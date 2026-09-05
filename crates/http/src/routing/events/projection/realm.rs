@@ -368,12 +368,11 @@ pub async fn project_member_identity_update(state: &AppState, operation: &Operat
     // `expected_state_digest` is present, it MUST equal the current
     // per-actor writer-observed effective-set digest
     // (`member_identity_effective_set_digest`, which folds `segment`) BEFORE
-    // this event lands. Reject the Move with `member_identity_state_mismatch`.
-    // soland accepts and reports
-    // here; the wire-level submit path turns the warn into a 412 in a
-    // follow-up patch — for now reducer-state coherence is preserved by
-    // dropping the projection write so the digest never advances under a
-    // stale writer.
+    // this event lands. Admission refuses the mismatch with
+    // `failed_precondition` + `reason_code=member_identity_state_mismatch`
+    // (`preflight_member_identity_state_guard`), so reaching this branch means
+    // the digest moved between admission and projection. Dropping the write
+    // keeps the digest from advancing under a stale writer.
     if let Some(expected) = payload.get("expected_state_digest").and_then(Value::as_str) {
         let current = state.member_identity_state_digest(&realm_id, &actor_id);
         if current.as_deref().is_some_and(|c| c != expected) {

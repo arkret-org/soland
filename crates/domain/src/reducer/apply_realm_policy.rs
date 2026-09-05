@@ -235,6 +235,20 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
                 };
             };
+            // An accepted policy bundle is the other half of the pair; a Realm
+            // that has not written one yet is checked when it does.
+            if join_rule_requires_an_automatic_gate(join_rule)
+                && self
+                    .realm_policy_bundle_cell_value(operation.realm_id.as_str())
+                    .is_some()
+                && !join_policy_declares_an_automatic_gate(
+                    self.realm_join_policy_cell_value(operation.realm_id.as_str()),
+                )
+            {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH.to_owned(),
+                };
+            }
             self.realm_join_rules
                 .insert(operation.realm_id.to_string(), join_rule.to_owned());
         }
@@ -382,6 +396,13 @@ impl ProjectionState {
         {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
+            };
+        }
+        if join_rule_requires_an_automatic_gate(self.realm_default_join_rule(&realm_id))
+            && !join_policy_declares_an_automatic_gate(value.get("join_policy"))
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH.to_owned(),
             };
         }
         // `encryption-and-audit.md` §2.4.1 — the 300000 ms ceiling is a reducer
@@ -1438,4 +1459,26 @@ fn focus_write_preserves_committed(existing: Option<&CellState>, next: &Value) -
         Some(committed) => next.get("session_focus").and_then(Value::as_str) == Some(committed),
         None => true,
     }
+}
+
+/// join-policy.md 2: `restricted` and `knock_restricted` promise an entry gate.
+/// A policy carrying only `principal_admission` / `cooldown` hard gates admits
+/// exactly the set `public` admits, so the pair is a contradictory declaration
+/// and neither cell may be written under it.
+fn join_policy_declares_an_automatic_gate(join_policy: Option<&Value>) -> bool {
+    join_policy
+        .and_then(|policy| policy.get("gates"))
+        .and_then(Value::as_array)
+        .is_some_and(|gates| {
+            gates.iter().any(|gate| {
+                matches!(
+                    gate.get("kind").and_then(Value::as_str),
+                    Some("claim_required" | "challenge_response" | "parent_membership")
+                )
+            })
+        })
+}
+
+fn join_rule_requires_an_automatic_gate(join_rule: &str) -> bool {
+    matches!(join_rule, "restricted" | "knock_restricted")
 }

@@ -2978,6 +2978,158 @@ pub(super) async fn preflight_account_data_cas(
     .with_details(details))
 }
 
+/// client-sync.md 8.1: the optional `expected_state_digest` on
+/// `ak.member.identity.update` is an optimistic-concurrency guard over the
+/// current effective-set digest for the same `(realm_id, member_id, segment)`.
+/// A mismatch MUST reject the Event rather than apply it as a valid
+/// replacement, so the guard runs at admission with zero writes instead of
+/// being discovered after acceptance, where dropping the projection would leave
+/// an accepted Event that no reader can see.
+pub(super) fn preflight_member_identity_state_guard(
+    state: &AppState,
+    operation: &arkret_event_draft::ProjectedEventOperation,
+) -> Result<(), SubmitOneError> {
+    if operation.event_kind != arkret_wire::EventKind::MemberIdentityUpdate {
+        return Ok(());
+    }
+    let Some(expected) = operation
+        .payload
+        .get("expected_state_digest")
+        .and_then(Value::as_str)
+    else {
+        return Ok(());
+    };
+    let (Some(realm_id), Some(actor_id)) = (
+        operation.payload.get("realm_id").and_then(Value::as_str),
+        operation
+            .payload
+            .get("actor_id")
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()),
+    ) else {
+        // Shape validation owns the missing-carrier case and reports it as a
+        // schema violation; the guard has nothing to compare against.
+        return Ok(());
+    };
+    let current = state.member_identity_state_digest(realm_id, &actor_id.to_string());
+    match current.as_deref() {
+        // No accepted identity event yet: the writer observed the empty set,
+        // which no digest can name, so the guard cannot be satisfied.
+        None => Ok(()),
+        Some(current) if current == expected => Ok(()),
+        Some(current) => Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            arkret_wire::ReasonCode::MEMBER_IDENTITY_STATE_MISMATCH,
+            "expected_state_digest does not match the current member identity effective set",
+        )
+        .with_details(json!({ "current_state_digest": current }))),
+    }
+}
+
+#[cfg(test)]
+mod member_identity_state_guard_tests {
+    use super::*;
+
+    const GUARD_REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+
+    fn guard_actor() -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            crate::test_event::station_id(),
+        ))
+    }
+
+    fn guard_state() -> AppState {
+        use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let identity_payload = json!({
+            "member_identity": {
+                "subject_actor_id": guard_actor(),
+                "display_profile": { "display_name": "Alice" }
+            }
+        });
+        let payload_digest = arkret_canonical::sha256_digest(
+            arkret_canonical::canonical_json_bytes(&identity_payload).unwrap(),
+        );
+        state.test_insert_member_identity(MemberIdentityEventRecord {
+            event_id: "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx".to_owned(),
+            subject: MemberIdentitySubjectKey {
+                realm_id: GUARD_REALM.to_owned(),
+                actor_id: guard_actor().to_string(),
+                segment: "member_identity".to_owned(),
+            },
+            payload_digest,
+            replaces: Vec::new(),
+            raw_event: json!({
+                "event_id": "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx",
+                "payload": {
+                    "realm_id": GUARD_REALM,
+                    "actor_id": guard_actor(),
+                    "segment": "member_identity",
+                    "identity_payload": identity_payload,
+                }
+            }),
+        });
+        state
+    }
+
+    fn guard_operation(expected_state_digest: Option<&str>) -> Operation {
+        let mut payload = json!({
+            "realm_id": GUARD_REALM,
+            "actor_id": guard_actor(),
+            "segment": "member_identity",
+            "identity_payload": {"member_identity": {"subject_actor_id": guard_actor()}},
+        });
+        if let Some(digest) = expected_state_digest {
+            payload["expected_state_digest"] = json!(digest);
+        }
+        arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-00000000000a")
+                .unwrap(),
+            arkret_wire::RealmId::new(GUARD_REALM).unwrap(),
+            arkret_wire::EventKind::MemberIdentityUpdate.as_str(),
+            payload,
+        )
+    }
+
+    #[test]
+    fn a_stale_expected_state_digest_is_refused_at_admission() {
+        let state = guard_state();
+        let error = preflight_member_identity_state_guard(
+            &state,
+            &guard_operation(Some(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )),
+        )
+        .expect_err("a stale writer must not be admitted");
+        let rejection = error.rejection().expect("guard rejects, never quarantines");
+        assert_eq!(rejection.wire_code(), "failed_precondition");
+        assert_eq!(
+            rejection.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::MEMBER_IDENTITY_STATE_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn the_observed_effective_set_digest_is_admitted() {
+        let state = guard_state();
+        let current = state
+            .member_identity_state_digest(GUARD_REALM, &guard_actor().to_string())
+            .expect("the seeded record has an effective-set digest");
+        assert!(
+            preflight_member_identity_state_guard(&state, &guard_operation(Some(&current))).is_ok()
+        );
+    }
+
+    #[test]
+    fn an_absent_guard_stays_optional() {
+        let state = guard_state();
+        assert!(preflight_member_identity_state_guard(&state, &guard_operation(None)).is_ok());
+    }
+}
+
 #[cfg(test)]
 mod cas_write_guard_tests {
     use super::*;

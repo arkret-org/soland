@@ -75,6 +75,22 @@ pub(super) fn validate_key_backup_body_typed(
 }
 
 pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    // key-management.md 7.9: an unknown, reserved (`ak.aead.hybrid_kem.*`) or
+    // name-contradicting `aead_profile` fails closed under its own registered
+    // reason code. It is checked ahead of the per-method field sets because a
+    // profile the receiver cannot resolve makes every derived parameter
+    // unverifiable.
+    backup
+        .encryption
+        .aead
+        .validate_aead_profile()
+        .map_err(|reason| {
+            schema_error(format!(
+                "key backup encryption.aead.aead_profile `{}` is not an active registered profile",
+                backup.encryption.aead.aead_profile.as_deref().unwrap_or("")
+            ))
+            .with_reason_code(reason)
+        })?;
     match backup.encryption.recipient_method {
         KeyBackupRecipientMethod::PassphraseKdf => {
             if backup.backup_kind == BackupKind::MlsHistory {
@@ -509,6 +525,64 @@ mod tests {
             &format!("{RECOVERY_CONTROLLER_DID}#recovery-proof-1"),
             now
         ));
+    }
+
+    fn secret_storage_encryption(
+        name: arkret_models_crypto::key_backup::KeyBackupAeadName,
+        aead_profile: Option<&str>,
+    ) -> arkret_models_crypto::key_backup::KeyBackupEncryption {
+        arkret_models_crypto::key_backup::KeyBackupEncryption {
+            recipient_method:
+                arkret_models_crypto::key_backup::KeyBackupRecipientMethod::SecretStorageKey,
+            recipient_key_ref: Some("ak.secret_storage.default".to_owned()),
+            kdf: None,
+            aead: arkret_models_crypto::key_backup::KeyBackupAead {
+                name,
+                aead_profile: aead_profile.map(str::to_owned),
+                nonce_salt: None,
+                // `secret_storage_key` requires an AEAD nonce; the fixture is a
+                // complete envelope so `validate()` exercises the profile rule
+                // rather than tripping on a missing sibling field.
+                nonce: Some(
+                    arkret_wire::Base64UrlString::new("AAECAwQFBgcICQoL".to_owned()).unwrap(),
+                ),
+                enc: None,
+                extra: Default::default(),
+            },
+            key_commitment: None,
+            hpke_suite: None,
+            extra: Default::default(),
+        }
+    }
+
+    /// key-management.md 7.9: the receiver fails closed on a profile it cannot
+    /// resolve, under the registered `unsupported_aead_profile` reason code.
+    #[test]
+    fn an_unresolvable_aead_profile_fails_closed_with_its_reason_code() {
+        for profile in [
+            "ak.aead.hybrid_kem.x25519_mlkem768.v1",
+            "ak.aead.unpublished_future.v1",
+        ] {
+            let encryption = secret_storage_encryption(
+                arkret_models_crypto::key_backup::KeyBackupAeadName::Xchacha20Poly1305,
+                Some(profile),
+            );
+            let error = encryption
+                .aead
+                .validate_aead_profile()
+                .expect_err("profile must fail closed");
+            assert_eq!(error, arkret_wire::ReasonCode::UNSUPPORTED_AEAD_PROFILE);
+        }
+    }
+
+    #[test]
+    fn an_active_profile_matching_its_algorithm_is_accepted() {
+        let encryption = secret_storage_encryption(
+            arkret_models_crypto::key_backup::KeyBackupAeadName::Xchacha20Poly1305,
+            Some("ak.aead.xchacha20_poly1305.v1"),
+        );
+        assert!(encryption.aead.validate_aead_profile().is_ok());
+        assert!(encryption.validate().is_ok());
     }
 
     #[test]

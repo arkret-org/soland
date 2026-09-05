@@ -508,9 +508,19 @@ impl ProjectionState {
         if join_rule.is_some_and(|rule| matches!(rule, "invite" | "closed")) && is_self_authored {
             return Err("gate_check_failed");
         }
+        // join-policy.md 2: `restricted` and `knock_restricted` are the two
+        // rules whose admitted set is defined by the automatic gates. Without
+        // a policy carrying one, the declared rule admits exactly what `public`
+        // admits, which is the silent degradation this fails closed on.
+        let automatic_gate_required =
+            join_rule.is_some_and(|rule| matches!(rule, "restricted" | "knock_restricted"));
         let Some(join_policy) = self.realm_join_policy_cell_value(operation.realm_id.as_str())
         else {
-            return Ok(());
+            return if automatic_gate_required {
+                Err("gate_check_failed")
+            } else {
+                Ok(())
+            };
         };
         if let Err(reason) = validate_join_policy_payload(join_policy) {
             return if reason == "join_policy_duplicate_gate_id" {
@@ -586,12 +596,23 @@ impl ProjectionState {
         {
             return Ok(());
         }
-        let normal_gates = gates.iter().filter_map(Value::as_object).filter(|gate| {
-            !matches!(
-                gate.get("kind").and_then(Value::as_str),
-                Some("principal_admission" | "cooldown")
-            )
-        });
+        let mut normal_gates = gates
+            .iter()
+            .filter_map(Value::as_object)
+            .filter(|gate| {
+                !matches!(
+                    gate.get("kind").and_then(Value::as_str),
+                    Some("principal_admission" | "cooldown")
+                )
+            })
+            .peekable();
+        if normal_gates.peek().is_none() {
+            return if automatic_gate_required {
+                Err("gate_check_failed")
+            } else {
+                Ok(())
+            };
+        }
         match join_policy.get("combinator").and_then(Value::as_str) {
             Some("all") => {
                 for gate in normal_gates {
@@ -602,18 +623,12 @@ impl ProjectionState {
                 Ok(())
             }
             Some("any") => {
-                let mut saw_normal_gate = false;
                 for gate in normal_gates {
-                    saw_normal_gate = true;
                     if self.join_gate_allows(gate, proofs, member, operation.created_at) {
                         return Ok(());
                     }
                 }
-                if saw_normal_gate {
-                    Err("gate_check_failed")
-                } else {
-                    Ok(())
-                }
+                Err("gate_check_failed")
             }
             _ => Err("gate_check_failed"),
         }
@@ -665,7 +680,6 @@ impl ProjectionState {
                 .and_then(Value::as_str)
                 .and_then(|gate_id| gate_proof_for_gate(proofs, gate_id))
                 .is_some_and(|proof| claim_required_gate_has_proof(gate, proof)),
-            Some("application_form" | "manual_review") => false,
             _ => false,
         }
     }

@@ -13,6 +13,11 @@ use zeroize::{Zeroize, Zeroizing};
 /// a federation origin cannot split batches safely if peers cap the wire below the constant.
 pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
+/// Concurrent Applet edge transactions this Station admits before it
+/// sheds load. applet-integration.md 7.3 requires the excess to come back
+/// as per-event `queue_full` rejections with `retry_after_ms`, not as a
+/// timeout or an unbounded backlog.
+pub const DEFAULT_APPLET_TRANSACTION_INFLIGHT_CAPACITY: usize = 64;
 pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV: &str = "SOLAND_PQ_TLS_DEPLOYMENT_PROBE";
 
 /// STUN URL shipped as the [`IceServersConfig::default`] value. A production
@@ -410,6 +415,10 @@ pub struct AppConfig {
     /// next to-device response can carry `lost=true`.
     /// Env: `SOLAND_TO_DEVICE_QUEUE_CAPACITY` (default 10_000).
     pub to_device_queue_capacity: usize,
+    /// Concurrent `ak.edge.applet.command.transaction.v1` deliveries this
+    /// Station processes before shedding load with `queue_full`.
+    /// Env: `SOLAND_APPLET_TRANSACTION_INFLIGHT_CAPACITY` (default 64).
+    pub applet_transaction_inflight_capacity: usize,
     /// Rolling-24h per-principal cap on full-ciphertext key-backup downloads
     /// (`key-management.md` §7.8), already clamped to the range
     /// `soland_services::runtime_guards` allows.
@@ -902,6 +911,7 @@ impl AppConfig {
             admin_max_page_limit: 1000,
             admin_principal_ids: Vec::new(),
             to_device_queue_capacity: 10_000,
+            applet_transaction_inflight_capacity: DEFAULT_APPLET_TRANSACTION_INFLIGHT_CAPACITY,
             key_backup_daily_download_limit:
                 soland_services::runtime_guards::clamp_key_backup_daily_download_limit(None),
             service_identity_bundle_dir: None,
@@ -1129,6 +1139,12 @@ impl AppConfig {
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_TO_DEVICE_QUEUE_CAPACITY);
+        let applet_transaction_inflight_capacity =
+            lookup(values, "SOLAND_APPLET_TRANSACTION_INFLIGHT_CAPACITY")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(DEFAULT_APPLET_TRANSACTION_INFLIGHT_CAPACITY);
         // Parsed here, clamped by the guard that owns the range. Previously
         // `runtime_guards` read this from the environment itself, which put an
         // env read inside `soland-services`.
@@ -1295,6 +1311,7 @@ impl AppConfig {
             admin_max_page_limit,
             admin_principal_ids,
             to_device_queue_capacity,
+            applet_transaction_inflight_capacity,
             key_backup_daily_download_limit,
             service_identity_bundle_dir,
             verified_profiles_artifact,

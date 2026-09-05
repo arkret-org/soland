@@ -1,6 +1,7 @@
 use super::*;
 
 mod agent_lifecycle;
+mod audit_release;
 mod call_state;
 mod cells_realm;
 mod circle_encryption;

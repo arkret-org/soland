@@ -174,6 +174,16 @@ pub enum ProjectionEffect {
         binding_id: String,
         state: String,
     },
+    /// `ak.audit.session.*` advanced the sealed release session FSM.
+    AuditSessionProjected {
+        session_id: String,
+        state: String,
+    },
+    /// `ak.audit.release` appended one release manifest to its session log.
+    AuditReleaseProjected {
+        session_id: String,
+        release_id: String,
+    },
     /// `call-state.md` §7 — `ak.call.summary` projected into the write-once
     /// `ak.component.call.summary.v1` cas_register cell.
     CallSummaryProjected {

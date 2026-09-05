@@ -638,6 +638,27 @@ pub struct CircleProjection {
     pub members: BTreeSet<String>,
 }
 
+/// One sealed audit release session (`audited-e2ee.md` sections 3-4).
+///
+/// The registered `ak.component.audit.session.v1` cell carries only the FSM
+/// stage, but every later stage and the release manifest are checked against
+/// the binding and scope the session opened under, so those travel here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditSessionProjection {
+    pub session_id: String,
+    pub realm_id: String,
+    pub binding_id: String,
+    /// Canonical JSON of the session's `effective_scope`, compared verbatim
+    /// against the binding's own scope.
+    pub effective_scope: serde_json::Value,
+    pub stage: arkret_models_collaboration::events_payloads::audit::AuditSessionStage,
+    pub approved_release_mode:
+        Option<arkret_models_collaboration::events_payloads::audit::AuditReleaseMode>,
+    /// Accepted `ak.audit.session.notice` Event id. A release names it, and a
+    /// session that has none has not noticed anybody.
+    pub notice_ref: Option<String>,
+}
+
 /// First-class Agent Sidecar aggregate. Sidecars are not Circles and
 /// never acquire Circle membership or a hidden Circle/Strand backing object.
 #[derive(Clone, Debug, PartialEq, Eq)]

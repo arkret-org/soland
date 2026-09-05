@@ -144,11 +144,13 @@ pub(crate) fn validate_realm_search_policy_payload(policy: &Value) -> Result<(),
     Ok(())
 }
 
+/// The closed v1 gate set. `event-payload.schema.json#/$defs/join_policy_gate`
+/// is a five-arm `oneOf` and join-policy.md 1 states that v1 defines no
+/// application or review workflow, so an application_form / manual_review gate
+/// has no carrier to be accepted under.
 const JOIN_POLICY_GATE_KINDS: &[&str] = &[
     "claim_required",
-    "application_form",
     "challenge_response",
-    "manual_review",
     "parent_membership",
     "principal_admission",
     "cooldown",
@@ -177,7 +179,6 @@ pub fn validate_join_policy_payload(join_policy: &Value) -> Result<(), &'static 
         return Err("join_policy_too_many_gates");
     }
     let mut seen_gate_ids = BTreeSet::new();
-    let mut review_capability_required = false;
     for gate in gates {
         let Some(gate) = gate.as_object() else {
             return Err("join_policy gates must be objects");
@@ -200,36 +201,18 @@ pub fn validate_join_policy_payload(join_policy: &Value) -> Result<(), &'static 
             "challenge_response" => validate_challenge_response_gate(gate)?,
             "cooldown" => validate_cooldown_gate(gate)?,
             "claim_required" => validate_claim_required_gate(gate)?,
-            "application_form" => {
-                review_capability_required = true;
-                validate_application_form_gate(gate)?;
-            }
-            "manual_review" => {
-                review_capability_required = true;
-                validate_auto_resolve(gate, false)?;
-            }
             _ => unreachable!("gate kind checked above"),
         }
     }
-    if review_capability_required
-        && object
-            .get("review_capability")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .is_none()
-    {
-        return Err("join_policy_review_capability_required");
-    }
-    validate_reviewer_quorum(join_policy)?;
     Ok(())
 }
 
-fn validate_auto_resolve(
-    gate: &serde_json::Map<String, Value>,
-    expected: bool,
-) -> Result<(), &'static str> {
+/// join-policy.md 3.1: `auto_resolve` is optional and, when present, may only
+/// be `true`. Every v1 gate is reducer-evaluable, so there is no arm that
+/// carries `false`.
+fn validate_auto_resolve(gate: &serde_json::Map<String, Value>) -> Result<(), &'static str> {
     if let Some(value) = gate.get("auto_resolve")
-        && value.as_bool() != Some(expected)
+        && value.as_bool() != Some(true)
     {
         return Err("join_policy_gate_auto_resolve_invalid");
     }
@@ -239,7 +222,7 @@ fn validate_auto_resolve(
 pub(crate) fn validate_principal_admission_gate(
     gate: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {
-    validate_auto_resolve(gate, true)?;
+    validate_auto_resolve(gate)?;
     validate_did_method_list(gate, "allowed_did_methods")?;
     validate_account_id_list(gate, "allowed_account_ids")?;
     validate_account_id_list(gate, "denied_account_ids")?;
@@ -305,7 +288,7 @@ fn validate_actor_id_list(
 pub(crate) fn validate_parent_membership_gate(
     gate: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {
-    validate_auto_resolve(gate, true)?;
+    validate_auto_resolve(gate)?;
     let Some(source_realms) = gate
         .get("membership_source_realm_ids")
         .and_then(Value::as_array)
@@ -336,7 +319,7 @@ pub(crate) fn validate_parent_membership_gate(
 pub(crate) fn validate_challenge_response_gate(
     gate: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {
-    validate_auto_resolve(gate, true)?;
+    validate_auto_resolve(gate)?;
     let Some(provider_did) = gate.get("provider_did").and_then(Value::as_str) else {
         return Err("challenge_response_provider_invalid");
     };
@@ -370,7 +353,7 @@ pub(crate) fn validate_challenge_response_gate(
 pub(crate) fn validate_cooldown_gate(
     gate: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {
-    validate_auto_resolve(gate, true)?;
+    validate_auto_resolve(gate)?;
     let Some(min_interval) = gate.get("min_interval_since_leave").and_then(Value::as_str) else {
         return Err("cooldown_min_interval_invalid");
     };
@@ -383,63 +366,12 @@ pub(crate) fn validate_cooldown_gate(
 pub(crate) fn validate_claim_required_gate(
     gate: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {
-    validate_auto_resolve(gate, true)?;
+    validate_auto_resolve(gate)?;
     let Some(claims) = gate.get("required_claims").and_then(Value::as_array) else {
         return Err("claim_required_claims_invalid");
     };
     if claims.is_empty() {
         return Err("claim_required_claims_invalid");
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_application_form_gate(
-    gate: &serde_json::Map<String, Value>,
-) -> Result<(), &'static str> {
-    validate_auto_resolve(gate, false)?;
-    let Some(questions) = gate.get("questions").and_then(Value::as_array) else {
-        return Err("application_form_questions_invalid");
-    };
-    if questions.is_empty() || questions.len() > 64 {
-        return Err("application_form_questions_invalid");
-    }
-    Ok(())
-}
-
-fn validate_reviewer_quorum(join_policy: &Value) -> Result<(), &'static str> {
-    let Some(quorum) = join_policy.get("reviewer_quorum") else {
-        return Ok(());
-    };
-    if let Some(value) = quorum.as_str() {
-        return match value {
-            "any" | "majority" | "all" => Ok(()),
-            _ => Err("join_policy_reviewer_quorum_invalid"),
-        };
-    }
-    let Some(object) = quorum.as_object() else {
-        return Err("join_policy_reviewer_quorum_invalid");
-    };
-    let Some(threshold) = object.get("threshold").and_then(Value::as_u64) else {
-        return Err("join_policy_reviewer_quorum_invalid");
-    };
-    if threshold == 0 {
-        return Err("join_policy_reviewer_quorum_invalid");
-    }
-    let Some(reviewers) = object.get("reviewers").and_then(Value::as_array) else {
-        return Err("join_policy_reviewer_quorum_invalid");
-    };
-    let mut unique_reviewers = BTreeSet::new();
-    for reviewer in reviewers {
-        let Some(reviewer) = reviewer.as_str() else {
-            return Err("join_policy_reviewer_quorum_invalid");
-        };
-        if arkret_identifiers::DidCoreId::new(reviewer.to_owned()).is_err() {
-            return Err("join_policy_reviewer_quorum_invalid");
-        }
-        unique_reviewers.insert(reviewer.to_owned());
-    }
-    if threshold as usize > unique_reviewers.len() {
-        return Err("join_policy_reviewer_quorum_invalid");
     }
     Ok(())
 }

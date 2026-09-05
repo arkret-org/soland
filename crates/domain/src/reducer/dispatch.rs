@@ -662,6 +662,22 @@ fn apply_audit_binding_state_dispatch(
     s.apply_audit_binding_state(op)
 }
 
+fn apply_audit_session_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_audit_session(op)
+}
+
+fn apply_audit_release_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_audit_release(op)
+}
+
 /// Dispatch for `ak.call.state`; cell family is
 /// `ak.component.call.state.v1` (`cell_subject = payload.call_id`).
 fn apply_call_state_dispatch(
@@ -1159,6 +1175,29 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::AuditAppletBindingState,
         apply_audit_binding_state_dispatch,
+    );
+    // `audited-e2ee.md` sections 3-4 — the sealed release session and its
+    // release manifests. Without these the four release gates
+    // (binding / scope / notice / non-retroactive) have no evaluation point.
+    m.insert(
+        arkret_wire::EventKind::AuditSessionRequest,
+        apply_audit_session_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::AuditSessionAuthorize,
+        apply_audit_session_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::AuditSessionNotice,
+        apply_audit_session_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::AuditSessionClose,
+        apply_audit_session_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::AuditRelease,
+        apply_audit_release_dispatch,
     );
     // `ak.call.state` — durable call lifecycle + recording/transcribe/
     // moderation projection. Cell family `ak.component.call.state.v1`,

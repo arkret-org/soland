@@ -186,6 +186,12 @@ pub struct AppState {
     /// Lossy process-local acceleration signal. Durable pending rows remain
     /// the reconciliation source of truth after missed wakeups or restarts.
     control_seal_wakeup: Arc<tokio::sync::Notify>,
+    /// Inbound admission slots for Applet edge transactions. Saturation is a
+    /// protocol outcome, not a timeout: applet-integration.md 7.3 requires the
+    /// shed delivery to come back as per-event `queue_full` with
+    /// `retry_after_ms`, and to leave the idempotency identity unconsumed so
+    /// the sender may re-deliver the same bytes.
+    applet_transaction_slots: Arc<tokio::sync::Semaphore>,
     /// Server-enforced reconnect windows advertised by subscribe control
     /// frames. This prevents a faulty or overloaded client from immediately
     /// re-opening the same subscribe scope after `dropped` /
@@ -1088,6 +1094,7 @@ impl AppState {
         } = runtime;
         persistence.bind_history_authority_view_cas(Arc::new(projections.clone()));
         let now = chrono::Utc::now();
+        let applet_transaction_inflight_capacity = config.applet_transaction_inflight_capacity;
 
         let service_id = service_identity
             .identity()
@@ -1253,6 +1260,9 @@ impl AppState {
             event_broadcast,
             connection_drain: Arc::new(tokio::sync::watch::Sender::new(None)),
             control_seal_wakeup: Arc::new(tokio::sync::Notify::new()),
+            applet_transaction_slots: Arc::new(tokio::sync::Semaphore::new(
+                applet_transaction_inflight_capacity,
+            )),
             notary_signing_key,
             notary_signing_key_origin,
             // G4.T3 — load verified-profile descriptors at startup. An unset
@@ -2091,6 +2101,18 @@ impl AppState {
 
     pub(crate) async fn control_seal_wakeup_notified(&self) {
         self.control_seal_wakeup.notified().await;
+    }
+
+    /// Claim one inbound Applet-transaction admission slot, or `None` when the
+    /// Station is already at capacity. The permit is released when the returned
+    /// guard drops, so a delivery holds a slot for exactly as long as it is
+    /// being processed.
+    pub(crate) fn try_claim_applet_transaction_slot(
+        &self,
+    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.applet_transaction_slots)
+            .try_acquire_owned()
+            .ok()
     }
 
     #[cfg(any(test, feature = "test-support"))]

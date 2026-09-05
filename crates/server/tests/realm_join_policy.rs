@@ -485,3 +485,89 @@ fn manual_review_gate_is_rejected_as_non_v1_policy() {
     ));
     assert!(state.realm_policy_bundle_cell_value(REALM_A).is_none());
 }
+
+/// join-policy.md §2: `restricted` and `knock_restricted` promise an entry
+/// gate. A policy carrying only the `principal_admission` / `cooldown` hard
+/// gates admits exactly the set `public` admits, so the pair is a
+/// contradictory declaration and the reducer refuses to write it.
+#[test]
+fn restricted_join_rule_rejects_a_policy_without_an_automatic_gate() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    apply_join_rule(&mut state, "restricted");
+
+    let effect = state.apply(
+        &op(
+            arkret_wire::EventKind::RealmPolicyBundle,
+            REALM_A,
+            json!({
+                "policy_revision": 1,
+                "join_policy": {
+                    "gates": [{
+                        "gate_id": "allowlist",
+                        "kind": "principal_admission",
+                        "allowed_principal_ids": [BOB]
+                    }],
+                    "combinator": "all"
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(
+        matches!(
+            &effect,
+            ProjectionEffect::Rejected { reason } if reason == "join_rule_policy_mismatch"
+        ),
+        "got {effect:?}"
+    );
+    assert!(state.realm_policy_bundle_cell_value(REALM_A).is_none());
+}
+
+#[test]
+fn knock_restricted_accepts_a_policy_that_carries_an_automatic_gate() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    apply_join_rule(&mut state, "knock_restricted");
+    apply_policy(
+        &mut state,
+        &hlc,
+        json!({
+            "gates": [
+                {
+                    "gate_id": "allowlist",
+                    "kind": "principal_admission",
+                    "allowed_principal_ids": [BOB]
+                },
+                {
+                    "gate_id": "employee",
+                    "kind": "claim_required",
+                    "required_claims": ["employee"]
+                }
+            ],
+            "combinator": "all"
+        }),
+    );
+    assert!(state.realm_policy_bundle_cell_value(REALM_A).is_some());
+}
+
+/// The other half of the same rule: a `restricted` Realm that has no automatic
+/// gate must not admit a self-authored join, which is exactly what an empty
+/// `all` gate list used to do vacuously.
+#[test]
+fn restricted_without_an_automatic_gate_never_admits_a_join() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    // The write guard refuses the pair, so reach the evaluation path the way a
+    // Realm that never wrote a policy bundle does.
+    apply_join_rule(&mut state, "restricted");
+
+    let effect = state.apply(&join_op(MALLORY), &hlc);
+    assert!(
+        matches!(
+            &effect,
+            ProjectionEffect::Rejected { reason } if reason == "gate_check_failed"
+        ),
+        "got {effect:?}"
+    );
+}

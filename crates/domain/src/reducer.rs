@@ -24,6 +24,7 @@
 
 // SOL-07-005: strand/morph/circle/applet/agent `apply_*` reducers (additional
 // `impl ProjectionState` blocks) split out of this file.
+mod apply_audit_session;
 mod apply_capability;
 mod apply_history_access;
 mod apply_identity_resolution;
@@ -109,10 +110,10 @@ pub use projection_state::ProjectionState;
 // sibling `apply_*` modules via `super::*`.
 pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
-    AppletProjection, CapabilityDerivedState, CircleLifecycleState, CircleMembershipState,
-    CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, InviteProjection,
-    KeyPackageLifetimeProjection, MessageState, MlsCommitEpoch, MlsCommitEpochKey,
-    MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
+    AppletProjection, AuditSessionProjection, CapabilityDerivedState, CircleLifecycleState,
+    CircleMembershipState, CircleProjection, DocumentVersionProjection, ErasureReceiptRecord,
+    InviteProjection, KeyPackageLifetimeProjection, MessageState, MlsCommitEpoch,
+    MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
     MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
     PollOptionState, PollState, PollVoteState, ProjectedMessageView, PushRouteCellValue,
     PushRouteSubject, ReactionState, RealmInheritancePolicyState, RealmLinkState,

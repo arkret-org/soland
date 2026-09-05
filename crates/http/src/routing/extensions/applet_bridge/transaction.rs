@@ -23,6 +23,14 @@ pub(super) async fn process_verified_transaction(
 ) -> Result<AppletTransactionOutcome, AppError> {
     let applet_id = transaction.applet_id.clone();
     let source_id = transaction.source_id.to_string();
+    // applet-integration.md 7.3: a saturated inbound queue is a protocol
+    // outcome. The shed delivery comes back as a per-event `queue_full` with
+    // `retry_after_ms`, and the slot is claimed BEFORE the replay record is
+    // begun so the rejection leaves the idempotency identity unconsumed and the
+    // sender may re-deliver the same bytes under the same key.
+    let Some(_admission_slot) = state.try_claim_applet_transaction_slot() else {
+        return Ok(queue_full_outcome(&transaction));
+    };
     let begin = state
         .event_queries()
         .begin_applet_transaction(AppletTransactionReplayState {
@@ -236,6 +244,31 @@ fn namespace_pattern_is_wildcard(pattern: &str) -> bool {
     pattern.contains('*') || pattern.ends_with(':') || pattern.ends_with('/')
 }
 
+/// Retry window advertised with a shed delivery. It is a fixed, small window:
+/// the sender re-delivers the exact same bytes under the same idempotency
+/// identity, so a longer wait only delays work the Station still has to do.
+const QUEUE_FULL_RETRY_AFTER_MS: u64 = 1_000;
+
+/// Reject every event in the delivery for inbound backpressure, without
+/// consuming the idempotency identity.
+fn queue_full_outcome(transaction: &AppletTransactionRequestBody) -> AppletTransactionOutcome {
+    AppletTransactionOutcome {
+        status: AppletTransactionStatus::Rejected,
+        rejections: transaction
+            .events
+            .iter()
+            .map(|event| RejectedItem {
+                event_id: Some(event.event_id.clone()),
+                reason_code: arkret_wire::ReasonCode::from_wire(
+                    arkret_wire::ReasonCode::QUEUE_FULL,
+                ),
+                retry_after_ms: Some(QUEUE_FULL_RETRY_AFTER_MS),
+            })
+            .collect(),
+        retry_after_ms: Some(QUEUE_FULL_RETRY_AFTER_MS),
+    }
+}
+
 fn rejected_event(event_id: &str, reason_code: impl AsRef<str>) -> RejectedItem {
     RejectedItem {
         event_id: EventId::new(event_id.to_owned()).ok(),
@@ -251,4 +284,88 @@ fn rejected_event_with_detail(
 ) -> RejectedItem {
     let _detail = detail.into();
     rejected_event(event_id, reason_code)
+}
+
+#[cfg(test)]
+mod backpressure_tests {
+    use super::*;
+
+    fn transaction_state(capacity: usize) -> AppState {
+        let mut config = crate::config::AppConfig::test_default();
+        config.applet_transaction_inflight_capacity = capacity;
+        AppState::new(config, soland_storage_postgres::Db { pool: None })
+    }
+
+    #[test]
+    fn a_saturated_station_sheds_the_delivery_without_taking_a_slot_it_cannot_release() {
+        let state = transaction_state(1);
+        let first = state
+            .try_claim_applet_transaction_slot()
+            .expect("the first delivery is admitted");
+        assert!(
+            state.try_claim_applet_transaction_slot().is_none(),
+            "a full inbound queue must refuse the next delivery"
+        );
+        drop(first);
+        assert!(
+            state.try_claim_applet_transaction_slot().is_some(),
+            "the slot must return when the delivery finishes"
+        );
+    }
+
+    #[test]
+    fn the_shed_outcome_rejects_every_event_with_queue_full_and_a_retry_window() {
+        let event_ids = [
+            "ak:event:AfJRB2whShXS-ghpXQhgN5u_MsXwor5nNWDxQ6YCfvcf",
+            "ak:event:AfJRB2whShXS-ghpXQhgN5u_MsXwor5nNWDxQ6YCfvcg",
+        ];
+        let transaction = AppletTransactionRequestBody {
+            applet_id: arkret_identifiers::AppletId::new(
+                "ak:applet:01904100-0000-7000-8000-aaaaaaaaaaaa",
+            )
+            .unwrap(),
+            source_id: arkret_wire::DidCoreId::new("ak:did_core:web:applet.example").unwrap(),
+            events: event_ids
+                .iter()
+                .map(|event_id| {
+                    let mut event = crate::test_event::raw_event(
+                        arkret_wire::EventKind::MessageCreate.as_str(),
+                        arkret_wire::ScopeRef::Realm {
+                            realm_id: arkret_wire::RealmId::new(
+                                "ak:realm:AQpwDm7ZXVTjUWCnaqcmxxZ49Y8CpzFJ-vLzmvCjBXfw",
+                            )
+                            .unwrap(),
+                        },
+                        arkret_wire::DidCoreId::new("ak:did_core:web:applet.example").unwrap(),
+                        1,
+                        arkret_wire::Hlc::new("01970e589d21-0001-a13f9c2e").unwrap(),
+                        serde_json::json!({
+                            "strand_id": "ak:strand:AQ9vwMrZNs64XfX4CVfhG2FPvja_JU2XLAIWCbvWK5kG",
+                            "content": {"kind": "ak.content.text", "body": "hello"}
+                        }),
+                    )
+                    .expect("test Event envelope");
+                    event.event_id = EventId::new((*event_id).to_owned()).unwrap();
+                    event
+                })
+                .collect(),
+            signals: None,
+        };
+
+        let outcome = queue_full_outcome(&transaction);
+        assert_eq!(outcome.status, AppletTransactionStatus::Rejected);
+        assert_eq!(outcome.retry_after_ms, Some(QUEUE_FULL_RETRY_AFTER_MS));
+        assert_eq!(outcome.rejections.len(), event_ids.len());
+        for (rejection, event_id) in outcome.rejections.iter().zip(event_ids) {
+            assert_eq!(
+                rejection.event_id.as_ref().map(EventId::as_str),
+                Some(event_id)
+            );
+            assert_eq!(
+                rejection.reason_code.as_str(),
+                arkret_wire::ReasonCode::QUEUE_FULL
+            );
+            assert_eq!(rejection.retry_after_ms, Some(QUEUE_FULL_RETRY_AFTER_MS));
+        }
+    }
 }

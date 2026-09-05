@@ -166,6 +166,8 @@ pub struct ProjectionState {
     pub circles: BTreeMap<String, CircleProjection>,
     /// First-class Sidecars keyed by `sidecar_id`.
     pub sidecars: BTreeMap<String, SidecarProjection>,
+    /// Sealed audit release sessions keyed by `audit_session_id`.
+    pub audit_sessions: BTreeMap<String, AuditSessionProjection>,
     /// Native source-context mappings keyed by `(sidecar_id, kind:id)`.
     pub sidecar_contexts: BTreeMap<(String, String), SidecarContextProjection>,
     /// Accepted control ref that created each Sidecar.
