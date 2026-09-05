@@ -2522,6 +2522,262 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         .unwrap();
 }
 
+/// The closed exemption to whole-group quarantine.
+///
+/// `operations-sync.md` section 12 quarantines every variant of a colliding
+/// identity until a verdict arrives, and then stops: an accepted
+/// `canonical_winner` settles the identity, so a redelivered variant is
+/// evidence to keep, not grounds to reopen it. This walks all three arrivals
+/// that can follow a verdict — the winner, the loser, and anything at all after
+/// `void_all` — because the failure mode is silent: each one that
+/// requarantines undoes the verdict and puts the Realm back where it was.
+#[tokio::test]
+async fn postgres_settled_collision_admits_the_winner_and_refuses_the_rest() {
+    use diesel::sql_types::{BigInt, Binary, SmallInt, Text};
+    use diesel::{QueryableByName, sql_query};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{
+        CanonicalEventRecord, EventStore, FederationFrontierExchangeStore, PersistenceError, ids,
+    };
+    use soland_storage_postgres::PgFederationFrontierExchangeStore;
+
+    #[derive(QueryableByName)]
+    struct PkRow {
+        #[diesel(sql_type = BigInt)]
+        pk: i64,
+    }
+    #[derive(QueryableByName)]
+    struct StateRow {
+        #[diesel(sql_type = Text)]
+        state: String,
+    }
+
+    async fn stored_event_state(pool: &PgPool, event_pk: i64) -> String {
+        let mut conn = pool.get().await.unwrap();
+        sql_query("SELECT state FROM canonical_events WHERE pk = $1")
+            .bind::<BigInt, _>(event_pk)
+            .get_result::<StateRow>(&mut conn)
+            .await
+            .unwrap()
+            .state
+    }
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let events = PgEventStore { pool: pool.clone() };
+    let federation = PgFederationFrontierExchangeStore { pool: pool.clone() };
+    let now = chrono::Utc::now();
+    // The admission timestamp is the covering Seal's, so it is deliberately not
+    // `now`: a Station that only ever held the loser has to land on the same
+    // value as one that held the winner all along.
+    let sealed_at = chrono::DateTime::from_timestamp_millis(
+        (now - chrono::Duration::hours(5)).timestamp_millis(),
+    )
+    .unwrap();
+
+    // Every arrival below is a real preimage of its own identity — only the
+    // arriving record is revalidated against the digest — while the row already
+    // in the table carries the other variant's bytes. That is exactly the state
+    // a Station is in when it admitted one variant of a collision and never saw
+    // the other, and it is the only way to stage a collision without one.
+    let run_id = uuid::Uuid::now_v7();
+    let realm_id =
+        event_derived_realm_id(format!("postgres-settled-collision-realm-{run_id}").as_bytes());
+    let actor_id = format!("ak:did_core:web:settled-collision-{run_id}.example");
+    let mut conn = pool.get().await.unwrap();
+    let realm_identity = ids::realm_identity_parts(&realm_id).unwrap();
+    let realm_pk = sql_query(
+        "INSERT INTO canonical_realms (id, digest_suite, digest, wire_id) \
+         VALUES ($1, $2, $3, $4) RETURNING pk",
+    )
+    .bind::<Binary, _>(realm_identity.id.to_vec())
+    .bind::<SmallInt, _>(i16::from(realm_identity.digest_suite))
+    .bind::<Binary, _>(realm_identity.digest.to_vec())
+    .bind::<Text, _>(&realm_id)
+    .get_result::<PkRow>(&mut conn)
+    .await
+    .unwrap()
+    .pk;
+
+    // Three independent identities, one per arrival being exercised.
+    let mut staged = Vec::new();
+    for (index, resident_bytes) in [
+        // 0: the Station holds the loser and the winner arrives.
+        br#"{"variant":"resident-loser"}"#.to_vec(),
+        // 1: the Station holds the winner and the loser arrives.
+        br#"{"variant":"resident-winner"}"#.to_vec(),
+        // 2: `void_all`, and any variant arrives.
+        br#"{"variant":"resident-voided"}"#.to_vec(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let preimage = format!(r#"{{"arriving":"{run_id}","slot":{index}}}"#).into_bytes();
+        let digest = arkret_canonical::sha256_bytes(&preimage);
+        let mut id = [0_u8; ids::EVENT_ID_BYTES];
+        id[0] = 0x01;
+        id[1..].copy_from_slice(&digest);
+        let event_id = ids::format_event_id(&id);
+        let event_pk = sql_query(
+            "INSERT INTO canonical_events \
+             (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, \
+              canonical_bytes, envelope, received_at) \
+             VALUES ($1, 1, $2, $3, $4, $5, $6, 'ak.test.data', 'arkret://events/test/v1', \
+                     $7, $8, $9) RETURNING pk",
+        )
+        .bind::<Binary, _>(id.to_vec())
+        .bind::<Binary, _>(digest.to_vec())
+        .bind::<Text, _>(&actor_id)
+        .bind::<BigInt, _>(20 + index as i64)
+        .bind::<Text, _>(&realm_id)
+        .bind::<BigInt, _>(realm_pk)
+        .bind::<Binary, _>(resident_bytes.clone())
+        .bind::<diesel::sql_types::Jsonb, _>(
+            serde_json::json!({"proofs": [{"jws": "already-verified"}], "variant": "resident"}),
+        )
+        .bind::<diesel::sql_types::Timestamptz, _>(now)
+        .get_result::<PkRow>(&mut conn)
+        .await
+        .unwrap()
+        .pk;
+        staged.push((
+            event_id.clone(),
+            event_pk,
+            resident_bytes,
+            CanonicalEventRecord {
+                event_id,
+                actor_id: actor_id.clone(),
+                actor_seq: 20 + index as u64,
+                realm_id: Some(realm_id.clone()),
+                kind: "ak.test.data".to_owned(),
+                schema_id: "arkret://events/test/v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                canonical_digest: ids::format_event_digest(0x01, &digest).unwrap(),
+                canonical_bytes: preimage,
+                envelope: serde_json::json!({"variant": "arriving"}),
+                received_at: now,
+            },
+        ));
+    }
+    drop(conn);
+
+    // The verdicts. Slot 0 names the arriving bytes, slot 1 names the bytes
+    // already resident, slot 2 voids the identity outright.
+    for (index, (event_id, _, resident_bytes, arriving)) in staged.iter().enumerate() {
+        let winner_canonical_bytes = match index {
+            0 => Some(arriving.canonical_bytes.clone()),
+            1 => Some(resident_bytes.clone()),
+            _ => None,
+        };
+        let subject =
+            arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventIdCollision {
+                event_id: arkret_wire::EventId::new(event_id.clone()).unwrap(),
+            };
+        federation
+            .record_local_normalization(
+                &soland_storage::FederationFrontierResolutionRecord {
+                    realm_id: realm_id.clone(),
+                    cell_subject_key: subject.cell_subject_key().unwrap().to_string(),
+                    subject: serde_json::to_value(&subject).unwrap(),
+                    verdict: match index {
+                        2 => serde_json::json!({"kind": "void_all"}),
+                        _ => serde_json::json!({"kind": "canonical_winner", "winner_index": 0}),
+                    },
+                    conflict_evidence_digest: format!("sha256:{}", "6".repeat(64)),
+                    resolution_event_digest: format!("sha256:{}", "7".repeat(64)),
+                    normalized_at: 30 + index as i64,
+                },
+                &soland_storage::FederationForkNormalizationScope::EventIdCollision {
+                    event_id: event_id.clone(),
+                    winner_sealed_at_ms: winner_canonical_bytes
+                        .is_some()
+                        .then(|| sealed_at.timestamp_millis()),
+                    winner_canonical_bytes,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    // Slot 0: the verdict already admitted the winner when it was recorded, so
+    // redelivering the same bytes is an ordinary replay rather than a conflict.
+    let (event_id, event_pk, resident_bytes, arriving) = &staged[0];
+    events.put(arriving.clone()).await.unwrap();
+    let admitted = events
+        .get(event_id)
+        .await
+        .unwrap()
+        .expect("the winner is the accepted variant of a settled identity");
+    assert_eq!(admitted.canonical_bytes, arriving.canonical_bytes);
+    assert_eq!(
+        admitted.received_at, sealed_at,
+        "the admitted Event is timestamped from the covering Seal, not a local clock",
+    );
+    assert_eq!(
+        admitted.envelope.get("proofs"),
+        Some(&serde_json::json!([{"jws": "already-verified"}])),
+        "both variants bind the same event_digest, so the proofs this Station already \
+         verified for the identity carry over instead of being re-derived",
+    );
+    assert_eq!(
+        events
+            .collision_variants(event_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|variant| variant.canonical_bytes.clone())
+            .collect::<Vec<_>>(),
+        vec![resident_bytes.clone()],
+        "the displaced loser is retained as a forensic variant",
+    );
+    assert_eq!(stored_event_state(&pool, *event_pk).await, "accepted");
+
+    // Slot 1: the loser arrives at a Station holding the winner. Refused, kept,
+    // and the accepted row is left exactly as the verdict left it.
+    let (event_id, event_pk, resident_bytes, arriving) = &staged[1];
+    let error = events.put(arriving.clone()).await.unwrap_err();
+    assert!(
+        matches!(error, PersistenceError::Conflict(reason) if reason == "event_hash_collision"),
+        "a settled identity still refuses a second preimage",
+    );
+    assert_eq!(
+        events
+            .get(event_id)
+            .await
+            .unwrap()
+            .expect("the winner stays readable")
+            .canonical_bytes,
+        resident_bytes.clone(),
+    );
+    assert_eq!(
+        events.collision_variants(event_id).await.unwrap().len(),
+        1,
+        "the refused loser is retained as a forensic variant",
+    );
+    assert_eq!(
+        stored_event_state(&pool, *event_pk).await,
+        "accepted",
+        "a settled identity is not requarantined by a redelivered loser",
+    );
+
+    // Slot 2: after `void_all` the identity has no accepted variant here, and
+    // an arrival must not revive it.
+    let (event_id, event_pk, _, arriving) = &staged[2];
+    let error = events.put(arriving.clone()).await.unwrap_err();
+    assert!(
+        matches!(error, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
+    );
+    assert!(
+        events.get(event_id).await.unwrap().is_none(),
+        "void_all leaves the identity with no accepted variant",
+    );
+    assert_eq!(
+        stored_event_state(&pool, *event_pk).await,
+        "accepted",
+        "void_all is enforced by the read surface, not by requarantining the row",
+    );
+}
+
 #[tokio::test]
 async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_conflict() {
     use diesel::sql_types::{BigInt, Binary, SmallInt, Text};
@@ -3842,11 +4098,14 @@ async fn postgres_fork_resolution_void_all_empties_the_position_and_keeps_it_emp
 
 /// A collision verdict can only be applied on complete canonical bytes.
 ///
-/// Two variants of one full hash are indistinguishable by id, so the subtraction
-/// compares preimages: the Station that happens to hold the losing variant drops
-/// it, and the one holding the winner keeps reading it.
+/// Two variants of one full hash are indistinguishable by id, so the verdict
+/// compares preimages. It does not merely subtract: `event-auth-state-resolution.md`
+/// section 6.3.3 point 3 makes an accepted `canonical_winner` the admission
+/// authority for the winner's bytes, so the Station that happens to hold the
+/// loser adopts the winner rather than being left unable to answer for that
+/// identity at all. A verdict from another Realm still governs nothing here.
 #[tokio::test]
-async fn postgres_fork_resolution_collision_verdict_keeps_only_the_winning_preimage() {
+async fn postgres_fork_resolution_collision_verdict_admits_the_winning_preimage() {
     use diesel::sql_types::{BigInt, Binary, SmallInt, Text, Timestamptz};
     use diesel::{QueryableByName, sql_query};
     use diesel_async::RunQueryDsl;
@@ -3888,8 +4147,15 @@ async fn postgres_fork_resolution_collision_verdict_keeps_only_the_winning_preim
     // stored bytes deliberately differ from the identity's digest preimage,
     // which is exactly the state a Station is in when it admitted one variant
     // and never saw the other.
-    let winning_preimage = b"fork-collision-winning-preimage".to_vec();
-    let losing_preimage = b"fork-collision-losing-preimage".to_vec();
+    let winning_preimage = br#"{"kind":"ak.test.data","note":"winner"}"#.to_vec();
+    let losing_preimage = br#"{"kind":"ak.test.data","note":"loser"}"#.to_vec();
+    // The admission timestamp is the covering Seal's, so it is deliberately not
+    // `now`: a Station that only ever held the loser has to land on the same
+    // value as one that held the winner all along.
+    let winner_sealed_at = chrono::DateTime::from_timestamp_millis(
+        (now - chrono::Duration::hours(3)).timestamp_millis(),
+    )
+    .unwrap();
     let mut identities = Vec::new();
     for (index, stored_bytes) in [&losing_preimage, &winning_preimage, &losing_preimage]
         .into_iter()
@@ -3949,15 +4215,36 @@ async fn postgres_fork_resolution_collision_verdict_keeps_only_the_winning_preim
                 &soland_storage::FederationForkNormalizationScope::EventIdCollision {
                     event_id: event_id.clone(),
                     winner_canonical_bytes: Some(winning_preimage.clone()),
+                    winner_sealed_at_ms: Some(winner_sealed_at.timestamp_millis()),
                 },
             )
             .await
             .unwrap();
     }
 
-    assert!(
-        events.get(&identities[0]).await.unwrap().is_none(),
-        "the Station holding the losing preimage stops reading it"
+    let admitted = events
+        .get(&identities[0])
+        .await
+        .unwrap()
+        .expect("the verdict admits the winner on the Station that held the loser");
+    assert_eq!(
+        admitted.canonical_bytes, winning_preimage,
+        "an accepted canonical_winner is the admission authority for the winner's bytes",
+    );
+    assert_eq!(
+        admitted.received_at, winner_sealed_at,
+        "the admitted Event is timestamped from the covering Seal, not a local clock",
+    );
+    assert_eq!(
+        events
+            .collision_variants(&identities[0])
+            .await
+            .unwrap()
+            .iter()
+            .map(|variant| variant.canonical_bytes.clone())
+            .collect::<Vec<_>>(),
+        vec![losing_preimage.clone()],
+        "the displaced loser is retained as a forensic variant",
     );
     assert_eq!(
         events

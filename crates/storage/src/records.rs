@@ -980,7 +980,8 @@ pub struct FederationFrontierResolutionRecord {
 /// that arrives after the verdict is excluded on arrival — `void_all` is final
 /// for the position and `canonical_winner` cannot be reopened by a later
 /// variant. Nothing is deleted: canonical bytes a Seal pinned, and the reducer
-/// output it produced, are retained exactly as they were.
+/// output it produced, are retained exactly as they were — a loser displaced by
+/// a collision verdict moves to the collision bucket rather than disappearing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FederationForkNormalizationScope {
     /// `subject.kind=event_sibling_position`. Every Event at this exact
@@ -998,6 +999,18 @@ pub enum FederationForkNormalizationScope {
     EventIdCollision {
         event_id: String,
         winner_canonical_bytes: Option<Vec<u8>>,
+        /// The covering Seal's `sealed_at`, in epoch milliseconds, or `None`
+        /// for `void_all`.
+        ///
+        /// Spec section 6.3.3 point 3: an accepted `canonical_winner` is itself
+        /// the admission authority for the winner's bytes, so a receiver that
+        /// holds only the loser adopts the winner instead of staying unable to
+        /// answer for that identity. That admission is required to be a pure
+        /// function of `(winner bytes, resolution Seal)`, so the admitted
+        /// Event's local receipt timestamp comes from the Seal rather than from
+        /// a local clock — two receivers with different histories must end up
+        /// byte-identical.
+        winner_sealed_at_ms: Option<i64>,
     },
 }
 

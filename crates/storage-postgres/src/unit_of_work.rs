@@ -450,9 +450,20 @@ async fn preflight_event_batch(
                 .map_err(PersistenceError::database)?;
         if let Some(stored) = stored {
             if stored.canonical_bytes != item.event.canonical_bytes {
-                let outcome = insert_canonical_event(conn, &item.event).await?;
-                debug_assert_eq!(outcome, CanonicalInsertOutcome::Collision);
-                return Ok(Some(CommitTransactionOutcome::Collision));
+                // A byte-different preimage for an identity already here.
+                // `insert_canonical_event` decides which of the two this is: an
+                // open collision, or a variant of an identity an accepted fork
+                // resolution already settled. Only the winner of such a verdict
+                // is admissible, and it comes back as a replay because the row
+                // now holds exactly these bytes.
+                if !matches!(
+                    insert_canonical_event(conn, &item.event).await?,
+                    CanonicalInsertOutcome::Replay(_)
+                ) {
+                    return Ok(Some(CommitTransactionOutcome::Collision));
+                }
+                commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
+                continue;
             }
             if stored.state == "quarantined" {
                 return Ok(Some(CommitTransactionOutcome::Collision));
@@ -464,8 +475,15 @@ async fn preflight_event_batch(
             if previous.canonical_bytes != item.event.canonical_bytes {
                 let inserted = insert_canonical_event(conn, previous).await?;
                 debug_assert!(matches!(inserted, CanonicalInsertOutcome::Inserted(_)));
-                let collision = insert_canonical_event(conn, &item.event).await?;
-                debug_assert_eq!(collision, CanonicalInsertOutcome::Collision);
+                // Two preimages of one identity inside a single batch. The
+                // second is written so the collision bucket holds both, and the
+                // batch is refused whichever way that lands — a settled identity
+                // still refuses a second variant, it just does not requarantine.
+                let second = insert_canonical_event(conn, &item.event).await?;
+                debug_assert!(!matches!(
+                    second,
+                    CanonicalInsertOutcome::Inserted(_) | CanonicalInsertOutcome::Replay(_)
+                ));
                 return Ok(Some(CommitTransactionOutcome::Collision));
             }
         } else {
@@ -916,7 +934,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 let outcome = insert_canonical_event(conn, &request.event).await?;
                 if matches!(
                     outcome,
-                    CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined
+                    CanonicalInsertOutcome::Collision
+                    | CanonicalInsertOutcome::Quarantined
+                    | CanonicalInsertOutcome::AdjudicatedVariant
                 ) {
                     return Ok(CommitTransactionOutcome::Collision);
                 }

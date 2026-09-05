@@ -11,7 +11,9 @@ use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{
     MlsGovernanceVerificationCheckpoint, MlsGroupGenesisBinding,
 };
-use arkret_state::state::{BottomMode, compute_state_root, control_event_set_root};
+#[cfg(test)]
+use arkret_state::state::compute_state_root;
+use arkret_state::state::{BottomMode, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cba::LatticeOp;
 use arkret_wire::cba::LatticeOpType;

@@ -185,11 +185,29 @@ pub(crate) enum CanonicalInsertOutcome {
     Replay(i64),
     Quarantined,
     Collision,
+    /// A second preimage for an identity an accepted fork resolution already
+    /// settled.
+    ///
+    /// It is retained as a forensic variant and rejected, but it is **not**
+    /// collision evidence any more: `operations-sync.md` section 12 makes an
+    /// accepted `canonical_winner` the closed exemption to whole-group
+    /// quarantine, so re-quarantining here would undo the verdict every time a
+    /// loser was redelivered.
+    AdjudicatedVariant,
 }
 
 enum StoreTransactionOutcome<T> {
     Committed(T),
     Collision,
+}
+
+/// The winner an accepted fork resolution named for one colliding identity.
+#[derive(QueryableByName)]
+struct SettledCollisionRow {
+    #[diesel(sql_type = Nullable<Binary>)]
+    winner_canonical_bytes: Option<Vec<u8>>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    winner_sealed_at: Option<i64>,
 }
 
 #[derive(QueryableByName)]
@@ -262,6 +280,159 @@ async fn lock_realm_actor(conn: &mut AsyncPgConnection, lock_key: &str) -> Persi
         .map_err(PersistenceError::database)
 }
 
+/// Keep one canonical variant of a colliding identity as forensic evidence.
+///
+/// `operations-sync.md` section 12 returns every known variant of a collision
+/// bucket, so a variant is written here whether it is being quarantined, is the
+/// loser a verdict displaced, or is a redelivery a settled identity refuses.
+/// The variant's identity is its parent's and is reached through `event_pk`;
+/// only the columns that genuinely differ per variant are stored.
+#[allow(clippy::too_many_arguments)]
+async fn record_collision_variant(
+    conn: &mut AsyncPgConnection,
+    event_pk: i64,
+    actor_id: &str,
+    actor_seq: i64,
+    realm_id: Option<&str>,
+    kind: &str,
+    schema_id: &str,
+    canonical_bytes: &[u8],
+    envelope: &Value,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    sql_query(
+        "INSERT INTO event_collision_variants \
+         (event_pk, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, \
+          received_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+         ON CONFLICT (event_pk, canonical_bytes) DO NOTHING",
+    )
+    .bind::<BigInt, _>(event_pk)
+    .bind::<Text, _>(actor_id)
+    .bind::<BigInt, _>(actor_seq)
+    .bind::<Nullable<Text>, _>(realm_id)
+    .bind::<Text, _>(kind)
+    .bind::<Text, _>(schema_id)
+    .bind::<Binary, _>(canonical_bytes)
+    .bind::<Jsonb, _>(envelope)
+    .bind::<Timestamptz, _>(received_at)
+    .execute(conn)
+    .await
+    .map(|_| ())
+    .map_err(PersistenceError::database)
+}
+
+/// The accepted fork resolution that settled this colliding identity, if any.
+///
+/// `None` means the identity is unadjudicated and an incoming second preimage is
+/// still open collision evidence. A row with no `winner_canonical_bytes` is
+/// `void_all`: the identity has no accepted variant in this Realm and no
+/// arrival may revive it.
+async fn settled_collision_verdict(
+    conn: &mut AsyncPgConnection,
+    collision_event_id: &[u8],
+    realm_id: Option<&str>,
+) -> PersistenceResult<Option<SettledCollisionRow>> {
+    // A verdict is keyed by Realm, so a row without one cannot be governed by
+    // any and stays open collision evidence.
+    let Some(realm_id) = realm_id else {
+        return Ok(None);
+    };
+    sql_query(
+        "SELECT winner_canonical_bytes, winner_sealed_at FROM federation_fork_normalization          WHERE collision_event_id = $1 AND realm_id = $2",
+    )
+    .bind::<Binary, _>(collision_event_id)
+    .bind::<Text, _>(realm_id)
+    .get_result::<SettledCollisionRow>(conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)
+}
+
+/// Make the winner of an accepted `canonical_winner` verdict the accepted
+/// variant of its identity.
+///
+/// `event-auth-state-resolution.md` section 6.3.3 point 3. Before this, a
+/// verdict could only ever *subtract*: a Station holding the loser dropped it
+/// from the accepted read surface and was then unable to answer for that
+/// identity at all, which is what left `federation.md` section 4.5.3's second
+/// alignment phase unreachable for every loser-only Station.
+///
+/// The replacement is in place rather than an insert because `canonical_events`
+/// holds one row per identity (`UNIQUE (id)`, `UNIQUE (digest_suite, digest)`)
+/// and neither key moves — the two variants collide precisely because they share
+/// a digest. The loser's bytes are already in `event_collision_variants` by the
+/// time this runs; its `projection_events` row goes too, so nothing derived from
+/// the loser survives in a read surface.
+///
+/// Two column meanings decide the statements below:
+///
+/// * `canonical_bytes` is the **digest preimage**, which by definition excludes `proofs`,
+///   `unsigned`, `actor_kind` and `event_id`. A verdict carries exactly that, so it replaces the
+///   column verbatim.
+/// * `envelope` is the full wire Event, so it is rebuilt as the winner preimage plus those four
+///   members taken from the row already here. That is not a shortcut: both variants compute the
+///   same `event_digest`, so the proofs this Station already verified for this identity hold over
+///   the winner's bytes unchanged, and re-deriving them from the loser is precisely what must not
+///   happen.
+///
+/// `received_at` comes from the covering Seal rather than a local clock, which
+/// is what makes the admission a pure function of the winner's bytes and that
+/// Seal: two Stations that admit the same verdict from different histories end
+/// up byte-identical.
+///
+/// Every statement is a no-op on a Station that already holds the winner, which
+/// is what makes replaying a verdict idempotent.
+pub(crate) async fn admit_collision_winner(
+    conn: &mut AsyncPgConnection,
+    collision_event_id: &[u8],
+    realm_id: Option<&str>,
+    winner_canonical_bytes: &[u8],
+    winner_sealed_at_ms: i64,
+) -> PersistenceResult<()> {
+    let Some(realm_id) = realm_id else {
+        return Ok(());
+    };
+    let received_at =
+        chrono::DateTime::from_timestamp_millis(winner_sealed_at_ms).ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "fork resolution winner sealed_at is out of range".to_owned(),
+            )
+        })?;
+
+    sql_query(
+        "INSERT INTO event_collision_variants          (event_pk, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope,           received_at)          SELECT pk, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope,                 received_at          FROM canonical_events          WHERE id = $1 AND realm_id = $2 AND canonical_bytes <> $3          ON CONFLICT (event_pk, canonical_bytes) DO NOTHING",
+    )
+    .bind::<Binary, _>(collision_event_id)
+    .bind::<Text, _>(realm_id)
+    .bind::<Binary, _>(winner_canonical_bytes)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+
+    sql_query(
+        "DELETE FROM projection_events WHERE event_pk IN (            SELECT pk FROM canonical_events            WHERE id = $1 AND realm_id = $2 AND canonical_bytes <> $3          )",
+    )
+    .bind::<Binary, _>(collision_event_id)
+    .bind::<Text, _>(realm_id)
+    .bind::<Binary, _>(winner_canonical_bytes)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+
+    sql_query(
+        "UPDATE canonical_events SET            canonical_bytes = $3,            envelope = convert_from($3, 'UTF8')::jsonb || (              SELECT COALESCE(jsonb_object_agg(member.key, member.value), '{}'::jsonb)              FROM jsonb_each(canonical_events.envelope) AS member              WHERE member.key IN ('proofs', 'unsigned', 'actor_kind', 'event_id')            ),            received_at = $4,            state = 'accepted'          WHERE id = $1 AND realm_id = $2 AND canonical_bytes <> $3",
+    )
+    .bind::<Binary, _>(collision_event_id)
+    .bind::<Text, _>(realm_id)
+    .bind::<Binary, _>(winner_canonical_bytes)
+    .bind::<Timestamptz, _>(received_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
 pub(crate) async fn insert_canonical_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
@@ -300,6 +471,59 @@ pub(crate) async fn insert_canonical_event(
                 CanonicalInsertOutcome::Quarantined
             });
         }
+        // Which Realm's recovery authority governs this row. A collision group
+        // can span Realms and each Realm adjudicates only its own projection,
+        // so the verdict is looked up against the Realm of the row that is
+        // actually here, not against the Realm the new variant claims.
+        if let Some(settled) =
+            settled_collision_verdict(conn, &identity.id, stored.realm_id.as_deref()).await?
+        {
+            // The closed exemption of `operations-sync.md` section 12. This
+            // identity is no longer an open collision: an accepted
+            // `ak.fork.resolution` has already named what survives here, so a
+            // second preimage is evidence to keep, not grounds to quarantine
+            // the group again. Requarantining would undo the verdict on every
+            // redelivery, and the verdict is exactly what the quarantine was
+            // waiting for.
+            if let (Some(winner), Some(sealed_at_ms)) = (
+                settled.winner_canonical_bytes.as_deref(),
+                settled.winner_sealed_at,
+            ) && winner == record.canonical_bytes.as_slice()
+            {
+                // The winner arriving at a Station that holds the loser. The
+                // verdict is its admission authority, so it takes the identity
+                // over rather than bouncing off the row already here, and the
+                // displaced loser is archived by the admission itself.
+                admit_collision_winner(
+                    conn,
+                    &identity.id,
+                    stored.realm_id.as_deref(),
+                    winner,
+                    sealed_at_ms,
+                )
+                .await?;
+                return Ok(CanonicalInsertOutcome::Replay(stored.pk));
+            }
+            // Either a loser being redelivered, or any variant after
+            // `void_all`. Kept as evidence, refused as an arrival, and the
+            // accepted row is left exactly as the verdict left it.
+            record_collision_variant(
+                conn,
+                stored.pk,
+                &record.actor_id,
+                record.actor_seq as i64,
+                record.realm_id.as_deref(),
+                &record.kind,
+                &record.schema_id,
+                &record.canonical_bytes,
+                &record.envelope,
+                record.received_at,
+            )
+            .await?;
+            return Ok(CanonicalInsertOutcome::AdjudicatedVariant);
+        }
+        // An unadjudicated collision: neither variant can be preferred, so both
+        // are kept and the whole group is quarantined until a verdict arrives.
         for (
             canonical_bytes,
             actor_id,
@@ -331,24 +555,19 @@ pub(crate) async fn insert_canonical_event(
                 record.received_at,
             ),
         ] {
-            sql_query(
-                "INSERT INTO event_collision_variants \
-                 (event_pk, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-                 ON CONFLICT (event_pk, canonical_bytes) DO NOTHING",
+            record_collision_variant(
+                conn,
+                stored.pk,
+                &actor_id,
+                actor_seq,
+                realm_id.as_deref(),
+                &kind,
+                &schema_id,
+                &canonical_bytes,
+                &envelope,
+                received_at,
             )
-            .bind::<BigInt, _>(stored.pk)
-            .bind::<Text, _>(actor_id)
-            .bind::<BigInt, _>(actor_seq)
-            .bind::<Nullable<Text>, _>(realm_id)
-            .bind::<Text, _>(kind)
-            .bind::<Text, _>(schema_id)
-            .bind::<Binary, _>(canonical_bytes)
-            .bind::<Jsonb, _>(envelope)
-            .bind::<Timestamptz, _>(received_at)
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
+            .await?;
         }
         sql_query("UPDATE canonical_events SET state = 'quarantined' WHERE pk = $1")
             .bind::<BigInt, _>(stored.pk)
@@ -451,11 +670,19 @@ async fn preflight_canonical_events(
             .map_err(PersistenceError::database)?;
         if let Some(stored) = stored {
             if stored.canonical_bytes != record.canonical_bytes {
-                debug_assert_eq!(
+                // A byte-different preimage for an identity already here.
+                // `insert_canonical_event` decides which of the two this is: an
+                // open collision, or a variant of an identity an accepted fork
+                // resolution already settled. Only the winner of such a verdict
+                // is admissible, and it comes back as a replay because the row
+                // now holds exactly these bytes.
+                if !matches!(
                     insert_canonical_event(conn, record).await?,
-                    CanonicalInsertOutcome::Collision
-                );
-                return Ok(true);
+                    CanonicalInsertOutcome::Replay(_)
+                ) {
+                    return Ok(true);
+                }
+                continue;
             }
             if stored.state == "quarantined" {
                 return Ok(true);
@@ -468,10 +695,14 @@ async fn preflight_canonical_events(
                     insert_canonical_event(conn, previous).await?,
                     CanonicalInsertOutcome::Inserted(_)
                 ));
-                debug_assert_eq!(
+                // Two preimages of one identity inside a single batch. The
+                // second is written so the collision bucket holds both, and the
+                // batch is refused whichever way that lands — a settled identity
+                // still refuses a second variant, it just does not requarantine.
+                debug_assert!(!matches!(
                     insert_canonical_event(conn, record).await?,
-                    CanonicalInsertOutcome::Collision
-                );
+                    CanonicalInsertOutcome::Inserted(_) | CanonicalInsertOutcome::Replay(_)
+                ));
                 return Ok(true);
             }
         } else {
@@ -809,9 +1040,15 @@ impl EventStore for PgEventStore {
             })
             .await
             .map_err(PgTransactionError::into_persistence)?;
+        // An `AdjudicatedVariant` is refused like a collision — `operations-sync.md`
+        // section 12 rejects the newly arrived variant either way — but nothing
+        // was quarantined: the exemption exists so a settled identity is not
+        // reopened by a redelivery.
         if matches!(
             outcome,
-            CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined
+            CanonicalInsertOutcome::Collision
+                | CanonicalInsertOutcome::Quarantined
+                | CanonicalInsertOutcome::AdjudicatedVariant
         ) {
             Err(PersistenceError::Conflict(
                 "event_hash_collision".to_owned(),
@@ -995,7 +1232,9 @@ impl EventStore for PgEventStore {
                             replay_count += 1;
                             pk
                         }
-                        CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined => {
+                        CanonicalInsertOutcome::Collision
+                        | CanonicalInsertOutcome::Quarantined
+                        | CanonicalInsertOutcome::AdjudicatedVariant => {
                             unreachable!("batch collision was handled by preflight")
                         }
                     };
@@ -1132,7 +1371,9 @@ impl EventStore for PgEventStore {
             for record in records {
                 let event_pk = match insert_canonical_event(conn, &record).await? {
                     CanonicalInsertOutcome::Inserted(pk) | CanonicalInsertOutcome::Replay(pk) => pk,
-                    CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined => {
+                    CanonicalInsertOutcome::Collision
+                    | CanonicalInsertOutcome::Quarantined
+                    | CanonicalInsertOutcome::AdjudicatedVariant => {
                         unreachable!("founding collision was handled by preflight")
                     }
                 };
@@ -1331,7 +1572,9 @@ impl EventStore for PgEventStore {
                 for record in records {
                     let event_pk = match insert_canonical_event(conn, &record).await? {
                         CanonicalInsertOutcome::Inserted(pk) | CanonicalInsertOutcome::Replay(pk) => pk,
-                        CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined => {
+                        CanonicalInsertOutcome::Collision
+                        | CanonicalInsertOutcome::Quarantined
+                        | CanonicalInsertOutcome::AdjudicatedVariant => {
                             unreachable!("batch collision was handled by preflight")
                         }
                     };

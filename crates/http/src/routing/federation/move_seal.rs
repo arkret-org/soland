@@ -199,7 +199,7 @@ pub(crate) async fn validate_accepted_fork_resolution_records(
         record
             .validate_collision_evidence(&event, &records, digest_suite)
             .map_err(|error| seal_admission_error(error.to_string()))?;
-        let scope = fork_normalization_scope(&event, &record, &records, digest_suite)?;
+        let scope = fork_normalization_scope(&event, &record, &records, seal, digest_suite)?;
         record_fork_resolution_normalization(state, &event, &record, &scope).await?;
     }
     Ok(())
@@ -264,6 +264,13 @@ async fn resolved_collision_variant_records(
 /// below are total. A collision winner is named by index into the Move's own
 /// evidence and can only be carried as complete canonical bytes — two variants
 /// of one hash are by construction indistinguishable by id.
+///
+/// The covering Seal is a parameter because a collision winner is not merely
+/// kept in or subtracted from the read surface: spec section 6.3.3 point 3
+/// admits it, and requires that admission to be a pure function of the winner's
+/// bytes and this Seal. `sealed_at` is the timestamp the admitted Event is
+/// stored under, so a receiver that held only the loser ends up byte-identical
+/// to one that held the winner all along.
 fn fork_normalization_scope(
     event: &Event,
     record: &arkret_models_collaboration::events_payloads::ForkResolutionRecord,
@@ -271,6 +278,7 @@ fn fork_normalization_scope(
         arkret_identifiers::CollisionVariantRecordId,
         arkret_models_collaboration::events_payloads::state::CollisionVariantRecord,
     >,
+    seal: &Seal,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<soland_services::federation::FederationForkNormalizationScope, AppError> {
     use arkret_models_collaboration::events_payloads::{
@@ -348,6 +356,9 @@ fn fork_normalization_scope(
             };
             Ok(FederationForkNormalizationScope::EventIdCollision {
                 event_id: event_id.as_str().to_owned(),
+                winner_sealed_at_ms: winner_canonical_bytes
+                    .is_some()
+                    .then(|| seal.sealed_at.timestamp_millis()),
                 winner_canonical_bytes,
             })
         }
@@ -381,7 +392,75 @@ async fn record_fork_resolution_normalization(
         .federation()
         .record_frontier_local_normalization(&normalization, scope)
         .await
-        .map_err(|error| seal_admission_error(error.to_string()))
+        .map_err(|error| seal_admission_error(error.to_string()))?;
+    reproject_admitted_collision_winner(state, scope).await
+}
+
+/// Rebuild the projection row of an Event this verdict just admitted.
+///
+/// The durable half of the admission runs inside the normalization
+/// transaction, which can restore the canonical read surface but not the
+/// projection timeline: the timeline row is reducer output, and the storage
+/// layer has no reducer. So it is rebuilt here, from the bytes now stored,
+/// through the same Event -> Operation mapper the live submit path uses.
+/// Skipping this would leave the identity readable as a canonical Event and
+/// invisible in every timeline, subscription and cursor that reads
+/// `projection_events` — which is most of the read surface.
+///
+/// `received_at` is the covering Seal's `sealed_at`, the same value the admitted
+/// Event carries, because `event-auth-state-resolution.md` section 6.3.3 point 3
+/// requires the projection a loser-holding Station derives to match the one a
+/// Station that always held the winner has.
+///
+/// Nothing to do for a sibling-position subject, for `void_all`, for a Station
+/// that holds no variant of the identity, or for an Event kind that has no
+/// projection row; the append itself is idempotent on `event_pk`.
+async fn reproject_admitted_collision_winner(
+    state: &AppState,
+    scope: &soland_services::federation::FederationForkNormalizationScope,
+) -> Result<(), AppError> {
+    use soland_services::federation::FederationForkNormalizationScope;
+
+    let FederationForkNormalizationScope::EventIdCollision {
+        event_id,
+        winner_sealed_at_ms: Some(sealed_at_ms),
+        ..
+    } = scope
+    else {
+        return Ok(());
+    };
+    let received_at = chrono::DateTime::from_timestamp_millis(*sealed_at_ms)
+        .ok_or_else(|| seal_admission_error("fork resolution winner sealed_at is out of range"))?;
+    let Some(admitted) = state
+        .event_queries()
+        .accepted_event(event_id)
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                InternalError,
+                format!("load admitted collision winner: {error}"),
+            )
+        })?
+    else {
+        return Ok(());
+    };
+    let Some(operation) =
+        crate::routing::events::event_log::projection_operation_from_canonical_record(&admitted)
+    else {
+        return Ok(());
+    };
+    let mut projected =
+        crate::routing::events::projection::projection_event_from_operation(&operation, None);
+    projected.received_at = received_at;
+    crate::routing::events::projection::persist_and_publish_projection_event(state, projected)
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                InternalError,
+                format!("reproject admitted collision winner: {error}"),
+            )
+        })?;
+    Ok(())
 }
 
 /// Map an SDK [`SealReject`] onto an [`AppError`].

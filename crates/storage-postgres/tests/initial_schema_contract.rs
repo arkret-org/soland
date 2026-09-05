@@ -105,3 +105,21 @@ fn franking_replay_nonce_ledger_has_bounded_expiry_contract() {
         INITIAL_DOWN.contains("DROP TABLE IF EXISTS moderation_franking_replay_nonces CASCADE")
     );
 }
+
+/// A collision verdict is not only a subtraction: it admits a winner.
+///
+/// `event-auth-state-resolution.md` section 6.3.3 point 3 makes the admitted
+/// Event's local receipt timestamp the covering Seal's `sealed_at`, so the
+/// verdict row has to carry that timestamp, and it has to be present exactly
+/// when there is a winner to admit. Without the CHECK, a `canonical_winner`
+/// verdict could persist with nothing to admit it under, and the admission
+/// would silently fall back to a local clock — which is what makes two
+/// Stations diverge.
+#[test]
+fn fork_normalization_carries_the_timestamp_its_winner_is_admitted_under() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.federation_fork_normalization"));
+    assert!(INITIAL_UP.contains("winner_sealed_at bigint"));
+    assert!(INITIAL_UP.contains("CONSTRAINT federation_fork_normalization_winner_sealed_at_check"));
+    assert!(INITIAL_UP.contains("(winner_canonical_bytes IS NULL) = (winner_sealed_at IS NULL)"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS federation_fork_normalization"));
+}

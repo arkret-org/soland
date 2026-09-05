@@ -1748,6 +1748,12 @@ CREATE TABLE public.federation_fork_normalization (
     winner_event_id bytea,
     collision_event_id bytea,
     winner_canonical_bytes bytea,
+    -- The covering Seal's `sealed_at`, in epoch milliseconds. Spec section 6.3.3
+    -- point 3 makes it the admitted winner's local receipt timestamp so that a
+    -- receiver which only ever held the loser ends up byte-identical to one that
+    -- always held the winner. `normalized_at` above is local bookkeeping and
+    -- deliberately is not that value.
+    winner_sealed_at bigint,
     normalized_at bigint NOT NULL,
     CONSTRAINT federation_fork_normalization_pkey
         PRIMARY KEY (realm_id, cell_subject_key),
@@ -1762,6 +1768,10 @@ CREATE TABLE public.federation_fork_normalization (
     ),
     CONSTRAINT federation_fork_normalization_collision_id_length_check CHECK (
         collision_event_id IS NULL OR octet_length(collision_event_id) = 33
+    ),
+    -- A winner to admit and the timestamp to admit it under travel together.
+    CONSTRAINT federation_fork_normalization_winner_sealed_at_check CHECK (
+        (winner_canonical_bytes IS NULL) = (winner_sealed_at IS NULL)
     )
 );
 

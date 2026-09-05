@@ -28,6 +28,7 @@ struct NormalizationScopeColumns {
     winner_event_id: Option<Vec<u8>>,
     collision_event_id: Option<Vec<u8>>,
     winner_canonical_bytes: Option<Vec<u8>>,
+    winner_sealed_at: Option<i64>,
 }
 
 fn normalization_event_id(event_id: &str) -> PersistenceResult<Vec<u8>> {
@@ -61,18 +62,56 @@ fn normalization_scope_columns(
                 .transpose()?,
             collision_event_id: None,
             winner_canonical_bytes: None,
+            winner_sealed_at: None,
         },
         FederationForkNormalizationScope::EventIdCollision {
             event_id,
             winner_canonical_bytes,
+            winner_sealed_at_ms,
         } => NormalizationScopeColumns {
             actor_id: None,
             actor_seq: None,
             winner_event_id: None,
             collision_event_id: Some(normalization_event_id(event_id)?),
             winner_canonical_bytes: winner_canonical_bytes.clone(),
+            // The table's CHECK ties these two together, so a `canonical_winner`
+            // verdict that arrived without the Seal timestamp its admission has
+            // to use fails loudly instead of persisting a winner that could
+            // only be admitted against a local clock.
+            winner_sealed_at: *winner_sealed_at_ms,
         },
     })
+}
+
+/// Admit the winner this verdict names, in the same transaction as the verdict.
+///
+/// `event-auth-state-resolution.md` section 6.3.3 point 3: an accepted
+/// `canonical_winner` is itself the admission authority for the winner's bytes,
+/// so the Station that holds the loser adopts the winner here rather than
+/// merely dropping the loser from its read surface and being left unable to
+/// answer for that identity. Skipped for a sibling-position subject and for
+/// `void_all`, where subtraction is the whole story.
+async fn admit_adjudicated_collision_winner(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    scope: &NormalizationScopeColumns,
+) -> Result<(), PgTransactionError> {
+    let (Some(collision_event_id), Some(winner_bytes), Some(sealed_at_ms)) = (
+        scope.collision_event_id.as_deref(),
+        scope.winner_canonical_bytes.as_deref(),
+        scope.winner_sealed_at,
+    ) else {
+        return Ok(());
+    };
+    crate::events::admit_collision_winner(
+        conn,
+        collision_event_id,
+        Some(realm_id),
+        winner_bytes,
+        sealed_at_ms,
+    )
+    .await?;
+    Ok(())
 }
 
 /// Every column of `federation_outbox`, aliased to the record field names.
@@ -928,8 +967,8 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             sql_query(
                 "INSERT INTO federation_fork_normalization \
                  (realm_id, cell_subject_key, actor_id, actor_seq, winner_event_id, \
-                  collision_event_id, winner_canonical_bytes, normalized_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                  collision_event_id, winner_canonical_bytes, winner_sealed_at, normalized_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                  ON CONFLICT (realm_id, cell_subject_key) DO NOTHING",
             )
             .bind::<Text, _>(&resolution.realm_id)
@@ -939,9 +978,11 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             .bind::<Nullable<Binary>, _>(scope.winner_event_id.as_deref())
             .bind::<Nullable<Binary>, _>(scope.collision_event_id.as_deref())
             .bind::<Nullable<Binary>, _>(scope.winner_canonical_bytes.as_deref())
+            .bind::<Nullable<BigInt>, _>(scope.winner_sealed_at)
             .bind::<BigInt, _>(resolution.normalized_at)
             .execute(conn)
             .await?;
+            admit_adjudicated_collision_winner(conn, &resolution.realm_id, &scope).await?;
             sql_query(
                 "UPDATE federation_frontier_confirmed_evidence \
                  SET local_resolution_kind = 'fork_resolution_event', \
