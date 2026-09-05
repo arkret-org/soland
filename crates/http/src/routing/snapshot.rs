@@ -35,10 +35,11 @@ pub(crate) async fn snapshot_manifest_for_realm(
         ))
     });
 
-    let items = events
+    let mut items = events
         .iter()
         .map(snapshot_item_from_event)
         .collect::<Result<Vec<_>, _>>()?;
+    items.extend(cas_cell_items(state, &realm_id_value).await?);
     let state_digest = arkret_state::state_digest_from_items(&items)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let snapshot_id = arkret_identifiers::SnapshotId::new(crate::ids::generate_snapshot_id())
@@ -187,6 +188,50 @@ async fn persist_snapshot_chunk_blobs(
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     }
     Ok(())
+}
+
+/// The `cas_cell` half of `items[]`, one entry per written `cas_register` cell.
+///
+/// `snapshot-schema.md` section 3 makes `items[]` a closed union whose second
+/// branch carries a control cell's complete active head set, and section 4
+/// folds those into `state_digest` alongside the object leaves. A `cas_register`
+/// cell cannot be represented by the object branch at all: that branch names
+/// exactly one `source_event_id`, and a cell in `⊥` — or one with two
+/// same-valued concurrent heads — has several live write identities with no
+/// grounds to pick between them.
+///
+/// Membership follows section 6.2.1 rather than the settled value: a cell is in
+/// as soon as it has one active head, so a cell released to `null` and a cell in
+/// `⊥` both appear, and only a never-written cell is absent. `cas_cell` rejects
+/// an empty head set, so the filter here is what keeps that from firing.
+///
+/// A Realm with no Seal yet has no governance view to materialize and
+/// contributes no cells.
+async fn cas_cell_items(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+) -> Result<Vec<arkret_state::SnapshotMaterializedItem>, soland_http::error::AppError> {
+    let leaves = state
+        .projections()
+        .realm_seal_leaves(realm_id)
+        .await
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    if leaves.is_empty() {
+        return Ok(Vec::new());
+    }
+    let heads_by_cell = state
+        .projections()
+        .effective_cas_heads_at(&leaves, realm_id)
+        .await
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    heads_by_cell
+        .into_iter()
+        .filter(|(_, heads)| !heads.is_empty())
+        .map(|(cell, heads)| {
+            arkret_state::SnapshotMaterializedItem::cas_cell(cell, &heads)
+                .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
+        })
+        .collect()
 }
 
 fn snapshot_item_from_event(

@@ -2004,6 +2004,21 @@ impl AppState {
             .expect("push device registrations are readable")
     }
 
+    /// One content-addressed object as this Station stored it.
+    ///
+    /// A snapshot manifest commits to its chunks only through their content
+    /// address, so a test that wants to assert on chunk contents has to read the
+    /// bytes back rather than trust the manifest.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub async fn test_object_by_sha256(&self, sha256: &str) -> Vec<u8> {
+        let key = self.deliveries().object_key_for_sha256(sha256);
+        self.deliveries()
+            .get_object(&key)
+            .await
+            .expect("the object this Station persisted is readable")
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub async fn test_effective_state_at(
