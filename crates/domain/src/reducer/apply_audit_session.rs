@@ -10,16 +10,18 @@
 //! binding activation frontier is forbidden outright
 //! (`audit_release_retroactive_scope_forbidden`).
 //!
-//! Attestation evidence (`ak.schema.audit_release_attestation.v1`) is
-//! deliberately absent here: `audit_release_payload` is a closed object with no
-//! attestation member, so `audit_release_attestation_invalid` /
-//! `audit_release_attestation_mismatch` have no carrier the reducer can read.
-//! That gap is filed, not silently approximated.
+//! Attestation evidence (`ak.schema.audit_release_attestation.v1`) rides inline
+//! on the release as `release_attestation` and is verified here against the
+//! binding's `attestation_policy` (`audit_release_attestation_invalid`) and
+//! against the active binding and accepted authorize
+//! (`audit_release_attestation_mismatch`); see §6.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::events_payloads::audit::{
-    AuditReleasePayload, AuditSessionPayload, AuditSessionStage,
+    AuditAttestationPolicy, AuditReleasePayload, AuditSessionPayload, AuditSessionStage,
 };
+use arkret_models_collaboration::governance::audit::AuditReleaseAttestation;
+use chrono::{DateTime, Utc};
 use arkret_state::lattice::CellState;
 use arkret_wire::cba::{LatticeOpType, ProjectedOp};
 use serde_json::Value;
@@ -27,6 +29,9 @@ use serde_json::Value;
 use super::ProjectionState;
 use super::effects::ProjectionEffect;
 use super::projections::AuditSessionProjection;
+
+/// `audit_assurance_class` value that makes remote attestation load-bearing.
+const ATTESTED_HARDWARE_ASSURANCE: &str = "attested_hardware";
 
 fn rejected(reason: &str) -> ProjectionEffect {
     ProjectionEffect::Rejected {
@@ -160,6 +165,13 @@ impl ProjectionState {
         let approved_release_mode = payload
             .approved_release_mode
             .or_else(|| existing.and_then(|session| session.approved_release_mode));
+        let approved_recipient_audit_actor_id = payload
+            .approved_recipient_audit_actor_id
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| {
+                existing.and_then(|session| session.approved_recipient_audit_actor_id.clone())
+            });
         let projection = AuditSessionProjection {
             session_id: session_id.clone(),
             realm_id: payload.realm_id.to_string(),
@@ -167,6 +179,7 @@ impl ProjectionState {
             effective_scope: declared_scope,
             stage: payload.session_state,
             approved_release_mode,
+            approved_recipient_audit_actor_id,
             notice_ref,
         };
         self.audit_sessions.insert(session_id.clone(), projection);
@@ -232,6 +245,14 @@ impl ProjectionState {
         if let Some(reason) = binding_manifest_violation(&binding, &payload) {
             return rejected(reason);
         }
+        if let Some(reason) = release_attestation_violation(
+            &binding,
+            &payload,
+            session.approved_recipient_audit_actor_id.as_deref(),
+            operation.created_at,
+        ) {
+            return rejected(reason);
+        }
 
         let Some(cell) = release_cell(&session_id) else {
             return rejected(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED);
@@ -273,6 +294,104 @@ const fn audit_session_stage_str(stage: AuditSessionStage) -> &'static str {
         AuditSessionStage::Notice => "notice",
         AuditSessionStage::Close => "close",
     }
+}
+
+/// `audited-e2ee.md` §6 attestation verification, evaluated at `ak.audit.release`
+/// admission.
+///
+/// The split between the two reason codes is the one the spec draws and is not
+/// interchangeable: `_invalid` means the evidence itself is untrustworthy — its
+/// chain root is not one the Realm declared, its window is closed or wider than
+/// the profile allows, its platform or measurement is not one the binding
+/// permits — while `_mismatch` means valid evidence that describes some other
+/// Realm, service, policy revision or auditor than the one this release runs
+/// under.
+///
+/// Freshness is judged against the Event's own signed `created_at`, never a
+/// receiver clock, so every replay of this Event reaches the same verdict.
+fn release_attestation_violation(
+    binding: &Value,
+    payload: &AuditReleasePayload,
+    approved_recipient_audit_actor_id: Option<&str>,
+    event_created_at: DateTime<Utc>,
+) -> Option<&'static str> {
+    let invalid = arkret_wire::ReasonCode::AUDIT_RELEASE_ATTESTATION_INVALID;
+    let mismatch = arkret_wire::ReasonCode::AUDIT_RELEASE_ATTESTATION_MISMATCH;
+
+    // The binding's assurance class decides whether evidence is required at
+    // all. A `disclosed_policy` binding carrying evidence would be claiming a
+    // guarantee it never bought, so the member is rejected rather than ignored.
+    let attested = binding.get("audit_assurance_class").and_then(Value::as_str)
+        == Some(ATTESTED_HARDWARE_ASSURANCE);
+    let Some(attestation) = payload.release_attestation.as_ref() else {
+        return attested.then_some(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+    };
+    if !attested {
+        return Some(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+    }
+    let policy: AuditAttestationPolicy = match binding.get("attestation_policy") {
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(policy) => policy,
+            Err(_) => return Some(invalid),
+        },
+        // An `attested_hardware` binding without a policy has no trust root
+        // list, so there is nothing to validate the evidence against.
+        None => return Some(invalid),
+    };
+
+    if !attestation.platform.family.is_hardware_backed() {
+        return Some(invalid);
+    }
+    let Ok(root_digest) = attestation.chain_root_digest() else {
+        return Some(invalid);
+    };
+    if !policy.trust_root_digests.contains(&root_digest) {
+        return Some(invalid);
+    }
+    if !policy
+        .allowed_code_digests
+        .contains(&attestation.measurement.code_digest)
+    {
+        return Some(invalid);
+    }
+    if !policy
+        .allowed_policy_versions
+        .contains(&attestation.measurement.policy_version)
+    {
+        return Some(invalid);
+    }
+    let validity = &attestation.validity;
+    if validity.expires_at <= validity.not_before
+        || validity.expires_at - validity.not_before > AuditReleaseAttestation::MAX_VALIDITY
+    {
+        return Some(invalid);
+    }
+    if event_created_at < validity.not_before || event_created_at >= validity.expires_at {
+        return Some(invalid);
+    }
+
+    if attestation.realm_id.as_str() != payload.realm_id.as_str() {
+        return Some(mismatch);
+    }
+    if binding.get("service_id").and_then(Value::as_str) != Some(attestation.service_id.as_str()) {
+        return Some(mismatch);
+    }
+    if binding
+        .get("policy_version_digest")
+        .and_then(Value::as_str)
+        .is_some_and(|digest| digest != attestation.audit_policy_version_digest.as_str())
+    {
+        return Some(mismatch);
+    }
+    // The approved recipient is the auditor the authorize step named. Evidence
+    // attesting a different actor's output path proves nothing about where this
+    // release's material is going.
+    if approved_recipient_audit_actor_id
+        .is_some_and(|actor| actor != attestation.audit_actor_id.to_string())
+    {
+        return Some(mismatch);
+    }
+    None
 }
 
 /// The manifest rules the binding document itself decides. Every one of these

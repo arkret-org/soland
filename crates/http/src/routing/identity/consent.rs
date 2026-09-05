@@ -29,8 +29,8 @@ use arkret_models_collaboration::account_lifecycle::{
     ConsentRequestRequestBody, ConsentRevokeRequestBody, ConsentState,
 };
 use arkret_models_collaboration::governance::invite_addressing::{
-    InviteQuarantine, InviteQuarantineInvalidation, InviteQuarantineInvalidationReason,
-    InviteQuarantineInvalidationScope,
+    HolderQuarantine, HolderQuarantineInvalidation, HolderQuarantineInvalidationReason,
+    HolderQuarantineInvalidationScope,
 };
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
@@ -199,7 +199,7 @@ pub(crate) async fn apply_committed_consent_admission(
                 "accepted",
             )
             .await;
-            if let Some(cas) = admission.commit.invite_quarantine.as_ref() {
+            if let Some(cas) = admission.commit.holder_quarantine.as_ref() {
                 fanout_actor_private_update(
                     state,
                     admission.holder_account_id.principal_id.as_str(),
@@ -207,7 +207,7 @@ pub(crate) async fn apply_committed_consent_admission(
                         sender: station_device_message_sender(state),
                         content: ActorPrivateAccountDataUpdate {
                             operation: ActorPrivateAccountDataOperation::Put,
-                            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+                            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
                             revision: cas.record.revision,
                             content: Some(cas.record.payload.clone()),
                             updated_at: cas.record.updated_at,
@@ -219,7 +219,7 @@ pub(crate) async fn apply_committed_consent_admission(
                 append_audit_log(
                     state,
                     Some(admission.holder_account_id.principal_id.as_str()),
-                    "consent.revoke.invite_quarantine_invalidation",
+                    "consent.revoke.holder_quarantine_invalidation",
                     json!({
                         "holder_account_id": admission.holder_account_id,
                         "peer": admission.commit.cell.peer,
@@ -309,7 +309,7 @@ async fn plan_consent_grant(
         consent_id,
         commit: CommitConsentProjection {
             cell,
-            invite_quarantine: None,
+            holder_quarantine: None,
         },
         effect: ConsentAdmissionEffect::Grant { dot },
     })
@@ -407,7 +407,7 @@ async fn plan_consent_revoke(
     cell.revoked_dots.extend(observed_dot_ids.iter().cloned());
     cell.updated_at = revoked_at;
 
-    let quarantine = plan_invite_quarantine_invalidation(
+    let quarantine = plan_holder_quarantine_invalidation(
         state,
         event.actor_id.as_account_id().ok_or_else(|| {
             ConsentRejection::schema("consent quarantine holder must be an Account Actor")
@@ -428,7 +428,7 @@ async fn plan_consent_revoke(
         consent_id,
         commit: CommitConsentProjection {
             cell,
-            invite_quarantine: quarantine.map(|(cas, _)| cas),
+            holder_quarantine: quarantine.map(|(cas, _)| cas),
         },
         effect: ConsentAdmissionEffect::Revoke {
             observed_dot_ids,
@@ -1088,7 +1088,7 @@ fn consent_response(
 /// Returns the staged CAS and how many `pending_review` entries it drops. The
 /// write itself happens inside the Event commit transaction, so a revoke that
 /// cannot invalidate is never accepted.
-async fn plan_invite_quarantine_invalidation(
+async fn plan_holder_quarantine_invalidation(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
     peer: &str,
@@ -1106,7 +1106,7 @@ async fn plan_invite_quarantine_invalidation(
     let holder = arkret_wire::ActorId::account(account_id.clone()).to_string();
     let existing = state
         .account_data()
-        .entry(&holder, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+        .entry(&holder, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
         .await
         .map_err(|error| {
             ConsentRejection::internal(format!("invite quarantine cell is unavailable: {error}"))
@@ -1114,7 +1114,7 @@ async fn plan_invite_quarantine_invalidation(
     let Some(existing) = existing else {
         return Ok(None);
     };
-    let mut quarantine: InviteQuarantine = serde_json::from_value(existing.payload.clone())
+    let mut quarantine: HolderQuarantine = serde_json::from_value(existing.payload.clone())
         .map_err(|error| {
             ConsentRejection::internal(format!("invalid invite quarantine cell: {error}"))
         })?;
@@ -1133,15 +1133,15 @@ async fn plan_invite_quarantine_invalidation(
         return Ok(None);
     }
     quarantine.updated_at = revoked_at;
-    quarantine.last_invalidation = Some(InviteQuarantineInvalidation {
-        reason: InviteQuarantineInvalidationReason::ConsentRevoke,
+    quarantine.last_invalidation = Some(HolderQuarantineInvalidation {
+        reason: HolderQuarantineInvalidationReason::ConsentRevoke,
         peer_principal_id: DidCoreId::new(peer.to_owned()).map_err(|error| {
             ConsentRejection::internal(format!("invalid revoked peer: {error}"))
         })?,
         consent_scope: if consent_scope == "any" {
-            InviteQuarantineInvalidationScope::Any
+            HolderQuarantineInvalidationScope::Any
         } else {
-            InviteQuarantineInvalidationScope::Invite
+            HolderQuarantineInvalidationScope::Invite
         },
         revoked_at,
         removed_entries: removed as u64,
@@ -1151,7 +1151,7 @@ async fn plan_invite_quarantine_invalidation(
     })?;
     let record = AccountDataState {
         actor_id: holder.to_owned(),
-        account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+        account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
         revision: existing.revision + 1,
         payload: serde_json::to_value(quarantine).map_err(|error| {
             ConsentRejection::internal(format!("invite quarantine encode: {error}"))
@@ -1639,10 +1639,10 @@ mod tests {
             .expect("holder device");
         let initial = AccountDataState {
             actor_id: holder_actor.clone(),
-            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
             revision: 1,
             payload: json!({
-                "schema": "ak.schema.invite_quarantine.v1",
+                "schema": "ak.schema.holder_quarantine.v1",
                 "quarantine_entries": [{
                     "entry_digest": format!("sha256:{}", "a".repeat(64)),
                     "status": "pending_review",
@@ -1678,10 +1678,10 @@ mod tests {
             holder_account.principal_id.clone(),
             DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         );
-        plan_invite_quarantine_invalidation(&state, &foreign_holder, PEER, "invite", revoked_at)
+        plan_holder_quarantine_invalidation(&state, &foreign_holder, PEER, "invite", revoked_at)
             .await
             .expect_err("the same principal at another Station cannot revoke this quarantine");
-        let (cas, removed) = plan_invite_quarantine_invalidation(
+        let (cas, removed) = plan_holder_quarantine_invalidation(
             &state,
             &holder_account,
             PEER,
@@ -1700,7 +1700,7 @@ mod tests {
         assert_eq!(
             state
                 .account_data()
-                .entry(&holder_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+                .entry(&holder_actor, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
                 .await
                 .expect("quarantine cell")
                 .expect("seeded cell")
@@ -1719,7 +1719,7 @@ mod tests {
             consent_id: CONSENT_ID.to_owned(),
             commit: CommitConsentProjection {
                 cell,
-                invite_quarantine: Some(cas),
+                holder_quarantine: Some(cas),
             },
             effect: ConsentAdmissionEffect::Revoke {
                 observed_dot_ids: vec![format!("{GRANT_EVENT}:0")],

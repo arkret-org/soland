@@ -10,8 +10,8 @@ use arkret_models_collaboration::governance::invite_addressing::{
     InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequestBody,
     InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody,
     InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody,
-    InviteLocatorStatus, InviteQuarantine, InviteQuarantineEntry, InviteQuarantineScope,
-    InviteQuarantineStatus, InviteReceivePolicy, InviteTrustTier, PrincipalLocator,
+    InviteLocatorStatus, HolderQuarantine, HolderQuarantineEntry, HolderQuarantineScope,
+    HolderQuarantineStatus, InviteReceivePolicy, InviteTrustTier, PrincipalLocator,
     PrincipalLocatorProof, PrincipalLocatorProofPurpose, SelfInviteDispatchRequestBody,
 };
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
@@ -376,7 +376,7 @@ async fn receive_private_invite_delivery(
 
     if decision.action != InviteReceiveAction::Notify {
         let quarantine_persisted = if decision.action == InviteReceiveAction::Quarantine {
-            persist_invite_quarantine_entry(
+            persist_holder_quarantine_entry(
                 state,
                 &subject,
                 source_id,
@@ -1163,7 +1163,7 @@ fn receive_action_str(action: &InviteReceiveAction) -> &'static str {
     }
 }
 
-async fn persist_invite_quarantine_entry(
+async fn persist_holder_quarantine_entry(
     state: &AppState,
     subject: &str,
     source_id: &str,
@@ -1248,15 +1248,15 @@ async fn persist_invite_quarantine_entry(
         Hash::new(value)
             .map_err(|error| AppError::internal(format!("invite quarantine digest: {error}")))
     };
-    let entry = InviteQuarantineEntry {
+    let entry = HolderQuarantineEntry {
         entry_digest: parse_digest(entry_digest)?,
-        status: InviteQuarantineStatus::PendingReview,
+        status: HolderQuarantineStatus::PendingReview,
         account_id: account_id.clone(),
         source_peer_principal_id: DidCoreId::new(inviter_id.to_owned())
             .map_err(|error| AppError::param_invalid(format!("invalid inviter: {error}")))?,
         source_id: DidCoreId::new(source_id.to_owned())
             .map_err(|error| AppError::param_invalid(format!("invalid source: {error}")))?,
-        consent_scope: InviteQuarantineScope::Invite,
+        consent_scope: HolderQuarantineScope::Invite,
         introduction_kind: serde_json::from_value(json!(delivery.introduction_evidence.kind()))
             .map_err(|error| AppError::internal(format!("invalid introduction kind: {error}")))?,
         effective_kind: serde_json::from_value(json!(decision.effective_kind))
@@ -1278,24 +1278,24 @@ async fn persist_invite_quarantine_entry(
     let mut attempt = 0;
     let record = loop {
         let existing = account_data
-            .entry(&subject_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+            .entry(&subject_actor, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         let existing_cell = existing
             .as_ref()
-            .map(|record| serde_json::from_value::<InviteQuarantine>(record.payload.clone()))
+            .map(|record| serde_json::from_value::<HolderQuarantine>(record.payload.clone()))
             .transpose()
             .map_err(|error| {
                 AppError::internal(format!("invalid invite quarantine cell: {error}"))
             })?;
         let quarantine =
-            merge_invite_quarantine_cell(existing_cell, entry.clone(), received_at, account_id)?;
+            merge_holder_quarantine_cell(existing_cell, entry.clone(), received_at, account_id)?;
         let cell_updated_at = quarantine.updated_at;
         let payload = serde_json::to_value(&quarantine)
             .map_err(|error| AppError::internal(format!("invite quarantine encode: {error}")))?;
         let record = AccountDataState {
             actor_id: subject_actor.clone(),
-            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
             revision: existing.as_ref().map_or(1, |record| record.revision + 1),
             payload,
             tombstone: false,
@@ -1341,7 +1341,7 @@ async fn persist_invite_quarantine_entry(
             sender: station_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
-                account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+                account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
                 revision: record.revision,
                 content: Some(record.payload.clone()),
                 updated_at: record.updated_at,
@@ -1438,13 +1438,13 @@ fn new_source_ledger_digest(
     hex::encode(tag)
 }
 
-fn merge_invite_quarantine_cell(
-    existing: Option<InviteQuarantine>,
-    new_entry: InviteQuarantineEntry,
+fn merge_holder_quarantine_cell(
+    existing: Option<HolderQuarantine>,
+    new_entry: HolderQuarantineEntry,
     received_at: chrono::DateTime<chrono::Utc>,
     account_id: &arkret_wire::AccountId,
-) -> Result<InviteQuarantine, AppError> {
-    let mut quarantine = existing.unwrap_or_else(|| InviteQuarantine::new(received_at));
+) -> Result<HolderQuarantine, AppError> {
+    let mut quarantine = existing.unwrap_or_else(|| HolderQuarantine::new(received_at));
     quarantine
         .validate_holder(account_id)
         .map_err(|error| AppError::internal(format!("invite quarantine binding: {error}")))?;
@@ -3036,7 +3036,7 @@ mod invite_locator_security_tests {
                 production_invite_delivery_from(&state, inviter_id, event_id, idempotency_key);
             let body = serde_json::to_value(&delivery).unwrap();
             admitted.push(
-                persist_invite_quarantine_entry(
+                persist_holder_quarantine_entry(
                     &state,
                     PRODUCTION_HOLDER,
                     state.service_id(),
@@ -3063,7 +3063,7 @@ mod invite_locator_security_tests {
                     state.service_core_id().clone(),
                 ))
                 .to_string(),
-                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+                AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             )
             .await
             .expect("invite quarantine cell")
@@ -3088,7 +3088,7 @@ mod invite_locator_security_tests {
         );
         let repeat_body = serde_json::to_value(&repeat).unwrap();
         assert!(
-            persist_invite_quarantine_entry(
+            persist_holder_quarantine_entry(
                 &state,
                 PRODUCTION_HOLDER,
                 state.service_id(),
@@ -3104,7 +3104,7 @@ mod invite_locator_security_tests {
     }
 
     #[tokio::test]
-    async fn production_invite_quarantine_fanout_uses_a_readable_service_sender() {
+    async fn production_holder_quarantine_fanout_uses_a_readable_service_sender() {
         let state = production_holder_state().await;
         let delivery = production_invite_delivery(&state);
         let body = serde_json::to_value(&delivery).unwrap();
@@ -3116,7 +3116,7 @@ mod invite_locator_security_tests {
         };
 
         assert!(
-            persist_invite_quarantine_entry(
+            persist_holder_quarantine_entry(
                 &state,
                 PRODUCTION_HOLDER,
                 state.service_id(),
@@ -3133,14 +3133,14 @@ mod invite_locator_security_tests {
             .entry(
                 &arkret_wire::ActorId::account(delivery.invite_address.account_id.clone())
                     .to_string(),
-                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+                AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             )
             .await
             .expect("invite quarantine cell")
             .expect("invite quarantine write");
-        assert_eq!(cell.payload["schema"], "ak.schema.invite_quarantine.v1");
+        assert_eq!(cell.payload["schema"], "ak.schema.holder_quarantine.v1");
         assert!(cell.payload.get("entries").is_none());
-        let typed: InviteQuarantine = serde_json::from_value(cell.payload.clone()).unwrap();
+        let typed: HolderQuarantine = serde_json::from_value(cell.payload.clone()).unwrap();
         typed
             .validate_holder(&delivery.invite_address.account_id)
             .unwrap();
@@ -3159,7 +3159,7 @@ mod invite_locator_security_tests {
         assert!(!entry.get("invite_event_id").is_some_and(Value::is_null));
         assert_service_account_data_fanout(
             &state,
-            AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+            AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             cell.revision,
             &cell.payload,
         )
@@ -3167,7 +3167,7 @@ mod invite_locator_security_tests {
         assert!(
             state
                 .account_data()
-                .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+                .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
                 .await
                 .unwrap()
                 .is_none()
@@ -3176,7 +3176,7 @@ mod invite_locator_security_tests {
         foreign_delivery.invite_address.account_id.station_id =
             DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
         assert!(
-            persist_invite_quarantine_entry(
+            persist_holder_quarantine_entry(
                 &state,
                 PRODUCTION_HOLDER,
                 state.service_id(),
@@ -3194,7 +3194,7 @@ mod invite_locator_security_tests {
                 .entry(
                     &arkret_wire::ActorId::account(foreign_delivery.invite_address.account_id)
                         .to_string(),
-                    AccountDataKey::ACCOUNT_INVITE_QUARANTINE
+                    AccountDataKey::ACCOUNT_HOLDER_QUARANTINE
                 )
                 .await
                 .unwrap()
@@ -3203,7 +3203,7 @@ mod invite_locator_security_tests {
     }
 
     #[tokio::test]
-    async fn concurrent_invite_quarantine_writes_merge_without_exposing_cas_conflict() {
+    async fn concurrent_holder_quarantine_writes_merge_without_exposing_cas_conflict() {
         let state = production_holder_state().await;
         let delivery_a = production_invite_delivery(&state);
         let body_a = serde_json::to_value(&delivery_a).unwrap();
@@ -3222,7 +3222,7 @@ mod invite_locator_security_tests {
         };
 
         let (first, second) = tokio::join!(
-            persist_invite_quarantine_entry(
+            persist_holder_quarantine_entry(
                 &state,
                 PRODUCTION_HOLDER,
                 state.service_id(),
@@ -3231,7 +3231,7 @@ mod invite_locator_security_tests {
                 &body_a,
                 &decision,
             ),
-            persist_invite_quarantine_entry(
+            persist_holder_quarantine_entry(
                 &state,
                 PRODUCTION_HOLDER,
                 state.service_id(),
@@ -3249,12 +3249,12 @@ mod invite_locator_security_tests {
             .entry(
                 &arkret_wire::ActorId::account(delivery_a.invite_address.account_id.clone())
                     .to_string(),
-                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+                AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             )
             .await
             .expect("invite quarantine cell")
             .expect("concurrent quarantine writes");
-        let quarantine: InviteQuarantine = serde_json::from_value(cell.payload).unwrap();
+        let quarantine: HolderQuarantine = serde_json::from_value(cell.payload).unwrap();
         quarantine
             .validate_holder(&delivery_a.invite_address.account_id)
             .unwrap();

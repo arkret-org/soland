@@ -654,6 +654,11 @@ pub struct AuditSessionProjection {
     pub stage: arkret_models_collaboration::events_payloads::audit::AuditSessionStage,
     pub approved_release_mode:
         Option<arkret_models_collaboration::events_payloads::audit::AuditReleaseMode>,
+    /// Audit actor the accepted `authorize` approved as the release recipient.
+    /// Release attestation evidence has to attest this exact actor's output
+    /// path, so a release cannot present evidence for a different auditor
+    /// (`audited-e2ee.md` §6).
+    pub approved_recipient_audit_actor_id: Option<String>,
     /// Accepted `ak.audit.session.notice` Event id. A release names it, and a
     /// session that has none has not noticed anybody.
     pub notice_ref: Option<String>,

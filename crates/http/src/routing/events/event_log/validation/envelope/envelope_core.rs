@@ -880,6 +880,10 @@ async fn finalize_validated_event_envelope(
         internal_admission,
     )
     .await?;
+    // The signature half of `join-policy.md` §4 rule 4. The reducer owns the
+    // binding tuple, but resolving a gate proof's signer through a DID document
+    // is admission-path work, so it runs beside the envelope proofs.
+    validate_join_gate_proof_signatures(object, state).await?;
     enforce_device_generation_fence(
         state,
         session,

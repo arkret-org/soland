@@ -565,7 +565,7 @@ async fn commit_consent_projection(
             "consent_intent_rebind".to_owned(),
         ));
     }
-    let Some(cas) = commit.invite_quarantine else {
+    let Some(cas) = commit.holder_quarantine else {
         return Ok(());
     };
     let record = cas.record;

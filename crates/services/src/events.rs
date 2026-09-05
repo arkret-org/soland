@@ -795,7 +795,7 @@ pub struct CommitAcceptedEventCommand {
 #[derive(Clone, Debug)]
 pub struct CommitConsentProjection {
     pub cell: crate::identity::ConsentCellRecord,
-    pub invite_quarantine: Option<CommitAccountDataCas>,
+    pub holder_quarantine: Option<CommitAccountDataCas>,
 }
 
 /// One account-data cell replaced by revision CAS inside an Event commit.

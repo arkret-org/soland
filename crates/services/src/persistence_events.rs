@@ -96,7 +96,7 @@ fn persistence_event_commit_request(
         consent_projection: command.consent_projection.map(|commit| {
             soland_storage::ConsentProjectionCommit {
                 cell: commit.cell,
-                invite_quarantine: commit.invite_quarantine.map(|cas| {
+                holder_quarantine: commit.holder_quarantine.map(|cas| {
                     soland_storage::AccountDataCasCommit {
                         record: soland_storage::AccountDataRecord {
                             actor: cas.record.actor_id,

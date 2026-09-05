@@ -205,6 +205,7 @@ mod capability_refs;
 mod control_move;
 mod envelope_core;
 mod features_schema;
+mod join_gate_proofs;
 mod minimal_metadata_author;
 mod proofs;
 mod realm_authority_root;
@@ -221,4 +222,5 @@ pub(crate) use features_schema::{
     event_requirements_schema_id, validate_event_critical_features,
     validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
 };
+pub(crate) use join_gate_proofs::validate_join_gate_proof_signatures;
 pub(crate) use proofs::validate_event_proofs;

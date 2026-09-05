@@ -3904,6 +3904,7 @@ mod control_governance_health_tests {
             .unwrap()
         };
         let invite_id = "ak:invite:AVcbARXDOZuMaYlp1-g60cl4c6Y5NzY10J6VMsgtrakA";
+        let mut slots = Vec::new();
         for station in [
             "ak:did_core:web:station-a.example",
             "ak:did_core:web:station-b.example",
@@ -3916,12 +3917,29 @@ mod control_governance_health_tests {
                 "target_state": "revoked",
             }));
             let writes = service.project_accepted_cell_writes(&event).unwrap();
-            assert_eq!(writes.len(), 1);
+            // The lifecycle transition plus the live-target release, whose
+            // subject is derived from the complete AccountId — which is the
+            // point of this test: the same principal at a different Station is
+            // a different slot, so the two loop iterations must not collide.
+            assert_eq!(writes.len(), 2);
             assert_eq!(
                 writes[0].cell_id.as_str(),
                 format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}")
             );
+            assert!(
+                writes[1].cell_id.as_str().starts_with(&format!(
+                    "ak:cell:{}:",
+                    arkret_wire::CellFamilyId::INVITE_LIVE_TARGET_V1
+                )),
+                "second write releases the live-target slot, got {}",
+                writes[1].cell_id.as_str()
+            );
+            slots.push(writes[1].cell_id.as_str().to_owned());
         }
+        assert_ne!(
+            slots[0], slots[1],
+            "one principal at two Stations holds two distinct live-target slots"
+        );
         let legacy = make_event(serde_json::json!({
             "invite_id": invite_id, "invitee_id": principal, "target_state": "revoked",
         }));

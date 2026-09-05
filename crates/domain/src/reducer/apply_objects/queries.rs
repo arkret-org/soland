@@ -4,6 +4,7 @@
 //! cross-family `self.apply_*` / `self.check_*` calls are unaffected.
 
 use super::*;
+use arkret_models_collaboration::governance::membership_invite::JoinGateProof;
 
 fn is_policy_frontier_component(component: &str) -> bool {
     (component.starts_with("ak.component.realm.")
@@ -532,15 +533,42 @@ impl ProjectionState {
         let Some(gates) = join_policy.get("gates").and_then(Value::as_array) else {
             return Err("gate_check_failed");
         };
-        let proofs = operation
+        // `gate_proofs[]` items are the registered closed `join_gate_proof`
+        // carrier. Parsing them here rather than probing member names is what
+        // makes two implementations agree on what a proof even is: the private
+        // shape this used to accept was never in the schema.
+        let raw_proofs = operation
             .payload
             .get("gate_proofs")
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        if proofs.len() > 16 || gate_proofs_have_duplicate_gate_ids(proofs) {
+        if raw_proofs.len() > 16 {
             return Err("gate_check_failed");
         }
+        let mut proofs: Vec<JoinGateProof> = Vec::with_capacity(raw_proofs.len());
+        let mut seen_gate_ids = std::collections::BTreeSet::new();
+        for raw in raw_proofs {
+            let Ok(proof) = serde_json::from_value::<JoinGateProof>(raw.clone()) else {
+                return Err("gate_check_failed");
+            };
+            if !seen_gate_ids.insert(proof.gate_id.clone()) {
+                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+            }
+            proofs.push(proof);
+        }
+        // The digest every proof binds itself to: the accepted policy component
+        // this join is evaluated against. A proof minted under an earlier
+        // revision cannot be replayed into this one.
+        let Ok(policy_digest) = arkret_canonical::canonical_sha256(join_policy)
+            .map_err(|_| ())
+            .and_then(|digest| arkret_wire::Hash::new(digest).map_err(|_| ()))
+        else {
+            return Err("gate_check_failed");
+        };
+        let Ok(applicant_actor_id) = serde_json::from_str::<arkret_wire::ActorId>(member) else {
+            return Err("gate_check_failed");
+        };
         for gate in gates {
             let Some(gate) = gate.as_object() else {
                 return Err("gate_check_failed");
@@ -616,7 +644,15 @@ impl ProjectionState {
         match join_policy.get("combinator").and_then(Value::as_str) {
             Some("all") => {
                 for gate in normal_gates {
-                    if !self.join_gate_allows(gate, proofs, member, operation.created_at) {
+                    if !self.join_gate_allows(
+                        gate,
+                        &proofs,
+                        member,
+                        &applicant_actor_id,
+                        &policy_digest,
+                        operation.realm_id.as_str(),
+                        operation.created_at,
+                    ) {
                         return Err("gate_check_failed");
                     }
                 }
@@ -624,7 +660,15 @@ impl ProjectionState {
             }
             Some("any") => {
                 for gate in normal_gates {
-                    if self.join_gate_allows(gate, proofs, member, operation.created_at) {
+                    if self.join_gate_allows(
+                        gate,
+                        &proofs,
+                        member,
+                        &applicant_actor_id,
+                        &policy_digest,
+                        operation.realm_id.as_str(),
+                        operation.created_at,
+                    ) {
                         return Ok(());
                     }
                 }
@@ -661,25 +705,57 @@ impl ProjectionState {
         previous.state == "leave" && now.signed_duration_since(previous.updated_at) < min_interval
     }
 
+    /// One automatic gate's verdict.
+    ///
+    /// `parent_membership` is replayed from accepted state and takes no proof.
+    /// The two proof-bearing kinds each require an item naming this gate whose
+    /// binding tuple holds against this Realm, applicant and policy revision;
+    /// a missing item gives the same verdict as a failing one, which is what
+    /// keeps the outward answer non-enumerable.
+    #[allow(clippy::too_many_arguments)]
     fn join_gate_allows(
         &self,
         gate: &serde_json::Map<String, Value>,
-        proofs: &[Value],
+        proofs: &[JoinGateProof],
         member: &str,
-        now: chrono::DateTime<chrono::Utc>,
+        applicant_actor_id: &arkret_wire::ActorId,
+        policy_digest: &arkret_wire::Hash,
+        realm_id: &str,
+        event_created_at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        match gate.get("kind").and_then(Value::as_str) {
-            Some("parent_membership") => self.parent_membership_gate_allows(gate, member),
-            Some("challenge_response") => gate
-                .get("gate_id")
-                .and_then(Value::as_str)
-                .and_then(|gate_id| gate_proof_for_gate(proofs, gate_id))
-                .is_some_and(|proof| challenge_response_gate_allows(gate, proof, now)),
-            Some("claim_required") => gate
-                .get("gate_id")
-                .and_then(Value::as_str)
-                .and_then(|gate_id| gate_proof_for_gate(proofs, gate_id))
-                .is_some_and(|proof| claim_required_gate_has_proof(gate, proof)),
+        let kind = gate.get("kind").and_then(Value::as_str);
+        if kind == Some("parent_membership") {
+            return self.parent_membership_gate_allows(gate, member);
+        }
+        let Some(proof) = gate
+            .get("gate_id")
+            .and_then(Value::as_str)
+            .and_then(|gate_id| gate_proof_for_gate(proofs, gate_id))
+        else {
+            return false;
+        };
+        // `max_proof_age` is only declared by `challenge_response`; a gate that
+        // declares one it cannot parse has no evaluable freshness bound.
+        let max_proof_age = match kind {
+            Some("challenge_response") => match gate_max_proof_age(gate) {
+                Some(age) => Some(age),
+                None => return false,
+            },
+            _ => None,
+        };
+        if !join_gate_proof_binding_holds(
+            proof,
+            realm_id,
+            applicant_actor_id,
+            policy_digest,
+            event_created_at,
+            max_proof_age,
+        ) {
+            return false;
+        }
+        match kind {
+            Some("challenge_response") => challenge_response_gate_allows(gate, proof),
+            Some("claim_required") => claim_required_gate_has_proof(gate, proof),
             _ => false,
         }
     }
@@ -1123,25 +1199,6 @@ impl ProjectionState {
     }
 }
 
-fn gate_proofs_have_duplicate_gate_ids(proofs: &[Value]) -> bool {
-    let mut seen = std::collections::BTreeSet::new();
-    for proof in proofs {
-        let Some(gate_id) = proof.get("gate_id").and_then(Value::as_str) else {
-            return true;
-        };
-        if gate_id.trim().is_empty() || !seen.insert(gate_id.to_owned()) {
-            return true;
-        }
-    }
-    false
-}
-
-fn gate_proof_for_gate<'a>(
-    proofs: &'a [Value],
-    gate_id: &str,
-) -> Option<&'a serde_json::Map<String, Value>> {
-    proofs.iter().find_map(|proof| {
-        let object = proof.as_object()?;
-        (object.get("gate_id").and_then(Value::as_str) == Some(gate_id)).then_some(object)
-    })
+fn gate_proof_for_gate<'a>(proofs: &'a [JoinGateProof], gate_id: &str) -> Option<&'a JoinGateProof> {
+    proofs.iter().find(|proof| proof.gate_id == gate_id)
 }
