@@ -109,7 +109,7 @@ fn authorize_payload(binding_id: &str, session_id: &str, request_ref: &str) -> V
         "request_ref": request_ref,
         "approver_actor_id": actor(APPROVER),
         "approved_recipient_audit_actor_id": actor(SERVICE),
-        "approved_recipient_public_key_ref": format!("did:web:audit.example#release-1"),
+        "approved_recipient_public_key_ref": "did:web:audit.example#release-1",
         "approved_release_mode": "targeted_evidence_release",
         "notice_policy": {"audience": "members"},
         "expires_at": "2026-05-09T00:00:00.000Z",
@@ -189,7 +189,7 @@ fn noticed_session(state: &mut ProjectionState, hlc: &ServerHlc) -> (String, Str
         state,
         hlc,
         arkret_wire::EventKind::AuditSessionAuthorize.as_str(),
-        authorize_payload(&binding_id, &session_id, &request_event.to_string()),
+        authorize_payload(&binding_id, &session_id, request_event.as_ref()),
     );
     assert!(
         matches!(effect, ProjectionEffect::AuditSessionProjected { ref state, .. } if state == "authorize"),
@@ -200,7 +200,7 @@ fn noticed_session(state: &mut ProjectionState, hlc: &ServerHlc) -> (String, Str
         state,
         hlc,
         arkret_wire::EventKind::AuditSessionNotice.as_str(),
-        notice_payload(&binding_id, &session_id, &authorize_event.to_string()),
+        notice_payload(&binding_id, &session_id, authorize_event.as_ref()),
     );
     assert!(
         matches!(effect, ProjectionEffect::AuditSessionProjected { ref state, .. } if state == "notice"),
@@ -259,7 +259,7 @@ fn a_release_without_the_sessions_notice_is_refused() {
         &mut state,
         &hlc,
         arkret_wire::EventKind::AuditSessionAuthorize.as_str(),
-        authorize_payload(&binding_id, &session_id, &request_event.to_string()),
+        authorize_payload(&binding_id, &session_id, request_event.as_ref()),
     );
 
     // Authorized but never noticed: the release names an Event that is not
@@ -268,7 +268,7 @@ fn a_release_without_the_sessions_notice_is_refused() {
         &mut state,
         &hlc,
         arkret_wire::EventKind::AuditRelease.as_str(),
-        release_payload(&binding_id, &session_id, &request_event.to_string()),
+        release_payload(&binding_id, &session_id, request_event.as_ref()),
     );
     assert!(
         matches!(&effect, ProjectionEffect::Rejected { reason } if reason == "audit_release_notice_missing"),
@@ -476,16 +476,16 @@ fn attested_release_effect(mutate: impl FnOnce(&mut Value)) -> ProjectionEffect 
         &mut state,
         &hlc,
         arkret_wire::EventKind::AuditSessionAuthorize.as_str(),
-        authorize_payload(&binding_id, &session_id, &request_event.to_string()),
+        authorize_payload(&binding_id, &session_id, request_event.as_ref()),
     );
     let (notice_event, _) = apply(
         &mut state,
         &hlc,
         arkret_wire::EventKind::AuditSessionNotice.as_str(),
-        notice_payload(&binding_id, &session_id, &authorize_event.to_string()),
+        notice_payload(&binding_id, &session_id, authorize_event.as_ref()),
     );
 
-    let mut payload = release_payload(&binding_id, &session_id, &notice_event.to_string());
+    let mut payload = release_payload(&binding_id, &session_id, notice_event.as_ref());
     let mut evidence = attestation();
     mutate(&mut evidence);
     if !evidence.is_null() {

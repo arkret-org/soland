@@ -45,6 +45,11 @@ echo "gate: jobs=$jobs target=$target_dir log=$log"
 # scanner proves itself before it is trusted, same as the secret scan does.
 sh "$(dirname -- "$0")/tests/stale-literal-scan.tests.sh"
 sh "$(dirname -- "$0")/stale-literal-scan.sh"
+# A test-only accessor or module that lost its `#[cfg]` compiles into the
+# release binary and no test fails for it. Repository Actions are switched off
+# here by decision, so `.github/workflows/ci.yml` running this check guarantees
+# nothing — the local gate is where it has to run.
+python "$(dirname -- "$0")/check-test-support-surface.py"
 
 set +e
 CARGO_TARGET_DIR="$target_dir" cargo test --locked --quiet \

@@ -1,7 +1,15 @@
 #![forbid(unsafe_code)]
 
 pub mod authorization;
-#[doc(hidden)]
+/// Governance-basis fixtures for the development conformance harness.
+///
+/// `ConformanceNotarySigner::ed25519` derives a notary signing key from a
+/// caller-supplied 32-byte seed, so this module is fixture material, not a
+/// runtime surface. Compiled for this crate's own tests and, for other
+/// crates, behind the `test-support` feature they opt into — `soland-http`
+/// pulls it in through `conformance-harness`, and a default
+/// `soland-server` build contains neither.
+#[cfg(any(test, feature = "test-support"))]
 pub mod conformance_basis;
 pub mod delivery;
 pub mod events;

@@ -130,8 +130,8 @@ pub(super) async fn invite_capability_closure_from_bundles(
     let control_moves = index_control_moves_by_digest(bundles)?;
     for seal_id in acceptance_order(&seals_by_id)? {
         let seal = &seals_by_id[&seal_id];
-        let digest_suite = digest_suite_from_hash(&seal.control_event_set_root)
-            .map_err(|error| schema_violation(error))?;
+        let digest_suite =
+            digest_suite_from_hash(&seal.control_event_set_root).map_err(schema_violation)?;
         // The pre-state each covered Control Move is reduced against is the
         // view its own accepting Seal's predecessors resolve to, exactly as the
         // accept path does when this Station seals a Move of its own.
@@ -154,8 +154,7 @@ pub(super) async fn invite_capability_closure_from_bundles(
             // with. That is not always the Seal's root suite: a Seal carrying
             // `ak.realm.digest_suite.transition` seals under the new suite
             // while its delta still hashes under the old one.
-            let event_digest_suite =
-                digest_suite_from_hash(digest).map_err(|error| schema_violation(error))?;
+            let event_digest_suite = digest_suite_from_hash(digest).map_err(schema_violation)?;
             let writes = state
                 .projections()
                 .project_cell_writes_with_digest_suite(control_move, event_digest_suite)

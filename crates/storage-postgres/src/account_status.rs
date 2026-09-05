@@ -213,20 +213,10 @@ mod tests {
 
     use super::*;
 
-    /// Follows the gating convention of `tests/store_contracts.rs`: the
-    /// PostgreSQL contracts run only when `DATABASE_URL` points at a migrated
-    /// database and are skipped otherwise.
+    /// The shared contract pool. `SOLAND_TEST_DATABASE_URL` or `DATABASE_URL`
+    /// must name a reachable database; these contracts fail rather than skip.
     async fn test_pool() -> PgPool {
-        crate::Db::connect(
-            std::env::var("DATABASE_URL").ok().as_deref(),
-            Default::default(),
-        )
-        .await
-        .expect("initialize test database")
-        .pool
-        .expect(
-            "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
-        )
+        crate::test_database::contract_pool().await
     }
 
     /// Each run claims a fresh account so the shared database cannot leak a

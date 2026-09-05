@@ -25,18 +25,39 @@ use soland_storage_postgres::{
 /// Build a fresh pool against the configured database. Migrations are
 /// idempotent, so a second `Db::connect` behaves like a restarted process
 /// attaching to the same database.
+/// The database these contracts run against.
+///
+/// Same rule as `test_database::configured_url`: `SOLAND_TEST_DATABASE_URL`
+/// wins, `DATABASE_URL` is the fallback. It is spelled again here rather than
+/// called because an integration test links the library *without* `cfg(test)`,
+/// and a crate cannot enable its own `test-support` feature for its own
+/// `tests/` targets. Keep the two in step -- reading only `DATABASE_URL`, as
+/// this did until 2026-09-05, made the documented way of running the suite
+/// fail 48 contract tests with a message naming the other variable.
+fn configured_url() -> String {
+    for key in ["SOLAND_TEST_DATABASE_URL", "DATABASE_URL"] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            return value;
+        }
+    }
+    panic!(
+        "{}",
+        concat!(
+            "no test database is configured: set SOLAND_TEST_DATABASE_URL or DATABASE_URL ",
+            "to a PostgreSQL instance. These contract tests are the only proof the Postgres ",
+            "adapters honour the storage contracts, so they fail rather than skip."
+        )
+    );
+}
+
 async fn fresh_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL")
-        .ok()
-        .filter(|url| !url.trim().is_empty())
-        .expect(
-            "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
-        );
-    Db::connect(Some(&url), Default::default())
+    Db::connect(Some(&configured_url()), Default::default())
         .await
         .expect("initialize test database")
         .pool
-        .expect("configured DATABASE_URL yields a pool")
+        .expect("a configured URL always yields a pool")
 }
 
 /// `Db::connect` re-runs the embedded migrations on every call; two

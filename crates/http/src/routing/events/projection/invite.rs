@@ -1434,8 +1434,7 @@ mod tests {
             &operation_for(&second, "ak:operation:01904100-0000-7000-8000-000000000611"),
             &state.projections().snapshot(),
         )
-        .err()
-        .expect("an occupied slot rejects the duplicate");
+        .expect_err("an occupied slot rejects the duplicate");
         let InviteLiveTargetRejection::Occupied(problem) = rejection else {
             panic!("a claimed slot must report invite_live_target_occupied");
         };

@@ -2224,13 +2224,6 @@ CREATE TABLE public.realm_owning_organizations (
 
 CREATE INDEX realm_owning_organizations_organization_idx ON public.realm_owning_organizations USING btree (organization_id);
 
-CREATE TABLE public.realm_moderation_policies (
-    realm_id text PRIMARY KEY,
-    payload jsonb NOT NULL,
-    updated_by jsonb NOT NULL,
-    updated_at timestamp with time zone NOT NULL
-);
-
 CREATE TABLE public.retention_policies (
     realm_id text PRIMARY KEY,
     ttl_seconds bigint NOT NULL,

@@ -587,19 +587,41 @@ struct LedgerCountRow {
     value: i64,
 }
 
+/// The database these contracts run against.
+///
+/// Same rule as `test_database::configured_url`: `SOLAND_TEST_DATABASE_URL`
+/// wins, `DATABASE_URL` is the fallback. It is spelled again here rather than
+/// called because an integration test links the library *without* `cfg(test)`,
+/// and a crate cannot enable its own `test-support` feature for its own
+/// `tests/` targets. Keep the two in step -- reading only `DATABASE_URL`, as
+/// this did until 2026-09-05, made the documented way of running the suite
+/// fail 48 contract tests with a message naming the other variable.
+fn configured_url() -> String {
+    for key in ["SOLAND_TEST_DATABASE_URL", "DATABASE_URL"] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            return value;
+        }
+    }
+    panic!(
+        "{}",
+        concat!(
+            "no test database is configured: set SOLAND_TEST_DATABASE_URL or DATABASE_URL ",
+            "to a PostgreSQL instance. These contract tests are the only proof the Postgres ",
+            "adapters honour the storage contracts, so they fail rather than skip."
+        )
+    );
+}
+
 async fn test_pool() -> PgPool {
     TEST_POOL
         .get_or_init(|| async {
-            Db::connect(
-                std::env::var("DATABASE_URL").ok().as_deref(),
-                Default::default(),
-            )
-            .await
-            .expect("initialize test database")
-            .pool
-            .expect(
-                "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
-            )
+            Db::connect(Some(&configured_url()), Default::default())
+                .await
+                .expect("initialize test database")
+                .pool
+                .expect("a configured URL always yields a pool")
         })
         .await
         .clone()
@@ -3633,7 +3655,7 @@ async fn postgres_fork_resolution_canonical_winner_leaves_exactly_the_winner_rea
         vec![winner.event_id.clone()],
     );
     // 2. Ordinary reads agree, because they are the same projection.
-    assert!(events.get(&loser_sealed.event_id).await.unwrap().is_some() == false);
+    assert!(events.get(&loser_sealed.event_id).await.unwrap().is_none());
     assert!(!events.contains(&loser_plain.event_id).await.unwrap());
     assert!(events.get(&winner.event_id).await.unwrap().is_some());
     // 3. So does the actor chain the published frontier is built from: the losers are gone, the
