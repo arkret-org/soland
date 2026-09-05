@@ -35,23 +35,44 @@ pub(crate) async fn snapshot_manifest_for_realm(
         ))
     });
 
-    let mut items = events
-        .iter()
-        .map(snapshot_item_from_event)
-        .collect::<Result<Vec<_>, _>>()?;
-    items.extend(cas_cell_items(state, &realm_id_value).await?);
+    let (items, conflict_records) = reducer_cell_items(state, &realm_id_value).await?;
     let state_digest = arkret_state::state_digest_from_items(&items)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let snapshot_id = arkret_identifiers::SnapshotId::new(crate::ids::generate_snapshot_id())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let built_chunks = arkret_state::build_snapshot_chunks(
+    let built_chunks = arkret_state::build_snapshot_chunks_with_auxiliary_lists(
         &snapshot_id,
         arkret_wire::CORE_REDUCER_PROFILE,
-        items.clone(),
+        items,
         arkret_state::DEFAULT_SNAPSHOT_CHUNK_BYTES,
+        arkret_state::SnapshotAuxiliaryLists {
+            conflict_records,
+            ..Default::default()
+        },
     )
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     persist_snapshot_chunk_blobs(state, realm_id, &built_chunks).await?;
+    let chunk_payloads = built_chunks
+        .iter()
+        .map(|chunk| chunk.payload.clone())
+        .collect::<Vec<_>>();
+    // `snapshot-schema.md` section 3: bottom cells are not leaves; their only
+    // commitment is the conflict_records digest, so it is carried whenever the
+    // list is non-empty rather than left for a high-assurance profile to add.
+    let conflict_records_digest = if chunk_payloads
+        .iter()
+        .any(|chunk| !chunk.conflict_records.is_empty())
+    {
+        Some(
+            arkret_state::snapshot_conflict_records_digest(
+                &chunk_payloads,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
+        )
+    } else {
+        None
+    };
     let chunk_descriptors = built_chunks
         .iter()
         .map(|chunk| chunk.descriptor.clone())
@@ -104,9 +125,10 @@ pub(crate) async fn snapshot_manifest_for_realm(
             verification_profile: arkret_state::SnapshotSecurityClass::Standard,
             inclusion_proof_url: None,
             challenge_window_seconds: None,
-            conflict_records_digest: None,
+            conflict_records_digest,
             soft_failed_digest: None,
             quarantined_digest: None,
+            erasure_stubs_digest: None,
         }),
         created_by: arkret_wire::ActorId::service(service_id.clone()),
         created_at,
@@ -190,71 +212,85 @@ async fn persist_snapshot_chunk_blobs(
     Ok(())
 }
 
-/// The `cas_cell` half of `items[]`, one entry per written `cas_register` cell.
+/// The reducer cells behind `items[]` (`snapshot-schema.md` section 3).
 ///
-/// `snapshot-schema.md` section 3 makes `items[]` a closed union whose second
-/// branch carries a control cell's complete active head set, and section 4
-/// folds those into `state_digest` alongside the object leaves. A `cas_register`
-/// cell cannot be represented by the object branch at all: that branch names
-/// exactly one `source_event_id`, and a cell in `⊥` — or one with two
-/// same-valued concurrent heads — has several live write identities with no
-/// grounds to pick between them.
+/// A snapshot ships the reducer's own state, never rendered objects: every
+/// written Realm-scope cell under the Seal leaves covering the frontier, with
+/// the `event-auth-state-resolution.md` section 6.2.1 state object of its
+/// registered lattice — the complete active head set for a `cas_register`
+/// cell, the joined value for every other lattice. Section 4 then makes each
+/// snapshot leaf byte-identical to that cell's `state_root` leaf.
 ///
-/// Membership follows section 6.2.1 rather than the settled value: a cell is in
-/// as soon as it has one active head, so a cell released to `null` and a cell in
-/// `⊥` both appear, and only a never-written cell is absent. `cas_cell` rejects
-/// an empty head set, so the filter here is what keeps that from firing.
+/// Membership follows section 6.2.1 rather than a settled value: a CAS cell is
+/// in as soon as it has one active head (so a slot released to `null` and a
+/// cell in `⊥` both appear), any other cell is in when its join is a
+/// determinate value, and only a never-written cell is absent. A non-CAS cell
+/// whose join is `⊥` has no leaf; it is returned as a `bottom_cell` conflict
+/// record so a restoring receiver fails closed on it instead of reading it as
+/// never written.
 ///
 /// A Realm with no Seal yet has no governance view to materialize and
-/// contributes no cells.
-async fn cas_cell_items(
+/// contributes no cells. Data-plane cells are not yet exported here: this
+/// Station's reducer keeps them in projection tables rather than in the cell
+/// store the Seal view reads, which the cross-repo task tracks.
+async fn reducer_cell_items(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
-) -> Result<Vec<arkret_state::SnapshotMaterializedItem>, soland_http::error::AppError> {
+) -> Result<
+    (
+        Vec<arkret_state::SnapshotMaterializedItem>,
+        Vec<arkret_state::SnapshotConflictRecord>,
+    ),
+    soland_http::error::AppError,
+> {
+    let internal =
+        |error: &dyn std::fmt::Display| soland_http::error::AppError::internal(error.to_string());
     let leaves = state
         .projections()
         .realm_seal_leaves(realm_id)
         .await
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+        .map_err(|error| internal(&error))?;
     if leaves.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
+    let values = state
+        .projections()
+        .effective_state_at(&leaves, realm_id)
+        .await
+        .map_err(|error| internal(&error))?;
     let heads_by_cell = state
         .projections()
         .effective_cas_heads_at(&leaves, realm_id)
         .await
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    heads_by_cell
-        .into_iter()
-        .filter(|(_, heads)| !heads.is_empty())
-        .map(|(cell, heads)| {
-            arkret_state::SnapshotMaterializedItem::cas_cell(cell, &heads)
-                .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
-        })
-        .collect()
-}
+        .map_err(|error| internal(&error))?;
 
-fn snapshot_item_from_event(
-    record: &AcceptedEvent,
-) -> Result<arkret_state::SnapshotMaterializedItem, soland_http::error::AppError> {
-    let event_id = arkret_identifiers::EventId::new(record.event_id.clone())
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    Ok(arkret_state::SnapshotMaterializedItem::object(
-        record.kind.clone(),
-        record.event_id.clone(),
-        json!({
-            "event_id": record.event_id,
-            "actor_id": record.actor_id,
-            "actor_seq": record.actor_seq,
-            "realm_id": record.realm_id,
-            "kind": record.kind,
-            "schema_id": record.schema_id,
-            "canonical_digest": record.canonical_digest,
-            "received_at": record.received_at,
-            "envelope": record.envelope,
-        }),
-        event_id,
-    ))
+    let mut items = Vec::with_capacity(values.len() + heads_by_cell.len());
+    let mut conflict_records = Vec::new();
+    for (cell, cell_state) in values {
+        if arkret_wire::is_registered_cas_register_cell(cell.as_str()) {
+            // A CAS cell's state is its head set, taken from the identity half
+            // below; its joined value here would lose the write identities.
+            continue;
+        }
+        match cell_state {
+            arkret_state::lattice::CellState::Value(value) => items.push(
+                arkret_state::SnapshotMaterializedItem::value(cell, value)
+                    .map_err(|error| internal(&error))?,
+            ),
+            arkret_state::lattice::CellState::Bottom(_) => conflict_records
+                .push(arkret_state::SnapshotConflictRecord::BottomCell { cell_ref: cell }),
+        }
+    }
+    for (cell, heads) in heads_by_cell {
+        if heads.is_empty() {
+            continue;
+        }
+        items.push(
+            arkret_state::SnapshotMaterializedItem::cas_cell(cell, &heads)
+                .map_err(|error| internal(&error))?,
+        );
+    }
+    Ok((items, conflict_records))
 }
 
 fn snapshot_event_set_leaf(

@@ -1791,13 +1791,14 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     assert!(protocol_head_body["chunks"].is_array());
     assert!(protocol_head_body["signature"].is_object());
 
-    // `snapshot-schema.md` section 3: `items[]` is a closed union, and its
-    // second branch carries a `cas_register` control cell's full head set. Every
-    // Realm has at least one written CAS cell from genesis — the notary — so a
-    // manifest with no `cas_cell` item is a producer that only emits the object
-    // branch, which is what this Station used to do. The chunk payload is read
-    // back rather than trusted from the manifest because the manifest commits to
-    // the chunk only through its content address.
+    // `snapshot-schema.md` section 3: `items[]` is a closed single-branch union
+    // of reducer cells, `{kind:"cell", id, state}`, and a `cas_register` cell's
+    // state is its full head set. Every Realm has at least one written CAS cell
+    // from genesis — the notary — so a manifest without it is a producer that
+    // still dumps Events instead of reducer state, which is what this Station
+    // used to do. The chunk payload is read back rather than trusted from the
+    // manifest because the manifest commits to the chunk only through its
+    // content address.
     let chunk_ref = protocol_head_body["chunks"][0]["chunk_ref"]
         .as_str()
         .expect("a snapshot manifest carries at least one chunk descriptor");
@@ -1806,24 +1807,26 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .expect("a chunk ref is a sha256 content address");
     let chunk_bytes = state.test_object_by_sha256(sha256).await;
     let chunk: Value = serde_json::from_slice(&chunk_bytes).unwrap();
-    let cas_items = chunk["items"]
+    assert_eq!(chunk["chunk_kind"], "snapshot_chunk");
+    let items = chunk["items"]
         .as_array()
-        .expect("a chunk payload carries items[]")
-        .iter()
-        .filter(|item| item["kind"] == "cas_cell")
-        .collect::<Vec<_>>();
-    let notary_item = cas_items
+        .expect("a chunk payload carries items[]");
+    assert!(
+        items.iter().all(|item| item["kind"] == "cell"),
+        "every snapshot item is a reducer cell; the object branch is retired",
+    );
+    let notary_item = items
         .iter()
         .find(|item| item["id"] == "ak:cell:ak.component.notary.v1:null")
         .expect("the Realm notary cell is written at genesis and must be a snapshot member");
     assert!(
         notary_item["object"].is_null() && notary_item["source_event_id"].is_null(),
-        "a cas_cell item carries neither object nor source_event_id: one identity \
+        "a cell item carries neither object nor source_event_id: one identity \
          cannot name several live writes",
     );
     let heads = notary_item["state"]["heads"]
         .as_array()
-        .expect("a cas_cell state is a head set");
+        .expect("a cas_register cell state is a head set");
     assert!(
         !heads.is_empty(),
         "an unwritten cell is not a member, so an emitted cell always has a head",
