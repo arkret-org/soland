@@ -680,9 +680,7 @@ fn captcha_policy() -> Value {
 
 /// A `restricted` Realm whose only gate is the captcha challenge, plus the join
 /// Event that would clear it. The caller mutates the proof before applying.
-fn captcha_join(
-    mutate: impl FnOnce(&mut Value),
-) -> (ProjectionState, ServerHlc, Operation) {
+fn captcha_join(mutate: impl FnOnce(&mut Value)) -> (ProjectionState, ServerHlc, Operation) {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     apply_join_rule(&mut state, "restricted");
@@ -733,8 +731,7 @@ fn a_gate_proof_bound_to_another_applicant_is_refused() {
 #[test]
 fn a_gate_proof_bound_to_another_policy_revision_is_refused() {
     assert_gate_check_failed(|proof| {
-        proof["policy_digest"] =
-            json!(format!("sha256:{}", "b".repeat(64)));
+        proof["policy_digest"] = json!(format!("sha256:{}", "b".repeat(64)));
     });
 }
 

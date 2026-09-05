@@ -65,13 +65,26 @@ pub(crate) fn validate_event_envelope_with_context<'a>(
         realm_bootstrap_contexts,
         internal_admission,
         false,
+        None,
     ))
 }
 
+/// `invite-addressing.md` §7 step 4 — the same envelope verifier a member
+/// Station runs when it admits this Control Move, with the authority closure
+/// supplied by the caller instead of read from local accepted state.
+///
+/// `governance_closure` is `None` on the local branch, where this Station is a
+/// member of the Realm and its own accepted Seals are the closure, and `Some`
+/// on the peer branch, where the receiver holds no accepted state for the Realm
+/// and the closure arrived in the request's `cba_proof_bundles[]`. The
+/// evaluation after that point is byte-for-byte the same on both branches.
 pub(in crate::routing) fn validate_private_invite_envelope<'a>(
     state: &'a AppState,
     session: &'a SessionRecord,
     envelope: &'a Value,
+    governance_closure: Option<
+        &'a BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    >,
 ) -> std::pin::Pin<
     Box<
         dyn std::future::Future<Output = Result<ValidatedEventEnvelope, EventValidationError>>
@@ -86,6 +99,7 @@ pub(in crate::routing) fn validate_private_invite_envelope<'a>(
         &[],
         None,
         true,
+        governance_closure,
     ))
 }
 
@@ -147,6 +161,9 @@ async fn validate_event_envelope_with_ingress(
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     internal_admission: Option<&InternalEventAdmission>,
     private_invite_delivery: bool,
+    governance_closure: Option<
+        &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    >,
 ) -> Result<ValidatedEventEnvelope, EventValidationError> {
     let object = envelope.as_object().ok_or_else(|| {
         event_validation_error(
@@ -716,6 +733,7 @@ async fn validate_event_envelope_with_ingress(
         &actor,
         bootstrap_unit_member,
         realm_bootstrap_contexts,
+        governance_closure,
     )
     .await?;
     let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;

@@ -130,6 +130,34 @@ async fn strand_stage_set_is_the_single_writable_path_for_the_stage_axis_body() 
         "the object read surface returns the updated stage_changed_at: {read}"
     );
 
+    // Ruling 2026-09-05-2030 — `ak.self.strand.read.list` is the cross-implementation
+    // carrier for the stage axis, so the canonical list surface has to return the
+    // whole lifecycle cluster and not just its `state` half. A value only the
+    // product-private object read can produce is not interoperable.
+    let listed: Value = TestClient::get(format!(
+        "http://server/_arkret/self/realms/{}/strands",
+        demo_realm_id()
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = listed["strands"]
+        .as_array()
+        .expect("canonical Strand list")
+        .iter()
+        .find(|row| row["strand_id"] == strand_id.as_str())
+        .unwrap_or_else(|| panic!("Strand missing from the canonical list: {listed}"))
+        .clone();
+    assert_eq!(row["stage"], "done", "{row}");
+    assert!(
+        row["stage_changed_at"].is_string(),
+        "the canonical list surface carries stage_changed_at next to stage: {row}"
+    );
+    assert_eq!(row["state"], "active", "{row}");
+
     // §5.3.3 rules 5-6 — the axis is single-sourced and its reserved
     // `metadata.fields.*` spellings are forbidden wire. A capability's
     // `allowed_write_fields` is matched against the patch's top-level keys, so
@@ -320,4 +348,29 @@ async fn morph_stage_set_writes_the_same_axis_as_strand_body() {
             "stage=done must not archive the Morph"
         );
     }
+
+    // The Morph half of ruling 2026-09-05-2030: same cluster, same carrier.
+    let listed: Value = TestClient::get(format!(
+        "http://server/_arkret/self/realms/{}/morphs",
+        demo_realm_id()
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = listed["morphs"]
+        .as_array()
+        .expect("canonical Morph list")
+        .iter()
+        .find(|row| row["morph_id"] == morph_id.as_str())
+        .unwrap_or_else(|| panic!("Morph missing from the canonical list: {listed}"))
+        .clone();
+    assert_eq!(row["stage"], "done", "{row}");
+    assert!(
+        row["stage_changed_at"].is_string(),
+        "the canonical list surface carries stage_changed_at next to stage: {row}"
+    );
+    assert_eq!(row["state"], "active", "{row}");
 }
