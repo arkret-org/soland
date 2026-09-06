@@ -173,7 +173,7 @@ pub(crate) async fn realm_state_snapshot_manifest_for_realm(
 async fn persist_realm_state_snapshot_chunk_blobs(
     state: &AppState,
     realm_id: &str,
-    chunks: &[arkret_state::BuiltRealmStateRealmStateSnapshotChunk],
+    chunks: &[arkret_state::BuiltRealmStateSnapshotChunk],
 ) -> Result<(), soland_http::error::AppError> {
     for chunk in chunks {
         let blob_ref = chunk.descriptor.chunk_ref.as_str();
