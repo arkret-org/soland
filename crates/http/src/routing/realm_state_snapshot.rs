@@ -26,6 +26,7 @@ pub(crate) async fn realm_state_snapshot_manifest_for_realm(
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
         .into_iter()
         .filter(|record| record.realm_id.as_deref() == Some(realm_id))
+        .filter(is_realm_scope_event)
         .collect::<Vec<_>>();
     events.sort_by(|a, b| {
         (a.actor_id.as_str(), a.actor_seq, a.event_id.as_str()).cmp(&(
@@ -297,6 +298,28 @@ async fn reducer_cell_items(
         );
     }
     Ok((items, conflict_records))
+}
+
+/// Whether an accepted Event writes Realm-scope state
+/// (`realm-state-snapshot-schema.md` §3).
+///
+/// A v1 snapshot has no scope selector, so it commits exactly the
+/// `scope_ref.kind ∈ {realm, realm_genesis}` half of the Realm's log. Circle-
+/// and Sidecar-scope Events are bootstrapped by their own scope's sync path;
+/// putting them in the Realm frontier would publish their ids to every Realm
+/// member and make `state_digest` depend on who is asking.
+///
+/// Unrecognised scope kinds are out, not in: `ScopeRef` is `#[non_exhaustive]`
+/// and a future kind that defaulted to Realm-wide would leak by omission.
+fn is_realm_scope_event(record: &AcceptedEvent) -> bool {
+    matches!(
+        record
+            .envelope
+            .get("scope_ref")
+            .and_then(|scope| scope.get("kind"))
+            .and_then(Value::as_str),
+        Some("realm" | "realm_genesis")
+    )
 }
 
 fn realm_state_snapshot_event_set_leaf(
