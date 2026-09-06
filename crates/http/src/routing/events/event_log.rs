@@ -112,14 +112,13 @@ pub(crate) use submit::accepted_event_digest_suites;
 pub use submit::attach_fixture_station_admission_proof;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
-    CbaBundleClosure, DevicePairingAdmission, EventCommitIdempotency, EventValidationError,
-    InternalEventAdmission, ValidatedEventEnvelope, admit_frontier_backfill_event,
-    cba_proof_bundles_for_targets, digest_suite_from_hash,
-    prepare_service_franking_proof_event_value, service_event_authoring_lock,
-    submit_account_data_event_value, submit_agent_membership_cascade, submit_applet_install_batch,
-    submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
-    submit_initial_event_batch_outcome, submit_initial_event_submission,
-    submit_initial_event_submission_with_contact_projection,
+    DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
+    ValidatedEventEnvelope, admit_frontier_backfill_event, cba_proof_bundles_for_targets,
+    digest_suite_from_hash, prepare_service_franking_proof_event_value,
+    service_event_authoring_lock, submit_account_data_event_value, submit_agent_membership_cascade,
+    submit_applet_install_batch, submit_direct_conversation_founding_unit, submit_event_value,
+    submit_ghost_provision_batch, submit_initial_event_batch_outcome,
+    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_initial_identity_anchor_batch,
     submit_mimi_event_value, submit_mimi_reporter_initial_event_submission,
     submit_one_error_to_app_error, submit_peer_pcr_genesis, submit_sidecar_ensure_batch,

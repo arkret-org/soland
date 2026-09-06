@@ -28,25 +28,26 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
-use arkret_state::lattice::ordered_log::IssuedOp;
-use arkret_state::lattice::{CellState, SealedOp};
-use arkret_state::state::{CellStore, MemoryCellStore, MemorySealStore, SealStore};
-use arkret_wire::{CbaProofBundle, Event, Seal};
+use arkret_identifiers::{CellRef, RealmId, SealId};
+use arkret_state::lattice::CellState;
+use arkret_wire::{
+    Base64UrlString, CbaProofBundle, Event, Seal, SemanticRefProof, SemanticRefProofKind,
+    SemanticRefProofRootField,
+};
 use soland_http::error::AppError;
 
-use crate::routing::events::event_log::{
-    CbaBundleClosure, cba_proof_bundles_for_targets, digest_suite_from_hash,
-};
+use crate::routing::events::event_log::{cba_proof_bundles_for_targets, digest_suite_from_hash};
 use crate::state::AppState;
 
 /// The one cell `capabilities.md` §3.2 admits as the Realm authority source and
 /// the only cell the invite Control Move's authorization evaluation reads.
 ///
-/// Selecting the transported Control Moves by this cell keeps the bundle
-/// proportional to the fact under proof rather than to the Realm's whole
-/// control history; `cba-profiles.md` §5 explicitly allows a bounded verifiable
-/// subset of what the target Seal covers.
+/// §3.2 also fixes the shape of the evidence for it: the root-authority branch
+/// MUST run off that cell's registered inclusion proof under the same Seal
+/// basis. It is not a Control Move replay. The Event that writes this cell is
+/// `ak.realm.create`, a `seal_basis`-exempt anchor unit
+/// (`event-auth-state-resolution.md` §5) that
+/// `cba-proof-bundle.schema.json` forbids `control_moves[]` from carrying.
 const INVITE_AUTHORITY_CELL: &str = arkret_wire::REALM_AUTHORITY_ROOT_CELL;
 
 /// Build the `cba_proof_bundles[]` an outbound private invite delivery carries.
@@ -54,25 +55,26 @@ const INVITE_AUTHORITY_CELL: &str = arkret_wire::REALM_AUTHORITY_ROOT_CELL;
 /// The inviting Station is a member of the Realm and holds the whole accepted
 /// closure, so this is a local read. One bundle per `seal_basis.leaves` entry,
 /// which is exactly the coverage `invite-addressing.md` §7 step 4 requires of
-/// the receiver's admission check.
+/// the receiver's admission check, and each bundle carries the authority-root
+/// cell's inclusion proof under that leaf's own `state_root`.
 pub(super) async fn build_invite_capability_bundles(
     state: &AppState,
     invite_event: &Event,
 ) -> Result<Vec<CbaProofBundle>, AppError> {
+    let realm_id = &invite_event.realm_id;
     let leaves = invite_capability_leaves(invite_event)?;
     let targets = leaves.iter().cloned().collect::<BTreeSet<_>>();
-    let bundles = cba_proof_bundles_for_targets(
-        state,
-        &targets,
-        CbaBundleClosure::WithControlMovesWriting(INVITE_AUTHORITY_CELL),
-    )
-    .await
-    .map_err(|error| {
-        AppError::internal(format!(
-            "invite capability bundle construction failed: {error}"
-        ))
-    })?;
-    for bundle in &bundles {
+    let mut bundles = cba_proof_bundles_for_targets(state, &targets)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "invite capability bundle construction failed: {error}"
+            ))
+        })?;
+    for bundle in &mut bundles {
+        let proof =
+            authority_root_inclusion_proof(state, realm_id, &bundle.target_seal_ref).await?;
+        bundle.inclusion_proofs = vec![proof];
         bundle.validate_structural().map_err(|error| {
             AppError::internal(format!(
                 "constructed invite capability bundle is invalid: {error}"
@@ -80,6 +82,100 @@ pub(super) async fn build_invite_capability_bundles(
         })?;
     }
     Ok(bundles)
+}
+
+/// The authority-root cell's RFC 6962 branch under one accepted Seal's
+/// `state_root`.
+///
+/// The leaf preimage travels with the branch because the receiver holds no
+/// projection for this Realm: it has to recompute the leaf from bytes it was
+/// given and then recompute the root, and a bare digest would let it verify
+/// membership of a value it cannot read.
+async fn authority_root_inclusion_proof(
+    state: &AppState,
+    realm_id: &RealmId,
+    target_seal_ref: &SealId,
+) -> Result<SemanticRefProof, AppError> {
+    let seal = state
+        .projections()
+        .seal_by_id(target_seal_ref)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "read invite capability Seal {target_seal_ref}: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            AppError::internal(format!(
+                "invite capability Seal {target_seal_ref} is unavailable"
+            ))
+        })?;
+    let digest_suite = state
+        .projections()
+        .seal_digest_suites(&seal)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "resolve digest suite for invite capability Seal {target_seal_ref}: {error}"
+            ))
+        })?
+        .seal_digest_suite;
+    let cell = authority_root_cell_ref();
+    let seal_slice = std::slice::from_ref(target_seal_ref);
+    let effective = state
+        .projections()
+        .effective_state_at(seal_slice, realm_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "resolve invite capability authority root at {target_seal_ref}: {error}"
+            ))
+        })?;
+    // The authority-root cell is a `cas_register`, so its `state_root` leaf is
+    // built from the active head set rather than from the joined value
+    // (`event-auth-state-resolution.md` §6.2.1). Both the branch and the
+    // preimage therefore come from the same governance view.
+    let cas_heads = state
+        .projections()
+        .effective_cas_heads_at(seal_slice, realm_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "resolve invite capability CAS heads at {target_seal_ref}: {error}"
+            ))
+        })?;
+    let view = arkret_state::GovernanceView::new(&effective, &cas_heads);
+    let proof =
+        arkret_state::state_inclusion_proof(view, &cell, digest_suite).map_err(|error| {
+            AppError::internal(format!(
+                "build invite capability authority-root inclusion proof: {error}"
+            ))
+        })?;
+    let preimage = arkret_state::state_leaf_canonical_preimage(view, &cell).map_err(|error| {
+        AppError::internal(format!(
+            "build invite capability authority-root leaf preimage: {error}"
+        ))
+    })?;
+    Ok(SemanticRefProof {
+        kind: SemanticRefProofKind::Rfc6962Merkle,
+        root_field: SemanticRefProofRootField::StateRoot,
+        root_digest: seal.state_root.clone(),
+        leaf_canonical_preimage_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
+            &preimage,
+        ))
+        .map_err(|error| {
+            AppError::internal(format!("encode authority-root leaf preimage: {error}"))
+        })?,
+        leaf_digest: proof.leaf_digest,
+        audit_path: proof.inclusion_proof,
+        leaf_index: proof.leaf_index,
+        leaf_count: proof.leaf_count,
+    })
+}
+
+fn authority_root_cell_ref() -> CellRef {
+    CellRef::new(INVITE_AUTHORITY_CELL.to_owned())
+        .expect("the authority-root cell ref constant is well-formed")
 }
 
 /// `seal_basis.leaves` of the invite Control Move.
@@ -104,9 +200,14 @@ pub(super) fn invite_capability_leaves(invite_event: &Event) -> Result<Vec<SealI
 /// Step 4's closure for the peer branch: the joined control view the request's
 /// bundles resolve to.
 ///
-/// Reads nothing about the holder and writes nothing anywhere.
+/// `capabilities.md` §3.2 closes the evidence for the root-authority branch to
+/// one shape — the authority-root cell's registered inclusion proof under the
+/// same Seal basis — so this resolves the cell out of each bundle's branch
+/// against that bundle's own target Seal `state_root` and never replays a
+/// Control Move to reconstruct it. Reads nothing about the holder and writes
+/// nothing anywhere.
 pub(super) async fn invite_capability_closure_from_bundles(
-    state: &AppState,
+    _state: &AppState,
     invite_event: &Event,
     bundles: &[CbaProofBundle],
 ) -> Result<BTreeMap<CellRef, CellState>, AppError> {
@@ -114,90 +215,143 @@ pub(super) async fn invite_capability_closure_from_bundles(
     let leaves = invite_capability_leaves(invite_event)?;
     let seals_by_id = admit_invite_capability_bundles(bundles, &leaves, realm_id)?;
 
-    // Throwaway stores. `MemorySealStore::put` re-derives each Seal id from its
-    // canonical bytes, so a Seal whose content does not match the id the basis
-    // names never enters the view.
-    let seal_store = MemorySealStore::default();
-    let cell_store = MemoryCellStore::default();
-    let registry = soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
-        .map_err(|error| {
-        AppError::new(
-            soland_http::error::ErrorCode::UnsupportedProfile,
-            format!("the Realm reducer profile is not implemented here: {error}"),
-        )
-    })?;
-
-    let control_moves = index_control_moves_by_digest(bundles)?;
-    for seal_id in acceptance_order(&seals_by_id)? {
-        let seal = &seals_by_id[&seal_id];
-        let digest_suite =
-            digest_suite_from_hash(&seal.control_event_set_root).map_err(schema_violation)?;
-        // The pre-state each covered Control Move is reduced against is the
-        // view its own accepting Seal's predecessors resolve to, exactly as the
-        // accept path does when this Station seals a Move of its own.
-        let pre_state = arkret_state::effective_state_at(
-            &seal.predecessor_refs,
-            realm_id,
-            &seal_store,
-            &cell_store,
-            &registry,
-        )
-        .await
-        .map_err(|error| dependency_missing(&seals_by_id, &leaves, &error.to_string()))?;
-        let mut ops: Vec<(CellRef, IssuedOp)> = Vec::new();
-        for digest in &seal.delta {
-            let Some(control_move) = control_moves.get(digest) else {
-                continue;
-            };
-            // The Move's own digest names the suite it was accepted under,
-            // which is the one its derived `digest_of` members were projected
-            // with. That is not always the Seal's root suite: a Seal carrying
-            // `ak.realm.digest_suite.transition` seals under the new suite
-            // while its delta still hashes under the old one.
-            let event_digest_suite = digest_suite_from_hash(digest).map_err(schema_violation)?;
-            let writes = state
-                .projections()
-                .project_cell_writes_with_digest_suite(control_move, event_digest_suite)
-                .map_err(|error| {
-                    schema_violation(format!(
-                        "transported Control Move {digest} has no registered reducer output: {error}"
-                    ))
-                })?;
-            for write in writes {
-                let resolved = state
-                    .projections()
-                    .resolve_projected_cell_write(&write, realm_id, &pre_state)
-                    .map_err(|error| {
-                        schema_violation(format!(
-                            "transported Control Move {digest} cell write is unresolvable: {error}"
-                        ))
-                    })?;
-                for effect in resolved {
-                    ops.push((
-                        effect.cell_id.clone(),
-                        IssuedOp {
-                            issuer_id: control_move.actor_id.clone(),
-                            op: SealedOp::from_projection(digest.clone(), &effect),
-                        },
-                    ));
-                }
+    // Every leaf is a basis leaf of the same Control Move, so they must agree on
+    // the authority root. Disagreement is a broken closure rather than a merge
+    // problem: the receiver has no accepted state to break the tie with, and
+    // silently picking one branch would let a sender choose the controller.
+    let mut agreed: Option<serde_json::Value> = None;
+    for bundle in bundles {
+        let seal = seals_by_id.get(&bundle.target_seal_ref).ok_or_else(|| {
+            dependency_missing(
+                &seals_by_id,
+                &leaves,
+                "a bundle does not carry its own target Seal",
+            )
+        })?;
+        let Some(value) = authority_root_value_from_bundle(bundle, seal)? else {
+            // No branch for the cell at all. The narrowest registered outcome
+            // for that is `realm_authority_root_missing`, which the shared
+            // authorization evaluator raises from an empty closure; inventing a
+            // second spelling for it here would widen the closed table in
+            // `invite-addressing.md` §7 step 4.
+            return Ok(BTreeMap::new());
+        };
+        match &agreed {
+            Some(existing) if existing != &value => {
+                return Err(schema_violation(
+                    "invite capability bundles disagree on the Realm authority root",
+                ));
             }
+            _ => agreed = Some(value),
         }
-        seal_store
-            .put(seal, digest_suite)
-            .await
-            .map_err(|error| schema_violation(format!("transported Seal is invalid: {error}")))?;
-        cell_store
-            .append_sealed_effects(realm_id, &seal.id, &ops)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("invite capability closure replay failed: {error}"))
-            })?;
     }
 
-    arkret_state::effective_state_at(&leaves, realm_id, &seal_store, &cell_store, &registry)
-        .await
-        .map_err(|error| dependency_missing(&seals_by_id, &leaves, &error.to_string()))
+    Ok(agreed
+        .map(|value| BTreeMap::from([(authority_root_cell_ref(), CellState::Value(value))]))
+        .unwrap_or_default())
+}
+
+/// Resolve the authority-root cell out of one bundle's inclusion proofs.
+///
+/// `Ok(None)` means the bundle carries no branch for this cell — a missing
+/// authority root, not a malformed one. A branch that is present but does not
+/// reconstruct the Seal's signed `state_root`, or whose preimage is not the
+/// canonical leaf its digest claims, is a `schema_violation`: the bundle is
+/// unsigned transport, so every byte of it has to be re-derived here.
+fn authority_root_value_from_bundle(
+    bundle: &CbaProofBundle,
+    seal: &Seal,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let digest_suite = digest_suite_from_hash(&seal.state_root).map_err(schema_violation)?;
+    let cell = authority_root_cell_ref();
+    for proof in &bundle.inclusion_proofs {
+        if proof.root_field != SemanticRefProofRootField::StateRoot
+            || proof.root_digest != seal.state_root
+        {
+            continue;
+        }
+        let preimage =
+            arkret_canonical::base64url_decode(proof.leaf_canonical_preimage_b64u.as_str())
+                .map_err(|error| {
+                    schema_violation(format!(
+                        "invite capability inclusion proof preimage is not base64url: {error}"
+                    ))
+                })?;
+        let leaf: serde_json::Value = serde_json::from_slice(&preimage).map_err(|error| {
+            schema_violation(format!(
+                "invite capability inclusion proof preimage is not JSON: {error}"
+            ))
+        })?;
+        if leaf.get("cell").and_then(serde_json::Value::as_str) != Some(INVITE_AUTHORITY_CELL) {
+            continue;
+        }
+        // The preimage is what the leaf digest commits to, so it must be the
+        // canonical encoding and not merely an equivalent one.
+        let canonical = arkret_canonical::canonical_json_bytes(&leaf).map_err(|error| {
+            schema_violation(format!(
+                "invite capability inclusion proof preimage is not canonicalizable: {error}"
+            ))
+        })?;
+        if canonical != preimage {
+            return Err(schema_violation(
+                "invite capability inclusion proof preimage is not canonical bytes",
+            ));
+        }
+        let state_object = leaf
+            .get("state")
+            .cloned()
+            .ok_or_else(|| schema_violation("invite capability leaf carries no state"))?;
+        // §6.2.1's two leaf shapes. The authority-root cell is a
+        // `cas_register`, so in practice this is the head set; the value branch
+        // stays because the leaf definition is shared and a sender that ships
+        // the wrong shape must fail on the digest, not on a missing key.
+        let value = match (state_object.get("heads"), state_object.get("value")) {
+            (Some(heads), None) => {
+                arkret_state::causal_register_leaf_value(heads).map_err(|error| {
+                    schema_violation(format!(
+                        "invite capability leaf head set has no single value: {error}"
+                    ))
+                })?
+            }
+            (None, Some(value)) => value.clone(),
+            _ => {
+                return Err(schema_violation(
+                    "invite capability leaf state is not one closed §6.2.1 shape",
+                ));
+            }
+        };
+        let recomputed =
+            arkret_state::state_leaf_hash_from_state_object(&cell, state_object, digest_suite)
+                .map_err(|error| {
+                    schema_violation(format!(
+                        "invite capability leaf digest is unrecomputable: {error}"
+                    ))
+                })?;
+        if recomputed != proof.leaf_digest {
+            return Err(schema_violation(
+                "invite capability inclusion proof leaf digest does not match its preimage",
+            ));
+        }
+        if !arkret_state::verify_state_inclusion_proof(
+            &proof.leaf_digest,
+            proof.leaf_index,
+            proof.leaf_count,
+            &proof.audit_path,
+            &seal.state_root,
+            digest_suite,
+        )
+        .map_err(|error| {
+            schema_violation(format!(
+                "invite capability inclusion proof is unverifiable: {error}"
+            ))
+        })? {
+            return Err(schema_violation(
+                "invite capability inclusion proof does not reconstruct the Seal state_root",
+            ));
+        }
+        return Ok(Some(value));
+    }
+    Ok(None)
 }
 
 /// `invite-addressing.md` §7 step 4 bundle admission.
@@ -276,76 +430,6 @@ fn admit_invite_capability_bundles(
         ));
     }
     Ok(seals_by_id)
-}
-
-/// Every transported Control Move keyed by the digests a Seal delta can name it
-/// under.
-///
-/// A Seal's delta is written under the digest suite that Seal's own roots use,
-/// which the receiver has no Realm projection to look up, so both registered
-/// suites are indexed and the Seal decides which one applies.
-fn index_control_moves_by_digest(
-    bundles: &[CbaProofBundle],
-) -> Result<BTreeMap<Hash, Event>, AppError> {
-    let mut out = BTreeMap::new();
-    for bundle in bundles {
-        for control_move in &bundle.control_moves {
-            for suite in [
-                arkret_canonical::DigestSuite::Sha256,
-                arkret_canonical::DigestSuite::Blake3,
-            ] {
-                let Ok(digest) = control_move.event_digest_with_digest_suite(suite) else {
-                    continue;
-                };
-                let Ok(digest) = Hash::new(digest) else {
-                    continue;
-                };
-                match out.get(&digest) {
-                    Some(existing) if existing != control_move => {
-                        return Err(schema_violation(
-                            "invite capability bundles carry two Control Moves with one digest",
-                        ));
-                    }
-                    _ => {
-                        out.insert(digest, control_move.clone());
-                    }
-                }
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Seals ordered so every predecessor present in the closure is replayed first.
-///
-/// The cell log is batched per accepting Seal and register joins are sensitive
-/// to that batch order, so replaying a successor before its predecessor would
-/// change the joined value.
-fn acceptance_order(seals_by_id: &BTreeMap<SealId, Seal>) -> Result<Vec<SealId>, AppError> {
-    let mut emitted = BTreeSet::new();
-    let mut order = Vec::with_capacity(seals_by_id.len());
-    while order.len() < seals_by_id.len() {
-        let mut progressed = false;
-        for (seal_id, seal) in seals_by_id {
-            if emitted.contains(seal_id) {
-                continue;
-            }
-            if seal.predecessor_refs.iter().any(|predecessor| {
-                seals_by_id.contains_key(predecessor) && !emitted.contains(predecessor)
-            }) {
-                continue;
-            }
-            emitted.insert(seal_id.clone());
-            order.push(seal_id.clone());
-            progressed = true;
-        }
-        if !progressed {
-            return Err(schema_violation(
-                "invite capability bundle Seal predecessors form a cycle",
-            ));
-        }
-    }
-    Ok(order)
 }
 
 /// `cba-profiles.md` §5 — an incomplete closure is reported with the exact

@@ -373,23 +373,7 @@ async fn federation_cba_proof_bundles(
     if targets.len() > arkret_wire::event_submission::MAX_SUBMISSION_CBA_BUNDLES {
         return Err("federation CBA target count exceeds the v1 limit".to_owned());
     }
-    cba_proof_bundles_for_targets(state, &targets, CbaBundleClosure::SealsOnly).await
-}
-
-/// What a `CbaProofBundle` carries beyond the target Seal's predecessor closure
-/// (`authz/cba-profiles.md` §5).
-#[derive(Clone, Copy)]
-pub(in crate::routing) enum CbaBundleClosure {
-    /// Seal closure only. The federation rails carry their Control Moves in the
-    /// same request and the receiver is already inside the Realm's federation
-    /// visibility, so nothing else has to travel with the Seals.
-    SealsOnly,
-    /// Seal closure plus every accepted Control Move it covers whose
-    /// receiver-derived write targets this cell. `invite-addressing.md` §7 step 4
-    /// receivers hold no accepted state for the Realm at all and MUST NOT fetch
-    /// dependencies, so the objects their authorization evaluation reads have to
-    /// travel inside the request.
-    WithControlMovesWriting(&'static str),
+    cba_proof_bundles_for_targets(state, &targets).await
 }
 
 /// One receiver-relative bundle per target Seal.
@@ -400,7 +384,6 @@ pub(in crate::routing) enum CbaBundleClosure {
 pub(in crate::routing) async fn cba_proof_bundles_for_targets(
     state: &AppState,
     targets: &BTreeSet<arkret_identifiers::SealId>,
-    closure: CbaBundleClosure,
 ) -> Result<Vec<arkret_wire::CbaProofBundle>, String> {
     let mut bundles = Vec::with_capacity(targets.len());
     for target_seal_ref in targets {
@@ -422,63 +405,15 @@ pub(in crate::routing) async fn cba_proof_bundles_for_targets(
         if by_id.len() > arkret_wire::cba_proof_bundle::MAX_BUNDLE_SEALS {
             return Err("federation Seal prerequisite closure exceeds the v1 limit".to_owned());
         }
-        let control_moves = match closure {
-            CbaBundleClosure::SealsOnly => Vec::new(),
-            CbaBundleClosure::WithControlMovesWriting(cell_id) => {
-                covered_control_moves_writing(state, by_id.values(), cell_id).await?
-            }
-        };
         bundles.push(arkret_wire::CbaProofBundle {
             target_seal_ref: target_seal_ref.clone(),
             seals: by_id.into_values().collect(),
-            control_moves,
+            control_moves: Vec::new(),
             inclusion_proofs: Vec::new(),
             availability_proofs: Vec::new(),
         });
     }
     Ok(bundles)
-}
-
-/// The accepted Control Moves the Seal closure covers whose reducer-derived
-/// write targets `cell_id`, in strictly increasing `event_id` order.
-///
-/// `cba-profiles.md` §5 lets a sender ship a bounded verifiable superset but
-/// forbids objects unreachable from the target, and caps `control_moves[]` at
-/// 1,024. Selecting by written cell keeps the bundle proportional to the one
-/// cell the receiver's evaluation reads instead of to the Realm's whole control
-/// history, so a long-lived Realm can still address a first-contact invite.
-async fn covered_control_moves_writing<'a>(
-    state: &AppState,
-    seals: impl Iterator<Item = &'a arkret_wire::Seal>,
-    cell_id: &str,
-) -> Result<Vec<Event>, String> {
-    let mut by_event_id = BTreeMap::new();
-    for seal in seals {
-        let digest_suite = digest_suite_from_hash(&seal.control_event_set_root)?;
-        for digest in &seal.delta {
-            let Some(control_move) = state
-                .projections()
-                .control_event_by_digest(digest)
-                .await
-                .map_err(|error| format!("read covered Control Move {digest}: {error}"))?
-            else {
-                continue;
-            };
-            let writes = state
-                .projections()
-                .project_cell_writes_with_digest_suite(&control_move, digest_suite)
-                .map_err(|error| {
-                    format!("project covered Control Move {digest} cell writes: {error}")
-                })?;
-            if writes.iter().any(|write| write.cell_id.as_str() == cell_id) {
-                by_event_id.insert(control_move.event_id.as_str().to_owned(), control_move);
-            }
-        }
-    }
-    if by_event_id.len() > arkret_wire::cba_proof_bundle::MAX_BUNDLE_CONTROL_MOVES {
-        return Err("CBA proof bundle Control Move closure exceeds the v1 limit".to_owned());
-    }
-    Ok(by_event_id.into_values().collect())
 }
 
 /// The digest suite a self-describing `Hash` was computed under.
