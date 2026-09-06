@@ -76,7 +76,10 @@ async fn seal_accepted_invite_create(
         // The live-target slot is a `cas_register`, so its state_root leaf is
         // the head set of spec section 6.2.1 rather than its settled value.
         if arkret_state::is_causal_register(binding.lattice.kind()) {
-            let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), std::slice::from_ref(&ops));
+            let heads = arkret_state::causal_heads_for_batches(
+                binding.lattice.kind(),
+                std::slice::from_ref(&ops),
+            );
             if !heads.is_empty() {
                 cas_heads.insert(cell.clone(), heads);
             }

@@ -140,9 +140,7 @@ fn fork_normalization_carries_the_timestamp_its_winner_is_admitted_under() {
 #[test]
 fn direct_invite_live_uniqueness_covers_only_the_live_states() {
     assert!(INITIAL_UP.contains("CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx"));
-    assert!(INITIAL_UP.contains(
-        "(status = ANY (ARRAY['pending'::text, 'send_failed'::text]))"
-    ));
+    assert!(INITIAL_UP.contains("(status = ANY (ARRAY['pending'::text, 'send_failed'::text]))"));
     assert!(
         !INITIAL_UP.contains(
             "(status = ANY (ARRAY['pending'::text, 'claimed'::text, 'send_failed'::text]))"

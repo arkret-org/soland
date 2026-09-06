@@ -408,7 +408,10 @@ fn fixture_sealed_state_root(
         // A `cas_register` cell's state_root leaf is its head set (spec section
         // 6.2.1), derived from the same ops as the join.
         if arkret_state::is_causal_register(binding.lattice.kind()) {
-            let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), std::slice::from_ref(&cell_ops));
+            let heads = arkret_state::causal_heads_for_batches(
+                binding.lattice.kind(),
+                std::slice::from_ref(&cell_ops),
+            );
             if !heads.is_empty() {
                 cas_heads.insert(cell.clone(), heads);
             }
