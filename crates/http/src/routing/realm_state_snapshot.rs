@@ -6,10 +6,10 @@ use super::*;
 use crate::state::AppState;
 use crate::wire::now;
 
-pub(crate) async fn snapshot_manifest_for_realm(
+pub(crate) async fn realm_state_snapshot_manifest_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Result<arkret_state::SnapshotManifest, soland_http::error::AppError> {
+) -> Result<arkret_state::RealmRealmStateSnapshotStateManifest, soland_http::error::AppError> {
     let realm_id_value = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|_| soland_http::error::AppError::param_invalid("invalid realm_id"))?;
     {
@@ -38,25 +38,27 @@ pub(crate) async fn snapshot_manifest_for_realm(
     let (items, conflict_records) = reducer_cell_items(state, &realm_id_value).await?;
     let state_digest = arkret_state::state_digest_from_items(&items)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let snapshot_id = arkret_identifiers::SnapshotId::new(crate::ids::generate_snapshot_id())
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let built_chunks = arkret_state::build_snapshot_chunks_with_auxiliary_lists(
-        &snapshot_id,
+    let realm_state_snapshot_id = arkret_identifiers::RealmStateSnapshotId::new(
+        crate::ids::generate_realm_state_snapshot_id(),
+    )
+    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let built_chunks = arkret_state::build_realm_state_snapshot_chunks_with_auxiliary_lists(
+        &realm_state_snapshot_id,
         arkret_wire::CORE_REDUCER_PROFILE,
         items,
-        arkret_state::DEFAULT_SNAPSHOT_CHUNK_BYTES,
+        arkret_state::DEFAULT_REALM_STATE_SNAPSHOT_CHUNK_BYTES,
         arkret_state::SnapshotAuxiliaryLists {
             conflict_records,
             ..Default::default()
         },
     )
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    persist_snapshot_chunk_blobs(state, realm_id, &built_chunks).await?;
+    persist_realm_state_snapshot_chunk_blobs(state, realm_id, &built_chunks).await?;
     let chunk_payloads = built_chunks
         .iter()
         .map(|chunk| chunk.payload.clone())
         .collect::<Vec<_>>();
-    // `snapshot-schema.md` section 3: bottom cells are not leaves; their only
+    // `realm-state-snapshot-schema.md` section 3: bottom cells are not leaves; their only
     // commitment is the conflict_records digest, so it is carried whenever the
     // list is non-empty rather than left for a high-assurance profile to add.
     let conflict_records_digest = if chunk_payloads
@@ -64,7 +66,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .any(|chunk| !chunk.conflict_records.is_empty())
     {
         Some(
-            arkret_state::snapshot_conflict_records_digest(
+            arkret_state::realm_state_snapshot_conflict_records_digest(
                 &chunk_payloads,
                 arkret_canonical::DigestSuite::Sha256,
             )
@@ -78,10 +80,10 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .map(|chunk| chunk.descriptor.clone())
         .collect::<Vec<_>>();
 
-    let frontier_event_ids = snapshot_frontier_event_ids(&events)?;
+    let frontier_event_ids = realm_state_snapshot_frontier_event_ids(&events)?;
     let event_set_entries = events
         .iter()
-        .map(|record| snapshot_event_set_leaf(state, record))
+        .map(|record| realm_state_snapshot_event_set_leaf(state, record))
         .collect::<Result<Vec<_>, _>>()?;
     let event_set_commitment = arkret_state::event_set_commitment(
         arkret_state::EventSetCommitmentAlgorithm::MerkleEventSetV1,
@@ -89,24 +91,24 @@ pub(crate) async fn snapshot_manifest_for_realm(
     )
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let created_at = now();
-    let timeline_hlc = snapshot_timeline_hlc(state, &events, created_at)?;
+    let timeline_hlc = realm_state_snapshot_timeline_hlc(state, &events, created_at)?;
     let service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let auth_state_digest = snapshot_auth_state_digest(
+    let auth_state_digest = realm_state_snapshot_auth_state_digest(
         state.service_id(),
         realm_id,
         &frontier_event_ids,
         created_at,
     )?;
     let verification_method = state
-        .service_verification_method("snapshot-key-1")
+        .service_verification_method("realm-state-snapshot-key-1")
         .map_err(|error| {
             soland_http::error::AppError::internal(format!(
                 "snapshot verification method is invalid: {error}"
             ))
         })?;
-    let mut manifest = arkret_state::SnapshotManifest {
-        id: snapshot_id,
+    let mut manifest = arkret_state::RealmRealmStateSnapshotStateManifest {
+        id: realm_state_snapshot_id,
         realm_id: realm_id_value,
         reducer_profile: arkret_wire::CORE_REDUCER_PROFILE.to_owned(),
         schema_profile_refs: vec![
@@ -114,26 +116,30 @@ pub(crate) async fn snapshot_manifest_for_realm(
             arkret_wire::ProfileId::STATION_EVENTS_API_V1.to_owned(),
         ],
         state_digest,
-        frontier: arkret_state::SnapshotFrontier {
+        frontier: arkret_state::RealmRealmStateSnapshotStateFrontier {
             event_ids: frontier_event_ids.clone(),
             timeline_hlc,
         },
         event_set_commitment,
         chunks: chunk_descriptors,
-        security_class: arkret_state::SnapshotSecurityClass::Standard,
-        verification_hints: Some(arkret_state::SnapshotVerificationHints {
-            verification_profile: arkret_state::SnapshotSecurityClass::Standard,
-            inclusion_proof_url: None,
-            challenge_window_seconds: None,
-            conflict_records_digest,
-            soft_failed_digest: None,
-            quarantined_digest: None,
-            erasure_stubs_digest: None,
-        }),
+        security_class: arkret_state::RealmRealmStateSnapshotStateSecurityClass::Standard,
+        verification_hints: Some(
+            arkret_state::RealmRealmStateSnapshotStateVerificationHints {
+                verification_profile:
+                    arkret_state::RealmRealmStateSnapshotStateSecurityClass::Standard,
+                inclusion_proof_url: None,
+                challenge_window_seconds: None,
+                conflict_records_digest,
+                soft_failed_digest: None,
+                quarantined_digest: None,
+                erasure_stubs_digest: None,
+            },
+        ),
         created_by: arkret_wire::ActorId::service(service_id.clone()),
         created_at,
         authority_binding: arkret_state::AuthorityBinding {
-            authority_kind: arkret_state::SnapshotAuthorityKind::RealmPolicySnapshotIssuer,
+            authority_kind:
+                arkret_state::RealmRealmStateSnapshotStateAuthorityKind::RealmPolicySnapshotIssuer,
             auth_state_digest,
             auth_frontier: frontier_event_ids,
             checked_at: created_at,
@@ -167,10 +173,10 @@ pub(crate) async fn snapshot_manifest_for_realm(
     Ok(manifest)
 }
 
-async fn persist_snapshot_chunk_blobs(
+async fn persist_realm_state_snapshot_chunk_blobs(
     state: &AppState,
     realm_id: &str,
-    chunks: &[arkret_state::BuiltSnapshotChunk],
+    chunks: &[arkret_state::BuiltRealmStateRealmRealmStateSnapshotStateChunk],
 ) -> Result<(), soland_http::error::AppError> {
     for chunk in chunks {
         let blob_ref = chunk.descriptor.chunk_ref.as_str();
@@ -212,7 +218,7 @@ async fn persist_snapshot_chunk_blobs(
     Ok(())
 }
 
-/// The reducer cells behind `items[]` (`snapshot-schema.md` section 3).
+/// The reducer cells behind `items[]` (`realm-state-snapshot-schema.md` section 3).
 ///
 /// A snapshot ships the reducer's own state, never rendered objects: every
 /// written Realm-scope cell under the Seal leaves covering the frontier, with
@@ -238,8 +244,8 @@ async fn reducer_cell_items(
     realm_id: &arkret_identifiers::RealmId,
 ) -> Result<
     (
-        Vec<arkret_state::SnapshotMaterializedItem>,
-        Vec<arkret_state::SnapshotConflictRecord>,
+        Vec<arkret_state::RealmRealmStateSnapshotStateMaterializedItem>,
+        Vec<arkret_state::RealmRealmStateSnapshotStateConflictRecord>,
     ),
     soland_http::error::AppError,
 > {
@@ -274,11 +280,14 @@ async fn reducer_cell_items(
         }
         match cell_state {
             arkret_state::lattice::CellState::Value(value) => items.push(
-                arkret_state::SnapshotMaterializedItem::value(cell, value)
+                arkret_state::RealmRealmStateSnapshotStateMaterializedItem::value(cell, value)
                     .map_err(|error| internal(&error))?,
             ),
-            arkret_state::lattice::CellState::Bottom(_) => conflict_records
-                .push(arkret_state::SnapshotConflictRecord::BottomCell { cell_ref: cell }),
+            arkret_state::lattice::CellState::Bottom(_) => conflict_records.push(
+                arkret_state::RealmRealmStateSnapshotStateConflictRecord::BottomCell {
+                    cell_ref: cell,
+                },
+            ),
         }
     }
     for (cell, heads) in heads_by_cell {
@@ -286,14 +295,14 @@ async fn reducer_cell_items(
             continue;
         }
         items.push(
-            arkret_state::SnapshotMaterializedItem::cas_cell(cell, &heads)
+            arkret_state::RealmRealmStateSnapshotStateMaterializedItem::cas_cell(cell, &heads)
                 .map_err(|error| internal(&error))?,
         );
     }
     Ok((items, conflict_records))
 }
 
-fn snapshot_event_set_leaf(
+fn realm_state_snapshot_event_set_leaf(
     state: &AppState,
     record: &AcceptedEvent,
 ) -> Result<arkret_state::EventSetLeaf, soland_http::error::AppError> {
@@ -309,7 +318,7 @@ fn snapshot_event_set_leaf(
     })
 }
 
-fn snapshot_frontier_event_ids(
+fn realm_state_snapshot_frontier_event_ids(
     events: &[AcceptedEvent],
 ) -> Result<Vec<arkret_identifiers::EventId>, soland_http::error::AppError> {
     let mut by_actor: std::collections::BTreeMap<&str, &AcceptedEvent> =
@@ -335,7 +344,7 @@ fn snapshot_frontier_event_ids(
         .collect()
 }
 
-fn snapshot_timeline_hlc(
+fn realm_state_snapshot_timeline_hlc(
     state: &AppState,
     events: &[AcceptedEvent],
     fallback: chrono::DateTime<chrono::Utc>,
@@ -370,14 +379,14 @@ fn received_at_hlc(
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
 }
 
-fn snapshot_auth_state_digest(
+fn realm_state_snapshot_auth_state_digest(
     service_id: &str,
     realm_id: &str,
     frontier_event_ids: &[arkret_identifiers::EventId],
     checked_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_identifiers::Hash, soland_http::error::AppError> {
     let commitment = json!({
-        "profile": arkret_wire::DomainSeparationId::SNAPSHOT_AUTH_STATE_ISSUER_LOCAL_V1,
+        "profile": arkret_wire::DomainSeparationId::REALM_STATE_SNAPSHOT_AUTH_STATE_ISSUER_LOCAL_V1,
         "issuer_id": service_id,
         "realm_id": realm_id,
         "frontier_event_ids": frontier_event_ids,

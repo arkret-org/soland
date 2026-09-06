@@ -13,7 +13,7 @@
 //!   Multi-Realm / multi-actor stream; frame `kind` field replaces `type`.
 //! - `QUERY /_arkret/self/events`                — `ak.self.events.read.scan.v1` (canonical;
 //!   `ak.events.list` + `ak.sync.backfill` via `direction=forward|backward`).
-//! - `GET  /_arkret/self/snapshot/head`
+//! - `GET  /_arkret/self/realm-state-snapshot/head`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
@@ -53,7 +53,8 @@ use super::{
     TO_DEVICE_PAGE_LIMIT, authenticated_session, device_message_envelopes_after, is_realm_deleted,
     now, projected_event_page_for_realms_through, projected_event_replay_upper_bound,
     projection_event_json, query_param, realm_event_visible_to_session, realm_has_member,
-    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_manifest_for_realm,
+    realm_id_accessible, realm_state_snapshot_manifest_for_realm, realm_visible_to, render_error,
+    sha256_hex,
 };
 pub(crate) use crate::ids;
 pub(crate) use crate::state::{
@@ -94,7 +95,10 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("account/cursor/revoke").post(cursor::account_cursor_revoke))
         .push(Router::with_path("signal").post(signal::submit_signal))
         .push(Router::with_path("signal/subscribe").get(signal::signal_subscribe))
-        .push(Router::with_path("snapshot/head").get(events_query::snapshot_head))
+        .push(
+            Router::with_path("realm-state-snapshot/head")
+                .get(events_query::realm_state_snapshot_head),
+        )
 }
 
 pub(crate) fn scope_selector_to_realm_id(

@@ -146,7 +146,7 @@ pub struct AuthBridgeExamples {
 // no private copies that could drift. NOTE: the explicit `model::` path
 // matters — the SDK root re-exports a different, client-side typed
 // `sync::SyncRequestBody` under the same name.
-// Snapshot head operations return the full signed `ak.schema.snapshot.v1`
+// Snapshot head operations return the full signed `ak.schema.realm_state_snapshot.v1`
 // manifest. soland answers both operations with `not_implemented` until it can
 // produce a real Snapshot detached proof.
 
@@ -318,7 +318,7 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ak.self.snapshot.read.manifest_head.v1 returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle is development-only diagnostics"
+            "reason": "ak.self.realm_state_snapshot.read.manifest_head.v1 returns a signed ak.schema.realm_state_snapshot.v1 manifest; the /_soland dev bundle is development-only diagnostics"
         }),
         json!({
             "area": "account_auth.device_pair",

@@ -38,8 +38,8 @@ pub fn generate_install_id() -> String {
     generate("install")
 }
 
-pub fn generate_snapshot_id() -> String {
-    generate("snapshot")
+pub fn generate_realm_state_snapshot_id() -> String {
+    generate("realm_state_snapshot")
 }
 
 /// Notification id helper. Spec uses the full `ak:notification:` kind.

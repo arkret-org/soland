@@ -110,7 +110,7 @@ fn assert_required_migrated_operations(root: &Value) {
         "org.arkret.soland.system.health",
         "ak.server.read.describe",
         "ak.self.events.read.scan",
-        "ak.self.snapshot.read.manifest_head",
+        "ak.self.realm_state_snapshot.read.manifest_head",
         "ak.self.blob.command.presign",
         "org.arkret.soland.interop.mimi.protocol_directory",
         "org.arkret.soland.well_known.arkret",

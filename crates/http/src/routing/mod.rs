@@ -73,7 +73,7 @@ mod router_build;
 // 404/405 disambiguation, framework error catcher, sync-token guard, and the
 // `ArkretOpenApiDoc` depot type.
 // Snapshot manifest builders + small inventory/token helpers.
-mod snapshot;
+mod realm_state_snapshot;
 
 // Public router entry points (`crate::routing::router` and the rate-limiter /
 // request-size variants stay reachable at the same paths for `lib.rs`).
@@ -83,15 +83,15 @@ pub use events::sync::spawn_sync_cursor_ttl_sweeper;
 pub use governance_history::spawn_history_request_replica_reconciler;
 pub use interop::spawn_resumable_upload_ttl_sweeper;
 pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, push_target_privacy_derivation_claim};
+// Snapshot manifest builder + small JSON/token helpers reachable from children
+// and other crate modules via `crate::routing::*`.
+pub(crate) use realm_state_snapshot::{
+    device_inventory_to_json, generate_invite_token, realm_state_snapshot_manifest_for_realm,
+};
 // CORS handler consumed by `crate::service`.
 pub(crate) use router_build::{cors_handler_for_origin_spec, openapi_surface_router};
 pub use router_build::{
     router, router_with_rate_limiter_and_request_size_config, router_with_rate_limiter_config,
-};
-// Snapshot manifest builder + small JSON/token helpers reachable from children
-// and other crate modules via `crate::routing::*`.
-pub(crate) use snapshot::{
-    device_inventory_to_json, generate_invite_token, snapshot_manifest_for_realm,
 };
 // OpenAPI internals + 404/405 helpers shared across the routing children. The
 // glob re-exports keep these reachable from `super::*` in the child modules

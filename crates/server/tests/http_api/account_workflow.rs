@@ -1773,9 +1773,9 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     // snapshot.md / service-http-binding.md: the protocol surface now returns
-    // the signed ak.schema.snapshot.v1 manifest directly.
+    // the signed ak.schema.realm_state_snapshot.v1 manifest directly.
     let mut protocol_head = TestClient::get(format!(
-        "http://server/_arkret/self/snapshot/head?realm_id={realm_id}"
+        "http://server/_arkret/self/realm-state-snapshot/head?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -1786,12 +1786,12 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     assert!(
         protocol_head_body["id"]
             .as_str()
-            .is_some_and(|id| id.starts_with("ak:snapshot:"))
+            .is_some_and(|id| id.starts_with("ak:realm_state_snapshot:"))
     );
     assert!(protocol_head_body["chunks"].is_array());
     assert!(protocol_head_body["signature"].is_object());
 
-    // `snapshot-schema.md` section 3: `items[]` is a closed single-branch union
+    // `realm-state-snapshot-schema.md` section 3: `items[]` is a closed single-branch union
     // of reducer cells, `{kind:"cell", id, state}`, and a `cas_register` cell's
     // state is its full head set. Every Realm has at least one written CAS cell
     // from genesis — the notary — so a manifest without it is a producer that
@@ -1807,7 +1807,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .expect("a chunk ref is a sha256 content address");
     let chunk_bytes = state.test_object_by_sha256(sha256).await;
     let chunk: Value = serde_json::from_slice(&chunk_bytes).unwrap();
-    assert_eq!(chunk["chunk_kind"], "snapshot_chunk");
+    assert_eq!(chunk["chunk_kind"], "realm_state_snapshot_chunk");
     let items = chunk["items"]
         .as_array()
         .expect("a chunk payload carries items[]");

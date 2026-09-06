@@ -1252,7 +1252,7 @@ async fn events_query_impl(
     };
     soland_http::result::json_ok(EventsQueryOutcome {
         events,
-        snapshot_bootstrap: None,
+        realm_state_snapshot_bootstrap: None,
         prev_cursor,
         next_cursor,
         has_more,
@@ -2417,19 +2417,22 @@ async fn durable_events_query_from_parts(
     };
     Ok(EventsQueryOutcome {
         events,
-        snapshot_bootstrap: None,
+        realm_state_snapshot_bootstrap: None,
         next_cursor,
         prev_cursor,
         has_more,
     })
 }
 
-#[endpoint(operation_id = "ak.self.snapshot.read.manifest_head")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.read.manifest_head.v1"))]
-pub(super) async fn snapshot_head(
+#[endpoint(operation_id = "ak.self.realm_state_snapshot.read.manifest_head")]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.realm_state_snapshot.read.manifest_head.v1")
+)]
+pub(super) async fn realm_state_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> soland_http::result::JsonResult<arkret_state::SnapshotManifest> {
+) -> soland_http::result::JsonResult<arkret_state::RealmRealmStateSnapshotStateManifest> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| soland_http::error::AppError::param_missing("realm_id is required"))?;
@@ -2446,7 +2449,7 @@ pub(super) async fn snapshot_head(
     {
         return Err(soland_http::error::AppError::not_found("not found"));
     }
-    let manifest = snapshot_manifest_for_realm(state, &realm_id)
+    let manifest = realm_state_snapshot_manifest_for_realm(state, &realm_id)
         .await
         .map_err(|error| {
             if matches!(
@@ -2456,7 +2459,7 @@ pub(super) async fn snapshot_head(
             ) {
                 error
             } else {
-                crate::app_error!(SnapshotUnavailable, error.message,)
+                crate::app_error!(RealmStateSnapshotUnavailable, error.message,)
             }
         })?;
     soland_http::result::json_ok(manifest)

@@ -53,9 +53,9 @@ const MAX_CONFORMANCE_BATCH: usize = 1_000;
 const MAX_CONFORMANCE_RELATION_DEPTH: u64 = 32;
 const MAX_CONFORMANCE_ENVELOPE_BYTES: usize = 1024 * 1024;
 
-// Spec `snapshot.schema.json`: the manifest's own identifier field is `id`
-// (`snapshot_ref` only appears at external reference positions).
-const SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS: &[&str] = &[
+// Spec `realm-state-snapshot.schema.json`: the manifest's own identifier field is `id`
+// (`realm_state_snapshot_ref` only appears at external reference positions).
+const REALM_STATE_SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS: &[&str] = &[
     "id",
     "realm_id",
     "reducer_profile",
@@ -179,7 +179,7 @@ pub struct EraseReceiptVectorOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SnapshotVectorRequest {
+pub struct RealmStateSnapshotVectorRequest {
     vector_id: String,
 
     manifest: Value,
@@ -192,7 +192,7 @@ pub struct SnapshotVectorRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SnapshotVectorOutcome {
+pub struct RealmStateSnapshotVectorOutcome {
     vector_id: String,
     manifest_digest: String,
     chunk_hashes: Vec<String>,
@@ -1057,11 +1057,16 @@ fn projected_event_carries_plaintext(projected: &Value, original: &Value) -> boo
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.conformance.snapshot",
+    operation_id = "org.arkret.soland.conformance.realm_state_snapshot",
     tags("conformance")
 )]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.snapshot"))]
-pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<SnapshotVectorOutcome> {
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.conformance.realm_state_snapshot")
+)]
+pub async fn snapshot(
+    body: JsonBody<RealmStateSnapshotVectorRequest>,
+) -> JsonResult<RealmStateSnapshotVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
     let vector = body.vector_id.as_str();
@@ -1085,7 +1090,7 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
 
     let mut chunk_hashes = Vec::with_capacity(chunks.len());
     for (index, chunk) in chunks.iter().enumerate() {
-        let material = snapshot_chunk_material(chunk)?;
+        let material = realm_state_snapshot_chunk_material(chunk)?;
         let digest = sha256_digest(material.as_bytes());
         if let Some(declared) = declared_chunk_digest(manifest, chunks, index, chunk)
             && declared != digest
@@ -1094,7 +1099,7 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
                 SchemaViolation,
                 format!("snapshot chunk {index} digest mismatch"),
             )
-            .with_wire_code("snapshot_chunk_digest_mismatch"));
+            .with_wire_code("realm_state_snapshot_chunk_digest_mismatch"));
         }
         chunk_hashes.push(digest);
     }
@@ -1130,11 +1135,11 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
     {
         return Err(
             crate::app_error!(CapabilityDenied, "snapshot issuer is revoked")
-                .with_reason_code("snapshot_issuer_revoked"),
+                .with_reason_code("realm_state_snapshot_issuer_revoked"),
         );
     }
 
-    json_ok(SnapshotVectorOutcome {
+    json_ok(RealmStateSnapshotVectorOutcome {
         vector_id: vector.to_owned(),
         manifest_digest,
         chunk_hashes,
@@ -1143,7 +1148,7 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
         event_set_commitment,
         signature_valid: signature.is_some(),
         signer_did: signer_did.to_owned(),
-        signed_transcript_fields: SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS
+        signed_transcript_fields: REALM_STATE_SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS
             .iter()
             .map(|field| (*field).to_owned())
             .collect(),
@@ -1280,7 +1285,7 @@ fn strip_path(object: &mut Map<String, Value>, path: &str) {
     }
 }
 
-fn snapshot_chunk_material(chunk: &Value) -> Result<String, AppError> {
+fn realm_state_snapshot_chunk_material(chunk: &Value) -> Result<String, AppError> {
     if let Some(payload) = chunk.get("payload") {
         return canonical_json(payload).map_err(schema_error);
     }
@@ -1899,12 +1904,12 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_declared_digest_mismatch_is_detected() {
+    fn realm_state_snapshot_declared_digest_mismatch_is_detected() {
         let manifest = json!({
             "chunk_hashes": ["sha256:0000000000000000000000000000000000000000000000000000000000000000"]
         });
         let chunks = vec![json!({ "payload": { "body": "hello" } })];
-        let material = snapshot_chunk_material(&chunks[0]).unwrap();
+        let material = realm_state_snapshot_chunk_material(&chunks[0]).unwrap();
         let actual_digest = sha256_digest(material.as_bytes());
 
         assert_ne!(

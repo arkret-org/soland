@@ -198,8 +198,8 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
     let transition_payload = serde_json::json!({
         "from_digest_algorithm": "sha256",
         "to_digest_algorithm": "blake3",
-        "transition_snapshot_ref": "ak:snapshot:01904100-0000-7000-8000-000000000301",
-        "snapshot_commitment": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "transition_realm_state_realm_state_snapshot_ref": "ak:realm_state_snapshot:01904100-0000-7000-8000-000000000301",
+        "realm_state_snapshot_commitment": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     });
     serde_json::from_value::<
         arkret_models_collaboration::events_payloads::RealmDigestSuiteTransitionPayload,
@@ -233,8 +233,8 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
             serde_json::json!({
                 "from_digest_algorithm": "blake3",
                 "to_digest_algorithm": "sha256",
-                "transition_snapshot_ref": "ak:snapshot:01904100-0000-7000-8000-000000000302",
-                "snapshot_commitment": "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                "transition_realm_state_realm_state_snapshot_ref": "ak:realm_state_snapshot:01904100-0000-7000-8000-000000000302",
+                "realm_state_snapshot_commitment": "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             }),
         ),
         &hlc,

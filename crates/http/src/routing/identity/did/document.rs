@@ -170,7 +170,7 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
         let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             state.notary_signing_key().verifying_key().as_bytes(),
         );
-        for fragment in ["notary-key", "snapshot-key-1"] {
+        for fragment in ["notary-key", "realm-state-snapshot-key-1"] {
             let key_id = format!("{did}#{fragment}");
             verification_methods.push(json!({
                 "id": key_id,
