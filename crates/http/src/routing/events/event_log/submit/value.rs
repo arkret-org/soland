@@ -263,7 +263,7 @@ pub(super) fn validate_cas_write_guards(
     writes: &[arkret_wire::cba::ProjectedCellWrite],
     frozen: &std::collections::BTreeMap<arkret_wire::CellRef, arkret_state::lattice::CellState>,
 ) -> Result<(), SubmitOneError> {
-    use arkret_wire::cba::{LatticeOpType, PredicateOp, ProjectedOp};
+    use arkret_wire::cba::{LatticeOpType, ProjectedOp};
     for write in writes {
         let produces_set = match &write.op {
             ProjectedOp::Direct(op) => op.op_type == LatticeOpType::Set,
@@ -286,35 +286,27 @@ pub(super) fn validate_cas_write_guards(
         if binding.lattice.kind() != arkret_state::lattice::LatticeKind::CasRegister {
             continue;
         }
-        // An unwritten `cas_register` cell reads `null` protocol-wide
-        // (`event-auth-state-resolution.md` section 9.3.1.2); the registered
-        // `initial_value` mechanism is gone. `initial_state()` is still
-        // consulted so a non-CAS lattice that grows its own notion of an
-        // unwritten head stays on one definition with
-        // `ProjectionState::head_eq_holds`.
-        let initial = binding.lattice.initial_state().unwrap_or(Value::Null);
-        let observed = match frozen.get(&write.cell_id) {
-            Some(arkret_state::lattice::CellState::Value(value)) => value,
-            Some(arkret_state::lattice::CellState::Bottom(_)) => {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_bottom",
-                    "CAS target is in Bottom",
-                ));
-            }
-            None => &initial,
-        };
-        if observed != &initial
-            && !operation.context.preconditions.iter().any(|pre| {
-                pre.cell_id == write.cell_id
-                    && pre.predicate.op == PredicateOp::HeadEq
-                    && pre.predicate.value.as_ref() == Some(observed)
-            })
+        // No generalized whole-value head_eq is required. Section 9.3.1.3 item 1
+        // forbids demanding one for every CAS write: the signed seal_basis
+        // already fixes the complete pre-state, and the guard that does the work
+        // is the identity comparison H_c(B) = H_c(P) at Seal admission. A
+        // declared business precondition is still evaluated on the ordinary
+        // predicate path.
+        //
+        // What is still refused here is a write onto a cell whose family has no
+        // ordinary-write exit from Bottom (section 9.3.1.4 sole_recovery_families):
+        // only ak.conflict.recovery can move those. Families outside that list
+        // heal through an authorized ordinary write, so a Bottom target alone is
+        // not a rejection.
+        if matches!(
+            frozen.get(&write.cell_id),
+            Some(arkret_state::lattice::CellState::Bottom(_))
+        ) && soland_domain::reducer::lattice_kinds::is_sole_recovery_cell(write.cell_id.as_str())
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
-                "failed_precondition",
-                "non-initial cas_register write requires whole-value head_eq",
+                "failed_bottom",
+                "CAS target is in Bottom and its family has no ordinary-write exit",
             ));
         }
     }
@@ -3143,6 +3135,18 @@ mod member_identity_state_guard_tests {
 
 #[cfg(test)]
 mod cas_write_guard_tests {
+
+    fn conflict_bottom(cell: &arkret_wire::CellRef) -> arkret_state::lattice::CellState {
+        arkret_state::lattice::CellState::Bottom(arkret_wire::Bottom {
+            kind: arkret_wire::BottomKind::Conflict,
+            cell_ids: vec![cell.clone()],
+            move_ids: Vec::new(),
+            seal_view: None,
+            head_ids: Vec::new(),
+            details: None,
+            escalated_at: None,
+        })
+    }
     use super::*;
 
     #[test]
@@ -3180,23 +3184,10 @@ mod cas_write_guard_tests {
             arkret_state::lattice::CellState::Value(current.clone()),
         );
         state.projections().install_snapshot(snapshot);
-        assert_eq!(
-            validate_cas_write_guards(&state, &operation, &writes, &frozen)
-                .unwrap_err()
-                .code(),
-            "failed_precondition"
-        );
-        operation.context.preconditions = serde_json::from_value(json!([{
-            "cell_id": cell, "predicate": {"op": "head_eq", "value": {"policy_revision": 1}}
-        }]))
-        .unwrap();
-        assert_eq!(
-            validate_cas_write_guards(&state, &operation, &writes, &frozen)
-                .unwrap_err()
-                .code(),
-            "failed_precondition"
-        );
-        operation.context.preconditions[0].predicate.value = Some(current.clone());
+        // Section 9.3.1.3 item 1 forbids demanding a wire head_eq for a
+        // non-initial CAS write: the signed seal_basis already fixes the
+        // pre-state, and the identity comparison H_c(B) = H_c(P) runs at Seal
+        // admission. Preflight therefore admits this.
         assert!(validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok());
         assert_eq!(
             state
@@ -3215,6 +3206,16 @@ mod cas_write_guard_tests {
         );
         state.projections().install_snapshot(latest);
         assert!(validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok());
+
+        // A Bottom target on a family outside sole_recovery_families heals
+        // through an authorized ordinary write (section 9.3.1.4), so preflight
+        // must not refuse it.
+        frozen.insert(
+            writes[0].cell_id.clone(),
+            conflict_bottom(&writes[0].cell_id),
+        );
+        assert!(validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok());
+        let _ = &mut operation;
     }
 
     #[test]
@@ -3260,12 +3261,46 @@ mod cas_write_guard_tests {
         snapshot.install_reloaded_cells(&child, [(cell.clone(), value.clone())]);
         frozen.insert(cell.clone(), value);
         state.projections().install_snapshot(snapshot);
+        assert!(
+            validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok(),
+            "a real child predecessor is guarded by identity at Seal admission,              not by a wire head_eq preflight demands"
+        );
+    }
+
+    #[test]
+    fn a_sole_recovery_family_in_bottom_has_no_ordinary_write_exit() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+        // ak.component.realm.authority_root.v1 is the sole genesis base case of
+        // the authorization graph, so Bottom leaves nobody able to author an
+        // ordinary write; only ak.conflict.recovery moves it (section 9.3.1.4).
+        let cell = arkret_wire::CellRef::new(
+            "ak:cell:ak.component.realm.authority_root.v1:null".to_owned(),
+        )
+        .unwrap();
+        let operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000003")
+                .unwrap(),
+            arkret_wire::RealmId::new(realm).unwrap(),
+            arkret_wire::EventKind::RealmOwnerTransfer.as_str(),
+            json!({"controller_actor_id": "ak:did_core:webvh:z6mkfixturebob"}),
+        );
+        let mut op = arkret_wire::cba::LatticeOp::empty();
+        op.op_type = arkret_wire::cba::LatticeOpType::Set;
+        op.value = Some(operation.payload.clone());
+        let writes = vec![arkret_wire::cba::ProjectedCellWrite {
+            cell_id: cell.clone(),
+            op: arkret_wire::cba::ProjectedOp::Direct(op),
+        }];
+        let frozen = std::collections::BTreeMap::from([(cell.clone(), conflict_bottom(&cell))]);
         assert_eq!(
             validate_cas_write_guards(&state, &operation, &writes, &frozen)
                 .unwrap_err()
                 .code(),
-            "failed_precondition",
-            "a real child predecessor still requires whole-value CAS"
+            "failed_bottom"
         );
     }
 }
