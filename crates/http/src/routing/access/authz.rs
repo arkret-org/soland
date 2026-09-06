@@ -491,12 +491,12 @@ async fn effective_grants(
     let session = aa.authenticated_session(state, req).await?;
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
-    let legacy_subject_present = ["subject", "subject_station_id", "subject_account_id"]
+    let unaccepted_subject_present = ["subject", "subject_station_id", "subject_account_id"]
         .iter()
         .any(|key| query_param(req, key).is_some());
     let subject_actor = effective_grants_subject(
         query_param(req, "subject_actor_id").as_deref(),
-        legacy_subject_present,
+        unaccepted_subject_present,
         &session_actor,
     )?;
     let realm_id = query_param(req, "realm_id")
@@ -540,12 +540,12 @@ async fn effective_grants(
 
 fn effective_grants_subject(
     subject_actor_id: Option<&str>,
-    legacy_subject_present: bool,
+    unaccepted_subject_present: bool,
     session_actor: &ActorId,
 ) -> Result<ActorId, AppError> {
-    if legacy_subject_present {
+    if unaccepted_subject_present {
         return Err(AppError::param_invalid(
-            "effective-grants only accepts subject_actor_id; legacy subject fields are invalid",
+            "effective-grants accepts only subject_actor_id; subject, subject_station_id and subject_account_id are invalid",
         ));
     }
     match subject_actor_id {
