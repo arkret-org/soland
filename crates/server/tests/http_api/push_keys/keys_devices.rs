@@ -494,6 +494,42 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         encrypted_bytes
     );
 
+    // `service-http-binding.md` §3 registers `purpose` as optional on this
+    // surface: it is authorization material only inside a presign URL, and the
+    // session branch decides visibility from Realm membership. Requiring it
+    // rejected every caller that follows the table, including the SDK's own
+    // realm-state-snapshot restore, which fetches its chunks with
+    // `blob_download(chunk_ref, None)`.
+    let mut alice_blob_without_purpose = TestClient::get(format!(
+        "http://server/_arkret/self/blob/get?blob_ref={}",
+        blob["blob_ref"].as_str().unwrap()
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(
+        alice_blob_without_purpose.status_code.unwrap().as_u16(),
+        200
+    );
+    assert_eq!(
+        alice_blob_without_purpose
+            .take_string()
+            .await
+            .unwrap()
+            .as_bytes(),
+        encrypted_bytes
+    );
+
+    // The presign branch keeps it: `purpose` rides inside the signed payload,
+    // so a presign URL without one cannot be checked against anything.
+    let presign_without_purpose = TestClient::get(format!(
+        "http://server/_arkret/self/blob/get?blob_ref={}&presign=not-a-real-token",
+        blob["blob_ref"].as_str().unwrap()
+    ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(presign_without_purpose.status_code.unwrap().as_u16(), 400);
+
     let bob = register_account(
         state.clone(),
         "did:web:blob-bob.example",

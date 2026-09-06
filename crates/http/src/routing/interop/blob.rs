@@ -377,14 +377,29 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     };
-    let Some(purpose) = query_param(req, "purpose") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "param_missing",
-            "purpose is required",
-        );
-        return;
+    // `purpose` is authorization-bearing on the presign path and nowhere else:
+    // `validate_presign_query` compares it against the signed payload, so a
+    // presign URL without one cannot be checked and is refused here rather than
+    // silently mismatching. On the session path nothing reads it for the access
+    // decision — `blob_visible_to_session` does that — and requiring it made
+    // every registered caller that follows the binding contract fail, including
+    // the SDK's own realm-state-snapshot restore, which downloads its chunks
+    // with `blob_download(chunk_ref, None)`. `service-http-binding.md` §3 lists
+    // `purpose` as optional on this surface. Absent, it defaults the way the
+    // presign issuer already defaults it, and "download" keeps
+    // `Content-Disposition: attachment` — the safe direction.
+    let purpose = match query_param(req, "purpose") {
+        Some(purpose) => purpose,
+        None if query_param(req, "presign").is_some() => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "param_missing",
+                "purpose is required with presign",
+            );
+            return;
+        }
+        None => DEFAULT_BLOB_PURPOSE.to_owned(),
     };
     if !is_valid_blob_purpose(&purpose) {
         render_error(
@@ -683,7 +698,7 @@ async fn blob_presign(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let blob_ref = body.blob_ref.as_str();
-    let purpose = body.purpose.as_deref().unwrap_or("download");
+    let purpose = body.purpose.as_deref().unwrap_or(DEFAULT_BLOB_PURPOSE);
     if !is_valid_blob_purpose(purpose) {
         return Err(AppError::param_invalid("invalid blob purpose"));
     }
@@ -1455,6 +1470,12 @@ pub(super) async fn enforce_blob_quota(
     }
     Ok(())
 }
+
+/// What a download declares when it declares nothing.
+///
+/// The presign issuer has always defaulted this way; the download surface now
+/// does too, so the two halves of one contract agree.
+pub(super) const DEFAULT_BLOB_PURPOSE: &str = "download";
 
 pub(super) fn is_valid_blob_purpose(value: &str) -> bool {
     let value = value.trim();
