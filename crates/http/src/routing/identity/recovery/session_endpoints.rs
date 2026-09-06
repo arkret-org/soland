@@ -2,6 +2,7 @@ use sha2::{Digest as _, Sha256};
 use soland_services::identity::RecoverySessionState as RecoverySessionServiceState;
 
 use super::*;
+use crate::routing::identity::value_mentions_identifier;
 
 const RECOVERY_SESSION_TTL_SECS: i64 = 900;
 
@@ -1357,19 +1358,6 @@ fn recovery_policy_mentions_identifier(
             .get(*key)
             .is_some_and(|value| value_mentions_identifier(value, identifier))
     })
-}
-
-fn value_mentions_identifier(value: &Value, identifier: &str) -> bool {
-    match value {
-        Value::String(value) => value == identifier,
-        Value::Array(values) => values
-            .iter()
-            .any(|value| value_mentions_identifier(value, identifier)),
-        Value::Object(object) => object
-            .values()
-            .any(|value| value_mentions_identifier(value, identifier)),
-        _ => false,
-    }
 }
 
 fn recovery_policy_requires_trusted_service_attestation(policy_payload: &Value) -> bool {

@@ -10,7 +10,7 @@ use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::Value;
 use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 
-use super::device_signature_kid_points_to_device_key;
+use super::{device_signature_kid_points_to_device_key, value_mentions_identifier};
 use crate::state::AppState;
 
 pub(crate) fn device_quorum_method_matches(
@@ -40,19 +40,6 @@ pub(crate) fn policy_mentions_identifier(
             .get(*key)
             .is_some_and(|value| value_mentions_identifier(value, identifier))
     })
-}
-
-fn value_mentions_identifier(value: &Value, identifier: &str) -> bool {
-    match value {
-        Value::String(value) => value == identifier,
-        Value::Array(values) => values
-            .iter()
-            .any(|value| value_mentions_identifier(value, identifier)),
-        Value::Object(object) => object
-            .values()
-            .any(|value| value_mentions_identifier(value, identifier)),
-        _ => false,
-    }
 }
 
 pub(crate) fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {

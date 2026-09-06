@@ -12,6 +12,7 @@
 //! `Idempotency-Key` and stamps the operator audit onto the dead letter — all
 //! in one transaction. See `routing::federation::outbox_operator`.
 
+use soland::process_config::arg_value;
 use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::routing::federation::outbox_operator::{self, DEFAULT_LIST_LIMIT};
 use soland_storage::FederationOutboxState;
@@ -131,19 +132,6 @@ fn positional(args: &[String]) -> Option<String> {
             continue;
         }
         return Some(arg.clone());
-    }
-    None
-}
-
-fn arg_value(args: &[String], name: &str) -> Option<String> {
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if arg == name {
-            return iter.next().cloned();
-        }
-        if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
-            return Some(value.to_owned());
-        }
     }
     None
 }

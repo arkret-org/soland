@@ -2,6 +2,7 @@ use anyhow::Context;
 use salvo::conn::Acceptor;
 use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
+use soland::process_config::arg_value;
 use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland_http::service;
@@ -365,19 +366,6 @@ async fn run() -> anyhow::Result<()> {
     }
     tracing::info!(event = "shutdown_complete", "soland stopped");
     Ok(())
-}
-
-fn arg_value(args: &[String], name: &str) -> Option<String> {
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if arg == name {
-            return iter.next().cloned();
-        }
-        if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
-            return Some(value.to_owned());
-        }
-    }
-    None
 }
 
 /// Build the tracing subscriber.

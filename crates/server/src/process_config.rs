@@ -104,6 +104,24 @@ fn ambient_environment() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Value of the `--name value` / `--name=value` command-line flag, if present.
+///
+/// Every binary in this crate parses its own flags this way; the one
+/// implementation lives here next to the rest of the process-facing argument
+/// handling so the two accepted spellings cannot drift apart.
+pub fn arg_value(args: &[String], name: &str) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == name {
+            return iter.next().cloned();
+        }
+        if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
+            return Some(value.to_owned());
+        }
+    }
+    None
+}
+
 fn config_path_from_args(args: &[String]) -> anyhow::Result<Option<PathBuf>> {
     let mut index = 1;
     while index < args.len() {

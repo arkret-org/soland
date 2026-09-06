@@ -4,6 +4,7 @@
 //! GC-eligible Moves as JSON on stdout. The `--dry-run` flag is the
 //! only mode currently supported (deletion is a follow-up).
 
+use soland::process_config::arg_value;
 use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::gc;
 use soland_storage_postgres::Db;
@@ -60,17 +61,4 @@ async fn main() -> anyhow::Result<()> {
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
-}
-
-fn arg_value(args: &[String], name: &str) -> Option<String> {
-    let mut iter = args.iter();
-    while let Some(a) = iter.next() {
-        if a == name {
-            return iter.next().cloned();
-        }
-        if let Some(value) = a.strip_prefix(&format!("{name}=")) {
-            return Some(value.to_owned());
-        }
-    }
-    None
 }

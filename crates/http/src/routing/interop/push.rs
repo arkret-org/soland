@@ -12,11 +12,9 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use hmac::{Hmac, KeyInit, Mac};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use sha2::Sha256;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::PushContractDrift;
@@ -26,7 +24,7 @@ use super::audit::append_audit_log;
 use super::push_outbound::{
     derive_push_gateway_service_base_url, join_push_gateway_url, refresh_push_gateway_description,
 };
-use super::{authenticated_session, now, sha256_hex};
+use super::{authenticated_session, hmac_sha256, now, sha256_hex};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -339,13 +337,6 @@ fn push_registration_accepts_target(
 
 fn constant_time_str_eq(left: &str, right: &str) -> bool {
     left.as_bytes().ct_eq(right.as_bytes()).into()
-}
-
-fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    let mut mac =
-        <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(data);
-    mac.finalize().into_bytes().into()
 }
 
 #[salvo::oapi::endpoint(

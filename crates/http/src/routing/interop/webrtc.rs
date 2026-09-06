@@ -39,7 +39,7 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
-use super::{now, realm_has_member, sha256_hex, validate_device_id};
+use super::{hmac_sha256, now, realm_has_member, sha256_hex, validate_device_id};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -1220,18 +1220,6 @@ fn issue_livekit_backend_token(
         backend_token: MediaBackendToken::Opaque(format!("{signing_input}.{signature_b64}")),
         connect_url: request.focus.connect_url.clone(),
     })
-}
-
-/// HMAC-SHA256 over `data` keyed by `key`. Used to sign the LiveKit JWT
-/// (`bindings/livekit.md` §2) with the deployment API Secret.
-fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-
-    let mut mac = <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(key)
-        .expect("HMAC accepts keys of any length");
-    mac.update(data);
-    mac.finalize().into_bytes().into()
 }
 
 /// Whether `issuer_kid` names a key of `service_id`.
