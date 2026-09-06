@@ -123,3 +123,30 @@ fn fork_normalization_carries_the_timestamp_its_winner_is_admitted_under() {
     assert!(INITIAL_UP.contains("(winner_canonical_bytes IS NULL) = (winner_sealed_at IS NULL)"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS federation_fork_normalization"));
 }
+
+/// The direct-invite read model's live set is the one §5.3 defines.
+///
+/// `governance-objects.md` §5.3: "直接邀请的 live 集合是 `{pending, send_failed}`。
+/// `claimed` **不属于**该集合". The index carried `claimed` as a third state on
+/// the strength of a comment that turned out to be wrong — a claimed 3PID
+/// invite keeps a non-NULL `third_party_invite` (the claim projection nulls
+/// members inside that JSONB object, never the column), so it is already
+/// excluded by the second conjunct, and a direct invite cannot reach `claimed`
+/// because the claim path matches on a token commitment inside
+/// `third_party_invite`.
+///
+/// It was unreachable rather than wrong, which is exactly why it needs pinning:
+/// nothing failed while it was there, and nothing would fail if it came back.
+#[test]
+fn direct_invite_live_uniqueness_covers_only_the_live_states() {
+    assert!(INITIAL_UP.contains("CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx"));
+    assert!(INITIAL_UP.contains(
+        "(status = ANY (ARRAY['pending'::text, 'send_failed'::text]))"
+    ));
+    assert!(
+        !INITIAL_UP.contains(
+            "(status = ANY (ARRAY['pending'::text, 'claimed'::text, 'send_failed'::text]))"
+        ),
+        "claimed is not in the direct-invite live set"
+    );
+}

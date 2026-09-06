@@ -2742,10 +2742,16 @@ CREATE INDEX realm_invites_invitee_idx ON public.realm_invites USING btree (invi
 -- this projection from denormalising two live rows into one server's own
 -- read model. A conforming implementation reproduces the rule from the Realm's
 -- authoritative state without any private index, so nothing may treat an error
--- from this index as the uniqueness decision. 'claimed' stays in the predicate
--- because a 3PID invite that was claimed by an account still materialises an
--- invitee_id row here; the slot itself is never claimed by a 3PID invite.
-CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites USING btree (realm_id, invitee_id) WHERE ((invitee_id IS NOT NULL) AND (third_party_invite IS NULL) AND (status = ANY (ARRAY['pending'::text, 'claimed'::text, 'send_failed'::text])));
+-- from this index as the uniqueness decision. The status array is the live set
+-- section 5.3 defines for a *direct* invite, {pending, send_failed}. 'claimed'
+-- used to sit here too, with a comment saying a claimed 3PID invite still
+-- materialises an invitee_id row: it does, but such a row keeps a non-NULL
+-- third_party_invite (the claim projection only nulls members inside that JSONB
+-- object, never the column), so the second conjunct already excludes it. A
+-- direct invite cannot reach 'claimed' at all -- the claim path requires a
+-- token commitment inside third_party_invite -- which made the third state
+-- unreachable and the reason for keeping it wrong.
+CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites USING btree (realm_id, invitee_id) WHERE ((invitee_id IS NOT NULL) AND (third_party_invite IS NULL) AND (status = ANY (ARRAY['pending'::text, 'send_failed'::text])));
 
 CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_id);
 
