@@ -1666,8 +1666,8 @@ async fn join_control_state_batches(
         let bottom_mode = binding.bottom_mode;
         // A `cas_register` cell's state_root leaf is its head set (spec section
         // 6.2.1), derived from the same batches as the join.
-        if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
-            let heads = arkret_state::cas_heads_for_batches(&batches);
+        if arkret_state::is_causal_register(binding.lattice.kind()) {
+            let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
             if !heads.is_empty() {
                 joined.cas_heads.insert(cell.clone(), heads);
             }

@@ -2292,8 +2292,8 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
                     // A `cas_register` cell's state_root leaf is its head set
                     // (spec section 6.2.1), derived from these same batches.
-                    if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
-                        let heads = arkret_state::cas_heads_for_batches(&batches);
+                    if arkret_state::is_causal_register(binding.lattice.kind()) {
+                        let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
                         if !heads.is_empty() {
                             joined_cas_heads.insert(cell.clone(), heads);
                         }
@@ -3182,15 +3182,20 @@ mod event_seal_commit_tests {
                 .unwrap();
         let join_move = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
         let ban_move = Hash::new(format!("sha256:{}", "f".repeat(64))).unwrap();
+        // The ban write's own verified basis observed the join write, so it
+        // supersedes it (`event-auth-state-resolution.md` §9.3.1.7 item 4).
+        // `fsm` is a causal register since §9.3.1.5: order in this list carries
+        // no causality, and without the edge these are two concurrent writes
+        // with different `to` and the cell reads `⊥`.
         let ops = [
-            (join_move.clone(), "leave", "join"),
-            (ban_move.clone(), "join", "ban"),
+            (join_move.clone(), "leave", "join", Vec::new()),
+            (ban_move.clone(), "join", "ban", vec![join_move.clone()]),
         ]
         .into_iter()
-        .map(|(move_id, from, to)| {
+        .map(|(move_id, from, to, supersedes)| {
             (
                 cell.clone(),
-                test_issued(SealedOp::new(
+                test_issued(SealedOp::superseding(
                     move_id,
                     LatticeOp {
                         op_type: LatticeOpType::Transition,
@@ -3201,6 +3206,7 @@ mod event_seal_commit_tests {
                         reason: None,
                         issuer_seq: None,
                     },
+                    supersedes,
                 )),
             )
         })

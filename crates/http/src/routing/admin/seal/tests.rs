@@ -78,12 +78,13 @@ fn notary_value_from_cell_reads_authoritative_threshold_form() {
 }
 
 #[test]
-fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
-    // SDK serializes the Bottom variant as PascalCase via serde
-    // default; the wire shape sodmin expects is snake_case. Our
-    // shaping helper bridges the two.
+fn bottom_entry_from_reads_the_kind_the_sdk_emits() {
+    // `BottomKind` is `#[serde(rename_all = "snake_case")]`, so the wire form
+    // already is what sodmin expects and the helper passes it through. These
+    // cases used to feed PascalCase and assert a normalisation step that the
+    // helper no longer does — and that the SDK never needed.
     let bottom = json!({
-        "kind": "Conflict",
+        "kind": "conflict",
         "event_ids": ["ak:event:a", "ak:event:b"],
         "details": "two heads"
     });
@@ -102,7 +103,7 @@ fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
 #[test]
 fn bottom_entry_from_non_conflict_kind_has_no_candidate_heads() {
     let bottom = json!({
-        "kind": "InvalidTransition",
+        "kind": "invalid_transition",
         "event_ids": ["ak:event:x"],
         "details": "fsm rejected from invited→ban"
     });

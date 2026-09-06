@@ -1542,7 +1542,7 @@ impl NotaryWorker {
                     .map_err(|error| NotaryError::Store(format!("cell registry: {error}")))?
                     .lattice
                     .kind();
-                let supersedes = if kind == arkret_state::LatticeKind::CasRegister {
+                let supersedes = if arkret_state::is_causal_register(kind) {
                     basis_heads
                         .get(&effect.cell_id)
                         .map(|heads| heads.iter().map(|head| head.move_id.clone()).collect())
@@ -1632,8 +1632,8 @@ impl NotaryWorker {
                 .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
             // A `cas_register` cell's state_root leaf is its head set (spec
             // section 6.2.1), derived from the same batches as the join.
-            if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
-                let heads = arkret_state::cas_heads_for_batches(&batches);
+            if arkret_state::is_causal_register(binding.lattice.kind()) {
+                let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
                 if !heads.is_empty() {
                     post_cas_heads.insert(cell.clone(), heads);
                 }
@@ -2140,11 +2140,23 @@ fn effective_membership_join_digest(ops: &[IssuedOp]) -> Result<Option<Hash>, No
     // One membership fold, in the SDK, shared with the MLS governance proof
     // replay. This Station used to carry its own copy with its own hardcoded
     // initial state, which meant the notary and the proof replay could drift
-    // apart on the same cell without anything noticing. The fold itself is still
-    // the arrival-ordered one the `fsm` transition algebra has to replace; see
-    // `arkret-work/review/spec-open/2026-09-06-1610`.
-    arkret_state::lattice::membership_transition_head_into(ops, "join")
-        .map_err(NotaryError::Construction)
+    // apart on the same cell without anything noticing. Since §9.3.1.5 it is the
+    // same causal-heads read the lattice itself performs, so there is no separate
+    // fold left to drift.
+    // §9.3.1.6 keeps every concurrent identity, so more than one write can put
+    // the cell in `join`. This caller needs a single digest and MUST NOT pick
+    // one: the head order fixes bytes and selects no winner.
+    let heads = arkret_state::lattice::membership_transition_heads_into(ops, "join")
+        .map_err(NotaryError::Construction)?;
+    match heads.as_slice() {
+        [] => Ok(None),
+        [head] => Ok(Some(head.clone())),
+        many => Err(NotaryError::Construction(format!(
+            "member cell resolves to join through {} concurrent writes ({}); the notary needs one              identity and MUST NOT choose",
+            many.len(),
+            many.iter().map(Hash::as_str).collect::<Vec<_>>().join(", "),
+        ))),
+    }
 }
 
 /// Build a 64-zero-byte signature placeholder used purely as a typed

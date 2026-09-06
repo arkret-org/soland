@@ -1000,14 +1000,15 @@ async fn produce_current_agent_signer_evidence(
         &runtime.signing_key_binding.agent_key_id,
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let (key_value, key_proof) = witnessed_cell(state, &realm_id, &key_seal, &key_cell_ref).await?;
+    let (key_value, _key_heads, key_proof) =
+        witnessed_cell(state, &realm_id, &key_seal, &key_cell_ref).await?;
     let key_value: Vec<AgentKeyCellEntry> = serde_json::from_value(key_value)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
 
     let lifecycle = accepted_current_lifecycle(state, &agent, agent_id, &realm_id).await?;
     let lifecycle_seal = covering_seal(state, &lifecycle.event).await?;
     let lifecycle_cell_ref = lifecycle_cell_ref(&agent_actor)?;
-    let (lifecycle_value, lifecycle_proof) =
+    let (lifecycle_value, lifecycle_heads, lifecycle_proof) =
         witnessed_cell(state, &realm_id, &lifecycle_seal, &lifecycle_cell_ref).await?;
     let lifecycle_value: AgentLifecycleStatus = serde_json::from_value(lifecycle_value)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
@@ -1092,6 +1093,22 @@ async fn produce_current_agent_signer_evidence(
             seal: lifecycle_seal,
             cell_ref: lifecycle_cell_ref,
             cell_value: lifecycle_value,
+            // `ak.component.agent.status.v1` is an `fsm`, so its section 6.2.1
+            // leaf hashes the head set; a verifier cannot rebuild `leaf_digest`
+            // from the settled status alone.
+            cell_heads: lifecycle_heads
+                .iter()
+                .map(|head| {
+                    Ok(arkret_models_identity::AgentLifecycleHead {
+                        event_id: arkret_wire::EventId::from_event_digest(&head.move_id).map_err(
+                            |_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing,
+                        )?,
+                        value: serde_json::from_value(head.value.clone()).map_err(|_| {
+                            AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+                        })?,
+                    })
+                })
+                .collect::<Result<Vec<_>, AgentSignerEvidenceQueryFailureReason>>()?,
             leaf_digest: lifecycle_proof.leaf_digest,
             leaf_index: lifecycle_proof.leaf_index,
             leaf_count: lifecycle_proof.leaf_count,
@@ -1233,7 +1250,11 @@ async fn witnessed_cell(
     seal: &Seal,
     cell: &NonEmptyString,
 ) -> Result<
-    (serde_json::Value, arkret_state::StateInclusionProof),
+    (
+        serde_json::Value,
+        Vec<arkret_state::lattice::cas_register::CasHead>,
+        arkret_state::StateInclusionProof,
+    ),
     AgentSignerEvidenceQueryFailureReason,
 > {
     let cell = CellRef::new(cell.as_str().to_owned())
@@ -1256,9 +1277,10 @@ async fn witnessed_cell(
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .seal_digest_suite;
-    // The branch is over the governance `state_root`, so `cas_register` cells in
-    // this view need their head half to hash the leaf shape spec section 6.2.1
-    // defines.
+    // The branch is over the governance `state_root`, so a causal register in
+    // this view needs its head half to hash the leaf shape spec section 6.2.1
+    // defines. `fsm` is one since section 9.3.1.5, which is why the head set
+    // travels with the witness rather than being rebuilt from the value.
     let cas_heads = state
         .projections()
         .effective_cas_heads_at(std::slice::from_ref(&seal.id), realm_id)
@@ -1270,7 +1292,8 @@ async fn witnessed_cell(
         digest_suite,
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    Ok((value, proof))
+    let heads = cas_heads.get(&cell).cloned().unwrap_or_default();
+    Ok((value, heads, proof))
 }
 
 fn lifecycle_cell_ref(
