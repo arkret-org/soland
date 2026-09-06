@@ -1022,20 +1022,7 @@ impl NotaryWorker {
         // generic SDK apply path deliberately remains backend-agnostic and
         // cannot make three stores crash-atomic; production PostgreSQL owns
         // that guarantee in EventSealCommitStore's single transaction.
-        let new_ops = accepted
-            .iter()
-            .flat_map(|entry| {
-                entry.effects.iter().map(|effect| {
-                    (
-                        effect.cell_id.clone(),
-                        IssuedOp {
-                            issuer_id: entry.actor_id.clone(),
-                            op: SealedOp::from_projection(entry.event_digest.clone(), effect),
-                        },
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
+        let new_ops = self.derive_sealed_ops(state, realm_id, &accepted).await?;
         match state
             .projections()
             .commit_event_seal_if_frontier(
@@ -1516,6 +1503,66 @@ impl NotaryWorker {
             .map_err(|e| NotaryError::Store(format!("effective state: {e}")))
     }
 
+    /// Attach each write's derived `supersedes` set before it is persisted.
+    ///
+    /// `event-auth-state-resolution.md` §9.3.1.3 item 4: a `cas_register` write
+    /// supersedes exactly the heads its own signed `seal_basis` observed for
+    /// that cell. The reducer derives it — it never appears on the wire — and
+    /// the SDK's `apply_seal` does this before appending. This Station has its
+    /// own commit path (PostgreSQL owns the crash-atomicity the generic path
+    /// cannot give across three stores) and persisted
+    /// `SealedOp::from_projection` directly, which leaves the set empty.
+    ///
+    /// Empty means "superseded nothing", so a second write on a cell never
+    /// retires the first: both stay heads, and a `bottom=reject` cell reads
+    /// `failed_bottom` on its second legitimate write. It has gone unnoticed
+    /// because the cells this path writes are written once per view.
+    async fn derive_sealed_ops(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        accepted: &[AcceptedControlMove],
+    ) -> Result<Vec<(CellRef, IssuedOp)>, NotaryError> {
+        let mut out = Vec::new();
+        for entry in accepted {
+            // A Move with no basis — Realm genesis, a reanchor replacement unit
+            // — observed nothing and therefore supersedes nothing.
+            let basis_heads = match entry.event.seal_basis.as_ref() {
+                Some(basis) => {
+                    self.read_effective_cas_heads(state, realm_id, &basis.leaves)
+                        .await?
+                }
+                None => arkret_state::CasHeadsByCell::new(),
+            };
+            for effect in &entry.effects {
+                let kind = state
+                    .projections()
+                    .cell_registry()
+                    .resolve(realm_id, &effect.cell_id)
+                    .map_err(|error| NotaryError::Store(format!("cell registry: {error}")))?
+                    .lattice
+                    .kind();
+                let supersedes = if kind == arkret_state::LatticeKind::CasRegister {
+                    basis_heads
+                        .get(&effect.cell_id)
+                        .map(|heads| heads.iter().map(|head| head.move_id.clone()).collect())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                out.push((
+                    effect.cell_id.clone(),
+                    IssuedOp {
+                        issuer_id: entry.actor_id.clone(),
+                        op: SealedOp::from_projection(entry.event_digest.clone(), effect)
+                            .with_supersedes(supersedes),
+                    },
+                ));
+            }
+        }
+        Ok(out)
+    }
+
     async fn read_effective_cas_heads(
         &self,
         state: &AppState,
@@ -1566,17 +1613,11 @@ impl NotaryWorker {
         // These are the resolved effects `verify_control_move` returned, not a
         // producer-supplied array — v1 has none.
         let mut candidate_ops: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
-        for entry in accepted {
-            for effect in &entry.effects {
-                let aop = IssuedOp {
-                    issuer_id: entry.actor_id.clone(),
-                    op: SealedOp::from_projection(entry.event_digest.clone(), effect),
-                };
-                candidate_ops
-                    .entry(effect.cell_id.clone())
-                    .or_default()
-                    .push(aop);
-            }
+        // The same derived `supersedes` the commit will persist. Predicting
+        // against bare projections would compute a root the store can never
+        // reproduce, because a `cas_register` cell's heads depend on it.
+        for (cell, issued) in self.derive_sealed_ops(state, realm_id, accepted).await? {
+            candidate_ops.entry(cell).or_default().push(issued);
         }
         for (cell, ops) in candidate_ops {
             batches_by_cell.entry(cell).or_default().push(ops);

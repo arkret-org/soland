@@ -515,7 +515,12 @@ impl ProjectionService {
         self.cell_store.as_ref()
     }
 
-    fn cell_registry(&self) -> &dyn CellRegistry {
+    /// The Realm's cell registry.
+    ///
+    /// Exposed because the notary derives each write's `supersedes` set from
+    /// the cell's lattice (`event-auth-state-resolution.md` §9.3.1.3 item 4),
+    /// which it cannot ask without resolving the binding.
+    pub fn cell_registry(&self) -> &dyn CellRegistry {
         self.cell_registry.as_ref()
     }
 
