@@ -7,12 +7,10 @@
 use std::collections::BTreeSet;
 
 use arkret_identifiers::{CellRef, RealmId};
+pub use arkret_lattice_registry::default_lattice_registry;
 use arkret_lattice_registry::{
     ContractRegistryError, ResolvedFsmContract, canonical_fsm_contracts,
     lattice_bindings_for_sdk_registry, try_build_sdk_cell_registry,
-};
-pub use arkret_lattice_registry::{
-    default_lattice_registry, is_sole_recovery_cell, sole_recovery_families,
 };
 use arkret_state::lattice::LatticeKind;
 use arkret_state::state::{BottomMode, CellRegistry, MemoryCellRegistry};

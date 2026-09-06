@@ -301,7 +301,7 @@ pub(super) fn validate_cas_write_guards(
         if matches!(
             frozen.get(&write.cell_id),
             Some(arkret_state::lattice::CellState::Bottom(_))
-        ) && soland_domain::reducer::lattice_kinds::is_sole_recovery_cell(write.cell_id.as_str())
+        ) && arkret_state::state::is_sole_recovery_cell(write.cell_id.as_str())
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
