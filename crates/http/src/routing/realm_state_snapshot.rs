@@ -9,7 +9,7 @@ use crate::wire::now;
 pub(crate) async fn realm_state_snapshot_manifest_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Result<arkret_state::RealmRealmStateSnapshotStateManifest, soland_http::error::AppError> {
+) -> Result<arkret_state::RealmStateSnapshotManifest, soland_http::error::AppError> {
     let realm_id_value = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|_| soland_http::error::AppError::param_invalid("invalid realm_id"))?;
     {
@@ -107,7 +107,7 @@ pub(crate) async fn realm_state_snapshot_manifest_for_realm(
                 "snapshot verification method is invalid: {error}"
             ))
         })?;
-    let mut manifest = arkret_state::RealmRealmStateSnapshotStateManifest {
+    let mut manifest = arkret_state::RealmStateSnapshotManifest {
         id: realm_state_snapshot_id,
         realm_id: realm_id_value,
         reducer_profile: arkret_wire::CORE_REDUCER_PROFILE.to_owned(),
@@ -116,30 +116,27 @@ pub(crate) async fn realm_state_snapshot_manifest_for_realm(
             arkret_wire::ProfileId::STATION_EVENTS_API_V1.to_owned(),
         ],
         state_digest,
-        frontier: arkret_state::RealmRealmStateSnapshotStateFrontier {
+        frontier: arkret_state::RealmStateSnapshotFrontier {
             event_ids: frontier_event_ids.clone(),
             timeline_hlc,
         },
         event_set_commitment,
         chunks: chunk_descriptors,
-        security_class: arkret_state::RealmRealmStateSnapshotStateSecurityClass::Standard,
-        verification_hints: Some(
-            arkret_state::RealmRealmStateSnapshotStateVerificationHints {
-                verification_profile:
-                    arkret_state::RealmRealmStateSnapshotStateSecurityClass::Standard,
-                inclusion_proof_url: None,
-                challenge_window_seconds: None,
-                conflict_records_digest,
-                soft_failed_digest: None,
-                quarantined_digest: None,
-                erasure_stubs_digest: None,
-            },
-        ),
+        security_class: arkret_state::RealmStateSnapshotSecurityClass::Standard,
+        verification_hints: Some(arkret_state::RealmStateSnapshotVerificationHints {
+            verification_profile: arkret_state::RealmStateSnapshotSecurityClass::Standard,
+            inclusion_proof_url: None,
+            challenge_window_seconds: None,
+            conflict_records_digest,
+            soft_failed_digest: None,
+            quarantined_digest: None,
+            erasure_stubs_digest: None,
+        }),
         created_by: arkret_wire::ActorId::service(service_id.clone()),
         created_at,
         authority_binding: arkret_state::AuthorityBinding {
             authority_kind:
-                arkret_state::RealmRealmStateSnapshotStateAuthorityKind::RealmPolicySnapshotIssuer,
+                arkret_state::RealmStateSnapshotAuthorityKind::RealmPolicySnapshotIssuer,
             auth_state_digest,
             auth_frontier: frontier_event_ids,
             checked_at: created_at,
@@ -176,7 +173,7 @@ pub(crate) async fn realm_state_snapshot_manifest_for_realm(
 async fn persist_realm_state_snapshot_chunk_blobs(
     state: &AppState,
     realm_id: &str,
-    chunks: &[arkret_state::BuiltRealmStateRealmRealmStateSnapshotStateChunk],
+    chunks: &[arkret_state::BuiltRealmStateRealmStateSnapshotChunk],
 ) -> Result<(), soland_http::error::AppError> {
     for chunk in chunks {
         let blob_ref = chunk.descriptor.chunk_ref.as_str();
@@ -244,8 +241,8 @@ async fn reducer_cell_items(
     realm_id: &arkret_identifiers::RealmId,
 ) -> Result<
     (
-        Vec<arkret_state::RealmRealmStateSnapshotStateMaterializedItem>,
-        Vec<arkret_state::RealmRealmStateSnapshotStateConflictRecord>,
+        Vec<arkret_state::RealmStateSnapshotMaterializedItem>,
+        Vec<arkret_state::RealmStateSnapshotConflictRecord>,
     ),
     soland_http::error::AppError,
 > {
@@ -280,14 +277,14 @@ async fn reducer_cell_items(
         }
         match cell_state {
             arkret_state::lattice::CellState::Value(value) => items.push(
-                arkret_state::RealmRealmStateSnapshotStateMaterializedItem::value(cell, value)
+                arkret_state::RealmStateSnapshotMaterializedItem::value(cell, value)
                     .map_err(|error| internal(&error))?,
             ),
-            arkret_state::lattice::CellState::Bottom(_) => conflict_records.push(
-                arkret_state::RealmRealmStateSnapshotStateConflictRecord::BottomCell {
+            arkret_state::lattice::CellState::Bottom(_) => {
+                conflict_records.push(arkret_state::RealmStateSnapshotConflictRecord::BottomCell {
                     cell_ref: cell,
-                },
-            ),
+                })
+            }
         }
     }
     for (cell, heads) in heads_by_cell {
@@ -295,7 +292,7 @@ async fn reducer_cell_items(
             continue;
         }
         items.push(
-            arkret_state::RealmRealmStateSnapshotStateMaterializedItem::cas_cell(cell, &heads)
+            arkret_state::RealmStateSnapshotMaterializedItem::cas_cell(cell, &heads)
                 .map_err(|error| internal(&error))?,
         );
     }

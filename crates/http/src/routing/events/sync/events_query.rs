@@ -2432,7 +2432,7 @@ async fn durable_events_query_from_parts(
 pub(super) async fn realm_state_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> soland_http::result::JsonResult<arkret_state::RealmRealmStateSnapshotStateManifest> {
+) -> soland_http::result::JsonResult<arkret_state::RealmStateSnapshotManifest> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| soland_http::error::AppError::param_missing("realm_id is required"))?;
