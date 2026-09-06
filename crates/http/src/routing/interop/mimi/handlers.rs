@@ -2121,8 +2121,9 @@ mod consent_proof_tests {
         assert_eq!(error.code, ErrorCode::NotFound);
     }
 
-    /// Ruling `review/spec-done/
-    /// 2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md`: the holder is
+    /// Ruling:
+    /// `review/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md`.
+    /// The holder is
     /// compared as a complete AccountId. Before it, the correlation stored a principal core
     /// and this update -- from the same principal's account on a *different*
     /// Station -- was accepted.

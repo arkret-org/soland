@@ -71,8 +71,8 @@ pub(super) fn selector_claim_audience(
 /// The signed target is the complete Agent `AccountId`, derived by the caller
 /// from the accepted provision's controller account rather than from this
 /// service's own Station. The selector namespace stays principal-scoped.
-/// Ruling `review/spec-done/2026-09-05-1310-agent-selector-mention-has-no-normative-station-source.
-/// md`.
+/// Ruling:
+/// `review/spec-done/2026-09-05-1310-agent-selector-mention-has-no-normative-station-source.md`.
 pub(super) fn signed_agent_selector_claim(
     state: &AppState,
     controller_subject: &str,
