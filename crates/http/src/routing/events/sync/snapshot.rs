@@ -1064,10 +1064,6 @@ async fn timeline_events_for_realm(
                     .payload
                     .entry("strand_id".to_owned())
                     .or_insert_with(|| Value::String(message.thread_id.clone()));
-                event
-                    .payload
-                    .entry("thread_id".to_owned())
-                    .or_insert_with(|| Value::String(message.thread_id.clone()));
                 mark_event_as_projection_only(&mut event);
             }
             timeline_entries.push((position, event));
@@ -1133,10 +1129,6 @@ async fn timeline_events_for_realm(
                 event
                     .payload
                     .entry("strand_id".to_owned())
-                    .or_insert_with(|| Value::String(message.thread_id.clone()));
-                event
-                    .payload
-                    .entry("thread_id".to_owned())
                     .or_insert_with(|| Value::String(message.thread_id.clone()));
                 mark_event_as_projection_only(&mut event);
             }
@@ -1792,13 +1784,6 @@ fn projection_event_scope_circle_id(
             .payload
             .get("strand_id")
             .and_then(Value::as_str)
-            .or_else(|| {
-                event
-                    .payload
-                    .get("thread_id")
-                    .and_then(Value::as_str)
-                    .filter(|value| value.starts_with("ak:strand:"))
-            })
             .and_then(|strand_id| projection.strand_scope_circle_id(strand_id));
     }
     let explicit_scope = event

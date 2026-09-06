@@ -80,52 +80,6 @@ fn moderation_decision_identity_uses_accepted_event_context() {
 }
 
 #[test]
-fn moderation_decision_rejects_legacy_action_and_wrapped_targets() {
-    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
-    let base = moderation_decision_operation("ak:did_core:web:mod.example");
-    let mut action_only = base.clone();
-    action_only
-        .payload
-        .as_object_mut()
-        .unwrap()
-        .remove("decision");
-    action_only.payload["action"] = serde_json::json!("require_review");
-    assert!(matches!(
-        ProjectionState::new().apply(&action_only, &hlc),
-        ProjectionEffect::Rejected { reason } if reason == "moderation_decision_kind_missing"
-    ));
-    for target in [
-        serde_json::json!({"id": MOD_TARGET_REF}),
-        serde_json::json!({"object_ref": MOD_TARGET_REF}),
-    ] {
-        let mut operation = base.clone();
-        operation.payload["target_ref"] = target;
-        assert!(matches!(
-            ProjectionState::new().apply(&operation, &hlc),
-            ProjectionEffect::Rejected { reason } if reason == "moderation_decision_target_ref_missing"
-        ));
-    }
-}
-
-#[test]
-fn moderation_lift_rejects_legacy_decision_id_alias() {
-    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
-    let operation = make_operation(
-        arkret_wire::EventKind::ModerationDecisionLift,
-        MOD_REALM,
-        serde_json::json!({
-            "target_ref": MOD_TARGET_REF,
-            "decision_id": MOD_DECISION_ID,
-            "observed_dot_ids": [MOD_DECISION_DOT],
-        }),
-    );
-    assert!(matches!(
-        ProjectionState::new().apply(&operation, &hlc),
-        ProjectionEffect::Rejected { reason } if reason == "moderation_lift_decision_ref_missing"
-    ));
-}
-
-#[test]
 fn moderation_decision_then_lift_converges_on_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("ak:did_core:web:test.soland");

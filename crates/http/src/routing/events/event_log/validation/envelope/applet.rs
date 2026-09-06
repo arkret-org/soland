@@ -649,13 +649,7 @@ pub(super) fn delegated_applet_resource_candidates(
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, actor_id);
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, event_id);
     if let Some(payload) = object.get("payload").and_then(Value::as_object) {
-        for field in [
-            "strand_id",
-            "thread_id",
-            "message_id",
-            "object_id",
-            "target_ref",
-        ] {
+        for field in ["strand_id", "message_id", "object_id", "target_ref"] {
             if let Some(value) = event_string_field(payload, &[field]) {
                 append_authz_resource_candidates(
                     &mut resources,

@@ -3328,7 +3328,7 @@ mod account_data_cas_tests {
         preflight_account_data_cas(&state, &operation)
             .await
             .unwrap();
-        operation.payload["legacy_holder_field"] = json!("ak:did_core:web:other-holder.example");
+        operation.payload["unknown_holder_field"] = json!("ak:did_core:web:other-holder.example");
         assert_eq!(
             preflight_account_data_cas(&state, &operation)
                 .await

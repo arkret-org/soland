@@ -229,7 +229,7 @@ async fn delete_policy_document(
 /// Decode a stored local policy document into its public response shape.
 ///
 /// The stored payload is written by [`upsert_policy_document`] through the
-/// same type, so a decode failure is storage corruption rather than a legacy
+/// same type, so a decode failure is storage corruption rather than an older
 /// shape and is surfaced as an internal error.
 pub fn policy_document_to_response(
     policy: &PolicyDocumentRecord,

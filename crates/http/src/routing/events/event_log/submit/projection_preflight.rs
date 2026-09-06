@@ -362,8 +362,8 @@ pub(super) async fn apply_projection_preflight(
                 ));
             }
             // realm-and-space.md §3.6 — Strand creation carries no position;
-            // any legacy placement metadata is a wire-shape violation. A
-            // separate Move establishes the first board/list position.
+            // any placement metadata is a wire-shape violation. A separate
+            // Move establishes the first board/list position.
             if let Err(reason) = proj.check_strand_position_typing(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::BAD_REQUEST,

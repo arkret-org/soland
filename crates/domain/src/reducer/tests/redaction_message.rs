@@ -31,7 +31,7 @@ fn message_create_and_query() {
         serde_json::json!({
             "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
             "sender": "ak:did_core:web:alice",
-            "thread_id": "ak:strand:1",
+            "strand_id": "ak:strand:1",
             "content": {"kind": "ak.content.text", "body": "hello"}
         }),
     );
@@ -58,7 +58,7 @@ fn redaction_hides_message() {
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
                 "sender": "ak:did_core:web:alice",
-                "thread_id": "ak:strand:1",
+                "strand_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
         ),
@@ -113,7 +113,7 @@ fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &
             serde_json::json!({
                 "event_id": event_id,
                 "sender": "ak:did_core:web:alice",
-                "thread_id": "ak:strand:1",
+                "strand_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
         ),
@@ -300,7 +300,7 @@ fn message_revise_creates_chain() {
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
                 "sender": "ak:did_core:web:alice",
-                "thread_id": "ak:strand:1",
+                "strand_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
             }),
         ),
@@ -346,7 +346,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
                 "event_id": event_id,
                 "message_id": message_id,
                 "sender": "ak:did_core:web:alice",
-                "thread_id": "ak:strand:1",
+                "strand_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
             }),
         ),
@@ -394,7 +394,7 @@ fn redaction_accepts_schema_message_id_target() {
             serde_json::json!({
                 "event_id": event_id,
                 "sender": "ak:did_core:web:alice",
-                "thread_id": "ak:strand:1",
+                "strand_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
         ),
@@ -445,7 +445,7 @@ fn redaction_by_message_id_hides_latest_revision() {
             serde_json::json!({
                 "event_id": event_id,
                 "sender": "ak:did_core:web:alice",
-                "thread_id": "ak:strand:1",
+                "strand_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
             }),
         ),

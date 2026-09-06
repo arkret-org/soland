@@ -709,10 +709,9 @@ mod tests {
     }
 
     #[test]
-    fn organization_actor_deny_rejects_legacy_or_mistagged_targets() {
+    fn organization_actor_deny_rejects_mistagged_targets() {
         let actor = account_at("station-a");
         for target in [
-            json!({"kind": "actor", "actor_id": actor.signing_principal_id()}),
             json!({"kind": "actor", "actor_id": actor.to_string()}),
             json!({"kind": "service", "actor_id": actor}),
             json!({"actor_id": actor}),

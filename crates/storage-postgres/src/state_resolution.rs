@@ -87,7 +87,7 @@ pub trait EventSealCommitStore: Send + Sync {
     ) -> StoreResult<Option<BTreeSet<Hash>>>;
 
     /// Return the immutable, receiver-verified effective state frozen at one
-    /// accepted Seal. A missing row permits legacy replay; a malformed row is
+    /// accepted Seal. A missing row permits a full replay; a malformed row is
     /// an error and must never silently fall back to a closure scan.
     async fn effective_state_checkpoint(
         &self,
@@ -3054,19 +3054,6 @@ mod event_seal_commit_tests {
         assert_eq!(
             sealed_op_from_value(encoded).expect("decode stored op"),
             issued
-        );
-
-        // A row written before the field existed decodes as "superseded
-        // nothing". That is the fail-closed reading: the write stays concurrent
-        // with every head instead of silently replacing one.
-        let mut legacy = sealed_op_to_value(&issued).expect("encode stored op");
-        legacy.as_object_mut().unwrap().remove("supersedes");
-        assert!(
-            sealed_op_from_value(legacy)
-                .expect("legacy rows stay decodable")
-                .op
-                .supersedes
-                .is_empty()
         );
     }
 

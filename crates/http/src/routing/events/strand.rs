@@ -54,12 +54,7 @@ pub fn discussion_track_for_projection_event(
     strand_id: Option<&str>,
 ) -> Option<serde_json::Value> {
     let strand_id = strand_id?;
-    let track_id = event
-        .payload
-        .get("thread_id")
-        .and_then(|value| value.as_str())
-        .unwrap_or(event.realm_id.as_str());
-    Some(default_discussion_track(strand_id, track_id))
+    Some(default_discussion_track(strand_id, event.realm_id.as_str()))
 }
 
 pub async fn strand_history_access_for_realm(state: &AppState, realm_id: &str) -> &'static str {

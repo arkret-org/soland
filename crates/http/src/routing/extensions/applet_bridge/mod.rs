@@ -17,7 +17,7 @@ mod inbound_signature_tests;
 
 pub(in crate::routing::extensions) use endpoints::protocol_router;
 // The formal Applet routes project Bot/Ghost authority directly from the
-// durable SDK-owned Applet record; no sibling legacy actor view exists.
+// durable SDK-owned Applet record; no sibling actor view exists.
 pub use types::{AppletRecord, AppletRevokeRecordOutcome, GhostActorRecord};
 pub(crate) use types::{
     registration_epoch_evidence_from_event, registration_epoch_evidence_from_record,

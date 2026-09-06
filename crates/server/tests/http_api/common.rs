@@ -235,8 +235,7 @@ pub(crate) fn advertises_operation(describe: &Value, operation_id: &str) -> bool
 }
 
 /// Return the canonical RFC 9457 Arkret problem code encoded by the problem
-/// type URI. Error responses are closed problem-detail objects; tests must not
-/// depend on the removed legacy `{ "error": { ... } }` envelope.
+/// type URI. Error responses are closed problem-detail objects.
 pub(crate) fn problem_code(body: &Value) -> &str {
     body["type"]
         .as_str()

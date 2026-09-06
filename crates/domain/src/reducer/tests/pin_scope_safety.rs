@@ -109,7 +109,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             REALM_ID,
             serde_json::json!({
                 "event_id": MESSAGE_EVENT_ID,
-                "thread_id": STRAND_ID,
+                "strand_id": STRAND_ID,
                 "sender": "ak:did_core:web:alice.example",
                 "content": {"kind": "ak.content.text", "body": "private"}
             }),

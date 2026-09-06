@@ -263,12 +263,12 @@ mod tests {
         let canonical =
             serde_json::to_value(proof("ak:did_core:web:svc.invalid", now, digest)).unwrap();
         for field in ["domain", "proof_purpose", "audience"] {
-            let mut legacy = canonical.clone();
-            legacy
+            let mut generic = canonical.clone();
+            generic
                 .as_object_mut()
                 .unwrap()
-                .insert(field.to_owned(), serde_json::json!("legacy"));
-            assert!(serde_json::from_value::<DirectoryRequestProof>(legacy).is_err());
+                .insert(field.to_owned(), serde_json::json!("unstructured"));
+            assert!(serde_json::from_value::<DirectoryRequestProof>(generic).is_err());
         }
     }
 

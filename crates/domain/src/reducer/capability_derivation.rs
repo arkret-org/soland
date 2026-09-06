@@ -411,9 +411,9 @@ mod alias_tests {
     fn capability_derivation_ignores_unregistered_bundle_carriers() {
         let payload = json!({
             "capability_bundles": ["canonical"],
-            "bundle_ids": ["legacy-ids"],
-            "bundles": ["legacy-plural"],
-            "bundle": {"id": "legacy-wrapper", "actions": ["legacy-action"]},
+            "bundle_ids": ["unregistered-ids"],
+            "bundles": ["unregistered-plural"],
+            "bundle": {"id": "unregistered-wrapper", "actions": ["unregistered-action"]},
             "actions": ["canonical-action"],
             "resources": [{"kind": "realm"}],
             "expires_at": "2026-09-02T00:00:00.000Z"

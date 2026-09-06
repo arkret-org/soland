@@ -90,7 +90,7 @@ fn event_schema_rejects_unknown_arkret_camel_case_property() {
     let payload = json!({
         "realm_id": "ak:realm:ARLbXJMwpJkX1X9nXmxj2Yv0DAzpbSmEiyQvmERDGGOt",
         "strand_id": "ak:strand:AdkuCk9s9aVgrLhlJ7RStI9OuRZNs0l_4p5_NBH_a-SY",
-        "legacyField": true,
+        "unknownField": true,
     });
     assert!(
         catalog

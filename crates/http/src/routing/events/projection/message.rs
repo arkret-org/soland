@@ -34,7 +34,7 @@ pub async fn project_federated_message(state: &AppState, _origin: &str, operatio
     let sender = operation.context.sender.to_string();
     let thread_id = operation
         .payload
-        .get("thread_id")
+        .get("strand_id")
         .and_then(|value| value.as_str())
         .unwrap_or(operation.realm_id.as_str())
         .to_owned();

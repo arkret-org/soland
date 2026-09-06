@@ -32,7 +32,7 @@ pub(crate) fn typed_realm_frontier(
 
 /// Convert the actor -> seq upper bound table to the typed
 /// `BTreeMap<ActorId, u64>` shape. Stored identities must already be canonical;
-/// corrupt or legacy rows must never disappear from a signed commitment.
+/// corrupt rows must never disappear from a signed commitment.
 pub(crate) fn typed_actor_upper_bounds(
     actor_to_seq: impl IntoIterator<Item = (String, u64)>,
 ) -> Result<BTreeMap<ActorId, u64>, String> {

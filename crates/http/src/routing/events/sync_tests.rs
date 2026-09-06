@@ -1017,7 +1017,6 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         arkret_wire::EventKind::MessageCreate,
         json!({
             "strand_id": strand_id,
-            "thread_id": strand_id,
             "content": {"kind": "ak.content.text", "body": "before join"}
         }),
         ROSTER_ACTOR,
@@ -1029,7 +1028,6 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         arkret_wire::EventKind::MessageCreate,
         json!({
             "strand_id": strand_id,
-            "thread_id": strand_id,
             "content": {"kind": "ak.content.text", "body": "after join"}
         }),
         ROSTER_ACTOR,
@@ -1049,7 +1047,6 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         "message_id": pre_join_message_id,
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
-        "thread_id": strand_id,
         "sender": ROSTER_ACTOR,
         "content": {"kind": "ak.content.text", "body": "before join"}
     });
@@ -1058,7 +1055,6 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         "message_id": post_join_message_id,
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
-        "thread_id": strand_id,
         "sender": ROSTER_ACTOR,
         "content": {"kind": "ak.content.text", "body": "after join"}
     });
@@ -1982,7 +1978,6 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
             "message_id": message_id,
             "realm_id": ROSTER_REALM,
             "strand_id": strand_id,
-            "thread_id": strand_id,
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "Pinned welcome"}
         }),
@@ -2130,7 +2125,6 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "message_id": message_id,
             "realm_id": ROSTER_REALM,
             "strand_id": strand_id,
-            "thread_id": strand_id,
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "original"}
         }),
@@ -2144,7 +2138,6 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "message_id": message_id,
             "realm_id": ROSTER_REALM,
             "strand_id": strand_id,
-            "thread_id": strand_id,
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "edited"}
         }),
@@ -2198,7 +2191,6 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     assert_eq!(matching[0]["payload"]["state"], "redacted");
     assert_eq!(matching[0]["payload"]["message_id"], message_id);
     assert_eq!(matching[0]["payload"]["strand_id"], strand_id);
-    assert_eq!(matching[0]["payload"]["thread_id"], strand_id);
     assert_eq!(
         matching[0]["payload"]["content"]["body"], "[redacted]",
         "sync must not fall back to the plaintext canonical revision"

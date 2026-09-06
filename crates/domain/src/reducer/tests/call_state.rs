@@ -534,7 +534,7 @@ fn payload_conflict_labels_do_not_create_a_cba_sibling_relation() {
         );
         input.operation.payload.as_object_mut().unwrap().insert(
             "conflict_basis".to_owned(),
-            Value::String("legacy-label".to_owned()),
+            Value::String("unstructured-label".to_owned()),
         );
         input
     };

@@ -11,7 +11,7 @@ impl ProjectionState {
         let sender = operation.context.sender.to_string();
         let thread_id = operation
             .payload
-            .get("thread_id")
+            .get("strand_id")
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();

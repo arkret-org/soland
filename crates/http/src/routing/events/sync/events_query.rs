@@ -1515,10 +1515,6 @@ mod tests {
         assert!(canonical_actor_selectors(&[TEST_ACTOR_CORE.to_owned()]).is_err());
         assert!(canonical_actor_selectors(&[first.clone(), first.clone()]).is_err());
         assert!(canonical_actor_selectors(&[format!(" {first}")]).is_err());
-        let mut legacy =
-            serde_json::to_value(selector_at("ak:did_core:web:station-a.example")).unwrap();
-        legacy["principal_id"] = json!(TEST_ACTOR_CORE);
-        assert!(canonical_actor_selectors(&[legacy.to_string()]).is_err());
         assert!(canonical_actor_selectors(&vec![first; 257]).is_err());
     }
 

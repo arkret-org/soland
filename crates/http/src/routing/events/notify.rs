@@ -290,7 +290,6 @@ pub(crate) async fn dispatch_message_notifications(
     let strand_id = payload
         .get("strand_id")
         .and_then(Value::as_str)
-        .or_else(|| payload.get("thread_id").and_then(Value::as_str))
         .map(ToOwned::to_owned);
     let source_ref = payload
         .get("message_id")
@@ -666,7 +665,7 @@ mod tests {
             "patch": {"metadata": {"$value": {"fields": {"calendar": {}}}}}
         })));
         assert!(!patch_touches_due_schedule(&json!({
-            "patch": {"metadata.fields": {"fields": {"due_at": "legacy"}}}
+            "patch": {"metadata.fields": {"fields": {"due_at": "unstructured"}}}
         })));
     }
 

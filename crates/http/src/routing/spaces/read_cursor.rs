@@ -348,7 +348,7 @@ mod tests {
         let mut event = signed_shape();
         event.payload.insert(
             "id".to_owned(),
-            serde_json::Value::String("legacy-read-cursor-object-id".to_owned()),
+            serde_json::Value::String("unstructured-read-cursor-object-id".to_owned()),
         );
         let error = validate_caller_signed_read_cursor(&actor(), DEVICE_ID, &event)
             .expect_err("payload id must fail closed");

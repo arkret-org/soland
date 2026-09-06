@@ -20,28 +20,17 @@ use crate::{JsonResult, app_error, json_ok};
 
 /// Fold a `CellState::Bottom(_)` JSON envelope into a `BottomEntry`.
 ///
-/// The SDK serializes `Bottom` as `{kind, ...}` where `kind` is one of
-/// `Conflict|InvalidTransition|...`. We snake-case it here so wire
-/// callers (sodmin) can pattern-match against `BottomKind::from_wire`.
+/// The SDK serializes `Bottom` as `{kind, ...}` with `kind` already in the
+/// snake_case wire form, so callers (sodmin) can pattern-match it against
+/// `BottomKind::from_wire` directly.
 pub(super) fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEntry {
     let raw_kind = bottom
         .get("kind")
         .and_then(Value::as_str)
         .unwrap_or("conflict");
-    // Convert UpperCamelCase variants → snake_case if the SDK emits them.
-    let kind = match raw_kind {
-        "Conflict" => "conflict",
-        "InvalidTransition" => "invalid_transition",
-        "MissingDependency" => "missing_dependency",
-        "Unauthorized" => "unauthorized",
-        "NotarySplit" => "notary_split",
-        "SchemaError" => "schema_error",
-        other => other,
-    }
-    .to_owned();
+    let kind = raw_kind.to_owned();
     let event_ids: Vec<String> = bottom
         .get("event_ids")
-        .or_else(|| bottom.get("moves"))
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
@@ -51,7 +40,6 @@ pub(super) fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -
         .unwrap_or_default();
     let details = bottom
         .get("details")
-        .or_else(|| bottom.get("reason"))
         .and_then(Value::as_str)
         .map(str::to_owned);
     let detected_at = bottom

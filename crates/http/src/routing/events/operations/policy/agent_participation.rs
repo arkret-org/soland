@@ -701,11 +701,7 @@ pub async fn validate_agent_reply_participation(
             None
         };
         validate_agent_context(state, operation, &agent_id, authorization_ref.as_deref())?;
-        let strand_id = operation
-            .payload
-            .get("strand_id")
-            .and_then(Value::as_str)
-            .or_else(|| operation.payload.get("thread_id").and_then(Value::as_str));
+        let strand_id = operation.payload.get("strand_id").and_then(Value::as_str);
         let Some(scope_keys) = crate::routing::agent_participation::scope_keys_for_message(
             state,
             operation.realm_id.as_str(),

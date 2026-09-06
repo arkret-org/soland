@@ -391,7 +391,7 @@ pub struct AppConfig {
     /// path still writes outbox rows so cotest can observe the boundary).
     pub federation_outbound_enabled: bool,
     /// Operator-triggered federation frontier diagnostic cadence in seconds.
-    /// Zero disables the legacy full-history worker, which is the production
+    /// Zero disables the full-history worker, which is the production
     /// default until its probe and fallback paths are incrementally bounded.
     /// Env: `SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS` (default `0`).
     pub federation_frontier_interval_seconds: u64,

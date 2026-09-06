@@ -362,7 +362,7 @@ async fn postgres_structured_projection_and_invite_identities_round_trip() {
                 assert_eq!(reopened.get(&record.$id).await.unwrap().unwrap(), record);
                 assert!(reopened.snapshot_all().await.unwrap().contains(&record));
             }
-            record.created_by = "ak:did_core:web:legacy.example".into();
+            record.created_by = "ak:did_core:web:unbound.example".into();
             assert!(
                 reopened.put(&record).await.is_err(),
                 "scalar bylines must fail closed"
@@ -499,7 +499,7 @@ async fn postgres_structured_projection_and_invite_identities_round_trip() {
             .any(|invite| invite.invite_id == record.invite_id)
     );
     let mut invalid = record;
-    invalid.inviter_id = "ak:did_core:web:legacy.example".into();
+    invalid.inviter_id = "ak:did_core:web:unbound.example".into();
     assert!(reopened.put(invalid).await.is_err());
 }
 

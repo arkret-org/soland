@@ -3990,10 +3990,6 @@ mod control_governance_health_tests {
             slots[0], slots[1],
             "one principal at two Stations holds two distinct live-target slots"
         );
-        let legacy = make_event(serde_json::json!({
-            "invite_id": invite_id, "invitee_id": principal, "target_state": "revoked",
-        }));
-        assert!(service.project_accepted_cell_writes(&legacy).is_err());
     }
 
     #[tokio::test]

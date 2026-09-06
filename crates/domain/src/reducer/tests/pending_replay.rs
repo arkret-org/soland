@@ -193,7 +193,7 @@ fn message_revision_pending_replays_after_original_event() {
         serde_json::json!({
             "event_id": EVENT,
             "sender": "ak:did_core:web:alice.example",
-            "thread_id": STRAND,
+            "strand_id": STRAND,
             "content": { "kind": "ak.content.text", "body": "original" }
         }),
     );
