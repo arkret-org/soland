@@ -308,7 +308,55 @@ pub(crate) async fn attested_device_record(
         AppError::internal(format!("device projection attestation failed: {error}"))
     })?;
 
+    let principal = state
+        .persistence()
+        .principal_resolution_by_account_id(account_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("device account resolution is unavailable"))?;
+    let resolution =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await?;
+    let attester =
+        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+            resolution,
+            &account_id.station_id,
+            attestation.proof.verification_method.clone(),
+            attested_at,
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let evidence = arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
+        signer_id: account_id.principal_id.clone(),
+        verification_method: arkret_wire::DidUrl::new(format!(
+            "{}#{}",
+            principal.projection.did, device_id
+        ))
+        .map_err(|error| AppError::internal(error.to_string()))?,
+        device_projection_attestation: attestation.clone(),
+        attester_signer_evidence_ref: attester
+            .evidence_ref()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    };
+    evidence
+        .validate_attester_binding()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let signer_evidence_ref = evidence
+        .evidence_ref()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    // Return the coordinate only after both immutable objects are durable.
+    for item in [attester, evidence] {
+        let content_digest = item
+            .canonical_sha256_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        state.persistence().governance_dependency_store().put_unscoped_signer_evidence_exact(
+            arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest },
+                authenticated_signer_resolution_evidence: Box::new(item),
+            },
+        ).await.map_err(|error| AppError::internal(error.to_string()))?;
+    }
     let record = QueryDeviceRecord {
+        signer_evidence_ref,
         algorithms,
         trust_algorithms,
         device_projection_attestation: attestation,

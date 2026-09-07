@@ -553,6 +553,98 @@ async fn validate_event_envelope_with_ingress(
             "realm already exists",
         ));
     }
+    if kind == arkret_wire::EventKind::DirectConversationBound.as_str()
+        || object.get("authorization_ref").and_then(Value::as_str)
+            == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1)
+    {
+        let founding = state
+            .event_queries()
+            .projected_events_for_realm(realm_id.as_str())
+            .await
+            .map_err(|_| {
+                event_validation_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "temporarily_unavailable",
+                    "founding unit lookup failed",
+                )
+            })?
+            .into_iter()
+            .find(|event| event.event_kind == arkret_wire::EventKind::RealmCreate)
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "accepted founding unit is missing",
+                )
+            })?;
+        let refs: Vec<_> = object
+            .get("refs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|reference| {
+                reference.get("role").and_then(Value::as_str)
+                    == Some("direct_conversation_founding_unit")
+            })
+            .collect();
+        if refs.len() != 1
+            || refs[0].get("id").and_then(Value::as_str) != Some(founding.event_id.as_str())
+            || refs[0].get("critical").and_then(Value::as_bool) == Some(false)
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "binding requires its exact critical founding unit reference",
+            ));
+        }
+        if kind != arkret_wire::EventKind::DirectConversationBound.as_str() {
+            let accepted = state
+                .event_queries()
+                .accepted_event(&founding.event_id)
+                .await
+                .map_err(|_| {
+                    event_validation_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "temporarily_unavailable",
+                        "founder lookup failed",
+                    )
+                })?
+                .ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::FORBIDDEN,
+                        "capability_denied",
+                        "accepted founder missing",
+                    )
+                })?;
+            let create: arkret_wire::Event =
+                serde_json::from_value(accepted.envelope).map_err(|_| {
+                    event_validation_error(
+                        StatusCode::FORBIDDEN,
+                        "capability_denied",
+                        "accepted founder invalid",
+                    )
+                })?;
+            if create.actor_id != session_actor
+                || state
+                    .contacts()
+                    .settled_direct_binding_for_realm(realm_id.as_str())
+                    .is_some()
+                || !matches!(
+                    arkret_wire::EventKind::from(kind.as_str()),
+                    arkret_wire::EventKind::MlsProposal
+                        | arkret_wire::EventKind::MlsCommit
+                        | arkret_wire::EventKind::MlsWelcome
+                        | arkret_wire::EventKind::MessageCreate
+                )
+            {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "bootstrap authority phase does not permit this author or action",
+                ));
+            }
+        }
+    }
     let is_realm_create_bootstrap = kind == arkret_wire::EventKind::RealmCreate.as_str()
         && realm_create_actor_is_creator(object, actor_id.as_str())
         && (actor_id == session_actor_id || agent_delegation)

@@ -664,6 +664,32 @@ pub(crate) async fn event_visible_to_session(
     if session_actor.to_string() == record.actor_id {
         return true;
     }
+    // A Contact participant may resolve the exact bilateral request/response
+    // after acceptance as well. This does not disclose the peer's PCR: only
+    // the Events already named by this pair's accepted Contact are visible.
+    if matches!(
+        record.kind.as_str(),
+        "ak.contact.requested" | "ak.contact.accepted"
+    ) {
+        let Ok(author) = serde_json::from_str::<arkret_wire::ActorId>(&record.actor_id) else {
+            return false;
+        };
+        if let Ok(Some(contact)) = state.contacts().contact_any(&author, &session_actor).await
+            && contact.status == "accepted"
+            && ((contact.requester_id == author && contact.target_id == session_actor)
+                || (contact.target_id == author && contact.requester_id == session_actor))
+            && (contact
+                .request_event_ref
+                .as_ref()
+                .is_some_and(|id| id.as_str() == record.event_id)
+                || contact
+                    .response_event_ref
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == record.event_id))
+        {
+            return true;
+        }
+    }
     match canonical_realm_id_for_record(record) {
         Some(realm_id) => {
             // Agent PCR Events are authored as the Agent Actor, while the
@@ -856,6 +882,78 @@ mod refs_limit_tests {
             envelope,
             received_at: chrono::Utc::now(),
         }
+    }
+
+    #[tokio::test]
+    async fn accepted_contact_exposes_only_exact_pair_events() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let session = SessionRecord {
+            token_hash: "contact-visibility".into(),
+            account_pk: None,
+            actor: "ak:did_core:web:alice.example".into(),
+            device_id: "device".into(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            created_at: chrono::Utc::now(),
+            revoked_at: None,
+        };
+        let alice = session_actor_id(&state, &session).unwrap();
+        let bob = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap(),
+            state.service_core_id(),
+        ));
+        let mut record = visibility_record("ak.contact.requested", json!({}));
+        record.actor_id = bob.to_string();
+        let mut contact = soland_domain::identity::ContactRecord {
+            requester_id: bob,
+            target_id: alice,
+            contact_round_id: None,
+            version: Some(1),
+            granted_to_target_scopes: vec!["direct_message".into()],
+            granted_to_requester_scopes: vec!["direct_message".into()],
+            status: "accepted".into(),
+            request_event_ref: Some(arkret_wire::EventId::new(record.event_id.clone()).unwrap()),
+            request_slot_states: Vec::new(),
+            request_receipts: Vec::new(),
+            request_mirror_receipts: Vec::new(),
+            contact_round_evidence: None,
+            contact_round_evidence_history: Vec::new(),
+            control_outcomes: Vec::new(),
+            response_event_ref: None,
+            tombstone_event_ref: None,
+            message: None,
+            peer_host_id: None,
+            peer_service_resolution: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        state
+            .contacts()
+            .save_contact(contact.clone())
+            .await
+            .unwrap();
+        assert!(event_visible_to_session(&state, &record, &session).await);
+        record.kind = "ak.device.authorize".into();
+        assert!(!event_visible_to_session(&state, &record, &session).await);
+        record.kind = "ak.contact.requested".into();
+        contact.request_event_ref = None;
+        state
+            .contacts()
+            .save_contact(contact.clone())
+            .await
+            .unwrap();
+        assert!(!event_visible_to_session(&state, &record, &session).await);
+        contact.request_event_ref =
+            Some(arkret_wire::EventId::new(record.event_id.clone()).unwrap());
+        contact.status = "tombstoned".into();
+        state.contacts().save_contact(contact).await.unwrap();
+        assert!(!event_visible_to_session(&state, &record, &session).await);
     }
 
     #[test]

@@ -276,6 +276,7 @@ async fn issue_selector(
             .await?;
             Ok(
                 record.map(|record| CurrentSignerEvidenceItem::AccountDevice {
+                    signer_evidence_ref: record.signer_evidence_ref,
                     account_id: account_id.clone(),
                     device_id: device_id.clone(),
                     device_projection_attestation: record.device_projection_attestation,

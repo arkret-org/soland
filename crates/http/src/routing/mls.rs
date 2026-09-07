@@ -3363,43 +3363,11 @@ async fn validate_direct_keypackage_consume(
     {
         return Ok(false);
     }
-    let binding = state
-        .contacts()
-        .settled_direct_binding_for_realm(&realm_id)
-        .filter(|binding| {
-            crate::routing::identity::account::direct_binding_matches_projection(state, binding)
-        })
-        .ok_or_else(|| {
-            crate::app_error!(
-                FailedPrecondition,
-                "Direct Conversation binding is not canonical and active",
-            )
-        })?;
-    let binding_event = state
-        .event_queries()
-        .accepted_event(&binding.binding_event_ref)
-        .await
-        .map_err(|error| AppError::internal(format!("direct binding lookup failed: {error}")))?
-        .ok_or_else(|| {
-            crate::app_error!(
-                FailedPrecondition,
-                "canonical direct binding Event is missing",
-            )
-        })?;
-    let binding_event = serde_json::from_value::<arkret_wire::Event>(binding_event.envelope)
-        .map_err(|error| {
-            AppError::internal(format!("stored direct binding Event invalid: {error}"))
-        })?;
-    let binding_payload = serde_json::from_value::<arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload>(
-        serde_json::to_value(binding_event.payload).map_err(|error| {
-            AppError::internal(format!("stored direct binding payload invalid: {error}"))
-        })?,
-    )
-    .map_err(|_| {
-        crate::app_error!(FailedPrecondition,
-            "canonical direct binding payload is invalid",
-        )
-    })?;
+    // The participant's durable Welcome receipt precedes the binding
+    // endorsement. Requiring a binding here creates a dependency cycle:
+    // exact-pair completion cannot be endorsed before this consume succeeds.
+    // The caller already verified the accepted Welcome and its exact signed
+    // recipient/claim tuple through validate_recipient_durable_receipt.
     let realm_scope = arkret_wire::ScopeRef::Realm {
         realm_id: RealmId::new(realm_id.clone()).map_err(|error| {
             crate::app_error!(
@@ -3418,12 +3386,6 @@ async fn validate_direct_keypackage_consume(
         return Err(crate::app_error!(
             FailedPrecondition,
             "KeyPackage consume does not reference the scope-derived direct conversation MLS group",
-        ));
-    }
-    if binding_payload.realm_id.as_str() != realm_id.as_str() {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "canonical direct binding belongs to another Realm",
         ));
     }
     let claim_id = &body.claim_id;

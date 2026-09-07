@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector, governance_attester_evidence_selectors,
-    governance_runtime_dependency_selectors_for_replay,
+    governance_runtime_dependency_selector_coordinates_for_acquisition,
 };
 use arkret_models_collaboration::history_key::{
     HistoryGovernanceTraversalIntent, HistoryGovernanceTraversalRetention,
@@ -115,9 +115,27 @@ pub fn prepare_retained_history_cut(
         .collect::<BTreeSet<_>>();
     let mut replay_seals = Vec::new();
     let mut replay_events = Vec::new();
-    let mut replay_event_digest_suites = Vec::new();
-    let mut replay_event_bytes_digests = Vec::new();
     let mut replay_dependencies = Vec::new();
+    let mut anchor_events = BTreeSet::new();
+    for seal in retained_seal_map.values().filter(|seal| seal.predecessor_refs.is_empty()) {
+        let mut unit = Vec::new();
+        for digest in &seal.delta {
+            let event = traversal.pins.iter().zip(&traversal.objects)
+                .find_map(|(pin, object)| match (pin, object) {
+                    (soland_storage::HistoryTraversalPin::ControlEvent { event_digest, .. },
+                     soland_storage::HistoryTraversalRetainedObject::ControlEvent(event))
+                        if event_digest == digest => Some(event.clone()),
+                    _ => None,
+                })
+                .ok_or_else(|| frontier("retained anchor unit is incomplete"))?;
+            unit.push((digest.clone(), event));
+        }
+        let unit = arkret_state::state::deterministic_order(unit)
+            .into_iter().map(|(_, event)| event).collect::<Vec<_>>();
+        arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&unit)
+            .map_err(|error| frontier(error.to_string()))?;
+        anchor_events.extend(seal.delta.iter().cloned());
+    }
     for (pin, object) in traversal.pins.iter().zip(&traversal.objects) {
         let canonical = soland_storage::history_traversal_retained_object_canonical(object)
             .map_err(|error| frontier(error.to_string()))?;
@@ -152,7 +170,7 @@ pub fn prepare_retained_history_cut(
             (
                 soland_storage::HistoryTraversalPin::ControlEvent {
                     event_digest,
-                    object_digest,
+                    ..
                 },
                 soland_storage::HistoryTraversalRetainedObject::ControlEvent(event),
             ) => {
@@ -170,20 +188,23 @@ pub fn prepare_retained_history_cut(
                         "retained Control Event digest does not match its pin",
                     ));
                 }
+                let context = if anchor_events.contains(event_digest) {
+                    arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+                } else {
+                    arkret_wire::event_envelope::EventSubmitContext::Standard
+                };
                 match event.proofs.as_slice() {
                     [EventProof::Producer(_)] => event
-                        .validate_for_direct_history_structural()
+                        .validate_for_direct_history_structural_in_context(context)
                         .map_err(|error| frontier(error.to_string()))?,
                     _ => event
                         .validate_for_federation_structural_in_context(
-                            arkret_wire::event_envelope::EventSubmitContext::Standard,
+                            context,
                             event_digest_suite,
                         )
                         .map_err(|error| frontier(error.to_string()))?,
                 }
-                replay_event_bytes_digests.push((replay_events.len(), object_digest.clone()));
                 replay_events.push(event.clone());
-                replay_event_digest_suites.push(event_digest_suite);
             }
             (
                 soland_storage::HistoryTraversalPin::GovernanceDependency { selector, .. },
@@ -199,37 +220,14 @@ pub fn prepare_retained_history_cut(
             }
         }
     }
-    for (event_index, object_digest) in replay_event_bytes_digests {
-        let event = &replay_events[event_index];
-        let event_digest_suite = replay_event_digest_suites[event_index];
-        let receipt_matches = replay_dependencies.iter().any(|dependency| {
-            let GovernanceDependency::AvailabilityReceipt {
-                availability_receipt,
-                ..
-            } = dependency
-            else {
-                return false;
-            };
-            availability_receipt.bytes_digest == object_digest
-                && availability_receipt
-                    .validate_event_bytes_digest(event, |bytes| {
-                        Ok(arkret_wire::Hash::new(arkret_canonical::digest(
-                            event_digest_suite,
-                            bytes,
-                        ))?)
-                    })
-                    .is_ok()
-        });
-        if !receipt_matches {
-            return Err(frontier(
-                "retained history Control Event receipt no longer validates",
-            ));
-        }
-    }
-    let expected_first_round = governance_runtime_dependency_selectors_for_replay(
+    // Availability is authorized by each Seal's predecessor state, not by a
+    // blanket per-Event requirement. Genesis has no predecessor authority and
+    // MUST carry no receipts. The caller's complete SDK replay verifies exact
+    // receipt bytes/signatures/coverage when that Seal's policy requires them.
+    // Proof regimes and closed anchor-unit CBA context were validated above.
+    let expected_first_round = governance_runtime_dependency_selector_coordinates_for_acquisition(
         &replay_seals,
         &replay_events,
-        &replay_event_digest_suites,
     )
     .map_err(|error| frontier(error.to_string()))?;
     let selector_key = |selector: &GovernanceDependencySelector| {

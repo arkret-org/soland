@@ -315,6 +315,7 @@ pub(super) async fn seed_agent_grant_session(
     let request = arkret_signatures::agent::RuntimeKeyRequestBuilder::new(
         &runtime_key,
         arkret_models_collaboration::agent_operations::AgentPairingBootstrap {
+            runtime_identity: None,
             arkret_base_url: "http://server".to_owned(),
             service_id: arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
             agent_id: outcome.agent_id.clone(),

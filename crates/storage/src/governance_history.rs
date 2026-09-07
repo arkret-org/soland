@@ -578,12 +578,16 @@ pub fn history_traversal_retained_object_canonical(
                 .event_digest
                 .digest_suite()
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            // Canonical storage has no covering Seal or complete anchor unit.
+            // Validate the proof regime and byte binding here; the retained-cut
+            // verifier owns context-sensitive CBA validation before replay.
             match event.proofs.as_slice() {
-                [EventProof::Producer(_)] => event.validate_for_direct_history_structural(),
-                _ => event.validate_for_federation_structural_in_context(
-                    arkret_wire::event_envelope::EventSubmitContext::Standard,
-                    event_digest_suite,
-                ),
+                [EventProof::Producer(producer)] => producer
+                    .validate_direct_signer_resolution_evidence()
+                    .and_then(|_| {
+                        event.validate_proof_bindings_with_digest_suite(event_digest_suite)
+                    }),
+                _ => event.validate_station_admission_binding(event_digest_suite),
             }
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
             event
@@ -856,6 +860,12 @@ pub trait HistoryTraversalRetentionStore: Send + Sync {
     async fn get(
         &self,
         retention_digest: &Hash,
+    ) -> PersistenceResult<Option<HistoryTraversalRetentionRecord>>;
+
+    /// Access credentials and retained traversal content have distinct digests.
+    async fn get_by_access(
+        &self,
+        access: &HistoryTraversalAccess,
     ) -> PersistenceResult<Option<HistoryTraversalRetentionRecord>>;
 
     async fn resolve_retained_object(

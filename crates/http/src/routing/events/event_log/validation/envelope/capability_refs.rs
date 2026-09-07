@@ -328,7 +328,56 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         Some("self_authored_proof" | "service_attested" | "crypto_verifiable")
     ) || (declared_admission == Some("conditional")
         && kind == arkret_wire::event_kind_str::SELF_MODERATION_REPORT);
-    if !realm_authority_root_authorized && !independently_admitted {
+    let direct_participant_authorized = object.get("authorization_ref").and_then(Value::as_str)
+        == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_PARTICIPANT_V1);
+    let direct_bootstrap_authorized = object.get("authorization_ref").and_then(Value::as_str)
+        == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1);
+    if kind == arkret_wire::EventKind::MessageCreate.as_str()
+        && state
+            .projections()
+            .snapshot()
+            .realm_is_direct_conversation(realm_id)
+        && !direct_participant_authorized
+        && !direct_bootstrap_authorized
+        && !object.contains_key("executed_by")
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "Direct Conversation messages require the registered participant authority source",
+        ));
+    }
+    if direct_participant_authorized {
+        if kind != arkret_wire::EventKind::MessageCreate.as_str() {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "participant source does not authorize this operation",
+            ));
+        }
+        crate::routing::identity::account::validate_direct_message_participant(
+            state,
+            realm_id,
+            object,
+            derived_cells,
+            &state_at_ref,
+        )
+        .await
+        .map_err(|reason| {
+            event_validation_error(StatusCode::FORBIDDEN, "capability_denied", reason)
+        })?;
+    }
+    if direct_bootstrap_authorized {
+        if kind != arkret_wire::EventKind::MessageCreate.as_str() {
+            return Err(event_validation_error(StatusCode::FORBIDDEN, "capability_denied",
+                "bootstrap data authority only permits provisional messages"));
+        }
+        crate::routing::identity::account::validate_direct_message_bootstrap(
+            state, realm_id, object, derived_cells, &state_at_ref).await
+            .map_err(|reason| event_validation_error(StatusCode::FORBIDDEN, "capability_denied", reason))?;
+    }
+    if !realm_authority_root_authorized && !independently_admitted && !direct_participant_authorized && !direct_bootstrap_authorized
+    {
         // Restrictive effects are global across every effective grant whose
         // action/resource selector matches this operation. A second broad
         // allow grant must not bleach a field-scoped deny, quarantine, or

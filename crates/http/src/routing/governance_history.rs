@@ -55,7 +55,6 @@ use super::events::peer::{
     peer_event_visibility, peer_mls_scope_visibility, peer_realm_visibility,
     source_id_from_request, validate_peer_request,
 };
-use super::now;
 use super::system::extract::AuthArgs;
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
@@ -76,6 +75,13 @@ pub(crate) use stream::{
 const HISTORY_RESPONSE_RELAY_ENDPOINT: &str = "/_arkret/peer/history-key-responses/relay";
 const HISTORY_REQUEST_REPLICA_RECONCILE_PAGE_LIMIT: usize = 100;
 const HISTORY_REQUEST_REPLICA_RECONCILE_INTERVAL_SECONDS: u64 = 30;
+
+// Freeze protocol timestamps at canonical millisecond precision before both
+// database reservation and signing. PostgreSQL otherwise truncates nanoseconds
+// and makes an immutable completion differ from its own reservation.
+fn now() -> chrono::DateTime<chrono::Utc> {
+    arkret_canonical::normalize_timestamp_canonical(super::now())
+}
 
 fn map_history_preparation_error(
     error: soland_services::governance_history::HistoryPreparationError,
@@ -728,18 +734,9 @@ async fn create_history_key_request(
             "history request requires current scope membership",
         ));
     }
-    verify_history_proof(
-        state,
-        &request.requester_proof,
-        request.requester_actor_id.signing_principal_id(),
-        request
-            .proof_binding_bytes()
-            .map_err(|error| AppError::param_invalid(error.to_string()))?,
-        "history request requester_id",
-    )
-    .await?;
+    verify_history_request_proof(state, &request).await?;
     validate_history_requester_endpoint_authorization(state, &request).await?;
-    validate_history_request_bases(state, realm_id, &request).await?;
+    let target_basis = validate_history_request_bases(state, realm_id, &request).await?;
     let request_digest = request
         .request_digest()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -757,7 +754,8 @@ async fn create_history_key_request(
         return Err(AppError::param_invalid("history request is expired"));
     }
     let (retention, pins, objects) =
-        build_member_history_retention(state, &request, request_digest.clone()).await?;
+        build_member_history_retention(state, &request, request_digest.clone(), &target_basis)
+            .await?;
     let (release_id, release_service_binding_ref) =
         validate_local_history_release_binding(state, &request).await?;
     let description = super::system::describe::build_server_description(state);
@@ -1497,7 +1495,7 @@ fn history_source_author_profile(
                 match authenticated_signer_resolution_evidence.as_ref() {
                     arkret_models_identity::AuthenticatedSignerResolutionEvidence::Principal {
                         ..
-                    } => AuthorProfile::OrdinaryHuman,
+                    } | arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice { .. } => AuthorProfile::OrdinaryHuman,
                     arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
                         ..
                     } => AuthorProfile::Agent,
@@ -1595,6 +1593,47 @@ async fn build_local_history_source_relay(
     source_record_digest: &arkret_wire::Hash,
     source_signer_dependencies: &[GovernanceDependency],
 ) -> Result<SourceRelayAttestation, AppError> {
+    let root_digest = history_source_signer_content_digest(response)?;
+    let mut is_device_source = false;
+    for dependency in source_signer_dependencies {
+        if let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            selector:
+                GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest },
+            authenticated_signer_resolution_evidence,
+        } = dependency
+        {
+            if content_digest != &root_digest {
+                continue;
+            }
+            if let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
+                device_projection_attestation,
+                ..
+            } = authenticated_signer_resolution_evidence.as_ref()
+            {
+                is_device_source = true;
+                let core = &device_projection_attestation.attestation;
+                let facet = crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
+                    state, core.account_id.principal_id.as_str(), core.device_id.as_str(),
+                ).await;
+                if facet.device_authorize_event_id.as_ref() != Some(&core.device_authorize_event_id)
+                    || facet.authorized_generation_ref != Some(core.authorized_generation_ref)
+                    || crate::routing::identity::device_signing::current_device_authorization(
+                        state,
+                        &response.source_actor_id,
+                        &core.device_id,
+                        &facet,
+                    )
+                    .await
+                    .map_err(map_service_error)?
+                    .is_none()
+                {
+                    return Err(AppError::capability_denied(
+                        "history source device authorization is no longer current",
+                    ));
+                }
+            }
+        }
+    }
     let request_record = state
         .persistence()
         .governance_history_service()
@@ -1610,6 +1649,11 @@ async fn build_local_history_source_relay(
     if let Some((archive_tuple, authority_observation)) =
         local_rhrk_source_authority(state, response, request, realm_id).await?
     {
+        if is_device_source {
+            return Err(AppError::capability_denied(
+                "device signer evidence cannot authorize organization recovery history",
+            ));
+        }
         authority_observation
             .validate_for_archive_tuple(&archive_tuple)
             .map_err(|error| AppError::capability_denied(error.to_string()))?;
@@ -2114,23 +2158,28 @@ async fn validate_history_request_bases(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
     request: &HistoryKeyRequest,
-) -> Result<(), AppError> {
+) -> Result<arkret_wire::SealBasis, AppError> {
     let mut current = state
         .projections()
         .realm_seal_leaves(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     current.sort();
-    if current != request.trusted_current_basis.leaves {
-        return Err(AppError::conflict(
-            "history request current Seal basis is stale",
-        ));
-    }
     let target_closure = state
         .projections()
-        .seal_closure(&request.trusted_current_basis.leaves)
+        .seal_closure(&current)
         .await
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if request
+        .trusted_current_basis
+        .leaves
+        .iter()
+        .any(|leaf| !target_closure.contains(leaf))
+    {
+        return Err(AppError::conflict(
+            "history request trusted basis is not dominated by the complete current frontier",
+        ));
+    }
     if request
         .trusted_history_base_basis
         .leaves
@@ -2165,13 +2214,14 @@ async fn validate_history_request_bases(
             "history request trusted base is not the complete predecessor-free bootstrap cut",
         ));
     }
-    Ok(())
+    Ok(arkret_wire::SealBasis { leaves: current })
 }
 
 async fn build_member_history_retention(
     state: &AppState,
     request: &HistoryKeyRequest,
     request_digest: arkret_wire::Hash,
+    target_basis: &arkret_wire::SealBasis,
 ) -> Result<
     (
         HistoryGovernanceTraversalRetention,
@@ -2184,7 +2234,7 @@ async fn build_member_history_retention(
         HistoryEffectiveScope::Realm { realm_id }
         | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
     };
-    let target_basis = request.trusted_current_basis.clone();
+    let target_basis = target_basis.clone();
     let target_closure = state
         .projections()
         .seal_closure(&target_basis.leaves)
@@ -2466,7 +2516,18 @@ async fn collect_history_dependencies(
             }
         }
     }
-    let mut event_bytes_digest = None;
+    // Availability dependencies are edges of the covering Seal, not necessarily
+    // of each Control Event. Pin the validated canonical Event bytes directly;
+    // Seal dependencies have already been retained by the same cut traversal.
+    let mut event_bytes_digest = event
+        .map(|event| {
+            soland_storage::history_traversal_retained_object_canonical(
+                &soland_storage::HistoryTraversalRetainedObject::ControlEvent(event.clone()),
+            )
+            .map(|canonical| canonical.object_digest)
+            .map_err(|error| AppError::internal(error.to_string()))
+        })
+        .transpose()?;
     for dependency in dependencies {
         let item = dependency;
         let selector = item.selector().clone();
@@ -2685,10 +2746,22 @@ async fn validate_retained_history_cut(
     let traversal = if let Some(local) = request_record.write.local_traversal.as_ref() {
         local
     } else {
+        let HistoryGovernanceTraversalIntent::MemberHistoryDelivery { target_basis, .. } =
+            &request_record
+                .write
+                .request_receipt
+                .history_traversal_retention
+                .traversal_intent
+        else {
+            return Err(AppError::param_invalid(
+                "request receipt has another history traversal kind",
+            ));
+        };
         let (retention, pins, objects) = build_member_history_retention(
             state,
             &request_record.write.request,
             request_record.write.request_digest.clone(),
+            target_basis,
         )
         .await?;
         derived_traversal = soland_storage::HistoryTraversalRetentionWrite {
@@ -4072,17 +4145,7 @@ async fn replicate_history_key_request(
         ));
     }
     validate_history_request_replica_destination(state, &replica, &local_service_id).await?;
-    verify_history_proof(
-        state,
-        &replica.request.requester_proof,
-        replica.request.requester_actor_id.signing_principal_id(),
-        replica
-            .request
-            .proof_binding_bytes()
-            .map_err(|error| AppError::param_invalid(error.to_string()))?,
-        "history request requester_id",
-    )
-    .await?;
+    verify_history_request_proof(state, &replica.request).await?;
     verify_history_proof(
         state,
         &replica.request_receipt.service_proof,
@@ -4317,6 +4380,48 @@ async fn verify_archive_replica_service_proof(
             "organization recovery archive service proof is invalid: {error}"
         ))
     })
+}
+
+async fn verify_history_request_proof(
+    state: &AppState,
+    request: &HistoryKeyRequest,
+) -> Result<(), AppError> {
+    let binding = request
+        .proof_binding_bytes()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if let RequesterEndpointAuthorization::OrdinaryHuman {
+        requester_device_id,
+        ..
+    } = &request.requester_endpoint_authorization
+    {
+        // history-visibility: the signed endpoint locator resolves through the
+        // current PCR device authorization, not a DID-document device method.
+        let authority = request.requester_actor_id.as_account_id().ok_or_else(|| {
+            AppError::capability_denied("ordinary history requester is not an Account")
+        })?;
+        return crate::jws_verify::verify_principal_authorized_jws_with_account_authority_async(
+            &binding,
+            &request.requester_proof.jws,
+            request.requester_proof.verification_method.as_str(),
+            authority,
+            requester_device_id,
+            state,
+        )
+        .await
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "history request endpoint proof is invalid: {error}"
+            ))
+        });
+    }
+    verify_history_proof(
+        state,
+        &request.requester_proof,
+        request.requester_actor_id.signing_principal_id(),
+        binding,
+        "history request requester_id",
+    )
+    .await
 }
 
 async fn verify_history_proof(

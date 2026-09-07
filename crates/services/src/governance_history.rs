@@ -359,11 +359,10 @@ impl GovernanceHistoryService {
         caller: Option<TraversalCaller<'_>>,
         now: DateTime<Utc>,
     ) -> ServiceResult<Option<soland_storage::HistoryTraversalRetentionRecord>> {
-        let (_, digest) = access.storage_parts();
         let Some(record) = self
             .persistence
             .history_traversal_retentions()
-            .get(digest)
+            .get_by_access(access)
             .await?
         else {
             return Ok(None);

@@ -1416,7 +1416,7 @@ async fn verified_contact_mirror_event(
     else {
         return Ok(None);
     };
-    if contact.status != "pending"
+    if !matches!(contact.status.as_str(), "pending" | "accepted")
         || contact.requester_id != event.actor_id
         || contact.target_id != session_actor_id
         || contact.request_event_ref.as_ref() != Some(&event.event_id)

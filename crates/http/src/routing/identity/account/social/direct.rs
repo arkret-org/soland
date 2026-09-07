@@ -228,6 +228,362 @@ pub(crate) async fn direct_group_state_for_realm(
     Ok(Some(event_ref))
 }
 
+/// A registered participant source is proved by accepted binding state and
+/// current Contact/MLS authority; it is never an ordinary Realm owner grant.
+pub(crate) async fn validate_direct_message_bootstrap(
+    state: &AppState,
+    realm_id: &str,
+    object: &serde_json::Map<String, Value>,
+    derived_cells: &[String],
+    state_at_ref: &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+) -> Result<(), &'static str> {
+    if object.contains_key("executed_by") || object.contains_key("applet_id") {
+        return Err("provisional message requires the direct founder author");
+    }
+    let realm = arkret_wire::RealmId::new(realm_id.to_owned()).map_err(|_| "invalid Realm")?;
+    let create = accepted_direct_realm_create(state, &realm).await?;
+    let actor: arkret_wire::ActorId =
+        serde_json::from_value(object.get("actor_id").cloned().ok_or("missing founder")?)
+            .map_err(|_| "invalid founder")?;
+    let projection = state.projections().snapshot();
+    if actor != create.actor_id
+        || !projection.realm_is_direct_conversation(realm_id)
+        || projection.realm_is_in_terminal_state(realm_id)
+        || projection.realm_is_frozen_at(realm_id, now())
+        || state
+            .contacts()
+            .settled_direct_binding_for_realm(realm_id)
+            .is_some()
+    {
+        return Err("provisional founder authority is not active");
+    }
+    let members = projection.members_of_realm(realm_id);
+    if members.len() != 2
+        || !members
+            .iter()
+            .any(|member| member.member.as_str() == actor.to_string())
+    {
+        return Err("provisional conversation requires its exact two members");
+    }
+    let peer: arkret_wire::ActorId = serde_json::from_str(
+        members
+            .iter()
+            .find(|member| member.member.as_str() != actor.to_string())
+            .ok_or("missing peer")?
+            .member
+            .as_str(),
+    )
+    .map_err(|_| "invalid peer")?;
+    let pair_key = direct_pair_key(state, &actor, &peer).map_err(|_| "invalid pair")?;
+    if state
+        .contacts()
+        .direct_bindings_for_pair(&pair_key)
+        .is_some_and(|bindings| bindings.digests().next().is_some())
+    {
+        return Err("existing or conflicting binding closes provisional authority");
+    }
+    let events = state
+        .event_queries()
+        .projected_events_for_realm(realm_id)
+        .await
+        .map_err(|_| "provisional authority dependencies unavailable")?;
+    let mut founding = Vec::new();
+    for projected in &events {
+        if !matches!(
+            projected.event_kind,
+            arkret_wire::EventKind::RealmCreate
+                | arkret_wire::EventKind::MemberState
+                | arkret_wire::EventKind::StrandCreate
+        ) {
+            continue;
+        }
+        let id = arkret_wire::EventId::new(projected.event_id.clone())
+            .map_err(|_| "founding reference")?;
+        let event =
+            accepted_direct_event(state, &id, &realm, projected.event_kind.as_str()).await?;
+        if event.actor_id == actor && event.actor_seq <= 3 {
+            founding.push(event);
+        }
+    }
+    founding.sort_by_key(|event| event.actor_seq);
+    let exact: [&arkret_wire::Event; 4] = founding
+        .iter()
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| "founding unit incomplete")?;
+    let plan = arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingPlan::from_events(exact)
+        .map_err(|_| "invalid founding unit")?;
+    if plan.realm_id != realm {
+        return Err("founding Realm mismatch");
+    }
+    let strand_id = plan.main_strand_id;
+    let timeline = format!("ak:cell:ak.component.strand.discussion.timeline.v1:{strand_id}");
+    if derived_cells != [timeline] {
+        return Err("provisional message must target the main Strand");
+    }
+    let current_ref = direct_group_state_for_realm(state, realm_id)
+        .await
+        .map_err(|_| "current group state unavailable")?
+        .ok_or("current group state is not unique")?;
+    let scope = serde_json::json!({"kind":"realm", "realm_id":realm_id});
+    if !state_at_ref.iter().any(|(cell, state)| cell.as_str().starts_with("ak:cell:ak.component.mls.epoch.v1:")
+        && matches!(state, arkret_state::lattice::CellState::Value(value)
+            if value.get("transition_ref").and_then(Value::as_str) == Some(current_ref.as_str())
+                && value.get("effective_scope") == Some(&scope)
+                && value.get("content_scheme").and_then(Value::as_str) == Some("mls_exporter_aead_v1"))) {
+        return Err("provisional message Seal does not cover the winning exporter state");
+    }
+    let contact = accepted_contact_for_pair(state, &actor, &peer, "direct_message")
+        .await
+        .map_err(|_| "current Contact lookup failed")?
+        .ok_or("Contact does not permit provisional messages")?;
+    if fresh_direct_contact_evidence(state, &contact)
+        .await
+        .map_err(|_| "Contact proof unavailable")?
+        .is_none()
+    {
+        return Err("fresh directional Contact proof is unavailable");
+    }
+    // The other bootstrap phase permits only a binding endorsement. A durable
+    // receipt for the winning peer Welcome closes provisional history sends.
+    for event in events
+        .iter()
+        .filter(|event| event.event_kind == arkret_wire::EventKind::MlsWelcome)
+    {
+        let welcome: arkret_models_collaboration::events_payloads::MlsWelcomePayload =
+            serde_json::from_value(event.payload.clone()).map_err(|_| "invalid Welcome")?;
+        if welcome.commit_ref != current_ref
+            || welcome.recipient_principal_id.as_ref() != Some(peer.signing_principal_id())
+        {
+            continue;
+        }
+        let claim = state
+            .mls_key_packages()
+            .peer_claim(
+                welcome.claim_receipt.source_id.as_str(),
+                welcome.claim_receipt.claim_request_id.as_str(),
+            )
+            .await
+            .map_err(|_| "Welcome receipt unavailable")?;
+        if let Some(claim) = claim.filter(|claim| claim.state == "consumed")
+            && let Some(receipt) = claim.consume_receipt
+        {
+            let receipt: arkret_models_crypto::KeyPackageConsumeReceipt =
+                serde_json::from_value(receipt).map_err(|_| "invalid durable receipt")?;
+            let durable = &receipt.recipient_durable_receipt;
+            if receipt.claim_id == welcome.claim_id
+                && durable.welcome_ref.as_str() == event.event_id
+                && durable.realm_id == realm
+                && durable.mls_group_id.as_str() == welcome.mls_group_id.as_str()
+                && durable.mls_epoch == welcome.epoch
+                && durable.key_package_ref.as_str() == welcome.keypackage_ref.as_str()
+                && durable.recipient_principal_id().as_ref() == Some(peer.signing_principal_id())
+            {
+                return Err("exact-pair completion requires the binding endorsement");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn validate_direct_message_participant(
+    state: &AppState,
+    realm_id: &str,
+    object: &serde_json::Map<String, Value>,
+    derived_cells: &[String],
+    state_at_ref: &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+) -> Result<(), &'static str> {
+    if object.contains_key("executed_by") || object.contains_key("applet_id") {
+        return Err("direct participant source requires a direct author");
+    }
+    let actor: arkret_wire::ActorId = serde_json::from_value(
+        object
+            .get("actor_id")
+            .cloned()
+            .ok_or("missing participant")?,
+    )
+    .map_err(|_| "invalid participant")?;
+    let binding = state
+        .contacts()
+        .settled_direct_binding_for_realm(realm_id)
+        .ok_or("Direct Conversation binding is not settled")?;
+    if !direct_binding_matches_projection(state, &binding) {
+        return Err("Direct Conversation membership or Strand is not active");
+    }
+    let projection = state.projections().snapshot();
+    if projection.realm_is_in_terminal_state(realm_id)
+        || projection.realm_is_frozen_at(realm_id, now())
+    {
+        return Err("Direct Conversation is not writable");
+    }
+    let refs = object
+        .get("refs")
+        .and_then(Value::as_array)
+        .ok_or("missing Direct Conversation binding reference")?;
+    let binding_refs: Vec<_> = refs
+        .iter()
+        .filter(|r| r.get("role").and_then(Value::as_str) == Some("direct_conversation_binding"))
+        .collect();
+    if binding_refs.len() != 1
+        || binding_refs[0].get("critical").and_then(Value::as_bool) == Some(false)
+    {
+        return Err("Direct Conversation requires its exact critical binding reference");
+    }
+    let binding_ref = binding_refs[0]
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("invalid Direct Conversation binding reference")?;
+    let record = state
+        .event_queries()
+        .accepted_event(binding_ref)
+        .await
+        .map_err(|_| "binding lookup failed")?
+        .ok_or("binding Event is unavailable")?;
+    let event: arkret_wire::Event =
+        serde_json::from_value(record.envelope).map_err(|_| "binding Event is invalid")?;
+    if event.kind != arkret_wire::EventKind::DirectConversationBound
+        || event.realm_id.as_str() != realm_id
+        || event.event_id.as_str() != binding_ref
+    {
+        return Err("binding reference is not an endorsement in this Realm");
+    }
+    let payload_value =
+        serde_json::to_value(&event.payload).map_err(|_| "binding payload encoding")?;
+    let payload: arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload =
+        serde_json::from_value(payload_value.clone()).map_err(|_| "binding payload is invalid")?;
+    if !payload.unordered_participant_ids.contains(&actor) || payload.realm_id.as_str() != realm_id
+    {
+        return Err("author is not a bound participant");
+    }
+    let digest = direct_binding_endorsement_digest(&payload)?;
+    let bindings = state
+        .contacts()
+        .direct_bindings_for_pair(payload.pair_key.as_ref())
+        .ok_or("current Direct Conversation binding is unavailable")?;
+    if bindings.digests().count() != 1
+        || !bindings.digests().any(|known| known == digest)
+        || payload.main_strand_id.as_str() != binding.main_strand_id
+    {
+        return Err("binding endorsement differs from the current semantic binding");
+    }
+    let binding_cell = format!(
+        "ak:cell:ak.component.direct_conversation.binding.v1:{}",
+        payload.pair_key
+    );
+    let timeline = format!(
+        "ak:cell:ak.component.strand.discussion.timeline.v1:{}",
+        binding.main_strand_id
+    );
+    if !direct_message_seal_covers(
+        state_at_ref,
+        &binding_cell,
+        &payload_value,
+        &timeline,
+        derived_cells,
+    ) {
+        return Err("message Seal does not cover the exact binding and main Strand");
+    }
+    validate_direct_binding_event_refs(state, &payload).await?;
+    let peer = payload
+        .unordered_participant_ids
+        .iter()
+        .find(|id| **id != actor)
+        .ok_or("missing peer")?;
+    let contact = accepted_contact_for_pair(state, &actor, peer, "direct_message")
+        .await
+        .map_err(|_| "current Contact lookup failed")?
+        .ok_or("current Contact does not permit messages")?;
+    if fresh_direct_contact_evidence(state, &contact)
+        .await
+        .map_err(|_| "Contact head verification failed")?
+        .is_none()
+    {
+        return Err("fresh directional Contact evidence is unavailable");
+    }
+    if direct_group_state_for_realm(state, realm_id)
+        .await
+        .map_err(|_| "MLS authority lookup failed")?
+        .is_none()
+    {
+        return Err("Direct Conversation has no unique current MLS state");
+    }
+    Ok(())
+}
+
+fn direct_message_seal_covers(
+    state_at_ref: &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    binding_cell: &str,
+    binding_payload: &Value,
+    timeline: &str,
+    derived_cells: &[String],
+) -> bool {
+    derived_cells.len() == 1 && derived_cells[0] == timeline
+        && state_at_ref.iter().any(|(cell, value)| {
+            cell.as_str() == binding_cell && matches!(value,
+                arkret_state::lattice::CellState::Value(value) if value.as_array().is_some_and(|entries|
+                    entries.iter().any(|entry| entry.get("value") == Some(binding_payload))))
+        })
+}
+
+#[cfg(test)]
+mod participant_authority_tests {
+    use super::*;
+
+    #[test]
+    fn direct_message_seal_rejects_missing_conflicted_foreign_or_widened_authority() {
+        use arkret_state::lattice::CellState;
+        let cell = "ak:cell:ak.component.direct_conversation.binding.v1:pair";
+        let timeline = "ak:cell:ak.component.strand.discussion.timeline.v1:main";
+        let payload = serde_json::json!({"realm_id": "realm-a", "main_strand_id": "main"});
+        let writes = vec![timeline.to_owned()];
+        let state = BTreeMap::from([(
+            arkret_identifiers::CellRef::new(cell).unwrap(),
+            CellState::Value(serde_json::json!([{"tag":"endorsement", "value":payload}])),
+        )]);
+        assert!(direct_message_seal_covers(
+            &state, cell, &payload, timeline, &writes
+        ));
+        assert!(!direct_message_seal_covers(
+            &BTreeMap::new(),
+            cell,
+            &payload,
+            timeline,
+            &writes
+        ));
+        let bottom = BTreeMap::from([(
+            arkret_identifiers::CellRef::new(cell).unwrap(),
+            CellState::Bottom(arkret_wire::Bottom::new(
+                arkret_wire::BottomKind::Conflict,
+                Vec::new(),
+            )),
+        )]);
+        assert!(!direct_message_seal_covers(
+            &bottom, cell, &payload, timeline, &writes
+        ));
+        assert!(!direct_message_seal_covers(
+            &state,
+            cell,
+            &serde_json::json!({"realm_id":"other"}),
+            timeline,
+            &writes
+        ));
+        assert!(!direct_message_seal_covers(
+            &state,
+            cell,
+            &payload,
+            "other-strand",
+            &writes
+        ));
+        assert!(!direct_message_seal_covers(
+            &state,
+            cell,
+            &payload,
+            timeline,
+            &[timeline.to_owned(), "other-cell".to_owned()]
+        ));
+    }
+}
+
 fn direct_binding_payload_from_operation(
     operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<
@@ -263,6 +619,15 @@ pub(crate) async fn validate_direct_binding_operation(
         "direct_conversation_binding_invalid"
     })?;
     let issuer = &operation.context.sender;
+    if operation
+        .context
+        .authorization_ref
+        .as_ref()
+        .map(|reference| reference.as_str())
+        != Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1)
+    {
+        return Err("direct_conversation_bootstrap_authority_required");
+    }
     if !payload
         .unordered_participant_ids
         .iter()
@@ -435,23 +800,125 @@ async fn validate_direct_binding_event_refs(
         .ok_or("direct_conversation_binding_invalid")?;
     validate_direct_founder(state, payload, creator, peer).await?;
 
-    // main Strand must be an accepted ak.strand.create inside the same Realm.
+    // Coordinates are derived from the exact accepted four-Event founding unit.
+    // StrandCreate has no producer-selected object.id in the current protocol.
     let realm_events = state
         .event_queries()
         .projected_events_for_realm(payload.realm_id.as_str())
         .await
         .map_err(|_| "direct_conversation_binding_invalid")?;
-    let has_main_strand = realm_events.iter().any(|event| {
-        event.event_kind == arkret_wire::EventKind::StrandCreate
-            && event
-                .payload
-                .get("object")
-                .and_then(|object| object.get("id"))
-                .and_then(Value::as_str)
-                == Some(payload.main_strand_id.as_str())
-    });
-    if !has_main_strand {
-        return Err("main_strand");
+    let mut founding = Vec::new();
+    for projected in &realm_events {
+        if !matches!(
+            projected.event_kind,
+            arkret_wire::EventKind::RealmCreate
+                | arkret_wire::EventKind::MemberState
+                | arkret_wire::EventKind::StrandCreate
+        ) {
+            continue;
+        }
+        let id =
+            arkret_wire::EventId::new(projected.event_id.clone()).map_err(|_| "founding_ref")?;
+        let event =
+            accepted_direct_event(state, &id, &payload.realm_id, projected.event_kind.as_str())
+                .await?;
+        if event.actor_id == *creator && event.actor_seq <= 3 {
+            founding.push(event);
+        }
+    }
+    founding.sort_by_key(|event| event.actor_seq);
+    let exact: [&arkret_wire::Event; 4] = founding
+        .iter()
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| "founding_unit_incomplete")?;
+    let plan = arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingPlan::from_events(exact)
+        .map_err(|_| "founding_unit_invalid")?;
+    if plan.realm_id != payload.realm_id
+        || plan.main_strand_id != payload.main_strand_id
+        || plan.founding_unit_digest != payload.founding_unit_digest
+    {
+        return Err("founding_coordinates_mismatch");
+    }
+    let membership: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
+        serde_json::from_value(
+            serde_json::to_value(&exact[1].payload).map_err(|_| "founding_payload")?,
+        )
+        .map_err(|_| "founding_membership")?;
+    if membership.member_id != *peer {
+        return Err("founding_peer_mismatch");
+    }
+    let initial = accepted_direct_event(
+        state,
+        &payload.initial_exact_pair_group_state_ref,
+        &payload.realm_id,
+        arkret_wire::EventKind::MlsCommit.as_str(),
+    )
+    .await?;
+    let commit: arkret_models_crypto::MlsCommitPayload = serde_json::from_value(
+        serde_json::to_value(initial.payload).map_err(|_| "initial_group_payload")?,
+    )
+    .map_err(|_| "initial_group_state_invalid")?;
+    if commit.next_epoch() == 0 || commit.next_epoch() != commit.base_epoch().saturating_add(1) {
+        return Err("initial_group_state_epoch");
+    }
+    let current_ref = direct_group_state_for_realm(state, payload.realm_id.as_str())
+        .await
+        .map_err(|_| "current_group_state_lookup")?
+        .ok_or("current_group_state_not_unique")?;
+    let current = accepted_direct_event(
+        state,
+        &current_ref,
+        &payload.realm_id,
+        arkret_wire::EventKind::MlsCommit.as_str(),
+    )
+    .await?;
+    let current: arkret_models_crypto::MlsCommitPayload = serde_json::from_value(
+        serde_json::to_value(current.payload).map_err(|_| "current_group_payload")?,
+    )
+    .map_err(|_| "current_group_state_invalid")?;
+    if current.mls_group_id() != commit.mls_group_id() {
+        return Err("group_cross_binding");
+    }
+    let mut consumed = false;
+    for projected in &realm_events {
+        if projected.event_kind != arkret_wire::EventKind::MlsWelcome {
+            continue;
+        }
+        let welcome: arkret_models_collaboration::events_payloads::MlsWelcomePayload =
+            serde_json::from_value(projected.payload.clone()).map_err(|_| "welcome_payload")?;
+        if welcome.commit_ref != payload.initial_exact_pair_group_state_ref
+            || welcome.epoch != commit.next_epoch()
+            || welcome.mls_group_id.as_str() != commit.mls_group_id()
+            || welcome.recipient_principal_id.as_ref() != Some(peer.signing_principal_id())
+        {
+            continue;
+        }
+        let ledger = state
+            .mls_key_packages()
+            .peer_claim(
+                welcome.claim_receipt.source_id.as_str(),
+                welcome.claim_receipt.claim_request_id.as_str(),
+            )
+            .await
+            .map_err(|_| "welcome_consume_lookup")?;
+        if let Some(claim) = ledger.filter(|claim| claim.state == "consumed")
+            && let Some(receipt) = claim.consume_receipt
+        {
+            let receipt: arkret_models_crypto::KeyPackageConsumeReceipt =
+                serde_json::from_value(receipt).map_err(|_| "consume_receipt_invalid")?;
+            let durable = &receipt.recipient_durable_receipt;
+            consumed |= receipt.claim_id == welcome.claim_id
+                && durable.welcome_ref.as_str() == projected.event_id
+                && durable.realm_id == payload.realm_id
+                && durable.mls_group_id.as_str() == welcome.mls_group_id.as_str()
+                && durable.mls_epoch == welcome.epoch
+                && durable.key_package_ref.as_str() == welcome.keypackage_ref.as_str()
+                && durable.recipient_principal_id().as_ref() == Some(peer.signing_principal_id());
+        }
+    }
+    if !consumed {
+        return Err("peer_welcome_not_durable");
     }
 
     match payload.authorization_basis.kind {

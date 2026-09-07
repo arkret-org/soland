@@ -338,9 +338,13 @@ async fn hydrate_canonical_realm_bootstraps(
         }
 
         let mut unit = vec![create];
+        let direct_conversation = create_payload.object.purpose == RealmPurpose::DirectConversation;
         let mut previous_event_id = create.event_id.as_str();
         let mut expected_seq = create.actor_seq.saturating_add(1);
         for candidate in records.iter().skip(create_index + 1) {
+            if direct_conversation && unit.len() == 4 {
+                break;
+            }
             if candidate.realm_id != create.realm_id || candidate.actor_id != create.actor_id {
                 break;
             }
@@ -355,7 +359,9 @@ async fn hydrate_canonical_realm_bootstraps(
             }
             if !arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(
                 &arkret_wire::EventKind::from(&candidate.kind),
-            ) {
+            ) && !(direct_conversation
+                && candidate.kind == arkret_wire::EventKind::StrandCreate.as_str())
+            {
                 break;
             }
             unit.push(candidate);
@@ -410,7 +416,14 @@ async fn hydrate_canonical_realm_bootstraps(
                 ) {
                     staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
                 } else if operation.event_kind == arkret_wire::EventKind::MemberState {
-                    staged.apply_validated_realm_bootstrap_membership(&operation, &cell_writes)
+                    if direct_conversation {
+                        staged.apply_validated_direct_conversation_bootstrap_membership(
+                            &operation,
+                            &cell_writes,
+                        )
+                    } else {
+                        staged.apply_validated_realm_bootstrap_membership(&operation, &cell_writes)
+                    }
                 } else {
                     staged.apply_projected(&operation, &cell_writes, hydration_hlc)
                 }

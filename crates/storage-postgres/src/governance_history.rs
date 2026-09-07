@@ -1246,6 +1246,29 @@ impl HistoryTraversalRetentionStore for PgHistoryTraversalRetentionStore {
         load_retention(&mut conn, retention_digest).await
     }
 
+    async fn get_by_access(
+        &self,
+        access: &HistoryTraversalAccess,
+    ) -> PersistenceResult<Option<HistoryTraversalRetentionRecord>> {
+        let (kind, digest) = access.storage_parts();
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT retention_digest FROM history_traversal_retentions WHERE access_kind = $1 AND access_digest = $2",
+        )
+        .bind::<Text, _>(kind)
+        .bind::<Text, _>(digest.as_str())
+        .get_result::<RetentionKeyRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        match row {
+            Some(row) => {
+                load_retention(&mut conn, &stored_hash(row.retention_digest, "retention")?).await
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn resolve_retained_object(
         &self,
         retention_digest: &Hash,
