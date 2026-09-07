@@ -3097,37 +3097,54 @@ impl ProjectionService {
         operation: &Operation,
     ) {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let membership_event_ref = Some(projection_event_ref(operation));
-        let mut state = self.state.lock();
-        let key = (realm_id.to_owned(), member.to_owned());
-        let previous = state.members.get(&key).cloned();
-        let joined_at = previous
-            .as_ref()
-            .filter(|membership| membership.state == "join")
-            .map(|membership| membership.joined_at)
-            .unwrap_or(operation.created_at);
-        state.members.insert(
-            key,
-            SolandMembershipState {
-                member: member.to_owned(),
-                realm_id: realm_id.to_owned(),
-                state: "join".to_owned(),
-                role: "member".to_owned(),
-                membership_event_ref,
-                invited_at: previous
-                    .as_ref()
-                    .and_then(|membership| membership.invited_at)
-                    .or(Some(invite_created_at)),
-                joined_at,
-                updated_at: operation.created_at,
-                reason: None,
-            },
+        restore_invite_acceptance_membership(
+            &mut self.state.lock(),
+            realm_id,
+            member,
+            invite_created_at,
+            operation,
         );
-        if let Some(cell_id) = invite_member_cell(member) {
-            state
-                .cells
-                .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
-        }
+    }
+}
+
+/// Materialize the membership cascade of an already accepted invite. Shared
+/// by live projection and canonical restart hydration.
+pub(crate) fn restore_invite_acceptance_membership(
+    state: &mut ProjectionState,
+    realm_id: &str,
+    member: &str,
+    invite_created_at: DateTime<Utc>,
+    operation: &Operation,
+) {
+    let membership_event_ref = Some(projection_event_ref(operation));
+    let key = (realm_id.to_owned(), member.to_owned());
+    let previous = state.members.get(&key).cloned();
+    let joined_at = previous
+        .as_ref()
+        .filter(|membership| membership.state == "join")
+        .map(|membership| membership.joined_at)
+        .unwrap_or(operation.created_at);
+    state.members.insert(
+        key,
+        SolandMembershipState {
+            member: member.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            membership_event_ref,
+            invited_at: previous
+                .as_ref()
+                .and_then(|membership| membership.invited_at)
+                .or(Some(invite_created_at)),
+            joined_at,
+            updated_at: operation.created_at,
+            reason: None,
+        },
+    );
+    if let Some(cell_id) = invite_member_cell(member) {
+        state
+            .cells
+            .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
     }
 }
 

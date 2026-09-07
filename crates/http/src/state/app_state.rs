@@ -2483,6 +2483,115 @@ mod membership_hydration_tests {
         assert_eq!(members.len(), 1);
     }
 
+    #[tokio::test]
+    async fn accepted_invite_membership_survives_restart_and_later_leave() {
+        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
+        let creator = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let principal = DidCoreId::new("ak:did_core:web:bob.example").unwrap();
+        let account =
+            arkret_wire::AccountId::new(principal.clone(), crate::test_event::station_id());
+        let actor = arkret_wire::ActorId::account(account.clone());
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let create = canonical_projection_source_event(
+            realm_id,
+            creator.as_str(),
+            1,
+            arkret_wire::EventKind::InviteCreate,
+            serde_json::json!({
+                "invitee_account_id": account,
+                "introduction_evidence_digest": format!("sha256:{}", "11".repeat(32)),
+                "expires_at": "2026-07-21T00:00:00.000Z",
+            }),
+            created_at,
+        );
+        let invite_id = arkret_wire::InviteId::from_event_id(
+            &arkret_wire::EventId::new(create.event_id.clone()).unwrap(),
+        );
+        let accept = canonical_projection_source_event(
+            realm_id,
+            principal.as_str(),
+            1,
+            arkret_wire::EventKind::InviteAccept,
+            serde_json::json!({"invite_id": invite_id, "invitee_account_id": account}),
+            created_at + chrono::Duration::seconds(1),
+        );
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
+        store.events().put(create).await.unwrap();
+        store.events().put(accept.clone()).await.unwrap();
+        let mut projection = ProjectionState::new();
+        let mut directory = directory_with_creator(&RealmId::new(realm_id).unwrap(), &creator);
+        // Replay after the invite has expired: acceptance is durable truth,
+        // not a new admission to evaluate against today's policy or time.
+        for _ in 0..2 {
+            soland_services::hydration::hydrate_canonical_realm_memberships(
+                &store,
+                &mut projection,
+                &RuntimeHydrationProjectionAdapter,
+            )
+            .await
+            .unwrap();
+            hydrate_realms_from_canonical_events(&store, &mut directory).await;
+            let membership = projection.member(realm_id, &actor.to_string()).unwrap();
+            assert_eq!(membership.state, "join");
+            assert_eq!(
+                membership.membership_event_ref.as_deref(),
+                Some(accept.event_id.as_str())
+            );
+            assert_eq!(membership.invited_at, Some(created_at));
+            assert_eq!(
+                membership.joined_at,
+                created_at + chrono::Duration::seconds(1)
+            );
+            assert!(
+                directory
+                    .get(&RealmId::new(realm_id).unwrap())
+                    .unwrap()
+                    .members
+                    .contains(&principal)
+            );
+            let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal.clone(),
+                DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+            ));
+            assert!(projection.member(realm_id, &foreign.to_string()).is_none());
+        }
+        let leave = canonical_projection_source_event(
+            realm_id,
+            principal.as_str(),
+            2,
+            arkret_wire::EventKind::MemberState,
+            serde_json::json!({"member_id": actor, "membership": "leave"}),
+            created_at + chrono::Duration::seconds(2),
+        );
+        store.events().put(leave).await.unwrap();
+        let mut restarted = ProjectionState::new();
+        soland_services::hydration::hydrate_canonical_realm_memberships(
+            &store,
+            &mut restarted,
+            &RuntimeHydrationProjectionAdapter,
+        )
+        .await
+        .unwrap();
+        hydrate_realms_from_canonical_events(&store, &mut directory).await;
+        assert_eq!(
+            restarted
+                .member(realm_id, &actor.to_string())
+                .unwrap()
+                .state,
+            "leave"
+        );
+        assert!(
+            !directory
+                .get(&RealmId::new(realm_id).unwrap())
+                .unwrap()
+                .members
+                .contains(&principal)
+        );
+    }
+
     // Regression for sidecar creation after restart: the Realm directory was
     // already replaying member Events, but the reducer cache was not. That
     // made an agent visible as a Realm member in Inkson while

@@ -625,10 +625,10 @@ async fn hydrate_applet_managed_pcr_identity(
 }
 
 /// Rebuild the reducer's Realm membership cache from canonical
-/// `ak.member.state` Events.
+/// `ak.member.state` and `ak.invite.accept` Events.
 ///
 /// The Realm directory has its own replay path because it is a query index,
-/// but Circle admission and the sidecar membership predicate read
+/// but MLS claims, Circle admission and the sidecar membership predicate read
 /// `ProjectionState::member`. Replaying only the directory leaves those two
 /// views disagreeing after every restart: the member is visible in Realm
 /// rosters while the Circle reducer rejects it as a non-member.
@@ -639,12 +639,29 @@ pub async fn hydrate_canonical_realm_memberships(
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::ProjectionEffect;
 
-    let mut records = persistence
-        .events()
-        .snapshot_all()
-        .await?
+    let all_records = persistence.events().snapshot_all().await?;
+    let invite_times = all_records
+        .iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::InviteCreate.as_str())
+        .filter_map(|record| {
+            let event = serde_json::from_value::<Event>(record.envelope.clone()).ok()?;
+            Some((
+                (
+                    event.realm_id.to_string(),
+                    arkret_wire::InviteId::from_event_id(&event.event_id).to_string(),
+                ),
+                event.created_at,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut records = all_records
         .into_iter()
-        .filter(|record| record.kind == arkret_wire::EventKind::MemberState.as_str())
+        .filter(|record| {
+            matches!(
+                arkret_wire::EventKind::from_wire(&record.kind),
+                arkret_wire::EventKind::MemberState | arkret_wire::EventKind::InviteAccept
+            )
+        })
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.received_at
@@ -662,6 +679,41 @@ pub async fn hydrate_canonical_realm_memberships(
                 record.event_id
             )));
         };
+        if operation.event_kind == arkret_wire::EventKind::InviteAccept {
+            let accepted = operation
+                .typed_payload::<arkret_wire::event_spec::InviteAccept>()
+                .map_err(|error| {
+                    soland_storage::PersistenceError::Internal(format!(
+                        "accepted invite {} cannot rebuild membership: {error}",
+                        record.event_id
+                    ))
+                })?;
+            if operation.context.sender.as_account_id().is_none()
+                || accepted.invitee_account_id.as_ref().is_some_and(|account| {
+                    operation.context.sender.as_account_id() != Some(account)
+                })
+            {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "accepted invite {} has a mismatched account",
+                    record.event_id
+                )));
+            }
+            let invited_at = invite_times
+                .get(&(
+                    operation.realm_id.to_string(),
+                    accepted.invite_id.to_string(),
+                ))
+                .copied()
+                .unwrap_or(operation.created_at);
+            crate::projection::restore_invite_acceptance_membership(
+                proj,
+                operation.realm_id.as_str(),
+                &operation.context.sender.to_string(),
+                invited_at,
+                &operation,
+            );
+            continue;
+        }
         match proj.restore_accepted_membership(&operation, operation.created_at) {
             ProjectionEffect::Rejected { reason } => {
                 return Err(soland_storage::PersistenceError::Internal(format!(
@@ -1248,7 +1300,10 @@ pub async fn hydrate_realms_from_canonical_events(
     for record in &events {
         if record.kind == arkret_wire::EventKind::RealmProfile.as_str() {
             hydrate_realm_profile_event(realms, record);
-        } else if record.kind == arkret_wire::EventKind::MemberState.as_str() {
+        } else if matches!(
+            arkret_wire::EventKind::from_wire(&record.kind),
+            arkret_wire::EventKind::MemberState | arkret_wire::EventKind::InviteAccept
+        ) {
             // Membership transitions MUST be replayed too, or joined members
             // vanish from `realm_entry.members` on restart. In an ordinary
             // Collaboration Realm the creator is established by the final
@@ -1318,8 +1373,8 @@ pub fn hydrate_realm_profile_event(
     entry.description = profile.summary;
 }
 
-/// Replay one persisted `ak.member.state` event into the rebuilt realm
-/// directory on boot. `join` adds the member to `realm_entry.members`;
+/// Replay one persisted `ak.member.state` or `ak.invite.accept` event into
+/// the rebuilt Realm directory. Invite acceptance and `join` add the member;
 /// `leave`/`ban` removes them. Other transitions (`invite`/`knock`) do not
 /// affect the directory member set (they live in the structured membership
 /// projection, consistent with the live `apply_membership` path). Events are
@@ -1329,6 +1384,28 @@ pub fn hydrate_realm_member_state_event(
     realms: &mut RealmDirectoryIndex,
     record: &CanonicalEventRecord,
 ) {
+    if record.kind == arkret_wire::EventKind::InviteAccept.as_str() {
+        let Ok(event) = serde_json::from_value::<Event>(record.envelope.clone()) else {
+            return;
+        };
+        let Ok(accepted) = event.typed_payload::<arkret_wire::event_spec::InviteAccept>() else {
+            return;
+        };
+        let Some(account) = event.actor_id.as_account_id() else {
+            return;
+        };
+        if accepted
+            .invitee_account_id
+            .as_ref()
+            .is_some_and(|invitee| invitee != account)
+        {
+            return;
+        }
+        if let Some(entry) = realms.get_mut(&event.realm_id) {
+            entry.members.insert(account.principal_id.clone());
+        }
+        return;
+    }
     let payload = record.envelope.get("payload");
     let membership = payload
         .and_then(|payload| payload.get("membership"))
