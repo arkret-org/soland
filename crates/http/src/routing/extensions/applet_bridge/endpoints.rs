@@ -256,13 +256,13 @@ async fn install_endpoint(
         &basis.effective_scope,
     )
     .await?
-        && exact_successful_install_replay(
+    {
+        require_exact_successful_install_replay(
             &existing.idempotency_key,
             existing.install_body_digest.as_str(),
             &idempotency_key,
             &body_digest,
-        )?
-    {
+        )?;
         res.status_code(StatusCode::OK);
         return json_ok(existing.install_response);
     }
@@ -392,17 +392,20 @@ async fn install_endpoint(
     json_ok(response)
 }
 
-fn exact_successful_install_replay(
+fn require_exact_successful_install_replay(
     stored_key: &str,
     stored_digest: &str,
     requested_key: &str,
     requested_digest: &str,
-) -> Result<bool, AppError> {
+) -> Result<(), AppError> {
     if stored_key != requested_key {
-        return Ok(false);
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::AppletAlreadyRegistered,
+            "applet package is already installed in this scope",
+        ));
     }
     if stored_digest == requested_digest {
-        return Ok(true);
+        return Ok(());
     }
     Err(
         AppError::conflict("Idempotency-Key was already used with a different applet install body")
@@ -2338,13 +2341,13 @@ mod revoke_saga_tests {
             Some("authoring_request_expired")
         );
         assert!(
-            exact_successful_install_replay(
+            require_exact_successful_install_replay(
                 "install-key",
                 "sha256:exact",
                 "install-key",
                 "sha256:exact",
             )
-            .unwrap()
+            .is_ok()
         );
     }
 
@@ -2384,7 +2387,7 @@ mod revoke_saga_tests {
 
     #[test]
     fn successful_install_replay_rejects_changed_body() {
-        let error = exact_successful_install_replay(
+        let error = require_exact_successful_install_replay(
             "install-key",
             "sha256:first",
             "install-key",
@@ -2395,6 +2398,19 @@ mod revoke_saga_tests {
             error.wire_code_override.as_deref(),
             Some("duplicate_conflict")
         );
+    }
+
+    #[test]
+    fn installed_applet_rejects_another_idempotency_key_before_reusing_authoring_preview() {
+        let error = require_exact_successful_install_replay(
+            "install-key",
+            "sha256:exact",
+            "another-key",
+            "sha256:exact",
+        )
+        .unwrap_err();
+        assert_eq!(error.wire_code(), "applet_already_registered");
+        assert_eq!(error.http_status(), StatusCode::CONFLICT);
     }
 
     #[test]

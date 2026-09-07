@@ -719,10 +719,10 @@ pub(super) async fn register_package_install(
             )
             .with_wire_code("duplicate_conflict"));
         }
-        return Err(
-            AppError::conflict("applet package is already installed in this scope")
-                .with_wire_code("duplicate_conflict"),
-        );
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::AppletAlreadyRegistered,
+            "applet package is already installed in this scope",
+        ));
     }
 
     let existing_identity = applet_identity(state, &applet_id, target_station_id.as_str()).await?;
