@@ -693,6 +693,8 @@ impl NotaryWorker {
         let mut rejected: Vec<RejectedControlMove> = Vec::new();
         let mut staged_anchor_state = pre_state.clone();
         let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
+        let mut ordinary_batch = arkret_wire::control_seal_batch::ControlSealBatch::default();
+        let mut basis_heads_cache = BTreeMap::new();
         for (digest, event) in ordered {
             let move_digest_suite =
                 if leaves.is_empty() && event.kind == arkret_wire::EventKind::RealmCreate {
@@ -797,6 +799,53 @@ impl NotaryWorker {
                     context,
                 ) {
                 Ok(effects) => {
+                    if let Some(basis) = event.seal_basis.as_ref() {
+                        let key = basis.leaves.clone();
+                        if !basis_heads_cache.contains_key(&key) {
+                            let heads =
+                                self.read_effective_cas_heads(state, realm_id, &key).await?;
+                            basis_heads_cache.insert(key.clone(), heads);
+                        }
+                        let basis_heads = &basis_heads_cache[&key];
+                        let mut stale_cell = None;
+                        for effect in &effects {
+                            let binding = state
+                                .projections()
+                                .cell_registry()
+                                .resolve(realm_id, &effect.cell_id)?;
+                            if arkret_state::is_causal_register(binding.lattice.kind()) {
+                                let observed = basis_heads
+                                    .get(&effect.cell_id)
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|head| head.move_id.as_str())
+                                    .collect::<BTreeSet<_>>();
+                                let current = pre_cas_heads
+                                    .get(&effect.cell_id)
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|head| head.move_id.as_str())
+                                    .collect::<BTreeSet<_>>();
+                                if observed != current {
+                                    stale_cell = Some(effect.cell_id.clone());
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(cell) = stale_cell {
+                            rejected.push((
+                                digest,
+                                event.event_id.to_string(),
+                                event.kind.as_str().to_owned(),
+                                event.preconditions.clone(),
+                                ControlMoveRejection::new(
+                                    ControlProposalRejectReason::CasConflict,
+                                    format!("signed basis has stale complete heads for {cell}"),
+                                ),
+                            ));
+                            continue;
+                        }
+                    }
                     if let Err(reject) = state
                         .projections()
                         .verify_recovery_witness_with_digest_suite(
@@ -840,6 +889,19 @@ impl NotaryWorker {
                                 join_cell(binding.lattice.as_ref(), &effect.cell_id, cell_ops),
                             );
                         }
+                    }
+                    if !leaves.is_empty()
+                        && ordinary_batch
+                            .try_insert(
+                                &event.kind,
+                                effects.iter().map(|effect| effect.cell_id.as_str()),
+                            )
+                            .is_err()
+                    {
+                        // Keep the immutable request pending. The successor pass
+                        // revalidates its own basis and returns a terminal result
+                        // if another accepted write has made it stale.
+                        continue;
                     }
                     accepted.push(AcceptedControlMove {
                         event_digest: digest,
@@ -1382,23 +1444,12 @@ impl NotaryWorker {
         if rejected.is_empty() {
             return Ok(());
         }
-        let records = state
-            .projections()
-            .pending_control_records(realm_id, 4096)
-            .await?;
-        let by_digest = records
-            .into_iter()
-            .filter_map(|record| {
-                let digest = record
-                    .event
-                    .event_digest_with_digest_suite(record.digest_suite)
-                    .ok()
-                    .and_then(|digest| Hash::new(digest).ok())?;
-                Some((digest, record))
-            })
-            .collect::<BTreeMap<_, _>>();
         for (digest, rejection) in rejected {
-            let Some(record) = by_digest.get(digest) else {
+            let Some(record) = state
+                .projections()
+                .control_proposal_snapshot(digest)
+                .await?
+            else {
                 return Err(NotaryError::Store(format!(
                     "rejected Control Move {digest} has no pending record"
                 )));

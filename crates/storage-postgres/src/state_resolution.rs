@@ -1322,7 +1322,7 @@ impl ControlEventStore for PgControlEventStore {
                    AND NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
                                    WHERE b.event_digest = c.event_digest) \
                    AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
-                 ORDER BY inserted_at ASC, event_digest ASC LIMIT $2",
+                 ORDER BY control_proposal_ack->>'absolute_due_at' ASC NULLS FIRST, event_digest ASC LIMIT $2",
             )
             .bind::<Text, _>(&realm_id)
             .bind::<BigInt, _>(limit)
@@ -1502,63 +1502,6 @@ impl ControlEventStore for PgControlEventStore {
                         digest_suite: arkret_canonical::digest_suite(&row.digest_suite)
                             .map_err(|error| StoreError::Backend(error.to_string()))?,
                         event,
-                        covering_seals: covering_seal_ids(row.covering_seal_ids)?,
-                        control_proposal_ack: row
-                            .control_proposal_ack
-                            .map(|value| serde_json::from_value(value).map_err(serde_to_store))
-                            .transpose()?,
-                        decisions: serde_json::from_value(row.proposal_decisions)
-                            .map_err(serde_to_store)?,
-                        decision_overdue: row.decision_overdue,
-                        ingress_class: serde_json::from_value(row.ingress_class)
-                            .map_err(serde_to_store)?,
-                    })
-                })
-                .collect()
-        })
-    }
-
-    async fn list_retained_faults(
-        &self,
-        realm_id: &RealmId,
-        limit: usize,
-    ) -> StoreResult<Vec<SealedControlEventRecord>> {
-        let pool = self.pool.clone();
-        let realm_id = realm_id.as_str().to_owned();
-        let limit = limit as i64;
-        await_store!(async move {
-            let mut conn = pg_conn(&pool).await?;
-            let rows = sql_query(
-                "SELECT c.digest_suite, c.event_json, array_agg(b.seal_id ORDER BY b.seal_id) AS covering_seal_ids, \
-                        c.control_proposal_ack, c.proposal_decisions, \
-                        bool_or(b.decision_overdue) AS decision_overdue, c.ingress_class \
-                 FROM state_control_events c \
-                 JOIN state_seal_control_events b ON b.event_digest = c.event_digest \
-                 WHERE c.realm_id = $1 \
-                   AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
-                                   WHERE q.seal_id = b.seal_id) \
-                   AND EXISTS ( \
-                     SELECT 1 FROM state_seal_control_events overdue \
-                     WHERE overdue.event_digest = c.event_digest AND overdue.decision_overdue \
-                       AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
-                                       WHERE q.seal_id = overdue.seal_id) \
-                   ) \
-                 GROUP BY c.event_digest, c.digest_suite, c.event_json, c.control_proposal_ack, \
-                          c.proposal_decisions, c.ingress_class \
-                 ORDER BY MIN(b.sealed_at) FILTER (WHERE b.decision_overdue) ASC, \
-                          c.event_digest ASC LIMIT $2",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<BigInt, _>(limit)
-            .load::<SealedControlEventRow>(&mut *conn)
-            .await
-            .map_err(diesel_to_store)?;
-            rows.into_iter()
-                .map(|row| {
-                    Ok(SealedControlEventRecord {
-                        digest_suite: arkret_canonical::digest_suite(&row.digest_suite)
-                            .map_err(|error| StoreError::Backend(error.to_string()))?,
-                        event: control_event_from_value(row.event_json)?,
                         covering_seals: covering_seal_ids(row.covering_seal_ids)?,
                         control_proposal_ack: row
                             .control_proposal_ack

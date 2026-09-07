@@ -118,27 +118,12 @@ pub(crate) async fn frontier_control_governance_health(
                 "control governance pending rows unavailable: {error}"
             ))
         })?;
-    let sealed = state
-        .projections()
-        .retained_control_proposal_faults(realm_id, limit)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "control governance sealed rows unavailable: {error}"
-            ))
-        })?;
     let mut ackless_authorized = std::collections::BTreeSet::new();
     let mut ackless_rejections = Vec::new();
     for (event, ingress_class, digest_suite) in pending
         .iter()
         .filter(|record| record.control_proposal_ack.is_none())
         .map(|record| (&record.event, &record.ingress_class, record.digest_suite))
-        .chain(
-            sealed
-                .iter()
-                .filter(|record| record.control_proposal_ack.is_none())
-                .map(|record| (&record.event, &record.ingress_class, record.digest_suite)),
-        )
     {
         let digest =
             arkret_state::state::control_event_digest(event, digest_suite).map_err(|error| {

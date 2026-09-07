@@ -1036,25 +1036,19 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     );
     let pre_join_event_id = pre_join_record.event_id.clone();
     let post_join_event_id = post_join_record.event_id.clone();
-    let pre_join_message_id = arkret_identifiers::MessageId::from_event_id(
-        &arkret_identifiers::EventId::new(pre_join_event_id.clone()).unwrap(),
-    );
-    let post_join_message_id = arkret_identifiers::MessageId::from_event_id(
-        &arkret_identifiers::EventId::new(post_join_event_id.clone()).unwrap(),
-    );
     let pre_join_payload = json!({
         "event_id": pre_join_event_id,
-        "message_id": pre_join_message_id,
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
+        "track_name": "discussion",
         "sender": ROSTER_ACTOR,
         "content": {"kind": "ak.content.text", "body": "before join"}
     });
     let post_join_payload = json!({
         "event_id": post_join_event_id,
-        "message_id": post_join_message_id,
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
+        "track_name": "discussion",
         "sender": ROSTER_ACTOR,
         "content": {"kind": "ak.content.text", "body": "after join"}
     });
@@ -1975,9 +1969,9 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         arkret_wire::EventKind::MessageCreate,
         json!({
             "event_id": message_event_id,
-            "message_id": message_id,
             "realm_id": ROSTER_REALM,
             "strand_id": strand_id,
+            "track_name": "discussion",
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "Pinned welcome"}
         }),
@@ -2122,9 +2116,9 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         arkret_wire::EventKind::MessageCreate,
         json!({
             "event_id": message_event_id,
-            "message_id": message_id,
             "realm_id": ROSTER_REALM,
             "strand_id": strand_id,
+            "track_name": "discussion",
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "original"}
         }),

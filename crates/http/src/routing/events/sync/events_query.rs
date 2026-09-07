@@ -2130,7 +2130,6 @@ mod tests {
         let redaction_event_id = redaction_event.event_id.to_string();
         let plaintext_payload = json!({
             "event_id": message_event_id,
-            "message_id": message_id,
             "realm_id": TEST_REALM,
             "strand_id": strand_id,
             "track_name": "discussion",

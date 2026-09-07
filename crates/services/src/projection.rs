@@ -5,7 +5,7 @@ use arkret_event_draft::{EventPayloadExt, ProjectedEventOperation as Operation};
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::event_sync::{
     ControlGovernanceHealth, ControlGovernanceHealthStatus, ControlProposalDecisionState,
-    ControlProposalFaultReason, PendingControlProposal, RetainedControlProposalFault,
+    ControlProposalFaultReason, PendingControlProposal,
 };
 use arkret_models_collaboration::history_key::{
     AuthorizationIncarnation, HistoryReleaseAttestation,
@@ -670,14 +670,12 @@ impl ProjectionService {
         policy: ControlProposalDecisionPolicy,
         ackless_authorized: &BTreeSet<Hash>,
     ) -> StoreResult<ControlGovernanceHealth> {
-        let records = self
+        let mut records = self
             .pending_control_records(realm_id, ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1)
             .await?;
-        if records.len() > ControlGovernanceHealth::MAX_PENDING_PROPOSALS {
-            return Err(arkret_state::state::StoreError::Conflict(
-                "control governance pending proposal view exceeds 128 entries".to_owned(),
-            ));
-        }
+        let pending_proposals_complete =
+            records.len() <= ControlGovernanceHealth::MAX_PENDING_PROPOSALS;
+        records.truncate(ControlGovernanceHealth::MAX_PENDING_PROPOSALS);
         let mut pending_proposals = Vec::with_capacity(records.len());
         for record in records {
             let digest =
@@ -729,13 +727,6 @@ impl ProjectionService {
                 .unwrap_or(ack.decision_due_at);
             let overdue = observed_at >= current_due_at;
             pending_proposals.push(PendingControlProposal {
-                proposal_digest: digest,
-                absolute_due_at: ack.absolute_due_at,
-                defer_count: u8::try_from(record.decisions.len()).map_err(|_| {
-                    arkret_state::state::StoreError::Conflict(
-                        "control proposal decision count overflow".to_owned(),
-                    )
-                })?,
                 decision_state: if overdue {
                     ControlProposalDecisionState::Overdue
                 } else if record.decisions.is_empty() {
@@ -745,101 +736,22 @@ impl ProjectionService {
                 },
                 fault_reason: overdue
                     .then_some(ControlProposalFaultReason::ControlProposalDecisionOverdue),
-                current_decision_due_at: current_due_at,
                 control_proposal_ack: ack,
                 decisions: record.decisions,
             });
         }
         pending_proposals.sort_by(|left, right| {
-            (left.absolute_due_at, left.proposal_digest.as_str())
-                .cmp(&(right.absolute_due_at, right.proposal_digest.as_str()))
-        });
-        let sealed = self
-            .retained_control_proposal_faults(
-                realm_id,
-                ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1,
+            (
+                left.control_proposal_ack.absolute_due_at,
+                left.control_proposal_ack.proposal_digest.as_str(),
             )
-            .await?;
-        let mut retained_faults = Vec::new();
-        for record in sealed {
-            let digest =
-                arkret_state::state::control_event_digest(&record.event, record.digest_suite)?;
-            let Some(ack) = record.control_proposal_ack else {
-                // The same Ack-less PCR class has no proposal deadline to
-                // retain as a governance fault after its Seal is accepted.
-                if matches!(
-                    record.ingress_class,
-                    ControlProposalIngressClass::AcklessSelfPrincipal(_)
-                ) && ackless_authorized.contains(&digest)
-                {
-                    continue;
-                }
-                return Err(arkret_state::state::StoreError::Conflict(format!(
-                    "sealed Control Move {digest} is missing its Control Proposal Ack"
-                )));
-            };
-            if matches!(
-                record.ingress_class,
-                ControlProposalIngressClass::AcklessSelfPrincipal(_)
-            ) {
-                return Err(arkret_state::state::StoreError::Conflict(format!(
-                    "sealed Control Move {digest} carries a Control Proposal Ack but was \
-                     classified Ack-less at ingress"
-                )));
-            }
-            if record
-                .decisions
-                .iter()
-                .any(ControlProposalDecision::is_reject)
-            {
-                return Err(arkret_state::state::StoreError::Conflict(
-                    "signed-rejected Control Move was also sealed".to_owned(),
-                ));
-            }
-            let mut previous_due_at = ack.decision_due_at;
-            let mut missed_deadline = false;
-            for decision in &record.decisions {
-                missed_deadline |= !decision.satisfied_current_deadline(previous_due_at);
-                previous_due_at = decision.decision_due_at();
-            }
-            let mut faulting_seals = Vec::new();
-            for seal_id in &record.covering_seals {
-                let seal = self.seal_by_id(seal_id).await?.ok_or_else(|| {
-                    arkret_state::state::StoreError::Conflict(format!(
-                        "sealed Control Move references missing Seal {seal_id}"
-                    ))
-                })?;
-                if missed_deadline || seal.sealed_at > previous_due_at {
-                    faulting_seals.push(seal);
-                }
-            }
-            faulting_seals.sort_by(|left, right| {
-                left.sealed_at
-                    .cmp(&right.sealed_at)
-                    .then_with(|| left.id.as_str().cmp(right.id.as_str()))
-            });
-            if let Some(seal) = faulting_seals.into_iter().next() {
-                retained_faults.push(RetainedControlProposalFault {
-                    proposal_digest: ack.proposal_digest.clone(),
-                    control_proposal_ack: ack,
-                    decisions: record.decisions,
-                    accepted_seal_id: seal.id,
-                    accepted_at: seal.sealed_at,
-                    fault_reason: ControlProposalFaultReason::ControlProposalDecisionOverdue,
-                });
-            }
-        }
-        if retained_faults.len() > ControlGovernanceHealth::MAX_PENDING_PROPOSALS {
-            return Err(arkret_state::state::StoreError::Conflict(
-                "control governance retained fault view exceeds 128 entries".to_owned(),
-            ));
-        }
-        retained_faults.sort_by(|left, right| {
-            (left.accepted_at, left.proposal_digest.as_str())
-                .cmp(&(right.accepted_at, right.proposal_digest.as_str()))
+                .cmp(&(
+                    right.control_proposal_ack.absolute_due_at,
+                    right.control_proposal_ack.proposal_digest.as_str(),
+                ))
         });
         let health = ControlGovernanceHealth {
-            status: if !retained_faults.is_empty()
+            status: if !pending_proposals_complete
                 || pending_proposals
                     .iter()
                     .any(|pending| pending.decision_state == ControlProposalDecisionState::Overdue)
@@ -849,7 +761,7 @@ impl ProjectionService {
                 ControlGovernanceHealthStatus::Healthy
             },
             pending_proposals,
-            retained_faults,
+            pending_proposals_complete,
         };
         health
             .validate_with_policy(policy)
@@ -943,16 +855,6 @@ impl ProjectionService {
     ) -> StoreResult<Vec<SealedControlEventRecord>> {
         self.control_event_store()
             .list_sealed(realm_id, cursor, limit)
-            .await
-    }
-
-    pub async fn retained_control_proposal_faults(
-        &self,
-        realm_id: &RealmId,
-        limit: usize,
-    ) -> StoreResult<Vec<SealedControlEventRecord>> {
-        self.control_event_store()
-            .list_retained_faults(realm_id, limit)
             .await
     }
 
@@ -3794,6 +3696,175 @@ mod control_governance_health_tests {
         )
     }
 
+    fn deadline_ack(event: &Event, received_at: DateTime<Utc>) -> ControlProposalAck {
+        let policy = ControlProposalDecisionPolicy::default();
+        let mut member = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: event.realm_id.clone(),
+            proposal_digest: arkret_state::state::control_event_digest(
+                event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
+            received_at,
+            decision_due_at: received_at + policy.decision_window,
+            absolute_due_at: received_at + policy.absolute_horizon,
+            authority_set_ref: Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#key")
+                    .unwrap(),
+                payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+                created_at: received_at,
+                jws: "a..b".to_owned(),
+            },
+        };
+        member.signature.payload_digest = member.authority_ack_digest().unwrap();
+        ControlProposalAck::from_authority_acks(vec![member], policy).unwrap()
+    }
+
+    #[tokio::test]
+    async fn resolved_fault_history_is_paginated_without_degrading_current_health() {
+        let service = service();
+        let received_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let mut realm_id = None;
+        let hash = || Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        for index in 0..1000 {
+            let event = ackless_event(&format!("late-{index}"));
+            realm_id = Some(event.realm_id.clone());
+            let ack = deadline_ack(&event, received_at);
+            let seal = Seal {
+                id: SealId::new(format!("ak:seal:sha256:{index:064x}")).unwrap(),
+                realm_id: event.realm_id.clone(),
+                predecessor_refs: Vec::new(),
+                delta: vec![ack.proposal_digest.clone()],
+                control_event_set_root: hash(),
+                state_root: hash(),
+                completeness_root: hash(),
+                notary_seq: index,
+                data_view_root: None,
+                data_event_set_root: None,
+                availability_receipt_digests: Vec::new(),
+                covered_event_digests: Vec::new(),
+                previous_state_root: None,
+                previous_digest_algorithm: None,
+                notary_signature: arkret_wire::seal::NotarySig::Single(
+                    arkret_wire::SealSignature {
+                        verification_method: arkret_wire::DidUrl::new("did:web:notary.example#key")
+                            .unwrap(),
+                        payload_digest: hash(),
+                        jws: "a..b".to_owned(),
+                    },
+                ),
+                sealed_at: ack.absolute_due_at + chrono::Duration::seconds(1),
+                hlc: Hlc::new("019f00000000-0000-00000001").unwrap(),
+            };
+            let store = service.control_event_store();
+            store
+                .put_pending_with_ingress(
+                    &event,
+                    &ControlProposalIngress::AckRequired(ack.clone()),
+                    arkret_canonical::DigestSuite::Sha256,
+                )
+                .await
+                .unwrap();
+            store
+                .mark_sealed(&ack.proposal_digest, &seal)
+                .await
+                .unwrap();
+            if index == 128 || index == 999 {
+                let health = service
+                    .control_governance_health(
+                        &event.realm_id,
+                        seal.sealed_at,
+                        ControlProposalDecisionPolicy::default(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(health.status, ControlGovernanceHealthStatus::Healthy);
+                assert!(health.pending_proposals_complete);
+            }
+        }
+        let realm_id = realm_id.unwrap();
+        let mut cursor = None;
+        let mut count = 0;
+        loop {
+            let page = service
+                .sealed_control_events(&realm_id, cursor.as_ref(), 73)
+                .await
+                .unwrap();
+            if page.is_empty() {
+                break;
+            }
+            for record in &page {
+                assert!(record.decision_overdue);
+                assert!(record.control_proposal_ack.is_some());
+            }
+            count += page.len();
+            cursor = Some(
+                arkret_state::state::control_event_digest(
+                    &page.last().unwrap().event,
+                    arkret_canonical::DigestSuite::Sha256,
+                )
+                .unwrap(),
+            );
+        }
+        assert_eq!(count, 1000);
+    }
+
+    #[tokio::test]
+    async fn pending_overflow_is_explicit_and_does_not_discard_obligations() {
+        let service = service();
+        let received_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let mut realm_id = None;
+        let mut expected = Vec::new();
+        for index in 0..129 {
+            let event = ackless_event(&format!("pending-{index}"));
+            realm_id = Some(event.realm_id.clone());
+            let ack = deadline_ack(&event, received_at + chrono::Duration::seconds(129 - index));
+            expected.push((ack.absolute_due_at, ack.proposal_digest.clone()));
+            service
+                .put_pending_control_event(
+                    &event,
+                    &ControlProposalIngress::AckRequired(ack),
+                    arkret_canonical::DigestSuite::Sha256,
+                )
+                .await
+                .unwrap();
+        }
+        let realm_id = realm_id.unwrap();
+        let health = service
+            .control_governance_health(
+                &realm_id,
+                received_at,
+                ControlProposalDecisionPolicy::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.pending_proposals.len(), 128);
+        assert!(!health.pending_proposals_complete);
+        assert_eq!(health.status, ControlGovernanceHealthStatus::Degraded);
+        expected.sort();
+        expected.truncate(128);
+        assert_eq!(
+            health
+                .pending_proposals
+                .iter()
+                .map(|row| (
+                    row.control_proposal_ack.absolute_due_at,
+                    row.control_proposal_ack.proposal_digest.clone(),
+                ))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            service
+                .pending_control_records(&realm_id, 1000)
+                .await
+                .unwrap()
+                .len(),
+            129
+        );
+    }
+
     #[test]
     fn contended_history_authority_guard_does_not_starve_tokio_worker() {
         use std::sync::mpsc;
@@ -4078,7 +4149,7 @@ mod control_governance_health_tests {
             .await
             .unwrap();
         assert!(health.pending_proposals.is_empty());
-        assert!(health.retained_faults.is_empty());
+        assert!(health.pending_proposals_complete);
     }
 }
 
