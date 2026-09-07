@@ -1781,13 +1781,15 @@ mod consent_proof_tests {
                 domain: Some(state.config().trust_domain.to_string()),
                 audience: Some(Audience::Single(state.service_id().to_owned())),
                 proof_purpose: None,
-                jws: "pending".to_owned(),
+                jws: String::new(),
             },
             reason: None,
             expires_at: None,
         };
         request.signature.payload_digest = request.payload_digest().unwrap();
-        let binding = request.signature_binding_bytes().unwrap();
+        let binding = request
+            .unsigned_signature_binding_bytes(&request.signature.unsigned())
+            .unwrap();
         let signing_key = arkret_signatures::development_signing_key(&verification_method);
         request.signature.jws =
             arkret_signatures::jws::sign_jws_ed25519(&binding, &signing_key).unwrap();
@@ -2022,7 +2024,9 @@ mod consent_proof_tests {
             request.signature.verification_method.as_str(),
         );
         request.signature.jws = arkret_signatures::jws::sign_jws_ed25519(
-            &request.signature_binding_bytes().unwrap(),
+            &request
+                .unsigned_signature_binding_bytes(&request.signature.unsigned())
+                .unwrap(),
             &signing_key,
         )
         .unwrap();
@@ -2202,7 +2206,7 @@ mod consent_proof_tests {
             domain: Some(state.config().trust_domain.to_string()),
             audience: Some(Audience::Single(state.service_id().to_owned())),
             proof_purpose: None,
-            jws: "pending".to_owned(),
+            jws: String::new(),
         }
     }
 
@@ -2240,7 +2244,9 @@ mod consent_proof_tests {
         let mut body = key_material_request(state, requester_id, method);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
         let proof = body.proofs[0].clone();
-        let binding = body.proof_binding_bytes(&proof).unwrap();
+        let binding = body
+            .unsigned_proof_binding_bytes(&proof.unsigned())
+            .unwrap();
         body.proofs[0].jws =
             arkret_signatures::jws::sign_jws_ed25519(&binding, signing_key).unwrap();
         body
@@ -2276,7 +2282,9 @@ mod consent_proof_tests {
         let mut body = request_consent_request(state, requester_id, method);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
         let proof = body.proofs[0].clone();
-        let binding = body.proof_binding_bytes(&proof).unwrap();
+        let binding = body
+            .unsigned_proof_binding_bytes(&proof.unsigned())
+            .unwrap();
         body.proofs[0].jws =
             arkret_signatures::jws::sign_jws_ed25519(&binding, signing_key).unwrap();
         body
@@ -2307,7 +2315,9 @@ mod consent_proof_tests {
         let mut body = identifier_query_request(state, requester_id, method);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
         let proof = body.proofs[0].clone();
-        let binding = body.proof_binding_bytes(&proof).unwrap();
+        let binding = body
+            .unsigned_proof_binding_bytes(&proof.unsigned())
+            .unwrap();
         body.proofs[0].jws =
             arkret_signatures::jws::sign_jws_ed25519(&binding, signing_key).unwrap();
         body
@@ -2450,7 +2460,9 @@ mod consent_proof_tests {
             now() - Duration::seconds(MIMI_OPERATION_PROOF_WINDOW_SECONDS + 1);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
         let proof = body.proofs[0].clone();
-        let binding = body.proof_binding_bytes(&proof).unwrap();
+        let binding = body
+            .unsigned_proof_binding_bytes(&proof.unsigned())
+            .unwrap();
         body.proofs[0].jws =
             arkret_signatures::jws::sign_jws_ed25519(&binding, &signing_key).unwrap();
 

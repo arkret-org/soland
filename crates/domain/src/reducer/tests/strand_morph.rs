@@ -20,8 +20,8 @@ fn strand_lifecycle_round_trip() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Payment refactor",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "metadata": { "title": "Payment refactor" },
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -92,8 +92,8 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Refactor",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "metadata": { "title": "Refactor" },
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -136,7 +136,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
         realm_id,
         serde_json::json!({
             "target_ref": strand_id,
-            "patch": { "title": "Edit while archived" }
+            "patch": { "metadata": { "title": "Edit while archived" } }
         }),
     );
     assert_eq!(
@@ -192,7 +192,7 @@ fn strand_description_and_synthesis_are_projected_and_updated_independently() {
                         "profile": "discussion"
                     }
                 },
-                "created_by": "ak:did_core:web:alice.example"
+                "created_by": account_actor("ak:did_core:web:alice.example")
             }
         }),
     );
@@ -298,7 +298,7 @@ fn morph_lifecycle_round_trip() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Backfill" },
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -351,7 +351,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Backfill" },
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -437,8 +437,8 @@ fn strand_position_events_touch_projection_without_changing_state() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Launch",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "metadata": { "title": "Launch" },
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -542,7 +542,7 @@ fn strand_position_events_queue_unknown_strand() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "metadata": { "title": "Backfill target" },
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -574,9 +574,9 @@ fn strand_content_slot_is_materialized_and_cleared_by_redaction() {
             serde_json::json!({
                 "object": {
                     "realm_id": realm_id,
-                    "title": "Synthesis with a body",
+                    "metadata": { "title": "Synthesis with a body" },
                     "content": {"kind": "ak.content.text", "body": "the synthesis body"},
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -641,7 +641,7 @@ fn morph_encrypted_content_slot_is_materialized_and_cleared_by_redaction() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "encrypted_content": {"scheme": "mls_rfc9420", "ciphertext": "Y2lwaGVy"},
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -703,7 +703,7 @@ fn redaction_with_strand_target_ref_flips_to_redacted() {
                             "content": {"kind": "ak.content.text", "body": "Synthesis"}
                         }
                     },
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -762,7 +762,7 @@ fn redaction_with_morph_target_ref_flips_to_redacted() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Sensitive task" },
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -808,8 +808,8 @@ fn redaction_preflight_rejects_against_already_terminal() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Strand",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "metadata": { "title": "Strand" },
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -854,7 +854,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Task" },
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -904,8 +904,8 @@ fn strand_tracks_update_touches_active_strand_only() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Launch",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "metadata": { "title": "Launch" },
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -952,7 +952,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                     "tracks": {
                         "discussion": {
                             "is_primary": true,
@@ -1022,7 +1022,7 @@ fn strand_tracks_update_cannot_change_synthesis_content() {
                             "content": {"kind": "ak.content.text", "body": "Before"}
                         }
                     },
-                    "created_by": "ak:did_core:web:alice.example"
+                    "created_by": account_actor("ak:did_core:web:alice.example")
                 }
             }),
         ),
@@ -1079,8 +1079,8 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Refactor",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "metadata": { "title": "Refactor" },
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),

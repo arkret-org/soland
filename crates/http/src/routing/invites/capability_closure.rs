@@ -301,25 +301,22 @@ fn authority_root_value_from_bundle(
             .get("state")
             .cloned()
             .ok_or_else(|| schema_violation("invite capability leaf carries no state"))?;
-        // §6.2.1's two leaf shapes. The authority-root cell is a
-        // `cas_register`, so in practice this is the head set; the value branch
-        // stays because the leaf definition is shared and a sender that ships
-        // the wrong shape must fail on the digest, not on a missing key.
-        let value = match (state_object.get("heads"), state_object.get("value")) {
-            (Some(heads), None) => {
-                arkret_state::causal_register_leaf_value(heads).map_err(|error| {
-                    schema_violation(format!(
-                        "invite capability leaf head set has no single value: {error}"
-                    ))
-                })?
-            }
-            (None, Some(value)) => value.clone(),
-            _ => {
-                return Err(schema_violation(
-                    "invite capability leaf state is not one closed §6.2.1 shape",
-                ));
-            }
-        };
+        // The authority-root family is causal: a value-only leaf is invalid.
+        if leaf.as_object().map(|object| object.len()) != Some(2)
+            || state_object.as_object().map(|object| object.len()) != Some(1)
+        {
+            return Err(schema_violation(
+                "invite capability leaf must have its closed canonical shape",
+            ));
+        }
+        let heads = state_object
+            .get("heads")
+            .ok_or_else(|| schema_violation("authority-root leaf requires causal heads"))?;
+        let value = arkret_state::causal_register_leaf_value(heads).map_err(|error| {
+            schema_violation(format!(
+                "invite capability leaf head set has no single value: {error}"
+            ))
+        })?;
         let recomputed =
             arkret_state::state_leaf_hash_from_state_object(&cell, state_object, digest_suite)
                 .map_err(|error| {
@@ -617,5 +614,63 @@ mod tests {
         let error = invite_capability_leaves(&event)
             .expect_err("an invite Control Move without a basis cannot be authorized");
         assert_eq!(error.wire_code(), "schema_violation");
+    }
+    // Exercise the portable leaf reader with a matching single-leaf Merkle
+    // root. Outer Seal signature admission is covered separately above.
+    fn authority_leaf_bundle(state: serde_json::Value) -> (CbaProofBundle, Seal) {
+        let mut bundle = fixture_bundle("soland:invite-capability-test:authority-leaf:");
+        let mut seal = bundle.seals[0].clone();
+        let leaf = serde_json::json!({ "cell": INVITE_AUTHORITY_CELL, "state": state });
+        let digest = arkret_state::state_leaf_hash_from_state_object(
+            &authority_root_cell_ref(),
+            state,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        seal.state_root = digest.clone();
+        bundle.inclusion_proofs = vec![SemanticRefProof {
+            kind: SemanticRefProofKind::Rfc6962Merkle,
+            root_field: SemanticRefProofRootField::StateRoot,
+            root_digest: digest.clone(),
+            leaf_canonical_preimage_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
+                &arkret_canonical::canonical_json_bytes(&leaf).unwrap(),
+            ))
+            .unwrap(),
+            leaf_digest: digest,
+            audit_path: Vec::new(),
+            leaf_index: 0,
+            leaf_count: 1,
+        }];
+        (bundle, seal)
+    }
+
+    #[test]
+    fn authority_leaf_requires_heads_even_when_value_only_root_matches() {
+        let (bundle, seal) = authority_leaf_bundle(serde_json::json!({ "value": null }));
+        let error = authority_root_value_from_bundle(&bundle, &seal)
+            .expect_err("a matching Merkle root cannot authorize the retired causal leaf shape");
+        assert_eq!(error.wire_code(), "schema_violation");
+    }
+
+    #[test]
+    fn authority_leaf_preserves_released_head_identity() {
+        let state = serde_json::json!({ "heads": [{
+            "event_id": "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E3",
+            "value": null,
+        }] });
+        let (bundle, seal) = authority_leaf_bundle(state.clone());
+        assert_eq!(
+            authority_root_value_from_bundle(&bundle, &seal).unwrap(),
+            Some(serde_json::Value::Null)
+        );
+        let mut extra = state;
+        extra["value"] = serde_json::Value::Null;
+        let (bundle, seal) = authority_leaf_bundle(extra);
+        assert_eq!(
+            authority_root_value_from_bundle(&bundle, &seal)
+                .unwrap_err()
+                .wire_code(),
+            "schema_violation"
+        );
     }
 }

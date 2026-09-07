@@ -1796,9 +1796,7 @@ pub(crate) fn canonical_event_ops(
         digest_suite,
     )?
     .into_iter()
-    .map(|(cell, op)| {
-        issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op)
-    })
+    .map(|(cell, op)| issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op))
     .collect()
 }
 
@@ -1827,9 +1825,7 @@ pub(crate) fn canonical_event_ops_with_frozen_pre_state(
         digest_suite,
     )?
     .into_iter()
-    .map(|(cell, op)| {
-        issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op)
-    })
+    .map(|(cell, op)| issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op))
     .collect()
 }
 
@@ -2052,7 +2048,8 @@ mod tests {
                 .to_owned(),
         )
         .unwrap();
-        let pending = issued_transition(0x21, serde_json::Value::Null, serde_json::json!("pending"));
+        let pending =
+            issued_transition(0x21, serde_json::Value::Null, serde_json::json!("pending"));
         let kind = state
             .projections()
             .resolve_cell(&realm_id, &cell)

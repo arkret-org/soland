@@ -184,7 +184,13 @@ async fn prepare_ghost_event(
         projection
             .check_move_preconditions(operation)
             .map_err(|reason| {
-                SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
+                let (code, message) = cba_bottom_reject(reason);
+                let error = SubmitOneError::new(StatusCode::PRECONDITION_FAILED, code, message);
+                if reason == "cell_bottom_state" {
+                    error.with_details(serde_json::json!({ "reason_code": "cell_in_bottom_state" }))
+                } else {
+                    error
+                }
             })?;
         let preceding_operations = preceding_prepared.iter().filter_map(|event| {
             event

@@ -1059,26 +1059,48 @@ async fn register_agent_membership_context(
         .put(record)
         .await
         .expect("agent record");
-    let accountability_grant_payload = json!({
-        "schema": "ak.schema.accountability_grant.v1",
-        "issuer_id": controller,
-        "subject_id": agent,
-        "accountability_scope": "agent_operator",
-        "grant_status": "active",
-        "not_before": "2026-01-01T00:00:00.000Z",
-        "expires_at": "2099-01-01T00:00:00.000Z",
-        "proof": {
-            "kind": "detached_jws",
-            "verification_method": format!("{ALICE_DID}#key-1"),
-            "payload_digest": format!("sha256:{}", "3".repeat(64)),
-            "created_at": "2026-01-01T00:00:00.000Z",
-            "jws": "test"
-        }
-    });
-    serde_json::from_value::<
-        arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload,
-    >(accountability_grant_payload.clone())
-    .expect("standard accountability grant payload");
+    use arkret_models_collaboration::governance::accountability::{
+        AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
+    };
+    let mut accountability_grant_payload = AccountabilityGrantPayload::new(
+        arkret_wire::DidCoreId::new(controller).unwrap(),
+        arkret_wire::DidCoreId::new(agent).unwrap(),
+        AccountabilityScope::Single(AccountabilityScopeKind::AgentOperator),
+        "2026-01-01T00:00:00Z".parse().unwrap(),
+        Some("2099-01-01T00:00:00Z".parse().unwrap()),
+        arkret_wire::PayloadProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(format!("{ALICE_DID}#key-1")).unwrap(),
+            payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+            created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: String::new(),
+        },
+    );
+    accountability_grant_payload.proof.payload_digest =
+        accountability_grant_payload.payload_digest().unwrap();
+    accountability_grant_payload.proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
+        arkret_signatures::development_signing_key(
+            accountability_grant_payload
+                .proof
+                .verification_method
+                .as_str(),
+        ),
+        accountability_grant_payload
+            .proof
+            .verification_method
+            .as_str(),
+    )
+    .sign_detached_jws(
+        &accountability_grant_payload
+            .canonical_proof_binding_bytes()
+            .unwrap(),
+    );
+    accountability_grant_payload
+        .validate_lifecycle_at(now)
+        .unwrap();
     let accountability_envelope = json!({
         "actor_id": fixture_actor(controller),
         "executed_by": fixture_actor(controller),

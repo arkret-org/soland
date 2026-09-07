@@ -335,7 +335,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let event_id = "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R";
-    let message_id = "ak:message:AXQ-Zb-ajLPUppedkeoOdGiFw_IFS5rx-tvwRdwirjrR";
+    let message_id = message_id_from_event_id(event_id);
     let revision_event_id = "ak:event:AY3yMyh6E9PG9a6M5sarXiHRk89RGO88qpJX6TmFfw4K";
 
     state.apply(
@@ -344,7 +344,6 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
-                "message_id": message_id,
                 "sender": "ak:did_core:web:alice",
                 "strand_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}

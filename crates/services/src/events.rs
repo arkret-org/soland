@@ -2500,6 +2500,34 @@ mod tests {
         accountability_scope: Value,
         received_at: DateTime<Utc>,
     ) -> AcceptedEvent {
+        let mut payload = AccountabilityGrantPayload {
+            schema: AccountabilityGrantPayload::SCHEMA.to_owned(),
+            issuer_id: DidCoreId::new("ak:did_core:web:controller.example").unwrap(),
+            subject_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
+            accountability_scope: serde_json::from_value(accountability_scope).unwrap(),
+            not_before: "2026-01-01T00:00:00Z".parse().unwrap(),
+            expires_at: Some("2099-01-01T00:00:00Z".parse().unwrap()),
+            grant_status: serde_json::from_value(serde_json::json!(grant_status)).unwrap(),
+            proof: arkret_wire::PayloadProof {
+                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                verification_method: arkret_wire::DidUrl::new("did:web:controller.example#key-1")
+                    .unwrap(),
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: String::new(),
+            },
+        };
+        payload.proof.payload_digest = payload.payload_digest().unwrap();
+        payload.proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::from_seed(
+            [17; 32],
+            payload.proof.verification_method.as_str(),
+        )
+        .sign_detached_jws(&payload.canonical_proof_binding_bytes().unwrap());
+        payload.proof.validate_production().unwrap();
         AcceptedEvent {
             event_id: event_id.to_owned(),
             actor_id: arkret_wire::ActorId::account(accountability_account(
@@ -2520,22 +2548,7 @@ mod tests {
                 "executed_by": arkret_wire::ActorId::account(accountability_account(
                     "ak:did_core:web:controller.example",
                 )),
-                "payload": {
-                    "schema": "ak.schema.accountability_grant.v1",
-                    "issuer_id": "ak:did_core:web:controller.example",
-                    "subject_id": "ak:did_core:web:agent.example",
-                    "accountability_scope": accountability_scope,
-                    "not_before": "2026-01-01T00:00:00.000Z",
-                    "expires_at": "2099-01-01T00:00:00.000Z",
-                    "grant_status": grant_status,
-                    "proof": {
-                        "kind": "detached_jws",
-                        "verification_method": "did:web:controller.example#key-1",
-                        "payload_digest": format!("sha256:{}", "3".repeat(64)),
-                        "created_at": "2026-01-01T00:00:00.000Z",
-                        "jws": "test"
-                    }
-                }
+                "payload": payload
             }),
             received_at,
         }

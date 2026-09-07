@@ -1005,8 +1005,12 @@ async fn produce_current_agent_signer_evidence(
     let key_value: Vec<AgentKeyCellEntry> = serde_json::from_value(key_value)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
 
-    let lifecycle = accepted_current_lifecycle(state, &agent, agent_id, &realm_id).await?;
-    let lifecycle_seal = covering_seal(state, &lifecycle.event).await?;
+    let frontier =
+        crate::routing::identity::agent_pcr::agent_event_seal_head(state, realm_id.as_str())
+            .await
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
+            .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let lifecycle_seal = frontier.clone();
     let lifecycle_cell_ref = lifecycle_cell_ref(&agent_actor)?;
     let (lifecycle_value, lifecycle_heads, lifecycle_proof) =
         witnessed_cell(state, &realm_id, &lifecycle_seal, &lifecycle_cell_ref).await?;
@@ -1015,12 +1019,9 @@ async fn produce_current_agent_signer_evidence(
     if lifecycle_value != AgentLifecycleStatus::Active {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive);
     }
+    let lifecycle =
+        accepted_current_lifecycle(state, &agent_actor, &realm_id, &lifecycle_heads).await?;
 
-    let frontier =
-        crate::routing::identity::agent_pcr::agent_event_seal_head(state, realm_id.as_str())
-            .await
-            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
-            .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let closure = state
         .projections()
         .seal_closure(std::slice::from_ref(&frontier.id))
@@ -1311,68 +1312,38 @@ fn lifecycle_cell_ref(
 
 async fn accepted_current_lifecycle(
     state: &AppState,
-    agent: &soland_services::identity::AgentPairingState,
-    agent_id: &DidCoreId,
+    agent_actor: &arkret_wire::ActorId,
     realm_id: &RealmId,
+    heads: &[arkret_state::lattice::cas_register::CasHead],
 ) -> Result<AcceptedLifecycle, AgentSignerEvidenceQueryFailureReason> {
-    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        agent_id.clone(),
-        state.service_core_id().clone(),
-    ));
-    let records = state
-        .event_queries()
-        .accepted_events()
-        .await
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let mut events = records
+    let missing = AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing;
+    if heads.is_empty()
+        || heads
+            .iter()
+            .any(|head| head.value != serde_json::json!("active"))
+    {
+        return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive);
+    }
+    // Every active head is authoritative. Choose a stable representative by
+    // content identity, never by caller-controlled timestamps or arrival order.
+    let event_id = heads
+        .iter()
+        .map(|head| EventId::from_event_digest(&head.move_id).map_err(|_| missing))
+        .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .filter_map(|record| serde_json::from_value::<Event>(record.envelope).ok())
-        .filter(|event| {
-            event.realm_id == *realm_id
-                && event.actor_id == agent_actor
-                && matches!(
-                    event.kind,
-                    arkret_wire::EventKind::RealmCreate
-                        | arkret_wire::EventKind::SelfAgentPause
-                        | arkret_wire::EventKind::SelfAgentResume
-                        | arkret_wire::EventKind::SelfAgentDeactivate
-                )
-        })
-        .collect::<Vec<_>>();
-    events.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
-    let event = events
-        .last()
-        .cloned()
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        .min()
+        .ok_or(missing)?;
+    let event = accepted_event(state, &event_id).await?;
+    if event.realm_id != *realm_id || event.actor_id != *agent_actor {
+        return Err(missing);
+    }
     let provenance = match event.kind {
-        arkret_wire::EventKind::RealmCreate => {
-            let _provision = agent
-                .provision_event_refs
-                .as_ref()
-                .and_then(|refs| refs.get("provision_event_id"))
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| EventId::new(value.to_owned()).ok())
-                .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-            AgentLifecycleProvenance::DelegatedPcrGenesis {
-                realm_create_event_id: event.event_id.clone(),
-            }
-        }
-        arkret_wire::EventKind::SelfAgentResume => {
-            let _predecessor = events
-                .iter()
-                .rev()
-                .skip(1)
-                .find(|candidate| candidate.kind == arkret_wire::EventKind::SelfAgentPause)
-                .map(|candidate| candidate.event_id.clone())
-                .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-            AgentLifecycleProvenance::ResumeAccepted {
-                resume_event_id: event.event_id.clone(),
-            }
-        }
+        arkret_wire::EventKind::RealmCreate => AgentLifecycleProvenance::DelegatedPcrGenesis {
+            realm_create_event_id: event.event_id.clone(),
+        },
+        arkret_wire::EventKind::SelfAgentResume => AgentLifecycleProvenance::ResumeAccepted {
+            resume_event_id: event.event_id.clone(),
+        },
         _ => return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive),
     };
     Ok(AcceptedLifecycle { event, provenance })
@@ -1496,7 +1467,35 @@ async fn verify_current_evidence(
         }
     }
     let verify_seal = |seal: &Seal| verify_seal_with_keys(seal, &seal_keys);
-    let verify_lifecycle = |witness: &AgentLifecycleWitness| validate_lifecycle_witness(witness);
+    let mut lifecycle_keys = std::collections::BTreeMap::new();
+    for proof in &snapshot
+        .state
+        .agent_lifecycle_witness
+        .accepted_status_event
+        .proofs
+    {
+        let arkret_wire::EventProof::StationAdmission(proof) = proof else {
+            continue;
+        };
+        let key = crate::jws_verify::resolve_ed25519_pubkey_async(
+            state,
+            proof.verification_method.as_str(),
+        )
+        .await
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        lifecycle_keys.insert(
+            proof.verification_method.to_string(),
+            PublicKeyMaterial::Ed25519Raw {
+                bytes: key.to_bytes().to_vec(),
+            },
+        );
+    }
+    let verify_lifecycle = |witness: &AgentLifecycleWitness| {
+        arkret_signatures::agent_evidence::verify_agent_lifecycle_event_signature(
+            witness,
+            &|method| lifecycle_keys.get(method.as_str()).cloned(),
+        )
+    };
     let binding_digest =
         arkret_signatures::agent_evidence::agent_signing_key_binding_digest(binding)
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
@@ -1606,54 +1605,5 @@ fn verify_seal_with_keys(
             multi.signatures.iter().try_for_each(verify)
         }
         NotarySig::Multi(_) => Err(AgentEvidenceRejectedReason::SigningKeyMismatch),
-    }
-}
-
-fn validate_lifecycle_witness(
-    witness: &AgentLifecycleWitness,
-) -> Result<(), arkret_signatures::agent_evidence::AgentEvidenceRejectedReason> {
-    use arkret_signatures::agent_evidence::AgentEvidenceRejectedReason;
-    let actor = witness
-        .accepted_status_event
-        .actor_id
-        .as_account_id()
-        .ok_or(AgentEvidenceRejectedReason::SigningKeyMismatch)?;
-    let canonical_actor = witness
-        .accepted_status_event
-        .actor_id
-        .canonical_key()
-        .map_err(|_| AgentEvidenceRejectedReason::SigningKeyMismatch)?;
-    let lifecycle_subject = arkret_wire::composite_subject(&[canonical_actor.as_str()])
-        .map_err(|_| AgentEvidenceRejectedReason::SigningKeyMismatch)?;
-    let lifecycle_cell_ref = format!("ak:cell:{AGENT_STATUS_COMPONENT}:{lifecycle_subject}");
-    if witness
-        .accepted_status_event
-        .actor_id
-        .signing_principal_id()
-        != &witness.agent_id
-        || actor.principal_id != witness.agent_id
-        || witness.cell_ref.as_str() != lifecycle_cell_ref
-        || witness.accepted_status_event.realm_id != witness.seal.realm_id
-        || witness.cell_value != AgentLifecycleStatus::Active
-    {
-        return Err(AgentEvidenceRejectedReason::AuthorizationInactive);
-    }
-    match &witness.provenance {
-        AgentLifecycleProvenance::DelegatedPcrGenesis {
-            realm_create_event_id,
-            ..
-        } if witness.accepted_status_event.kind == arkret_wire::EventKind::RealmCreate
-            && witness.accepted_status_event.event_id == *realm_create_event_id =>
-        {
-            Ok(())
-        }
-        AgentLifecycleProvenance::ResumeAccepted {
-            resume_event_id, ..
-        } if witness.accepted_status_event.kind == arkret_wire::EventKind::SelfAgentResume
-            && witness.accepted_status_event.event_id == *resume_event_id =>
-        {
-            Ok(())
-        }
-        _ => Err(AgentEvidenceRejectedReason::SigningKeyMismatch),
     }
 }

@@ -1135,16 +1135,19 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
     );
     let payload = serde_json::json!({
         "member_id": account_actor(member),
-        "sender": "ak:did_core:web:admin.example",
         "membership": "ban"
     });
-    let (_, writes) =
-        projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
-    let effect = state.apply_projected(
-        &make_operation(arkret_wire::EventKind::MemberState, realm_id, payload),
-        &writes,
-        &hlc,
+    let admin = "ak:did_core:web:admin.example";
+    let (_, writes) = projected_cell_writes_for_actor(
+        arkret_wire::EventKind::MemberState,
+        realm_id,
+        0,
+        &payload,
+        arkret_identifiers::DidCoreId::new(admin).unwrap(),
     );
+    let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
+    operation.context.sender = account_actor(admin);
+    let effect = state.apply_projected(&operation, &writes, &hlc);
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason } if reason == "invalid_membership_transition"

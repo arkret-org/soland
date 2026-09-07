@@ -8,7 +8,10 @@ use super::*;
 pub(crate) async fn fresh_direct_contact_evidence(
     state: &AppState,
     record: &ContactRecord,
-) -> Result<Option<arkret_models_collaboration::contact_operations::ContactRoundEvidenceBundle>, AppError> {
+) -> Result<
+    Option<arkret_models_collaboration::contact_operations::ContactRoundEvidenceBundle>,
+    AppError,
+> {
     let Some(mut bundle) = record.contact_round_evidence.clone() else {
         return Ok(None);
     };
@@ -28,7 +31,8 @@ pub(crate) async fn fresh_direct_contact_evidence(
         } else {
             return Ok(None);
         };
-        if proof.terminal || head != Some(&proof.head_event_ref)
+        if proof.terminal
+            || head != Some(&proof.head_event_ref)
             || proof.contact_round_id != bundle.contact_round_id
         {
             return Ok(None);
@@ -37,24 +41,38 @@ pub(crate) async fn fresh_direct_contact_evidence(
             continue;
         }
         if proof.issuer_id != state.service_core_id()
-            || holder.as_account_id().is_none_or(|account| account.station_id != state.service_core_id())
+            || holder
+                .as_account_id()
+                .is_none_or(|account| account.station_id != state.service_core_id())
         {
             return Ok(None);
         }
-        let Some(stored) = state.event_queries().canonical_event(proof.head_event_ref.as_str())
-            .await.map_err(|error| AppError::internal(format!("Contact head lookup: {error}")))?
+        let Some(stored) = state
+            .event_queries()
+            .canonical_event(proof.head_event_ref.as_str())
+            .await
+            .map_err(|error| AppError::internal(format!("Contact head lookup: {error}")))?
         else {
             return Ok(None);
         };
-        let event: arkret_wire::Event = serde_json::from_value(stored.envelope)
-            .map_err(|error| AppError::internal(format!("accepted Contact head decode: {error}")))?;
+        let event: arkret_wire::Event =
+            serde_json::from_value(stored.envelope).map_err(|error| {
+                AppError::internal(format!("accepted Contact head decode: {error}"))
+            })?;
         if event.actor_id != *holder || event.event_id != proof.head_event_ref {
             return Ok(None);
         }
-        let digest_suite = event.event_id.event_digest().digest_suite()
+        let digest_suite = event
+            .event_id
+            .event_digest()
+            .digest_suite()
             .map_err(|error| AppError::internal(format!("Contact head digest suite: {error}")))?;
         *proof = super::contact_write::signed_current_proof(
-            state, bundle.contact_round_id.clone(), proof.peer.clone(), &event, digest_suite,
+            state,
+            bundle.contact_round_id.clone(),
+            proof.peer.clone(),
+            &event,
+            digest_suite,
         )?;
     }
     Ok(Some(bundle))

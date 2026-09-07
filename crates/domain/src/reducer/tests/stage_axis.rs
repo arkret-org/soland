@@ -12,8 +12,8 @@ fn strand_create(strand_id: &str, stage: Option<&str>) -> Operation {
     let mut object = serde_json::json!({
         "id": strand_id,
         "realm_id": REALM,
-        "title": "Implement login",
-        "created_by": "ak:did_core:web:alice.example",
+        "metadata": { "title": "Implement login" },
+        "created_by": account_actor("ak:did_core:web:alice.example"),
     });
     if let Some(stage) = stage {
         object
@@ -42,7 +42,7 @@ fn morph_create(morph_id: &str, stage: Option<&str>) -> Operation {
         "realm_id": REALM,
         "morph_kind": "task",
         "metadata": { "title": "Backfill" },
-        "created_by": "ak:did_core:web:alice.example",
+        "created_by": account_actor("ak:did_core:web:alice.example"),
     });
     if let Some(stage) = stage {
         object
@@ -122,8 +122,8 @@ fn strand_create_ignores_wire_supplied_stage_changed_at() {
             "object": {
                 "id": strand_id,
                 "realm_id": REALM,
-                "title": "Refactor",
-                "created_by": "ak:did_core:web:alice.example",
+                "metadata": { "title": "Refactor" },
+                "created_by": account_actor("ak:did_core:web:alice.example"),
                 "stage": "draft",
                 "stage_changed_at": "2020-01-01T00:00:00.000Z",
             }
@@ -267,18 +267,12 @@ fn strand_update_patch_on_the_stage_axis_is_refused() {
         serde_json::json!({ "stage": "done" }),
         serde_json::json!({ "stage_changed_at": "2030-01-01T00:00:00.000Z" }),
     ] {
-        let effect = state.apply(
-            &make_operation(
-                arkret_wire::EventKind::StrandUpdate,
-                REALM,
-                serde_json::json!({ "target_ref": strand_id, "patch": patch }),
-            ),
-            &hlc,
-        );
-        assert!(
-            matches!(effect, ProjectionEffect::Rejected { .. }),
-            "ak.strand.update must not carry the stage axis"
-        );
+        let error = arkret_event_draft::validate_event_payload(
+            &arkret_wire::EventKind::StrandUpdate,
+            &serde_json::json!({ "target_ref": strand_id, "patch": patch }),
+        )
+        .expect_err("stage-axis patches must be rejected before operation projection");
+        assert!(error.to_string().contains("forbidden wire field patch:"));
     }
     assert_eq!(
         state.strands[strand_id].stage,

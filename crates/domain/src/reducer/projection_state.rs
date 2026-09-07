@@ -706,26 +706,10 @@ impl ProjectionState {
         }
     }
 
-    /// event-and-patch.md §4.4 — a Control Move MAY carry `preconditions[]`;
-    /// the reducer MUST evaluate every predicate against the current
-    /// materialized head BEFORE applying any effect, and the whole Move MUST
-    /// fail closed (`failed_precondition`) without partial application when
-    /// any predicate does not hold.
-    ///
-    /// This evaluates the generic `head_eq` compare-and-swap predicate:
-    /// each entry is `{ "cell_id": "<cell_ref>", "predicate": { "op": "head_eq",
-    /// "value": { "<field-path>": <expected> } } }`. For a strand-fields cell
-    /// (`ak.component.strand.object.v1:<strand_id>`) the `fields.<key>` paths
-    /// resolve against the materialized strand `fields`; for any other cell
-    /// family the path resolves against the resolved cell JSON value. A
-    /// mismatch — or a referenced cell / strand that is absent or in `Bottom`
-    /// — fails the precondition so the Move does not apply.
-    ///
-    /// Returns `Ok(())` when there are no `preconditions[]`, when every
-    /// predicate holds, or when a predicate carries an `op` this engine does
-    /// not recognize (forward-compatible: unknown ops are not silently
-    /// treated as satisfied for `head_eq`, but other op kinds are deferred to
-    /// their dedicated reducer gates and ignored here).
+    /// Evaluate registered head_eq predicates by canonical whole-value
+    /// comparison before applying any effect. Missing cells read null;
+    /// Bottom remains a distinct failure. Other registered predicates are
+    /// evaluated by their dedicated reducer gates.
     pub fn check_move_preconditions(&self, operation: &Operation) -> Result<(), &'static str> {
         for precondition in &operation.context.preconditions {
             if precondition.predicate.op != arkret_wire::cba::PredicateOp::HeadEq {
@@ -738,33 +722,22 @@ impl ProjectionState {
                 operation.realm_id.as_str(),
                 precondition.cell_id.as_str(),
                 expected,
-            ) {
+            )? {
                 return Err("failed_precondition");
             }
         }
         Ok(())
     }
 
-    /// The head an unwritten cell presents to a `head_eq` predicate.
-    ///
-    /// An unwritten `cas_register` cell reads `null` protocol-wide
-    /// (`event-auth-state-resolution.md` section 9.3.1.2). The registered
-    /// `initial_value` / `sentinel_writers` mechanism is deleted: a family that
-    /// needs a reusable free slot — `ak.component.invite.live_target.v1` is the
-    /// one — registers an explicit `set null` release write instead, so
-    /// `ak.invite.create`'s `head_eq: null` holds both on a slot that was
-    /// released and on one that was never claimed. What separates those two
-    /// states is the head-identity guard of section 9.3.1.3 item 3, not a
-    /// distinguished sentinel value.
-    fn unwritten_cell_head(_cell_ref: &str) -> Value {
-        Value::Null
-    }
-
     /// Compare `predicate.value` with the current cell head. Missing cells
     /// present the JSON null head.
-    fn head_eq_holds(&self, realm_id: &str, cell_ref: &str, expected: &Value) -> bool {
+    fn head_eq_holds(
+        &self,
+        realm_id: &str,
+        cell_ref: &str,
+        expected: &Value,
+    ) -> Result<bool, &'static str> {
         const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
-        const STRAND_FIELDS_FAMILY: &str = arkret_wire::CellFamilyId::STRAND_OBJECT_V1;
         // CellStore keys are `(realm_id, cell_ref)`. The structured membership
         // projection retains that Realm dimension, while the registered cell
         // subject is the digest of the complete tagged ActorId key.
@@ -786,63 +759,24 @@ impl ProjectionState {
                     (subject == actor_subject).then_some(member)
                 });
             let Some(member) = member else {
-                return expected.is_null();
+                return Ok(expected.is_null());
             };
             let observed = Value::String(member.state.clone());
-            return Self::observed_head_eq(&observed, expected);
+            return Ok(Self::observed_head_eq(&observed, expected));
         }
-        if let Some(strand_id) = cell_ref
-            .strip_prefix("ak:cell:")
-            .and_then(|rest| rest.strip_prefix(STRAND_FIELDS_FAMILY))
-            .and_then(|rest| rest.strip_prefix(':'))
-        {
-            let Some(strand) = self.strands.get(strand_id) else {
-                return expected.is_null();
-            };
-            let observed = Value::Object(
-                strand
-                    .fields
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect(),
-            );
-            return Self::observed_head_eq(&observed, expected)
-                || expected.as_object().is_some_and(|paths| {
-                    !paths.is_empty()
-                        && paths.iter().all(|(path, want)| {
-                            let key = path.strip_prefix("fields.").unwrap_or(path);
-                            strand.fields.get(key) == Some(want)
-                        })
-                });
+        let cell_id = CellRef::new(cell_ref.to_owned()).map_err(|_| "failed_precondition")?;
+        match self.realm_cell(realm_id, &cell_id) {
+            Some(CellState::Bottom(_)) => Err("cell_bottom_state"),
+            Some(CellState::Value(value)) => Ok(Self::observed_head_eq(value, expected)),
+            None => Ok(expected.is_null()),
         }
-        let Ok(cell_id) = CellRef::new(cell_ref.to_owned()) else {
-            return false;
-        };
-        let Some(value) = self.realm_cell_value(realm_id, &cell_id) else {
-            return Self::observed_head_eq(&Self::unwritten_cell_head(cell_ref), expected);
-        };
-        if Self::observed_head_eq(value, expected) {
-            return true;
-        }
-        expected
-            .as_object()
-            .is_some_and(|paths| !paths.is_empty() && Self::field_path_head_eq_holds(value, paths))
     }
 
     fn observed_head_eq(observed: &Value, expected: &Value) -> bool {
-        observed == expected || observed.get("head") == Some(expected)
-    }
-
-    fn field_path_head_eq_holds(
-        observed: &Value,
-        expected: &serde_json::Map<String, Value>,
-    ) -> bool {
-        expected.iter().all(|(path, want)| {
-            let resolved = path
-                .split('.')
-                .try_fold(observed, |current, segment| current.get(segment));
-            resolved == Some(want)
-        })
+        arkret_canonical::canonical_json_bytes(observed)
+            .ok()
+            .zip(arkret_canonical::canonical_json_bytes(expected).ok())
+            .is_some_and(|(observed, expected)| observed == expected)
     }
 
     pub fn child_order_cell_value(&self, parent_space_id: &str) -> Value {
@@ -1367,5 +1301,60 @@ impl ProjectionState {
                     .iter()
                     .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
         })
+    }
+}
+
+#[cfg(test)]
+mod head_eq_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_head_equality_does_not_accept_subsets_or_legacy_wrappers() {
+        let observed = serde_json::json!({"head": {"nested": 1}, "other": 2});
+        assert!(ProjectionState::observed_head_eq(
+            &observed,
+            &serde_json::json!({"other": 2, "head": {"nested": 1}})
+        ));
+        for expected in [
+            serde_json::json!({"other": 2}),
+            serde_json::json!({"nested": 1}),
+            serde_json::json!({"head.nested": 1}),
+        ] {
+            assert!(!ProjectionState::observed_head_eq(&observed, &expected));
+        }
+    }
+
+    #[test]
+    fn null_head_distinguishes_unwritten_released_and_bottom_in_each_realm() {
+        const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+        const REALM_B: &str = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
+        let cell = CellRef::new(arkret_wire::REALM_NOTARY_CELL).unwrap();
+        let mut state = ProjectionState::new();
+        assert_eq!(
+            state.head_eq_holds(REALM_A, cell.as_str(), &Value::Null),
+            Ok(true)
+        );
+        state
+            .realm_notary_cells
+            .insert(REALM_A.to_owned(), CellState::Value(Value::Null));
+        assert_eq!(
+            state.head_eq_holds(REALM_A, cell.as_str(), &Value::Null),
+            Ok(true)
+        );
+        state.realm_notary_cells.insert(
+            REALM_A.to_owned(),
+            CellState::Bottom(arkret_wire::Bottom::new(
+                arkret_wire::BottomKind::Conflict,
+                vec![cell.clone()],
+            )),
+        );
+        assert_eq!(
+            state.head_eq_holds(REALM_A, cell.as_str(), &Value::Null),
+            Err("cell_bottom_state")
+        );
+        assert_eq!(
+            state.head_eq_holds(REALM_B, cell.as_str(), &Value::Null),
+            Ok(true)
+        );
     }
 }

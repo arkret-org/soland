@@ -302,11 +302,13 @@ pub(super) async fn apply_projection_preflight(
             // head fails closed with `failed_precondition` and no partial
             // apply.
             if let Err(reason) = proj.check_move_preconditions(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
+                let (code, message) = cba_bottom_reject(reason);
+                let mut error = SubmitOneError::new(StatusCode::PRECONDITION_FAILED, code, message);
+                if reason == "cell_bottom_state" {
+                    error = error
+                        .with_details(serde_json::json!({ "reason_code": "cell_in_bottom_state" }));
+                }
+                return Err(error);
             }
             if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(

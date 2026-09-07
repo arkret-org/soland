@@ -1961,7 +1961,9 @@ async fn direct_conversation_resolve(
                     retry_after_ms: None,
                 });
             };
-            let Some(contact_round_evidence) = social::direct::fresh_direct_contact_evidence(state, contact).await? else {
+            let Some(contact_round_evidence) =
+                social::direct::fresh_direct_contact_evidence(state, contact).await?
+            else {
                 return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
                     retry_after_ms: None,
                 });

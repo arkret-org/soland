@@ -535,7 +535,7 @@ async fn exact_human_mimi_report_body(
                 domain: Some(state.config().trust_domain.to_string()),
                 audience: Some(arkret_wire::Audience::Single(state.service_id().clone())),
                 proof_purpose: None,
-                jws: "pending".to_owned(),
+                jws: String::new(),
             },
         },
         report_event: arkret_wire::EventInitialSubmission::online(report_event),
@@ -543,7 +543,9 @@ async fn exact_human_mimi_report_body(
     };
     body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
     body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
-        &body.reporter_authority_binding_bytes().unwrap(),
+        &body
+            .unsigned_reporter_authority_binding_bytes(&body.reporter_authority.proof.unsigned())
+            .unwrap(),
         &signing_key,
     )
     .unwrap();
@@ -556,7 +558,9 @@ fn resign_human_mimi_report_authority(
     let signing_key = SigningKey::from_bytes(&[21_u8; 32]);
     body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
     body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
-        &body.reporter_authority_binding_bytes().unwrap(),
+        &body
+            .unsigned_reporter_authority_binding_bytes(&body.reporter_authority.proof.unsigned())
+            .unwrap(),
         &signing_key,
     )
     .unwrap();
@@ -675,7 +679,7 @@ async fn exact_agent_mimi_report_body(
                 domain: Some(state.config().trust_domain.to_string()),
                 audience: Some(arkret_wire::Audience::Single(state.service_id().clone())),
                 proof_purpose: None,
-                jws: "pending".to_owned(),
+                jws: String::new(),
             },
         },
         report_event: arkret_wire::EventInitialSubmission::online(report_event),
@@ -683,7 +687,9 @@ async fn exact_agent_mimi_report_body(
     };
     body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
     body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
-        &body.reporter_authority_binding_bytes().unwrap(),
+        &body
+            .unsigned_reporter_authority_binding_bytes(&body.reporter_authority.proof.unsigned())
+            .unwrap(),
         runtime_key,
     )
     .unwrap();

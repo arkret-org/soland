@@ -1099,69 +1099,134 @@ async fn concurrent_direct_resolve_queries_are_side_effect_free_body() {
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
-
 #[test]
 fn direct_resolve_renews_expired_local_contact_proofs() {
-    run_on_deep_stack("direct_resolve_renews_expired_local_contact_proofs", async || {
-        let state = soland_test_support::app_state(test_config());
-        let _alice = dev_token(state.clone()).await;
-        let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
-        seed_accepted_direct_message_contact(&state, BOB_DID, BOB_DEVICE, None).await;
-        let alice_actor = local_actor(core_id("did:web:alice.example"));
-        let bob_actor = local_actor(core_id(BOB_DID));
-        let mut contact = state.test_persistence().contacts().get(&alice_actor, &bob_actor).await.unwrap().unwrap();
-        let mut heads = Vec::new();
-        for (did, device, kind, seq) in [
-            ("did:web:alice.example", ALICE_SIGNING_DEVICE, "ak.contact.requested", 11),
-            (BOB_DID, BOB_DEVICE, "ak.contact.accepted", 12),
-        ] {
-            let envelope = signed_canonical_event("contact-head", kind, did, device,
-                demo_realm_id(), seq, vec![], serde_json::json!({}));
-            let event: arkret_wire::Event = serde_json::from_value(envelope.clone()).unwrap();
-            let canonical_bytes = arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
-            heads.push(event.event_id.clone());
-            state.test_persistence().events().put(soland_storage::CanonicalEventRecord {
-                event_id: event.event_id.to_string(), actor_id: event.actor_id.to_string(),
-                actor_seq: seq, realm_id: Some(event.realm_id.to_string()), kind: kind.to_owned(),
-                schema_id: "ak.schema.event.v1".to_owned(), digest_suite: arkret_canonical::DigestSuite::Sha256,
-                canonical_digest: arkret_canonical::sha256_digest(&canonical_bytes),
-                canonical_bytes, envelope, received_at: Utc::now(),
-            }).await.unwrap();
-        }
-        let expired = normal_contact_evidence(local_account_id(core_id("did:web:alice.example")),
-            local_account_id(core_id(BOB_DID)), heads[0].clone(), heads[1].clone(),
-            Utc::now() - chrono::Duration::hours(2));
-        contact.request_event_ref = Some(heads[0].clone());
-        contact.response_event_ref = Some(heads[1].clone());
-        contact.contact_round_id = Some(expired.contact_round_id.clone());
-        contact.request_receipts = expired.request_receipts.clone();
-        contact.contact_round_evidence = Some(expired.clone());
-        state.test_persistence().contacts().put(&contact).await.unwrap();
-        let before = Utc::now();
-        let mut response = post_authenticated_canonical(state.clone(), &bob,
-            "http://server/_arkret/self/direct-conversations/resolve",
-            &human_direct_resolve_request("did:web:alice.example")).await;
-        let status = response.status_code.unwrap();
-        let body: Value = response.take_json().await.unwrap();
-        assert_eq!(status.as_u16(), 200, "{body}");
-        assert_eq!(body["state"], "creation_required", "{body}");
-        let refreshed: arkret_models_collaboration::contact_operations::ContactRoundEvidenceBundle =
+    run_on_deep_stack(
+        "direct_resolve_renews_expired_local_contact_proofs",
+        async || {
+            let state = soland_test_support::app_state(test_config());
+            let _alice = dev_token(state.clone()).await;
+            let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
+            seed_accepted_direct_message_contact(&state, BOB_DID, BOB_DEVICE, None).await;
+            let alice_actor = local_actor(core_id("did:web:alice.example"));
+            let bob_actor = local_actor(core_id(BOB_DID));
+            let mut contact = state
+                .test_persistence()
+                .contacts()
+                .get(&alice_actor, &bob_actor)
+                .await
+                .unwrap()
+                .unwrap();
+            let mut heads = Vec::new();
+            for (did, device, kind, seq) in [
+                (
+                    "did:web:alice.example",
+                    ALICE_SIGNING_DEVICE,
+                    "ak.contact.requested",
+                    11,
+                ),
+                (BOB_DID, BOB_DEVICE, "ak.contact.accepted", 12),
+            ] {
+                let envelope = signed_canonical_event(
+                    "contact-head",
+                    kind,
+                    did,
+                    device,
+                    demo_realm_id(),
+                    seq,
+                    vec![],
+                    serde_json::json!({}),
+                );
+                let event: arkret_wire::Event = serde_json::from_value(envelope.clone()).unwrap();
+                let canonical_bytes =
+                    arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap())
+                        .unwrap();
+                heads.push(event.event_id.clone());
+                state
+                    .test_persistence()
+                    .events()
+                    .put(soland_storage::CanonicalEventRecord {
+                        event_id: event.event_id.to_string(),
+                        actor_id: event.actor_id.to_string(),
+                        actor_seq: seq,
+                        realm_id: Some(event.realm_id.to_string()),
+                        kind: kind.to_owned(),
+                        schema_id: "ak.schema.event.v1".to_owned(),
+                        digest_suite: arkret_canonical::DigestSuite::Sha256,
+                        canonical_digest: arkret_canonical::sha256_digest(&canonical_bytes),
+                        canonical_bytes,
+                        envelope,
+                        received_at: Utc::now(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            let expired = normal_contact_evidence(
+                local_account_id(core_id("did:web:alice.example")),
+                local_account_id(core_id(BOB_DID)),
+                heads[0].clone(),
+                heads[1].clone(),
+                Utc::now() - chrono::Duration::hours(2),
+            );
+            contact.request_event_ref = Some(heads[0].clone());
+            contact.response_event_ref = Some(heads[1].clone());
+            contact.contact_round_id = Some(expired.contact_round_id.clone());
+            contact.request_receipts = expired.request_receipts.clone();
+            contact.contact_round_evidence = Some(expired.clone());
+            state
+                .test_persistence()
+                .contacts()
+                .put(&contact)
+                .await
+                .unwrap();
+            let before = Utc::now();
+            let mut response = post_authenticated_canonical(
+                state.clone(),
+                &bob,
+                "http://server/_arkret/self/direct-conversations/resolve",
+                &human_direct_resolve_request("did:web:alice.example"),
+            )
+            .await;
+            let status = response.status_code.unwrap();
+            let body: Value = response.take_json().await.unwrap();
+            assert_eq!(status.as_u16(), 200, "{body}");
+            assert_eq!(body["state"], "creation_required", "{body}");
+            let refreshed: arkret_models_collaboration::contact_operations::ContactRoundEvidenceBundle =
             serde_json::from_value(body["next_founding_input"]["founding_authority_evidence"]["contact_round_evidence"].clone()).unwrap();
-        assert_eq!(refreshed.contact_round_id, expired.contact_round_id);
-        assert_eq!(serde_json::to_value(&refreshed.normal_response_receipt).unwrap(),
-            serde_json::to_value(&expired.normal_response_receipt).unwrap());
-        for (fresh, old) in refreshed.current_proofs.iter().zip(&expired.current_proofs) {
-            assert_eq!(fresh.head_event_ref, old.head_event_ref);
-            assert!(fresh.fresh_until > before);
-            assert_ne!(fresh.signature, old.signature);
-        }
-        // An issuer's expired foreign proof must never be re-signed locally.
-        contact.contact_round_evidence.as_mut().unwrap().current_proofs[0].issuer_id =
-            core_id("did:web:foreign.example");
-        state.test_persistence().contacts().put(&contact).await.unwrap();
-        let body: Value = post_authenticated_canonical(state.clone(), &bob,
-            "http://server/_arkret/self/direct-conversations/resolve",
-            &human_direct_resolve_request("did:web:alice.example")).await.take_json().await.unwrap();
-        assert_eq!(body["state"], "temporarily_unavailable", "{body}");
-    });
+            assert_eq!(refreshed.contact_round_id, expired.contact_round_id);
+            assert_eq!(
+                serde_json::to_value(&refreshed.normal_response_receipt).unwrap(),
+                serde_json::to_value(&expired.normal_response_receipt).unwrap()
+            );
+            for (fresh, old) in refreshed.current_proofs.iter().zip(&expired.current_proofs) {
+                assert_eq!(fresh.head_event_ref, old.head_event_ref);
+                assert!(fresh.fresh_until > before);
+                assert_ne!(fresh.signature, old.signature);
+            }
+            // An issuer's expired foreign proof must never be re-signed locally.
+            contact
+                .contact_round_evidence
+                .as_mut()
+                .unwrap()
+                .current_proofs[0]
+                .issuer_id = core_id("did:web:foreign.example");
+            state
+                .test_persistence()
+                .contacts()
+                .put(&contact)
+                .await
+                .unwrap();
+            let body: Value = post_authenticated_canonical(
+                state.clone(),
+                &bob,
+                "http://server/_arkret/self/direct-conversations/resolve",
+                &human_direct_resolve_request("did:web:alice.example"),
+            )
+            .await
+            .take_json()
+            .await
+            .unwrap();
+            assert_eq!(body["state"], "temporarily_unavailable", "{body}");
+        },
+    );
 }
