@@ -2229,7 +2229,7 @@ async fn account_device_summary(
     Ok(summary)
 }
 
-fn device_revocation_gate_record(
+pub(crate) fn device_revocation_gate_record(
     record: soland_storage::DeviceRevocationTargetRecord,
 ) -> Option<Result<arkret_wire::DeviceRevocationGateRecord, AppError>> {
     use arkret_wire::{

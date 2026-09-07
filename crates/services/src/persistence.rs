@@ -793,6 +793,15 @@ impl PersistenceHandle {
 
 #[async_trait::async_trait]
 impl soland_storage::DeviceRevocationStore for PersistenceHandle {
+    async fn target_for_proposal(
+        &self,
+        proposal_digest: &str,
+    ) -> PersistenceResult<Option<soland_storage::DeviceRevocationTargetRecord>> {
+        self.persistence
+            .device_revocations()
+            .target_for_proposal(proposal_digest)
+            .await
+    }
     fn bind_control_event_store(
         &self,
         control_events: Arc<dyn arkret_state::state::ControlEventStore>,

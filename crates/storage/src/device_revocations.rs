@@ -378,6 +378,13 @@ pub trait DeviceRevocationStore: Send + Sync {
         selector: &DeviceRevocationGateSelector,
     ) -> PersistenceResult<Vec<DeviceRevocationTargetRecord>>;
 
+    /// Resolve the immutable reducer-derived target, never the current device
+    /// generation, when projecting a historical or pending proposal.
+    async fn target_for_proposal(
+        &self,
+        proposal_digest: &str,
+    ) -> PersistenceResult<Option<DeviceRevocationTargetRecord>>;
+
     /// Atomically order an immutable action intent against revoke acceptance.
     /// Exact replay returns the first durable linearization unchanged.
     async fn linearize_gate(

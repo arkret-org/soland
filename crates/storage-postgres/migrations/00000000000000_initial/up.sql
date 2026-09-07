@@ -692,6 +692,7 @@ CREATE TABLE public.state_control_seal_schedule (
     claim_until_ms bigint,
     consecutive_failures integer DEFAULT 0 NOT NULL CHECK (consecutive_failures >= 0),
     last_outcome text,
+    scan_cursor text,
     CHECK ((claim_holder IS NULL) = (claim_until_ms IS NULL))
 );
 
@@ -1853,6 +1854,15 @@ CREATE TABLE public.invite_locators (
 );
 
 CREATE INDEX invite_locators_subject_active_idx ON public.invite_locators USING btree (subject_id, expires_at) WHERE revoked_at IS NULL AND consumed_at IS NULL;
+
+-- Expiring internal relay bodies; NOTIFY carries only the UUID reference.
+CREATE TABLE public.event_notification_relay (
+    id uuid PRIMARY KEY,
+    payload text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT NOW()
+);
+CREATE INDEX event_notification_relay_created_idx
+    ON public.event_notification_relay (created_at, id);
 
 -- Deployment-wide dynamic operational settings (rate limits, admin
 -- allowlist, federation peers, feature toggles). One row PER setting key:

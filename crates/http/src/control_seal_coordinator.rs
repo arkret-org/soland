@@ -161,22 +161,18 @@ async fn run_reconciliation_pass(state: &AppState, holder: &str, repair_due: boo
 }
 
 async fn run_claimed_realm_pass(state: &AppState, claim: ControlSealScheduleClaim) {
-    let outcome = match tokio::time::timeout(
-        REALM_PASS_TIMEOUT,
-        run_realm_pass(state, &claim.realm_id, &claim.holder),
-    )
-    .await
-    {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            tracing::error!(
-                realm_id = %claim.realm_id,
-                timeout_ms = REALM_PASS_TIMEOUT.as_millis(),
-                "control-seal Realm pass timed out"
-            );
-            ControlSealAttemptOutcome::PassTimedOut
-        }
-    };
+    let outcome =
+        match tokio::time::timeout(REALM_PASS_TIMEOUT, run_realm_pass(state, &claim)).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                tracing::error!(
+                    realm_id = %claim.realm_id,
+                    timeout_ms = REALM_PASS_TIMEOUT.as_millis(),
+                    "control-seal Realm pass timed out"
+                );
+                ControlSealAttemptOutcome::PassTimedOut
+            }
+        };
     let observed_at_ms = chrono::Utc::now().timestamp_millis();
     let completion = tokio::time::timeout(
         SCHEDULE_COMPLETION_TIMEOUT,
@@ -361,11 +357,108 @@ async fn run_device_revocation_mls_cleanup(
 
 async fn run_realm_pass(
     state: &AppState,
-    realm_id: &RealmId,
-    holder: &str,
+    claim: &ControlSealScheduleClaim,
 ) -> ControlSealAttemptOutcome {
-    let service_id = state.service_id().clone();
-    let slot = match NotaryWorker::for_service(service_id)
+    let realm_id = &claim.realm_id;
+    let page = async {
+        let leaves = state.projections().realm_seal_leaves(realm_id).await?;
+        // Genesis is a closed atomic anchor unit and cannot be split by a
+        // previously persisted ordinary-work cursor.
+        let cursor = if leaves.is_empty() {
+            None
+        } else {
+            claim.scan_cursor.as_ref()
+        };
+        // An outer timeout or process crash cannot reach the in-pass split
+        // below. The next durable claim probes one item, so a hanging batch
+        // cannot repeatedly skip healthy neighbors on every cursor wrap.
+        let page_limit = control_seal_page_limit(leaves.is_empty(), claim.isolate_candidates);
+        let mut pending = state
+            .projections()
+            .pending_control_events_for_notary(realm_id, cursor, page_limit)
+            .await?;
+        if pending.is_empty() && cursor.is_some() {
+            pending = state
+                .projections()
+                .pending_control_events_for_notary(realm_id, None, page_limit)
+                .await?;
+        }
+        Ok::<_, arkret_state::state::StoreError>((pending, !leaves.is_empty()))
+    }
+    .await;
+    let (pending, can_split) = match page {
+        Ok(page) => page,
+        Err(error) => {
+            tracing::warn!(%error, %realm_id, "control-seal fair page is unavailable");
+            return ControlSealAttemptOutcome::TransientStoreFailure;
+        }
+    };
+    run_fault_isolated_batch(pending, can_split, |pending: Vec<arkret_wire::Event>| async move {
+        // Persist before each attempt, including isolated retries. A timeout or
+        // crash resumes after the last attempted item instead of pinning it.
+        let cursor = pending.last().map(|event| event.event_id.event_digest());
+        match state.projections().advance_control_seal_scan(
+            claim, cursor.as_ref(), chrono::Utc::now().timestamp_millis(),
+        ).await {
+            Ok(true) => run_pending_realm_pass(state, claim, pending).await,
+            result => {
+                tracing::warn!(?result, %realm_id, "control-seal scan claim no longer permits work");
+                ControlSealAttemptOutcome::TransientStoreFailure
+            }
+        }
+    }).await
+}
+
+fn control_seal_page_limit(genesis: bool, isolate_candidates: bool) -> usize {
+    if !genesis && isolate_candidates {
+        1
+    } else {
+        MAX_CONTROL_MOVES_PER_REALM
+    }
+}
+
+/// A failed ordinary batch supplies no authority to skip validation. Each
+/// isolated candidate re-enters the complete signing pass against durable
+/// state, including its current signer slot, policy, lease and frontier CAS.
+/// Missing evidence remains pending; no rejection or gate clearance is forged.
+async fn run_fault_isolated_batch<T, F, Fut>(
+    pending: Vec<T>,
+    can_split: bool,
+    mut attempt: F,
+) -> ControlSealAttemptOutcome
+where
+    T: Clone + Send,
+    F: FnMut(Vec<T>) -> Fut + Send,
+    Fut: std::future::Future<Output = ControlSealAttemptOutcome> + Send,
+{
+    let outcome = attempt(pending.clone()).await;
+    if !can_split || pending.len() <= 1 || !outcome.is_failure() {
+        return outcome;
+    }
+    let mut progressed = false;
+    for candidate in pending {
+        progressed |= matches!(
+            attempt(vec![candidate]).await,
+            ControlSealAttemptOutcome::ProgressPublished
+        );
+    }
+    if progressed {
+        ControlSealAttemptOutcome::ProgressPublished
+    } else {
+        outcome
+    }
+}
+
+async fn run_pending_realm_pass(
+    state: &AppState,
+    claim: &ControlSealScheduleClaim,
+    pending: Vec<arkret_wire::Event>,
+) -> ControlSealAttemptOutcome {
+    let realm_id = &claim.realm_id;
+    let holder = &claim.holder;
+    let worker =
+        NotaryWorker::for_service(state.service_id().clone()).with_pending_page(pending.clone());
+    let slot = match worker
         .signing_lease_slot(state, realm_id, MAX_CONTROL_MOVES_PER_REALM)
         .await
     {
@@ -391,17 +484,6 @@ async fn run_realm_pass(
         Err(error) => {
             tracing::warn!(%error, %realm_id, "control-seal coordinator could not resolve signer slot");
             return ControlSealAttemptOutcome::SignerSlotUnavailable;
-        }
-    };
-    let pending = match state
-        .projections()
-        .pending_control_events_for_notary(realm_id, None, MAX_CONTROL_MOVES_PER_REALM)
-        .await
-    {
-        Ok(pending) => pending,
-        Err(error) => {
-            tracing::warn!(%error, %realm_id, "control-seal coordinator could not load pending proposal policy inputs");
-            return ControlSealAttemptOutcome::TransientStoreFailure;
         }
     };
     let proposal_policy = match crate::control_proposal::control_proposal_policy(
@@ -436,7 +518,6 @@ async fn run_realm_pass(
         }
     };
 
-    let worker = NotaryWorker::for_service(state.service_id().clone());
     let attempt_outcome = match worker
         .sign_pending_for_realm(
             state,
@@ -592,4 +673,98 @@ async fn defer_due_proposals_after_failed_signing(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod isolation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn timed_out_batch_can_resume_with_an_independent_candidate() {
+        let page = vec![1_u8, 2];
+        let attempt = |page: Vec<u8>| async move {
+            if page.contains(&2) {
+                std::future::pending::<()>().await;
+            }
+            ControlSealAttemptOutcome::ProgressPublished
+        };
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(10),
+                run_fault_isolated_batch(page.clone(), true, attempt)
+            )
+            .await
+            .is_err()
+        );
+        let retry_page = page
+            .into_iter()
+            .take(control_seal_page_limit(false, true))
+            .collect();
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                run_fault_isolated_batch(retry_page, true, attempt)
+            )
+            .await
+            .unwrap(),
+            ControlSealAttemptOutcome::ProgressPublished
+        );
+        assert_eq!(
+            control_seal_page_limit(true, true),
+            MAX_CONTROL_MOVES_PER_REALM
+        );
+    }
+
+    #[tokio::test]
+    async fn broken_candidate_does_not_suppress_independent_full_passes() {
+        let attempts = std::sync::Mutex::new(Vec::new());
+        let attempts_ref = &attempts;
+        let outcome = run_fault_isolated_batch(vec![1, 2, 3], true, |page: Vec<u8>| async move {
+            attempts_ref.lock().unwrap().push(page.clone());
+            if page.contains(&1) {
+                ControlSealAttemptOutcome::SigningFailed
+            } else {
+                ControlSealAttemptOutcome::ProgressPublished
+            }
+        })
+        .await;
+        assert_eq!(outcome, ControlSealAttemptOutcome::ProgressPublished);
+        assert_eq!(
+            *attempts.lock().unwrap(),
+            vec![vec![1, 2, 3], vec![1], vec![2], vec![3]]
+        );
+    }
+
+    #[tokio::test]
+    async fn genesis_and_authority_unavailability_never_gain_partial_acceptance() {
+        for (can_split, failure) in [
+            (false, ControlSealAttemptOutcome::SigningFailed),
+            (true, ControlSealAttemptOutcome::LocalSignerNotMember),
+            (true, ControlSealAttemptOutcome::NotaryValueUnavailable),
+        ] {
+            let attempts = std::sync::atomic::AtomicUsize::new(0);
+            let attempts_ref = &attempts;
+            let failure_ref = &failure;
+            let outcome = run_fault_isolated_batch(vec![1, 2, 3], can_split, |_| async move {
+                attempts_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                failure_ref.clone()
+            })
+            .await;
+            assert_eq!(outcome, failure);
+            assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn unrepairable_evidence_stays_a_failure_after_bounded_isolation() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let attempts_ref = &attempts;
+        let outcome = run_fault_isolated_batch(vec![1, 2, 3], true, |_| async move {
+            attempts_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ControlSealAttemptOutcome::SigningFailed
+        })
+        .await;
+        assert_eq!(outcome, ControlSealAttemptOutcome::SigningFailed);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 4);
+    }
 }

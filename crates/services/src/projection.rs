@@ -727,6 +727,7 @@ impl ProjectionService {
                 .unwrap_or(ack.decision_due_at);
             let overdue = observed_at >= current_due_at;
             pending_proposals.push(PendingControlProposal {
+                device_revocation_state: None,
                 decision_state: if overdue {
                     ControlProposalDecisionState::Overdue
                 } else if record.decisions.is_empty() {
@@ -844,6 +845,17 @@ impl ProjectionService {
     ) -> StoreResult<Vec<Event>> {
         self.control_event_store()
             .list_pending_for_notary(realm_id, cursor, limit)
+            .await
+    }
+
+    pub async fn advance_control_seal_scan(
+        &self,
+        claim: &ControlSealScheduleClaim,
+        cursor: Option<&Hash>,
+        observed_at_ms: i64,
+    ) -> StoreResult<bool> {
+        self.control_event_store()
+            .advance_control_seal_scan(claim, cursor, observed_at_ms)
             .await
     }
 

@@ -59,6 +59,72 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
 static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
 
 #[tokio::test]
+async fn postgres_notification_relay_delivers_large_payload_by_committed_reference() {
+    use diesel::sql_query;
+    use diesel_async::RunQueryDsl;
+    use soland_storage_postgres::{load_event_notification, publish_event_notification};
+    use tokio_postgres::{AsyncMessage, NoTls};
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let (client, mut connection) =
+        tokio_postgres::connect(&support::contract_database_url(), NoTls)
+            .await
+            .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let listener = tokio::spawn(async move {
+        while let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
+            if let AsyncMessage::Notification(notification) = message.unwrap() {
+                sender.send(notification.payload().to_owned()).unwrap();
+            }
+        }
+    });
+    client
+        .batch_execute("LISTEN soland_event_notifications")
+        .await
+        .unwrap();
+    let payload = serde_json::json!({"welcome": "x".repeat(32_768)}).to_string();
+    let id = publish_event_notification(&pool, &payload).await.unwrap();
+    let reference = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference, id.to_string());
+    assert_eq!(reference.len(), 36);
+    assert_eq!(
+        load_event_notification(&pool, id).await.unwrap(),
+        Some(payload.clone())
+    );
+    // Another subscriber can read the same record; delivery is not a destructive dequeue.
+    assert_eq!(
+        load_event_notification(&pool, id).await.unwrap(),
+        Some(payload)
+    );
+    assert_eq!(
+        load_event_notification(&pool, uuid::Uuid::now_v7())
+            .await
+            .unwrap(),
+        None
+    );
+
+    let mut conn = pool.get().await.unwrap();
+    sql_query(
+        "UPDATE event_notification_relay SET created_at = NOW() - INTERVAL '2 days' WHERE id = $1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(id)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let current = publish_event_notification(&pool, "current").await.unwrap();
+    assert_eq!(load_event_notification(&pool, id).await.unwrap(), None);
+    assert_eq!(
+        load_event_notification(&pool, current).await.unwrap(),
+        Some("current".into())
+    );
+    listener.abort();
+}
+
+#[tokio::test]
 async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     use soland_storage::FederationFrontierExchangeStore;
     use soland_storage_postgres::PgFederationFrontierExchangeStore;
@@ -1183,6 +1249,23 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
         .pop()
         .unwrap();
     assert_eq!(first_claim.generation, 1);
+    assert!(!first_claim.isolate_candidates);
+
+    let first_cursor = first_event.event_id.event_digest();
+    assert!(
+        stores
+            .control_event_store
+            .advance_control_seal_scan(&first_claim, Some(&first_cursor), now_ms)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !stores
+            .control_event_store
+            .advance_control_seal_scan(&first_claim, None, now_ms + 1_000)
+            .await
+            .unwrap()
+    );
 
     stores
         .control_event_store
@@ -1215,6 +1298,15 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
         .pop()
         .unwrap();
     assert_eq!(second_claim.generation, 1);
+    assert_eq!(second_claim.scan_cursor, Some(first_cursor.clone()));
+    assert!(second_claim.isolate_candidates);
+    assert!(
+        !stores
+            .control_event_store
+            .advance_control_seal_scan(&first_claim, None, now_ms + 1_000)
+            .await
+            .unwrap()
+    );
 
     let (second_event, _) = seal_dependency_contract_event(&realm_id, "schedule-second");
     stores
@@ -1269,6 +1361,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
         .pop()
         .unwrap();
     assert_eq!(reclaimed.fence, third_claim.fence + 1);
+    assert!(reclaimed.isolate_candidates);
     assert_eq!(
         stores
             .control_event_store
@@ -2323,6 +2416,11 @@ async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn postgres_adapter_settles_sealed_device_revocations() {
+    use diesel::sql_types::Text;
+    use diesel::{QueryableByName, sql_query};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::DeviceRevocationStore;
+
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let cell_registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
@@ -2332,7 +2430,7 @@ async fn postgres_adapter_settles_sealed_device_revocations() {
     let stores =
         soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), cell_registry);
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
-    let revocations = soland_storage_postgres::PgDeviceRevocationStore { pool };
+    let revocations = soland_storage_postgres::PgDeviceRevocationStore { pool: pool.clone() };
     let namespace = format!("pgrevseal{}", uuid::Uuid::now_v7().simple());
     assert_device_revocation_seal_settlement_contract(
         DeviceRevocationSealSettlementStores {
@@ -2343,6 +2441,82 @@ async fn postgres_adapter_settles_sealed_device_revocations() {
         &namespace,
     )
     .await;
+
+    #[derive(QueryableByName)]
+    struct ProposalRow {
+        #[diesel(sql_type = Text)]
+        proposal_digest: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let original =
+        sql_query("SELECT proposal_digest FROM device_revocation_targets WHERE principal_id = $1")
+            .bind::<Text, _>(format!("ak:did_core:web:{namespace}.example"))
+            .get_result::<ProposalRow>(&mut conn)
+            .await
+            .unwrap();
+    let expected = revocations
+        .target_for_proposal(&original.proposal_digest)
+        .await
+        .unwrap()
+        .unwrap();
+    let damaged_digest = arkret_canonical::canonical_sha256(&namespace).unwrap();
+    let damaged_event_id = arkret_wire::EventId::from_event_digest(
+        &arkret_wire::Hash::new(damaged_digest.clone()).unwrap(),
+    )
+    .unwrap();
+    // Inject damaged persistence alongside the valid target. This is a fault
+    // fixture, never a second admitted or accepted canonical Event.
+    sql_query(
+        "INSERT INTO state_control_events \
+         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
+         SELECT $1, digest_suite, realm_id, event_json, '{}'::jsonb, ingress_class \
+         FROM state_control_events WHERE event_digest = $2",
+    )
+    .bind::<Text, _>(&damaged_digest)
+    .bind::<Text, _>(&original.proposal_digest)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    sql_query(
+        "INSERT INTO device_revocation_targets \
+         (proposal_digest, principal_id, station_id, device_id, target_device_authorize_event_id, \
+          target_device_generation_ref, proposal_event_id, accepted_at, acceptance_seq, control_proposal_ack) \
+         SELECT $1, principal_id, station_id, device_id, target_device_authorize_event_id, \
+          target_device_generation_ref, $2, accepted_at, acceptance_seq + 1, '{}'::jsonb \
+         FROM device_revocation_targets WHERE proposal_digest = $3",
+    )
+    .bind::<Text, _>(&damaged_digest)
+    .bind::<Text, _>(damaged_event_id.as_str())
+    .bind::<Text, _>(&original.proposal_digest)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let exact = revocations
+        .target_for_proposal(&original.proposal_digest)
+        .await;
+    let damaged = revocations.target_for_proposal(&damaged_digest).await;
+    let all = revocations.list_targets(&expected.selector).await;
+    let mut conn = pool.get().await.unwrap();
+    sql_query("DELETE FROM device_revocation_targets WHERE proposal_digest = $1")
+        .bind::<Text, _>(&damaged_digest)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sql_query("DELETE FROM state_control_events WHERE event_digest = $1")
+        .bind::<Text, _>(&damaged_digest)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(exact.unwrap(), Some(expected));
+    assert!(
+        damaged.is_err(),
+        "the corrupt target itself must fail closed"
+    );
+    assert!(
+        all.is_err(),
+        "a complete generation read must expose corruption"
+    );
 }
 
 #[tokio::test]

@@ -5299,6 +5299,19 @@ pub async fn assert_device_revocation_seal_settlement_contract(
             if blocking_proposal_digest == &proposal_digest
     ));
 
+    let target = stores
+        .revocations
+        .target_for_proposal(&proposal_digest)
+        .await
+        .expect("exact pending revoke target lookup")
+        .expect("accepted target");
+    assert_eq!(target.selector, selector);
+    assert_eq!(target.proposal_event_id, proposal_event_id);
+    assert!(matches!(
+        target.status,
+        DeviceRevocationTargetStatus::Pending { .. }
+    ));
+
     let digest = Hash::new(proposal_digest.clone()).expect("typed proposal digest");
     let seal = contract_covering_seal(&realm_id, digest.clone(), database_timestamp_now());
     stores
@@ -5324,6 +5337,14 @@ pub async fn assert_device_revocation_seal_settlement_contract(
         .await
         .expect("list targets after seal");
     assert_eq!(targets.len(), 1);
+    assert_eq!(
+        stores
+            .revocations
+            .target_for_proposal(&proposal_digest)
+            .await
+            .unwrap(),
+        Some(targets[0].clone())
+    );
     match &targets[0].status {
         DeviceRevocationTargetStatus::Revoked {
             covering_seal_id, ..

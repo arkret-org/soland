@@ -209,17 +209,57 @@ impl From<StoreError> for NotaryError {
     }
 }
 
-/// Stateless notary worker. Holds only the service DID; everything else
-/// reads from `AppState` per call.
+/// Notary worker with an optional fenced scheduler page. All authority and
+/// acceptance checks still read the durable state per call.
 pub struct NotaryWorker {
     service_id: String,
+    pending_page: Option<Vec<Event>>,
 }
 
 impl NotaryWorker {
     pub fn for_service(service_id: impl Into<String>) -> Self {
         Self {
             service_id: service_id.into(),
+            pending_page: None,
         }
+    }
+
+    pub(crate) fn with_pending_page(mut self, pending: Vec<Event>) -> Self {
+        self.pending_page = Some(pending);
+        self
+    }
+
+    async fn pending_events(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        limit: usize,
+    ) -> Result<Vec<Event>, NotaryError> {
+        if let Some(page) = &self.pending_page {
+            let mut pending = Vec::with_capacity(page.len());
+            for event in page {
+                let snapshot = state
+                    .projections()
+                    .control_proposal_snapshot(&event.event_id.event_digest())
+                    .await?
+                    .ok_or_else(|| {
+                        NotaryError::Store("scheduled proposal disappeared".to_owned())
+                    })?;
+                if snapshot.covering_seals.is_empty()
+                    && !snapshot
+                        .decisions
+                        .iter()
+                        .any(ControlProposalDecision::is_reject)
+                {
+                    pending.push(snapshot.event);
+                }
+            }
+            return Ok(pending);
+        }
+        Ok(state
+            .projections()
+            .pending_control_events_for_notary(realm_id, None, limit)
+            .await?)
     }
 
     /// Resolve the lease slot for this node's next signing pass.
@@ -235,9 +275,8 @@ impl NotaryWorker {
         realm_id: &RealmId,
         max_control_moves: usize,
     ) -> Result<SigningLeaseSlotResolution, NotaryError> {
-        let pending = state
-            .projections()
-            .pending_control_events_for_notary(realm_id, None, max_control_moves)
+        let pending = self
+            .pending_events(state, realm_id, max_control_moves)
             .await?;
         if pending.is_empty() {
             return Ok(SigningLeaseSlotResolution::NoPendingMoves);
@@ -426,9 +465,8 @@ impl NotaryWorker {
         realm_id: &RealmId,
         max_control_moves: usize,
     ) -> Result<Option<PreparedNotaryBatch>, NotaryError> {
-        let mut pending_events = state
-            .projections()
-            .pending_control_events_for_notary(realm_id, None, max_control_moves)
+        let mut pending_events = self
+            .pending_events(state, realm_id, max_control_moves)
             .await?;
         if pending_events.is_empty() {
             return Ok(None);

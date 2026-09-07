@@ -153,7 +153,7 @@ pub(crate) async fn frontier_control_governance_health(
             Some(reason) => ackless_rejections.push(format!("{reason} @ {}", event.event_id)),
         }
     }
-    state
+    let mut health = state
         .projections()
         .control_governance_health_with_ackless_authorities(
             realm_id,
@@ -174,7 +174,59 @@ pub(crate) async fn frontier_control_governance_health(
             AppError::internal(format!(
                 "control governance health unavailable: {error}{diagnostic}"
             ))
-        })
+        })?;
+    for proposal in &mut health.pending_proposals {
+        let digest = &proposal.control_proposal_ack.proposal_digest;
+        let event = state
+            .projections()
+            .control_event(digest)
+            .await
+            .map_err(|error| AppError::internal(format!("pending proposal unavailable: {error}")))?
+            .ok_or_else(|| AppError::internal("pending proposal Event is missing"))?;
+        if event.kind != arkret_wire::EventKind::DeviceRevoke {
+            continue;
+        }
+        let record = soland_storage::DeviceRevocationStore::target_for_proposal(
+            state.persistence(),
+            digest.as_str(),
+        )
+        .await
+        .map_err(|error| AppError::internal(format!("pending revoke target unavailable: {error}")))?
+        .ok_or_else(|| AppError::internal("pending revoke has no durable target"))?;
+        let revocation = crate::routing::identity::account::device_revocation_gate_record(record)
+            .transpose()?
+            .ok_or_else(|| {
+                crate::app_error!(FrontierUnavailable, "revoke settled during frontier read")
+            })?;
+        let arkret_wire::DeviceRevocationGateRecord::Pending(mut revocation) = revocation else {
+            return Err(crate::app_error!(
+                FrontierUnavailable,
+                "revoke sealed during frontier read"
+            ));
+        };
+        // Both mirrors use the same observation snapshot; target identity and
+        // acceptance sequence come only from the immutable reducer record.
+        revocation.decision_state = match proposal.decision_state {
+            arkret_models_collaboration::event_sync::ControlProposalDecisionState::Pending => {
+                arkret_wire::DeviceRevocationDecisionState::Pending
+            }
+            arkret_models_collaboration::event_sync::ControlProposalDecisionState::Deferred => {
+                arkret_wire::DeviceRevocationDecisionState::Deferred
+            }
+            arkret_models_collaboration::event_sync::ControlProposalDecisionState::Overdue => {
+                arkret_wire::DeviceRevocationDecisionState::Overdue
+            }
+        };
+        revocation.decisions = (!proposal.decisions.is_empty()).then(|| proposal.decisions.clone());
+        revocation.fault_reason = proposal
+            .fault_reason
+            .map(|_| arkret_wire::DeviceRevocationFaultReason::ControlProposalDecisionOverdue);
+        proposal.device_revocation_state = Some(revocation);
+    }
+    health.validate_with_policy(policy).map_err(|error| {
+        AppError::internal(format!("pending revoke projection invalid: {error}"))
+    })?;
+    Ok(health)
 }
 
 pub(in crate::routing::events) fn router() -> Router {
@@ -1635,13 +1687,7 @@ async fn seals_frontier(
             arkret_wire::SealBasis {
                 leaves: vec![seal.id.clone()],
             },
-            state
-                .projections()
-                .control_governance_health(&seal.realm_id, chrono::Utc::now(), governance_policy)
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("control governance health unavailable: {error}"))
-                })?,
+            frontier_control_governance_health(state, &seal.realm_id, governance_policy).await?,
             observation_coordinate,
         );
         return soland_http::result::json_ok(SealFrontierState {

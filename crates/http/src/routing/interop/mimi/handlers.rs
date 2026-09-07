@@ -363,14 +363,9 @@ pub(super) async fn mimi_consent_request(
     if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::param_invalid(message).with_reason_code("mimi_draft_unsupported"));
     }
-    let source_id = verify_mimi_consent_write_authority(
-        state,
-        req,
-        aa,
-        body.requester_actor_id.signing_principal_id().as_str(),
-    )
-    .await?;
-    verify_mimi_request_consent_proofs(state, &body).await?;
+    let (source_id, session) =
+        verify_mimi_consent_write_authority(state, req, aa, &body.requester_actor_id).await?;
+    verify_mimi_request_consent_proofs(state, &body, session.as_ref()).await?;
     let consent_id = ids::generate("consent");
     let consent_id = arkret_identifiers::ConsentId::new(consent_id)
         .map_err(|error| AppError::internal(format!("generated consent id is invalid: {error}")))?;
@@ -461,20 +456,28 @@ pub(super) async fn verify_mimi_consent_write_authority(
     state: &AppState,
     req: &mut Request,
     aa: AuthArgs,
-    expected_actor: &str,
-) -> Result<Option<String>, AppError> {
+    expected_actor: &arkret_wire::ActorId,
+) -> Result<
+    (
+        Option<String>,
+        Option<soland_services::identity::SessionIdentityState>,
+    ),
+    AppError,
+> {
     if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
-        if session.actor != expected_actor {
+        if crate::routing::identity::session_actor::validated_session_actor(state, &session).await?
+            != *expected_actor
+        {
             return Err(AppError::capability_denied(
                 "MIMI consent user session must match the consent actor",
             ));
         }
-        return Ok(None);
+        return Ok((None, Some(session)));
     }
     verify_mimi_source_service_signature(state, req, None)
         .await
-        .map(Some)
+        .map(|source| (Some(source), None))
 }
 
 const MIMI_OPERATION_PROOF_WINDOW_SECONDS: i64 = 300;
@@ -487,15 +490,13 @@ const MIMI_OPERATION_PROOF_WINDOW_SECONDS: i64 = 300;
 /// controlled by the DID the request names as its originator.
 enum MimiProofSigner<'a> {
     /// A device of a principal whose account authority lives on this service.
-    /// The `update_consent` family uses this: the proof is authored by the
-    /// consent actor's own device.
+    /// Both consent families use the exact account's accepted device authority.
     PrincipalDevice {
         authority: arkret_wire::AccountId,
         device_id: arkret_identifiers::DeviceId,
     },
     /// A verification method controlled by the originator DID carried on the
-    /// wire. The federated request families use this: the originator is a
-    /// remote principal or provider that this service never holds devices for.
+    /// wire. Only service-originated families use this authority source.
     DidController(&'a str),
     /// A current Agent runtime key selected from the accepted Agent PCR/key
     /// authorization state. The request never supplies this key material.
@@ -640,15 +641,11 @@ async fn verify_mimi_key_material_request_proofs(
 async fn verify_mimi_request_consent_proofs(
     state: &AppState,
     body: &MimiRequestConsentRequestBody,
+    session: Option<&soland_services::identity::SessionIdentityState>,
 ) -> Result<(), AppError> {
-    // The proof binding carries the complete Actor (the SDK builds it from
-    // requester_actor_id), but resolving the verification method is a key and
-    // authority question, so it projects the signing principal. The two are
-    // deliberately different: proving key control under a principal does not
-    // authorise acting for an arbitrary account of that principal, which is why
-    // the account authority is checked separately. Ruling
-    // `review/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md`.
-    let issuer = body.requester_actor_id.signing_principal_id().to_string();
+    if body.proofs.is_empty() {
+        return Err(mimi_consent_proof_invalid());
+    }
     for proof in &body.proofs {
         let binding = body.proof_binding_bytes(proof).map_err(|error| {
             AppError::param_invalid(format!(
@@ -656,16 +653,137 @@ async fn verify_mimi_request_consent_proofs(
             ))
             .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
         })?;
-        verify_mimi_operation_proof(
+        verify_mimi_consent_requester_proof(
             state,
             &binding,
             proof,
-            MimiProofSigner::DidController(issuer.as_str()),
-            "MIMI consent request",
+            &body.requester_actor_id,
+            session,
         )
         .await?;
     }
     Ok(())
+}
+
+fn mimi_consent_proof_invalid() -> AppError {
+    AppError::param_invalid("MIMI consent requester authority is unavailable")
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
+}
+
+async fn verify_mimi_consent_requester_proof(
+    state: &AppState,
+    binding: &[u8],
+    proof: &arkret_wire::PayloadProof,
+    actor: &arkret_wire::ActorId,
+    session: Option<&soland_services::identity::SessionIdentityState>,
+) -> Result<(), AppError> {
+    // This operation has no authorized remote PCR disclosure carrier. Check
+    // the exact Station before any local principal or private PCR lookup.
+    if actor.route_service_id() != &state.service_core_id() {
+        return Err(mimi_consent_proof_invalid());
+    }
+    let agent = crate::routing::identity::agent_pcr::agent_record_for_actor(state, actor)
+        .await
+        .map_err(|_| mimi_consent_proof_invalid())?;
+    if let Some(record) = agent {
+        let session = session.ok_or_else(mimi_consent_proof_invalid)?;
+        let grant = session
+            .session_grant
+            .as_ref()
+            .ok_or_else(mimi_consent_proof_invalid)?;
+        let arkret_models_identity::SessionGrantHolderBinding::AgentRuntime {
+            agent_id,
+            agent_key_authorization_ref,
+            verification_method,
+            ..
+        } = &grant.holder_binding
+        else {
+            return Err(mimi_consent_proof_invalid());
+        };
+        let key = record
+            .authorized_signing_key_binding
+            .as_ref()
+            .ok_or_else(mimi_consent_proof_invalid)?;
+        if actor.as_account_id() != Some(&grant.account_id)
+            || agent_id != actor.signing_principal_id()
+            || session.agent_session.as_ref().is_none_or(|agent| {
+                !agent.granted_scope.iter().any(|scope| {
+                    scope == arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REQUEST_CONSENT_V1
+                })
+            })
+            || record.state
+                != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+            || record.authorized_event_ref.as_deref() != Some(agent_key_authorization_ref.as_str())
+            || record.authorized_verification_method.as_deref()
+                != Some(proof.verification_method.as_str())
+            || verification_method != &proof.verification_method
+            || key.core.agent_id != *agent_id
+            || key.core.verification_method != *verification_method
+            || key.agent_key_authorize_event_id != *agent_key_authorization_ref
+            || record.authorized_public_key_digest.as_deref()
+                != Some(key.core.public_key_digest.as_str())
+        {
+            return Err(mimi_consent_proof_invalid());
+        }
+        crate::routing::identity::agent_pcr::validate_agent_controller_binding(
+            state,
+            &record,
+            now(),
+        )
+        .await
+        .map_err(|_| mimi_consent_proof_invalid())?;
+        if !crate::routing::mls::current_agent_key_authorization_matches_method(
+            state,
+            agent_id,
+            agent_key_authorization_ref.as_str(),
+            verification_method.as_str(),
+        )
+        .await
+            || arkret_signatures::agent_evidence::agent_signing_public_key_digest(
+                &key.core.public_key,
+            )
+            .map_err(|_| mimi_consent_proof_invalid())?
+                != key.core.public_key_digest
+        {
+            return Err(mimi_consent_proof_invalid());
+        }
+        let public_key: [u8; 32] =
+            arkret_canonical::base64url_decode(key.core.public_key.key.as_str())
+                .map_err(|_| mimi_consent_proof_invalid())?
+                .try_into()
+                .map_err(|_| mimi_consent_proof_invalid())?;
+        return verify_mimi_operation_proof(
+            state,
+            binding,
+            proof,
+            MimiProofSigner::AgentRuntime {
+                public_key: &public_key,
+            },
+            "MIMI consent request",
+        )
+        .await;
+    }
+    let authority = actor
+        .as_account_id()
+        .cloned()
+        .ok_or_else(mimi_consent_proof_invalid)?;
+    let device_id = proof
+        .verification_method
+        .as_str()
+        .rsplit_once('#')
+        .and_then(|(_, fragment)| arkret_identifiers::DeviceId::new(fragment.to_owned()).ok())
+        .ok_or_else(mimi_consent_proof_invalid)?;
+    verify_mimi_operation_proof(
+        state,
+        binding,
+        proof,
+        MimiProofSigner::PrincipalDevice {
+            authority,
+            device_id,
+        },
+        "MIMI consent request",
+    )
+    .await
 }
 
 /// Verify every proof carried by a MIMI identifier query.
@@ -717,7 +835,9 @@ async fn verify_mimi_consent_update_authority(
 > {
     let (session, source_id) = if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
-        if session.actor != body.actor_id.signing_principal_id().as_str() {
+        if crate::routing::identity::session_actor::validated_session_actor(state, &session).await?
+            != body.actor_id
+        {
             return Err(AppError::capability_denied(
                 "MIMI consent user session must match the consent actor",
             ));
@@ -774,22 +894,8 @@ fn mimi_consent_correlation_unavailable() -> AppError {
     AppError::not_found("MIMI consent correlation is unavailable")
 }
 
-/// The exact `consent_peer` a MIMI consent correlation names.
-///
-/// `mimi_request_consent_request_body.requester_id` is a bare `did_core_id`
-/// (spec `extensions/mimi-interop.md` section 10), while a consent entry's
-/// actor branch is matched by its **complete** ActorId and the pairwise branch
-/// by `(realm_id, principal_id)` (`identity/consent-model.md` section 6.1
-/// query step 1). The facade therefore reconciles against the one complete
-/// ActorId it can attest for that requester — an account hosted by this
-/// Station, the same completion `authenticated_holder_account_id` performs —
-/// and compares the whole `ConsentPeer`, never a principal core.
-///
-/// Two things consequently fail closed rather than degrade to a core-only
-/// comparison: a peer that names any other Station or actor role, and every
-/// `{kind:"pairwise_principal"}` peer, because a correlation carries no
-/// `realm_id` and a Realm-local ephemeral pairwise actor is not a MIMI
-/// requester this facade can host.
+/// Decode the exact Actor frozen by the original requester signature.
+/// Correlation never re-resolves a principal into a locally hosted account.
 fn mimi_correlation_peer(correlation_requester_actor_id: &str) -> Option<ConsentPeer> {
     let actor_id: arkret_wire::ActorId =
         serde_json::from_str(correlation_requester_actor_id).ok()?;
@@ -2002,6 +2108,117 @@ mod consent_proof_tests {
             .expect("proof preflight must not consume Event admission");
     }
 
+    fn sign_consent_request(body: &mut MimiRequestConsentRequestBody) {
+        body.proofs[0].payload_digest = body.payload_digest().unwrap();
+        let binding = body
+            .unsigned_proof_binding_bytes(&body.proofs[0].unsigned())
+            .unwrap();
+        let key =
+            arkret_signatures::development_signing_key(body.proofs[0].verification_method.as_str());
+        body.proofs[0].jws = arkret_signatures::jws::sign_jws_ed25519(&binding, &key).unwrap();
+    }
+
+    async fn authorized_consent_request(state: &AppState) -> MimiRequestConsentRequestBody {
+        let holder_request = request(state);
+        install_authorized_actor_device(state, &holder_request).await;
+        let mut body = MimiRequestConsentRequestBody {
+            requester_actor_id: holder_request.actor_id.clone(),
+            holder_account_id: test_requester_actor(state).as_account_id().unwrap().clone(),
+            purpose: MimiConsentPurpose::DirectMessage,
+            strand_id: None,
+            expires_at: None,
+            proofs: vec![holder_request.signature],
+        };
+        sign_consent_request(&mut body);
+        body
+    }
+
+    #[tokio::test]
+    async fn consent_request_uses_current_account_device_without_did_document_key() {
+        let state = state();
+        let body = authorized_consent_request(&state).await;
+        verify_mimi_request_consent_proofs(&state, &body, None)
+            .await
+            .unwrap();
+        verify_mimi_request_consent_proofs(&state, &body, None)
+            .await
+            .unwrap();
+        let mut expired = body.clone();
+        expired.proofs[0].created_at = now() - Duration::seconds(301);
+        sign_consent_request(&mut expired);
+        assert_rejected_proof(
+            &verify_mimi_request_consent_proofs(&state, &expired, None)
+                .await
+                .unwrap_err(),
+        );
+        let mut swapped = body.clone();
+        swapped.purpose = MimiConsentPurpose::Invite;
+        assert_rejected_proof(
+            &verify_mimi_request_consent_proofs(&state, &swapped, None)
+                .await
+                .unwrap_err(),
+        );
+        let mut foreign = body.clone();
+        foreign.requester_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            body.requester_actor_id.signing_principal_id().clone(),
+            DidCoreId::new("ak:did_core:web:other-station.invalid").unwrap(),
+        ));
+        sign_consent_request(&mut foreign);
+        assert_rejected_proof(
+            &verify_mimi_request_consent_proofs(&state, &foreign, None)
+                .await
+                .unwrap_err(),
+        );
+        let mut wrong_context = body.clone();
+        let mut transcript: Value =
+            serde_json::from_slice(&body.proof_binding_bytes(&body.proofs[0]).unwrap()).unwrap();
+        transcript["context"] =
+            json!(arkret_wire::ProofContextId::MIMI_IDENTIFIER_QUERY_REQUEST_PROOF_V1);
+        let key =
+            arkret_signatures::development_signing_key(body.proofs[0].verification_method.as_str());
+        wrong_context.proofs[0].jws = arkret_signatures::jws::sign_jws_ed25519(
+            &arkret_wire::canonical::canonical_json_bytes(&transcript).unwrap(),
+            &key,
+        )
+        .unwrap();
+        assert_rejected_proof(
+            &verify_mimi_request_consent_proofs(&state, &wrong_context, None)
+                .await
+                .unwrap_err(),
+        );
+        let device_id = body.proofs[0]
+            .verification_method
+            .as_str()
+            .rsplit_once('#')
+            .unwrap()
+            .1;
+        let mut device = state
+            .identities()
+            .find_device(soland_services::identity::FindDeviceQuery {
+                actor_id: body.requester_actor_id.signing_principal_id().to_string(),
+                device_id: device_id.to_owned(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        device.revoked_at = Some(now());
+        state
+            .identities()
+            .save_device(SaveDeviceCommand {
+                actor_id: device.actor_id.clone(),
+                device_id: device.device_id.clone(),
+                display_name: device.display_name.clone(),
+                device,
+            })
+            .await
+            .unwrap();
+        assert_rejected_proof(
+            &verify_mimi_request_consent_proofs(&state, &body, None)
+                .await
+                .unwrap_err(),
+        );
+    }
+
     #[tokio::test]
     async fn consent_actor_proof_rejects_wrong_station() {
         let state = state();
@@ -2355,9 +2572,10 @@ mod consent_proof_tests {
         verify_mimi_request_consent_proofs(
             &state,
             &signed_request_consent_request(&state, &requester_id, &method, &signing_key),
+            None,
         )
         .await
-        .expect("consent request proof");
+        .expect_err("DID key control cannot authorize an unproven remote Account");
         verify_mimi_identifier_query_proofs(
             &state,
             &signed_identifier_query_request(&state, &requester_id, &method, &signing_key),
@@ -2426,7 +2644,7 @@ mod consent_proof_tests {
         replayed.payload_digest = consent.payload_digest().unwrap();
         consent.proofs = vec![replayed];
 
-        let error = verify_mimi_request_consent_proofs(&state, &consent)
+        let error = verify_mimi_request_consent_proofs(&state, &consent, None)
             .await
             .expect_err("an identifier-query context proof must not verify as a consent request");
         assert_rejected_proof(&error);

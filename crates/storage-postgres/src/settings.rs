@@ -51,12 +51,3 @@ pub async fn store_settings_override(
     .map(|_| ())
     .map_err(soland_storage::PersistenceError::database)
 }
-
-pub async fn publish_event_notification(pool: &PgPool, payload: &str) -> anyhow::Result<()> {
-    let mut conn = pg_conn(pool).await?;
-    sql_query("SELECT pg_notify('soland_event_notifications', $1)")
-        .bind::<Text, _>(payload)
-        .execute(&mut *conn)
-        .await?;
-    Ok(())
-}

@@ -1,6 +1,14 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    event_notification_relay (id) {
+        id -> Uuid,
+        payload -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     account_data_changes (position) {
         position -> Int8,
         actor_id -> Text,
@@ -1530,6 +1538,7 @@ diesel::table! {
         claim_until_ms -> Nullable<Int8>,
         consecutive_failures -> Int4,
         last_outcome -> Nullable<Text>,
+        scan_cursor -> Nullable<Text>,
     }
 }
 

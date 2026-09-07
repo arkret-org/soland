@@ -924,6 +924,35 @@ fn covering_seal_ids(ids: Vec<String>) -> StoreResult<Vec<SealId>> {
 
 #[async_trait]
 impl ControlEventStore for PgControlEventStore {
+    async fn advance_control_seal_scan(
+        &self,
+        claim: &ControlSealScheduleClaim,
+        cursor: Option<&Hash>,
+        observed_at_ms: i64,
+    ) -> StoreResult<bool> {
+        let pool = self.pool.clone();
+        let claim = claim.clone();
+        let cursor = cursor.cloned();
+        await_store!(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let updated = sql_query(
+                "UPDATE state_control_seal_schedule s SET scan_cursor = $1 \
+                 WHERE s.realm_id = $2 AND claim_holder = $3 AND claim_fence = $4 \
+                   AND claim_until_ms > $5 \
+                   AND ($1::text IS NULL OR EXISTS (SELECT 1 FROM state_control_events c \
+                       WHERE c.event_digest = $1 AND c.realm_id = s.realm_id))",
+            )
+            .bind::<Nullable<Text>, _>(cursor.as_ref().map(Hash::as_str))
+            .bind::<Text, _>(claim.realm_id.as_str())
+            .bind::<Text, _>(&claim.holder)
+            .bind::<BigInt, _>(claim.fence as i64)
+            .bind::<BigInt, _>(observed_at_ms)
+            .execute(&mut *conn)
+            .await
+            .map_err(diesel_to_store)?;
+            Ok(updated == 1)
+        })
+    }
     async fn put_pending_with_ingress(
         &self,
         event: &Event,

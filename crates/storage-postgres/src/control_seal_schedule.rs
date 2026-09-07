@@ -15,6 +15,10 @@ struct ClaimRow {
     generation: i64,
     #[diesel(sql_type = BigInt)]
     claim_fence: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    scan_cursor: Option<String>,
+    #[diesel(sql_type = Bool)]
+    isolate_candidates: bool,
 }
 
 #[derive(QueryableByName)]
@@ -124,7 +128,8 @@ pub(crate) async fn claim_due(
     }
     let rows = sql_query(
         "WITH due AS ( \
-             SELECT realm_id FROM state_control_seal_schedule \
+             SELECT realm_id, (consecutive_failures > 0 OR claim_holder IS NOT NULL) AS isolate_candidates \
+             FROM state_control_seal_schedule \
              WHERE next_attempt_at_ms <= $1 \
                AND (claim_holder IS NULL OR claim_until_ms <= $1) \
              ORDER BY next_attempt_at_ms, first_pending_at_ms, realm_id \
@@ -136,7 +141,7 @@ pub(crate) async fn claim_due(
            claim_until_ms = $4, \
            last_attempt_at_ms = $1 \
          FROM due WHERE schedule.realm_id = due.realm_id \
-         RETURNING schedule.realm_id, schedule.generation, schedule.claim_fence",
+         RETURNING schedule.realm_id, schedule.generation, schedule.claim_fence, schedule.scan_cursor, due.isolate_candidates",
     )
     .bind::<BigInt, _>(now_ms)
     .bind::<BigInt, _>(limit as i64)
@@ -148,6 +153,14 @@ pub(crate) async fn claim_due(
         .into_iter()
         .map(|row| {
             Ok(ControlSealScheduleClaim {
+                isolate_candidates: row.isolate_candidates,
+                scan_cursor: row
+                    .scan_cursor
+                    .map(arkret_identifiers::Hash::new)
+                    .transpose()
+                    .map_err(|error| {
+                        diesel::result::Error::DeserializationError(Box::new(error))
+                    })?,
                 realm_id: RealmId::new(row.realm_id).map_err(invalid_stored_realm)?,
                 generation: u64::try_from(row.generation).map_err(|error| {
                     diesel::result::Error::DeserializationError(Box::new(error))

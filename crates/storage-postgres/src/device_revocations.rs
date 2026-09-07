@@ -161,6 +161,7 @@ async fn allocate_seq(
 async fn target_rows(
     conn: &mut AsyncPgConnection,
     selector: &DeviceRevocationGateSelector,
+    proposal_digest: Option<&str>,
 ) -> PersistenceResult<Vec<TargetStateRow>> {
     sql_query(
         "SELECT t.proposal_digest, t.proposal_event_id, t.accepted_at, t.acceptance_seq, \
@@ -181,6 +182,7 @@ async fn target_rows(
          WHERE t.principal_id = $1 AND t.station_id = $2 AND t.device_id = $3 \
            AND t.target_device_authorize_event_id = $4 \
            AND t.target_device_generation_ref = $5 \
+           AND ($6::text IS NULL OR t.proposal_digest = $6) \
          ORDER BY t.acceptance_seq, t.proposal_digest",
     )
     .bind::<Text, _>(&selector.principal_id)
@@ -188,9 +190,55 @@ async fn target_rows(
     .bind::<Text, _>(&selector.device_id)
     .bind::<Text, _>(&selector.target_device_authorize_event_id)
     .bind::<BigInt, _>(generation_as_i64(selector)?)
+    .bind::<Nullable<Text>, _>(proposal_digest)
     .load::<TargetStateRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)
+}
+
+fn target_record(
+    selector: &DeviceRevocationGateSelector,
+    row: TargetStateRow,
+) -> PersistenceResult<DeviceRevocationTargetRecord> {
+    let control_proposal_ack: arkret_wire::ControlProposalAck =
+        serde_json::from_value(row.control_proposal_ack)
+            .map_err(|error| PersistenceError::Internal(format!("stored revoke Ack: {error}")))?;
+    let status = if let Some(seal) = row.covering_seal_id {
+        DeviceRevocationTargetStatus::Revoked {
+            covering_seal_id: seal,
+            sealed_at: row.covered_at.ok_or_else(|| {
+                PersistenceError::Internal(
+                    "sealed device revocation target lacks sealed_at".to_owned(),
+                )
+            })?,
+        }
+    } else if let Some(terminal_decision) = terminal_reject(&row.proposal_decisions)? {
+        DeviceRevocationTargetStatus::Rejected { terminal_decision }
+    } else {
+        let decisions: Vec<arkret_wire::ControlProposalDecision> =
+            serde_json::from_value(row.proposal_decisions).map_err(|error| {
+                PersistenceError::Internal(format!("stored control proposal decisions: {error}"))
+            })?;
+        let due_at = decisions.last().map_or(
+            control_proposal_ack.decision_due_at,
+            arkret_wire::ControlProposalDecision::decision_due_at,
+        );
+        DeviceRevocationTargetStatus::Pending {
+            decisions,
+            decision_overdue: row.decision_overdue || Utc::now() > due_at,
+        }
+    };
+    Ok(DeviceRevocationTargetRecord {
+        selector: selector.clone(),
+        proposal_event_id: row.proposal_event_id,
+        proposal_digest: row.proposal_digest,
+        accepted_at: row.accepted_at,
+        acceptance_seq: u64::try_from(row.acceptance_seq).map_err(|_| {
+            PersistenceError::Internal("negative revoke acceptance sequence".to_owned())
+        })?,
+        control_proposal_ack,
+        status,
+    })
 }
 
 fn is_rejected(decisions: &Value) -> bool {
@@ -243,7 +291,7 @@ pub(crate) async fn gate_status_in_transaction(
         &selector.device_id,
     )
     .await?;
-    target_rows(conn, selector)
+    target_rows(conn, selector, None)
         .await
         .map(|rows| status_from_rows(&rows))
 }
@@ -311,7 +359,7 @@ pub(crate) async fn insert_transition_in_transaction(
         return Ok(false);
     }
     let gate_status = gate_status_in_transaction(conn, &transition.selector).await?;
-    let live = target_rows(conn, &transition.selector)
+    let live = target_rows(conn, &transition.selector, None)
         .await?
         .into_iter()
         .filter(|row| !is_rejected(&row.proposal_decisions))
@@ -365,6 +413,44 @@ pub(crate) async fn insert_transition_in_transaction(
 
 #[async_trait]
 impl DeviceRevocationStore for PgDeviceRevocationStore {
+    async fn target_for_proposal(
+        &self,
+        proposal_digest: &str,
+    ) -> PersistenceResult<Option<DeviceRevocationTargetRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let row = sql_query(
+            "SELECT principal_id, station_id, device_id, target_device_authorize_event_id, \
+             target_device_generation_ref, proposal_event_id, control_proposal_ack \
+             FROM device_revocation_targets WHERE proposal_digest = $1",
+        )
+        .bind::<Text, _>(proposal_digest)
+        .get_result::<ExistingTransitionRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let selector = DeviceRevocationGateSelector {
+            principal_id: row.principal_id,
+            station_id: row.station_id,
+            device_id: row.device_id,
+            target_device_authorize_event_id: row.target_device_authorize_event_id,
+            target_device_generation_ref: u64::try_from(row.target_device_generation_ref)
+                .map_err(|_| PersistenceError::Internal("negative revoke generation".to_owned()))?,
+        };
+        // An exact lookup must not load or decode other proposals' historical
+        // Ack/decision records for this device generation.
+        target_rows(&mut conn, &selector, Some(proposal_digest))
+            .await?
+            .into_iter()
+            .next()
+            .map(|row| target_record(&selector, row))
+            .transpose()
+    }
+
     async fn gate_status(
         &self,
         selector: &DeviceRevocationGateSelector,
@@ -386,52 +472,9 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let rows = target_rows(&mut conn, selector).await?;
+        let rows = target_rows(&mut conn, selector, None).await?;
         rows.into_iter()
-            .map(|row| {
-                let control_proposal_ack: arkret_wire::ControlProposalAck =
-                    serde_json::from_value(row.control_proposal_ack).map_err(|error| {
-                        PersistenceError::Internal(format!("stored revoke Ack: {error}"))
-                    })?;
-                let status = if let Some(seal) = row.covering_seal_id {
-                    DeviceRevocationTargetStatus::Revoked {
-                        covering_seal_id: seal,
-                        sealed_at: row.covered_at.ok_or_else(|| {
-                            PersistenceError::Internal(
-                                "sealed device revocation target lacks sealed_at".to_owned(),
-                            )
-                        })?,
-                    }
-                } else if let Some(terminal_decision) = terminal_reject(&row.proposal_decisions)? {
-                    DeviceRevocationTargetStatus::Rejected { terminal_decision }
-                } else {
-                    let decisions: Vec<arkret_wire::ControlProposalDecision> =
-                        serde_json::from_value(row.proposal_decisions).map_err(|error| {
-                            PersistenceError::Internal(format!(
-                                "stored control proposal decisions: {error}"
-                            ))
-                        })?;
-                    let due_at = decisions.last().map_or(
-                        control_proposal_ack.decision_due_at,
-                        arkret_wire::ControlProposalDecision::decision_due_at,
-                    );
-                    DeviceRevocationTargetStatus::Pending {
-                        decisions,
-                        decision_overdue: row.decision_overdue || Utc::now() > due_at,
-                    }
-                };
-                Ok(DeviceRevocationTargetRecord {
-                    selector: selector.clone(),
-                    proposal_event_id: row.proposal_event_id,
-                    proposal_digest: row.proposal_digest,
-                    accepted_at: row.accepted_at,
-                    acceptance_seq: u64::try_from(row.acceptance_seq).map_err(|_| {
-                        PersistenceError::Internal("negative revoke acceptance sequence".to_owned())
-                    })?,
-                    control_proposal_ack,
-                    status,
-                })
-            })
+            .map(|row| target_record(selector, row))
             .collect()
     }
 

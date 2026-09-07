@@ -276,7 +276,8 @@ impl PgEventNotificationWorker {
             origin: self.origin.clone(),
             notification,
         })?;
-        soland_storage_postgres::publish_event_notification(&self.pool, &payload).await
+        soland_storage_postgres::publish_event_notification(&self.pool, &payload).await?;
+        Ok(())
     }
 
     async fn listen_forever(self: Arc<Self>, local: EventBroadcast) {
@@ -290,32 +291,139 @@ impl PgEventNotificationWorker {
 
     async fn listen_once(&self, local: &EventBroadcast) -> anyhow::Result<()> {
         let (client, mut connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
-        client
-            .batch_execute(&format!("LISTEN {EVENT_NOTIFICATION_CHANNEL}"))
-            .await?;
-        loop {
-            match poll_fn(|cx| connection.poll_message(cx)).await {
-                Some(Ok(AsyncMessage::Notification(notification))) => {
-                    if notification.channel() != EVENT_NOTIFICATION_CHANNEL {
-                        continue;
+        let (sender, mut receiver) = mpsc::channel::<String>(128);
+        // Drive the connection while issuing LISTEN. Awaiting the command before
+        // polling Connection deadlocks its own request/response transport.
+        let drive = async {
+            loop {
+                match poll_fn(|cx| connection.poll_message(cx)).await {
+                    Some(Ok(AsyncMessage::Notification(notification))) => {
+                        if notification.channel() == EVENT_NOTIFICATION_CHANNEL {
+                            sender.send(notification.payload().to_owned()).await?;
+                        }
                     }
-                    let Ok(envelope) =
-                        serde_json::from_str::<PgEventNotificationEnvelope>(notification.payload())
-                    else {
-                        tracing::warn!("ignored malformed PostgreSQL event notification payload");
-                        continue;
-                    };
-                    if envelope.origin != self.origin {
-                        let _ = local.send_local(envelope.notification);
+                    Some(Ok(AsyncMessage::Notice(notice))) => {
+                        tracing::debug!(message = %notice.message(), "PostgreSQL listener notice");
                     }
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => return Err::<(), _>(anyhow::Error::from(error)),
+                    None => return Err(anyhow::anyhow!("PostgreSQL listener connection closed")),
                 }
-                Some(Ok(AsyncMessage::Notice(notice))) => {
-                    tracing::debug!(message = %notice.message(), "PostgreSQL listener notice");
-                }
-                Some(Ok(_)) => {}
-                Some(Err(error)) => return Err(error.into()),
-                None => return Ok(()),
             }
-        }
+        };
+        let consume = async {
+            client
+                .batch_execute(&format!("LISTEN {EVENT_NOTIFICATION_CHANNEL}"))
+                .await?;
+            while let Some(reference) = receiver.recv().await {
+                let Ok(id) = uuid::Uuid::parse_str(&reference) else {
+                    tracing::warn!("ignored malformed PostgreSQL event notification reference");
+                    continue;
+                };
+                let Some(payload) =
+                    soland_storage_postgres::load_event_notification(&self.pool, id).await?
+                else {
+                    tracing::warn!(%id, "PostgreSQL event notification reference expired");
+                    continue;
+                };
+                let Ok(envelope) = serde_json::from_str::<PgEventNotificationEnvelope>(&payload)
+                else {
+                    tracing::warn!("ignored malformed PostgreSQL event notification payload");
+                    continue;
+                };
+                if envelope.origin != self.origin {
+                    let _ = local.send_local(envelope.notification);
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        tokio::try_join!(drive, consume)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn independent_listeners_forward_large_events_without_origin_echo() {
+        let database = soland_storage_postgres::TestDatabase::lease().await;
+        let make_worker = |origin: &str| {
+            Arc::new(PgEventNotificationWorker {
+                pool: database.pool(),
+                database_url: database.url().to_owned(),
+                origin: origin.to_owned(),
+            })
+        };
+        let first = make_worker("first");
+        let second = make_worker("second");
+        let first_local = EventBroadcast::new(32);
+        let second_local = EventBroadcast::new(32);
+        let mut first_rx = first_local.subscribe();
+        let mut second_rx = second_local.subscribe();
+        let first_listener = first.clone();
+        let second_listener = second.clone();
+        let first_task =
+            tokio::spawn(async move { first_listener.listen_once(&first_local).await });
+        let second_task =
+            tokio::spawn(async move { second_listener.listen_once(&second_local).await });
+        let large_body = serde_json::json!({"ciphertext": "x".repeat(32_768)});
+        let exchange = async {
+            let mut received_first = false;
+            let mut received_second = false;
+            while !received_first || !received_second {
+                first
+                    .publish(EventNotification::event(
+                        "from-first".into(),
+                        "cursor".into(),
+                        large_body.clone(),
+                    ))
+                    .await
+                    .unwrap();
+                second
+                    .publish(EventNotification::event(
+                        "from-second".into(),
+                        "cursor".into(),
+                        large_body.clone(),
+                    ))
+                    .await
+                    .unwrap();
+                if !received_first {
+                    if let Ok(Ok(notification)) =
+                        tokio::time::timeout(Duration::from_millis(100), first_rx.recv()).await
+                    {
+                        assert_eq!(notification.realm_id, "from-second");
+                        let soland_http::state::EventNotificationKind::Event {
+                            event_payload, ..
+                        } = notification.kind
+                        else {
+                            panic!("expected event");
+                        };
+                        assert_eq!(event_payload, large_body);
+                        received_first = true;
+                    }
+                }
+                if !received_second {
+                    if let Ok(Ok(notification)) =
+                        tokio::time::timeout(Duration::from_millis(100), second_rx.recv()).await
+                    {
+                        assert_eq!(notification.realm_id, "from-first");
+                        let soland_http::state::EventNotificationKind::Event {
+                            event_payload, ..
+                        } = notification.kind
+                        else {
+                            panic!("expected event");
+                        };
+                        assert_eq!(event_payload, large_body);
+                        received_second = true;
+                    }
+                }
+            }
+        };
+        let result = tokio::time::timeout(Duration::from_secs(5), exchange).await;
+        first_task.abort();
+        second_task.abort();
+        result.expect("both independent LISTEN connections must become ready and deliver");
     }
 }
