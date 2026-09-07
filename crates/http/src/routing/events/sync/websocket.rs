@@ -14,7 +14,7 @@
 //! HTTP surface is a bounded long poll.
 //!
 //! The closed WebSocket transport is advertised only for deployments with a
-//! canonical public `https` origin and at least one explicit browser Origin.
+//! local TLS listener, canonical public `https` origin and an explicit browser Origin.
 //! The production path is covered by a live rustls peer test before this
 //! module adds the descriptor to ServiceDescribe (§10).
 
@@ -185,14 +185,14 @@ pub(crate) fn websocket_base_url(state: &AppState) -> Option<String> {
 }
 
 /// Add the closed §2 descriptor and its required profile claim when this
-/// deployment can actually admit a browser peer. A TLS origin with no explicit
-/// Origin allow-list is intentionally not advertised: every conforming client
-/// would otherwise discover an endpoint that must reject it.
+/// deployment can actually admit a browser peer. The local TLS listener and
+/// explicit Origin allow-list are required by the Upgrade admission path;
+/// a public HTTPS URL alone does not attest to this listener's transport.
 pub(crate) fn advertise_websocket_binding(
     state: &AppState,
     description: &mut arkret_models_discovery::ServiceDescribe,
 ) {
-    if allowed_origins(state).is_empty() {
+    if !state.config().tls_enabled() || allowed_origins(state).is_empty() {
         return;
     }
     let Some(base_url) = websocket_base_url(state) else {
@@ -2008,6 +2008,50 @@ mod tests {
             websocket_base_url(&state("http://server.example/", None)),
             None
         );
+    }
+
+    #[test]
+    fn discovery_requires_the_tls_listener_admitted_by_upgrade() {
+        for (tls, origins, advertised) in [
+            (false, Some("https://client.example"), false),
+            (true, None, false),
+            (true, Some("*"), false),
+            (true, Some("https://client.example"), true),
+        ] {
+            let mut config = crate::config::AppConfig::test_default();
+            config.public_base_url = "https://server.example/".to_owned();
+            config.cors_allow_origin = origins.map(ToOwned::to_owned);
+            if tls {
+                config.tls_cert_path = Some("test-cert.pem".into());
+                config.tls_key_path = Some("test-key.pem".into());
+            }
+            let state = AppState::new(config, Db { pool: None });
+            let description = crate::routing::system::describe::build_server_description(&state);
+            assert_eq!(
+                description
+                    .transport_bindings
+                    .iter()
+                    .any(|binding| matches!(
+                        binding,
+                        arkret_models_discovery::TransportBinding::Websocket { .. }
+                    )),
+                advertised,
+            );
+            assert_eq!(
+                description
+                    .supported_operation_bundles
+                    .iter()
+                    .any(|bundle| bundle == "ak.operation_bundle.station.websocket.v1"),
+                advertised,
+            );
+            assert_eq!(
+                description
+                    .supported_profiles
+                    .iter()
+                    .any(|profile| profile == arkret_wire::ProfileId::BINDING_WEBSOCKET_V1),
+                advertised,
+            );
+        }
     }
 
     #[test]

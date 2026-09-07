@@ -495,6 +495,10 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
 
     let mut config = AppConfig::test_default();
     config.public_base_url = public_base_url;
+    // This test installs the configured TLS material directly into Rustls.
+    // Keep deployment discovery aligned with the actual HTTPS listener above.
+    config.tls_cert_path = Some("live-test-in-memory-cert.pem".into());
+    config.tls_key_path = Some("live-test-in-memory-key.pem".into());
     config.cors_allow_origin = Some(ORIGIN.to_owned());
     config.development_mode = true;
     config.seed_demo_data = true;

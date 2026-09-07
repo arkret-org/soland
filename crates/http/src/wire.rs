@@ -681,6 +681,7 @@ pub fn describe(
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,
         limits: arkret_models_discovery::service_description::ServerLimits {
+            mls_governance_proof: Some(Default::default()),
             extensions: serde_json::from_value(serde_json::json!({
             "storage": storage,
             "max_limit": 100,
@@ -903,6 +904,10 @@ mod tests {
             },
         );
         let value = serde_json::to_value(description).expect("description serializes");
+        assert_eq!(
+            value["limits"]["mls_governance_proof"]["max_exact_response_bytes"],
+            arkret_wire::constants::MLS_GOVERNANCE_PROOF_MAX_BYTES
+        );
         assert_eq!(value["transport_bindings"][0]["kind"], "http_json");
         assert_eq!(
             value["transport_bindings"][0]["base_url"],
