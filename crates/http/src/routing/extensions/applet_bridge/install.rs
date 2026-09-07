@@ -1109,8 +1109,10 @@ pub(super) fn validate_applet_package(
     package
         .validate_with_epoch_evidence(registration_epoch_evidence)
         .map_err(|error| {
-            AppError::param_invalid(format!("applet package invalid: {error}"))
-                .with_wire_code("schema_violation")
+            AppError::new(
+                arkret_wire::ErrorCode::SchemaViolation,
+                format!("applet package invalid: {error}"),
+            )
         })?;
     if let Some(expires_at) = package.expires_at
         && expires_at <= chrono::Utc::now()
@@ -1122,10 +1124,10 @@ pub(super) fn validate_applet_package(
         .compute_package_digest()
         .map_err(|error| AppError::internal(format!("package digest failed: {error}")))?;
     if package.package_digest.as_ref() != Some(&expected_digest) {
-        return Err(
-            AppError::param_invalid("applet package_digest does not match package body")
-                .with_wire_code("schema_violation"),
-        );
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::SchemaViolation,
+            "applet package_digest does not match package body",
+        ));
     }
     let proof = package
         .proof
@@ -1164,10 +1166,10 @@ pub(super) fn validate_applet_package(
 
 fn validate_applet_controller_principal(package: &AppletPackage) -> Result<(), AppError> {
     if package.controller_principal_id == package.service_id {
-        return Err(AppError::param_invalid(
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::SchemaViolation,
             "applet runtime service_id cannot be used as controller_principal_id",
-        )
-        .with_wire_code("schema_violation"));
+        ));
     }
     Ok(())
 }
@@ -1183,16 +1185,27 @@ pub(super) fn registration_epoch_producer_signing_key(
                 .with_wire_code("applet_registration_epoch_evidence_mismatch")
                 .with_reason_detail(reason)
         })?;
-    validate_registration_epoch_evidence_for_document(package, evidence, &document)?;
-    let public_key_multibase = document
-        .verification_methods
-        .get(package.webhook_auth.key_ref.as_str())
-        .ok_or_else(|| {
-            AppError::param_invalid(
-                "applet webhook_auth key_ref is absent from the current service DID document",
-            )
-            .with_wire_code("applet_registration_epoch_signing_key_mismatch")
-        })?;
+    registration_epoch_signing_key_from_document(package, evidence, &document)
+}
+
+fn registration_epoch_signing_key_from_document(
+    package: &AppletPackage,
+    evidence: &AppletRegistrationEpochEvidence,
+    document: &DidDocument,
+) -> Result<arkret_wire::DidKey, AppError> {
+    validate_registration_epoch_evidence_for_document(package, evidence, document)?;
+    let public_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(
+        document,
+        package.webhook_auth.key_ref.as_str(),
+    )
+    .map_err(|error| {
+        AppError::param_invalid(format!(
+            "applet registration-epoch producer key is invalid: {error}"
+        ))
+        .with_wire_code("applet_registration_epoch_signing_key_mismatch")
+    })?;
+    let public_key_multibase =
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(public_key.as_bytes());
     arkret_wire::DidKey::new(format!("did:key:{public_key_multibase}")).map_err(|error| {
         AppError::param_invalid(format!(
             "applet registration-epoch producer key is invalid: {error}"
@@ -1206,10 +1219,9 @@ fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), 
         match arkret_schema::capability_action(action) {
             Some(_) => {}
             None => {
-                return Err(AppError::param_invalid(format!(
+                return Err(AppError::new(arkret_wire::ErrorCode::SchemaViolation, format!(
                     "applet package requested_scopes contains unknown capability action: {action}"
                 ))
-                .with_wire_code("schema_violation")
                 .with_reason_detail("capability_action_unknown"));
             }
         }
@@ -1814,6 +1826,7 @@ mod tests {
         let error = validate_applet_controller_principal(&package)
             .expect_err("runtime service must not be accepted as publisher principal");
         assert_eq!(error.wire_code(), "schema_violation");
+        assert_eq!(error.http_status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]
@@ -1910,6 +1923,75 @@ mod tests {
             &[CapabilityActionId::APPLET_GHOST_PROVISION.to_owned()],
             Some(&actor_policy)
         ));
+    }
+
+    #[test]
+    fn registration_epoch_signing_key_accepts_jwk_and_multibase_with_pinned_evidence() {
+        let package = sample_package();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[31; 32]).verifying_key();
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.as_bytes());
+        let expected = arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap();
+        let jwk = json!({
+            "kty": "OKP", "crv": "Ed25519",
+            "x": arkret_canonical::base64url_encode(key.as_bytes()),
+        })
+        .to_string();
+        for material in [multibase, jwk] {
+            let document = DidDocument::new(
+                Did::new("did:web:test-applet.example").unwrap(),
+                package.webhook_auth.key_ref.to_string(),
+                material,
+            );
+            let evidence = AppletRegistrationEpochEvidence::from_did_document(
+                &document,
+                arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                registration_epoch_signing_key_from_document(&package, &evidence, &document)
+                    .unwrap(),
+                expected
+            );
+
+            let mut rotated = document.clone();
+            rotated.verification_methods.insert(
+                package.webhook_auth.key_ref.to_string(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    ed25519_dalek::SigningKey::from_bytes(&[32; 32])
+                        .verifying_key()
+                        .as_bytes(),
+                ),
+            );
+            assert_eq!(
+                registration_epoch_signing_key_from_document(&package, &evidence, &rotated)
+                    .unwrap_err()
+                    .wire_code(),
+                "applet_registration_epoch_evidence_mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn registration_epoch_signing_key_rejects_non_ed25519_material() {
+        let package = sample_package();
+        let document = DidDocument::new(
+            Did::new("did:web:test-applet.example").unwrap(),
+            package.webhook_auth.key_ref.to_string(),
+            json!({"kty": "OKP", "crv": "X25519", "x": arkret_canonical::base64url_encode(&[31; 32])}).to_string(),
+        );
+        let evidence = AppletRegistrationEpochEvidence::from_did_document(
+            &document,
+            arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            registration_epoch_signing_key_from_document(&package, &evidence, &document)
+                .unwrap_err()
+                .wire_code(),
+            "applet_registration_epoch_signing_key_mismatch"
+        );
     }
 
     #[test]
