@@ -70,7 +70,7 @@ impl ProjectionState {
         let preconditions = &operation.context.preconditions;
         if preconditions.len() != 1
             || preconditions[0].cell_id.as_str() != RESOLUTION_CELL
-            || preconditions[0].predicate.op != arkret_wire::cba::PredicateOp::HeadEq
+            || preconditions[0].predicate.op != arkret_wire::cbs::PredicateOp::HeadEq
             || preconditions[0].predicate.value.as_ref() != Some(&current)
         {
             return ProjectionEffect::Rejected {
@@ -95,7 +95,7 @@ impl ProjectionState {
             .filter_map(ProjectedCellWrite::as_direct)
             .collect::<Vec<_>>();
         if projected.len() != 1
-            || projected[0].op.op_type != arkret_wire::cba::LatticeOpType::Set
+            || projected[0].op.op_type != arkret_wire::cbs::LatticeOpType::Set
             || projected[0].op.value.as_ref() != Some(&expected)
         {
             return ProjectionEffect::Rejected {

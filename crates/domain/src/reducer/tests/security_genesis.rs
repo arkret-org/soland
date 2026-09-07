@@ -10,7 +10,7 @@ fn input(
 ) -> (
     arkret_identifiers::EventId,
     Operation,
-    Vec<arkret_wire::cba::ProjectedCellWrite>,
+    Vec<arkret_wire::cbs::ProjectedCellWrite>,
 ) {
     let (event_id, writes) = projected_cell_writes(kind, realm, &payload);
     let mut operation_payload = payload;

@@ -163,7 +163,7 @@ pub(crate) async fn mint_control_proposal_acks(
 /// Verify the delegated-controller Control Proposal Ack of a Agent PCR
 /// closed genesis.
 ///
-/// `authz/cba-profiles.md` ingress source 1 is the only receipt path this class
+/// `authz/cbs-profiles.md` ingress source 1 is the only receipt path this class
 /// has: the founding authority is recomputed from the candidate signed create,
 /// the current controller device is established by the accepted Agent DID
 /// delegation, and the receipt signer is that controller device. A managed

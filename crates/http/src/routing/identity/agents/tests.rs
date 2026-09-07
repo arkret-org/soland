@@ -153,7 +153,7 @@ fn initial_submission(
             proofs: Vec::new(),
         }),
         event,
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
         control_proposal_ack: None,
         membership_compensation_evidence: None,
     }

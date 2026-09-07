@@ -7,7 +7,7 @@ use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
 
 /// Principal-private, non-canonical mirror of one fully verified inbound
 /// `ak.contact.requested` carrier. It never participates in Realm reduction,
-/// Seal construction, CBA frontiers, or state roots.
+/// Seal construction, CBS frontiers, or state roots.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContactVerifiedMirrorRecord {
     pub target_holder_principal_id: String,

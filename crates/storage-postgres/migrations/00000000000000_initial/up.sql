@@ -738,7 +738,7 @@ CREATE TRIGGER state_seals_immutable
 
 -- Frozen canonical DataEvent leaf set used to derive a locally authored Seal's
 -- optional data_event_set_root. Receiver-verified transported Seals can omit
--- this row because CBA dependency transport does not carry observational leaves.
+-- this row because CBS dependency transport does not carry observational leaves.
 CREATE TABLE public.state_seal_data_event_manifests (
     seal_id text PRIMARY KEY,
     realm_id text NOT NULL,

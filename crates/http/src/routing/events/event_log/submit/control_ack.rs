@@ -58,7 +58,7 @@ pub(super) async fn resolve_control_proposal_ack(
                 // ingress-authority class: its receipt is signed by the
                 // controller device named by the accepted Agent DID
                 // delegation, never by a frozen notary descriptor and never
-                // by this service (`authz/cba-profiles.md`, ingress source 1).
+                // by this service (`authz/cbs-profiles.md`, ingress source 1).
                 let authority_set_ref = if agent_pcr_control {
                     crate::control_proposal::verify_agent_pcr_ack(state, event, ack, policy)
                         .await

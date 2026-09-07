@@ -137,7 +137,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
             destination_kind: "station".to_owned(),
         },
         events: Vec::new(),
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
     };
     let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
         &req.service_binding_ref,
@@ -164,7 +164,7 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
             destination_kind: "station".to_owned(),
         },
         events: Vec::new(),
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
     };
 
     SolandEventsSubmitRequestBody::validate_federation_service_binding(&req.service_binding_ref)

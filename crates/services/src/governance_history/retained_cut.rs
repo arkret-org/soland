@@ -224,7 +224,7 @@ pub fn prepare_retained_history_cut(
     // blanket per-Event requirement. Genesis has no predecessor authority and
     // MUST carry no receipts. The caller's complete SDK replay verifies exact
     // receipt bytes/signatures/coverage when that Seal's policy requires them.
-    // Proof regimes and closed anchor-unit CBA context were validated above.
+    // Proof regimes and closed anchor-unit CBS context were validated above.
     let expected_first_round = governance_runtime_dependency_selector_coordinates_for_acquisition(
         &replay_seals,
         &replay_events,

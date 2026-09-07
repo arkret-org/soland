@@ -10,7 +10,7 @@ use super::*;
 /// Realm's effective suite.
 pub(in crate::routing) fn genesis_cell_write_projector(
     event: &arkret_wire::Event,
-) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, String> {
+) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, String> {
     arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
         .map_err(|error| error.to_string())
 }

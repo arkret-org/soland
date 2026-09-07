@@ -185,7 +185,7 @@ fn registered_projection_inputs(
     actor_seq: u64,
 ) -> (
     arkret_event_draft::ProjectedEventOperation,
-    Vec<arkret_wire::cba::ProjectedCellWrite>,
+    Vec<arkret_wire::cbs::ProjectedCellWrite>,
 ) {
     let mut event = crate::test_event::raw_event_at(
         operation.event_kind.as_str(),

@@ -16,7 +16,7 @@ pub(super) struct AcceptedEventPostCommit<'a> {
     pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
     pub(super) consent_admission: Option<&'a crate::routing::identity::consent::ConsentAdmission>,
     pub(super) projection_operation: Option<arkret_event_draft::ProjectedEventOperation>,
-    pub(super) projected_cell_writes: &'a [arkret_wire::cba::ProjectedCellWrite],
+    pub(super) projected_cell_writes: &'a [arkret_wire::cbs::ProjectedCellWrite],
     pub(super) projected_event: Option<soland_services::events::ProjectedEvent>,
     pub(super) envelope: &'a Value,
 }
@@ -351,16 +351,16 @@ pub(super) fn remove_rejected_claim_active_material(
     }
 }
 
-/// Every Seal a receiver needs to close the transported Events' CBA basis,
-/// packaged as the request's `cba_proof_bundles[]`.
+/// Every Seal a receiver needs to close the transported Events' CBS basis,
+/// packaged as the request's `cbs_proof_bundles[]`.
 ///
 /// Each target gets its own single-target bundle. Bundles may overlap because
 /// the wire contract is receiver-relative and permits bounded verifiable
 /// supersets.
-async fn federation_cba_proof_bundles(
+async fn federation_cbs_proof_bundles(
     state: &AppState,
     events: &[Event],
-) -> Result<Vec<arkret_wire::CbaProofBundle>, String> {
+) -> Result<Vec<arkret_wire::CbsProofBundle>, String> {
     let mut targets = BTreeSet::new();
     for event in events {
         if let Some(seal_ref) = &event.seal_ref {
@@ -370,21 +370,21 @@ async fn federation_cba_proof_bundles(
             targets.extend(seal_basis.leaves.iter().cloned());
         }
     }
-    if targets.len() > arkret_wire::event_submission::MAX_SUBMISSION_CBA_BUNDLES {
-        return Err("federation CBA target count exceeds the v1 limit".to_owned());
+    if targets.len() > arkret_wire::event_submission::MAX_SUBMISSION_CBS_BUNDLES {
+        return Err("federation CBS target count exceeds the v1 limit".to_owned());
     }
-    cba_proof_bundles_for_targets(state, &targets).await
+    cbs_proof_bundles_for_targets(state, &targets).await
 }
 
 /// One receiver-relative bundle per target Seal.
 ///
 /// Shared by the federation fanout above and by `ak.self.invites.command.dispatch.v1`:
 /// both need the same predecessor closure over the same accepted Seal store, and
-/// `cba-profiles.md` §5 gives them one shape, so there is one builder.
-pub(in crate::routing) async fn cba_proof_bundles_for_targets(
+/// `cbs-profiles.md` §5 gives them one shape, so there is one builder.
+pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
     state: &AppState,
     targets: &BTreeSet<arkret_identifiers::SealId>,
-) -> Result<Vec<arkret_wire::CbaProofBundle>, String> {
+) -> Result<Vec<arkret_wire::CbsProofBundle>, String> {
     let mut bundles = Vec::with_capacity(targets.len());
     for target_seal_ref in targets {
         let mut pending = vec![target_seal_ref.clone()];
@@ -402,10 +402,10 @@ pub(in crate::routing) async fn cba_proof_bundles_for_targets(
             pending.extend(seal.predecessor_refs.iter().cloned());
             by_id.insert(seal_id, seal);
         }
-        if by_id.len() > arkret_wire::cba_proof_bundle::MAX_BUNDLE_SEALS {
+        if by_id.len() > arkret_wire::cbs_proof_bundle::MAX_BUNDLE_SEALS {
             return Err("federation Seal prerequisite closure exceeds the v1 limit".to_owned());
         }
-        bundles.push(arkret_wire::CbaProofBundle {
+        bundles.push(arkret_wire::CbsProofBundle {
             target_seal_ref: target_seal_ref.clone(),
             seals: by_id.into_values().collect(),
             control_moves: Vec::new(),
@@ -658,11 +658,11 @@ pub(super) async fn peer_event_batch_fanout_records(
         .map(serde_json::from_value::<Event>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("failed to type check peer Event batch: {error}"))?;
-    let cba_proof_bundles =
-        federation_cba_proof_bundles(state, &events)
+    let cbs_proof_bundles =
+        federation_cbs_proof_bundles(state, &events)
             .await
             .map_err(|error| {
-                format!("failed to resolve peer Event batch CBA proof bundles: {error}")
+                format!("failed to resolve peer Event batch CBS proof bundles: {error}")
             })?;
     // The Realm genesis path stores its ingress receipts before it gets here
     // (`mint_and_store_ingress_receipt`), so the store is the only source.
@@ -701,7 +701,7 @@ pub(super) async fn peer_event_batch_fanout_records(
         let body = EventsSubmitFederationBatchRequestBody {
             service_binding_ref,
             events: submissions.clone(),
-            cba_proof_bundles: cba_proof_bundles.clone(),
+            cbs_proof_bundles: cbs_proof_bundles.clone(),
         };
         body.validate_federation_transport(&digest_suites)
             .map_err(|error| {
@@ -789,9 +789,9 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         .map(serde_json::from_value::<Event>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("failed to type Direct Conversation founding Events: {error}"))?;
-    let cba_proof_bundles = federation_cba_proof_bundles(state, &events)
+    let cbs_proof_bundles = federation_cbs_proof_bundles(state, &events)
         .await
-        .map_err(|error| format!("failed to resolve founding CBA proof bundles: {error}"))?;
+        .map_err(|error| format!("failed to resolve founding CBS proof bundles: {error}"))?;
     let submissions = federation_submissions(
         state,
         &events,
@@ -812,7 +812,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             events: submissions.clone(),
             source_acceptance_receipt: receipt.clone(),
             founding_authority_evidence: founding_authority_evidence.clone(),
-            cba_proof_bundles: cba_proof_bundles.clone(),
+            cbs_proof_bundles: cbs_proof_bundles.clone(),
         };
         let payload_json = canonical::canonical_json_bytes(&body)
             .ok()
@@ -979,11 +979,11 @@ pub(super) async fn peer_event_fanout_records(
             })?;
         peer_events.push(event.clone());
         peer_events.sort_by_key(|event| u8::from(!event.kind.is_control_plane()));
-        let cba_proof_bundles = federation_cba_proof_bundles(state, &peer_events)
+        let cbs_proof_bundles = federation_cbs_proof_bundles(state, &peer_events)
             .await
             .map_err(|error| {
                 format!(
-                    "failed to resolve dynamic peer Event {event_id} CBA proof bundles: {error}"
+                    "failed to resolve dynamic peer Event {event_id} CBS proof bundles: {error}"
                 )
             })?;
         let submissions = federation_submissions(
@@ -999,7 +999,7 @@ pub(super) async fn peer_event_fanout_records(
         let body = EventsSubmitFederationBatchRequestBody {
             service_binding_ref,
             events: submissions,
-            cba_proof_bundles,
+            cbs_proof_bundles,
         };
         body.validate_federation_transport(&digest_suites).map_err(|error| {
             format!(
@@ -1242,8 +1242,8 @@ async fn realm_bootstrap_fanout_record(
         service_binding_ref,
         events: submissions,
         // Realm bootstrap prerequisites precede any Seal, so the batch closes
-        // no CBA basis of its own.
-        cba_proof_bundles: Vec::new(),
+        // no CBS basis of its own.
+        cbs_proof_bundles: Vec::new(),
     };
     body.validate_federation_transport(&digest_suites).map_err(|error| {
         format!(

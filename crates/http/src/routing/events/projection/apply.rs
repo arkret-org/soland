@@ -34,7 +34,7 @@ pub async fn project_accepted_canonical_event_from_device(
     origin: &str,
     source_device_id: &str,
     operation: &Operation,
-    cell_writes: &[arkret_wire::cba::ProjectedCellWrite],
+    cell_writes: &[arkret_wire::cbs::ProjectedCellWrite],
 ) {
     project_accepted_operations_inner(
         state,
@@ -59,7 +59,7 @@ fn accepted_operation_cell_writes(
     state: &AppState,
     _origin: &str,
     operation: &Operation,
-) -> Vec<arkret_wire::cba::ProjectedCellWrite> {
+) -> Vec<arkret_wire::cbs::ProjectedCellWrite> {
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Vec::new();
     };
@@ -431,7 +431,7 @@ async fn project_accepted_operations_inner(
     origin: &str,
     source_device_id: &str,
     operations: &[Operation],
-    canonical_cell_writes: Option<&[arkret_wire::cba::ProjectedCellWrite]>,
+    canonical_cell_writes: Option<&[arkret_wire::cbs::ProjectedCellWrite]>,
 ) {
     debug_assert!(canonical_cell_writes.is_none() || operations.len() == 1);
     for operation in operations {

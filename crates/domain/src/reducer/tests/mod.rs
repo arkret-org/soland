@@ -146,7 +146,7 @@ pub(super) fn projected_cell_writes_at_seq(
     payload: &Value,
 ) -> (
     arkret_identifiers::EventId,
-    Vec<arkret_wire::cba::ProjectedCellWrite>,
+    Vec<arkret_wire::cbs::ProjectedCellWrite>,
 ) {
     let actor_id = arkret_wire::project_did_to_core_id(
         &arkret_identifiers::Did::new("did:web:reducer-test.example").unwrap(),
@@ -163,7 +163,7 @@ pub(super) fn projected_cell_writes_for_actor(
     actor_id: arkret_identifiers::DidCoreId,
 ) -> (
     arkret_identifiers::EventId,
-    Vec<arkret_wire::cba::ProjectedCellWrite>,
+    Vec<arkret_wire::cbs::ProjectedCellWrite>,
 ) {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
@@ -196,7 +196,7 @@ pub(super) fn projected_cell_writes(
     payload: &Value,
 ) -> (
     arkret_identifiers::EventId,
-    Vec<arkret_wire::cba::ProjectedCellWrite>,
+    Vec<arkret_wire::cbs::ProjectedCellWrite>,
 ) {
     projected_cell_writes_at_seq(object_kind, realm_id, 0, payload)
 }

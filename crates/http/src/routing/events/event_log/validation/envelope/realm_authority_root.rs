@@ -141,7 +141,7 @@ async fn accepted_seal_root(
     let leaves = governance_basis_leaves(object)?;
     // The closure is the only thing the two branches differ in. A caller that
     // already resolved the Event's own `seal_basis` — the private invite
-    // receiver, whose closure travelled in `cba_proof_bundles[]` because it is
+    // receiver, whose closure travelled in `cbs_proof_bundles[]` because it is
     // not a federation peer of this Realm — hands the joined control view in
     // directly; everyone else reads it out of local accepted Seals. Neither
     // branch may fall back to `realm_state.owner`, membership or `created_by`

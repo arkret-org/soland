@@ -21,11 +21,11 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         principal_did.as_str(),
     ))
     .unwrap();
-    let basis_seal_id = soland_test_support::cba_basis::seed_realm_basis(
+    let basis_seal_id = soland_test_support::cbs_basis::seed_realm_basis(
         state,
         pcr_realm_id.as_str(),
         principal_did.as_str(),
-        soland_test_support::cba_basis::FixtureBasis::shared(&[]),
+        soland_test_support::cbs_basis::FixtureBasis::shared(&[]),
     )
     .await;
     let basis_seal = state

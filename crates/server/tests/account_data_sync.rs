@@ -239,7 +239,7 @@ async fn signed_account_data_submission(
 /// projection leaves that cell unmaterialized, so the server correctly answers
 /// `dependency_missing` for every ordinary Event in the Realm.
 ///
-/// [`soland_test_support::cba_basis::seed_realm_genesis_event`] authors that
+/// [`soland_test_support::cbs_basis::seed_realm_genesis_event`] authors that
 /// genesis Event and folds it through the same reducer the submit path uses,
 /// so all seven cells — reducer profile, authority root, metadata, notary,
 /// create log, creator membership — are derived from the Event rather than
@@ -247,7 +247,7 @@ async fn signed_account_data_submission(
 /// soland-local read projections, and they restate the genesis object rather
 /// than inventing values it does not carry.
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
-    let realm_id = soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(
+    let realm_id = soland_test_support::cbs_basis::seed_event_derived_realm_genesis_event(
         &state, owner, title,
     )
     .await;
@@ -542,7 +542,7 @@ fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
         // Principal Control Realms use their distinct subject-derived bootstrap
         // path. Materialize its create-locked reducer cells through the SDK's PCR
         // genesis builder rather than through an ordinary Realm bootstrap.
-        soland_test_support::cba_basis::seed_realm_genesis_event(
+        soland_test_support::cbs_basis::seed_realm_genesis_event(
             &state,
             &soland_test_support::fixture_principal_control_realm(&actor),
             &actor,

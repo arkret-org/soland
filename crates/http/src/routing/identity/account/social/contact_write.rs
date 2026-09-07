@@ -1329,7 +1329,7 @@ async fn commit(
         arkret_wire::EventInitialSubmission {
             event: body.signed_event.clone(),
             authorization_lease: None,
-            cba_proof_bundles: Vec::new(),
+            cbs_proof_bundles: Vec::new(),
             control_proposal_ack: body.control_proposal_ack.clone(),
             membership_compensation_evidence: None,
         },

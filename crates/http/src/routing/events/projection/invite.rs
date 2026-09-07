@@ -1393,7 +1393,7 @@ mod tests {
             .iter()
             .find(|write| write.cell_id == live_target_cell(CANCEL_INVITEE))
             .expect("ak.invite.create must claim the live-target slot");
-        let arkret_wire::cba::ProjectedOp::Direct(op) = &claim.op else {
+        let arkret_wire::cbs::ProjectedOp::Direct(op) = &claim.op else {
             panic!("the claim write is a direct set");
         };
         assert_eq!(op.value.as_ref(), Some(&json!(create.event_id.as_str())));
@@ -1521,7 +1521,7 @@ mod tests {
             .into_iter()
             .find(|write| write.cell_id == live_target_cell(CANCEL_INVITEE))
             .expect("a directed terminal revoke releases the slot");
-        let arkret_wire::cba::ProjectedOp::Direct(op) = &release.op else {
+        let arkret_wire::cbs::ProjectedOp::Direct(op) = &release.op else {
             panic!("the release write is a direct set");
         };
         let free = arkret_schema::invite_live_target_free_value();

@@ -15,8 +15,8 @@ use arkret_state::mls_governance_proof::{
 use arkret_state::state::compute_state_root;
 use arkret_state::state::{BottomMode, control_event_set_root};
 #[cfg(test)]
-use arkret_wire::cba::LatticeOp;
-use arkret_wire::cba::LatticeOpType;
+use arkret_wire::cbs::LatticeOp;
+use arkret_wire::cbs::LatticeOpType;
 use arkret_wire::{ContentScheme, DurabilityPolicy, Event, NotarySig, ScopeRef as GovernanceScope};
 use salvo::oapi::extract::JsonBody;
 
@@ -2385,7 +2385,7 @@ mod tests {
             .expect("invite accept writes the member state cell");
         assert!(matches!(
             &member_write.op,
-            arkret_wire::cba::ProjectedOp::TransitionTo { to }
+            arkret_wire::cbs::ProjectedOp::TransitionTo { to }
                 if to == &serde_json::json!("join")
         ));
 

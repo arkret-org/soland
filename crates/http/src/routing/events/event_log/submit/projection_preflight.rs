@@ -6,7 +6,7 @@ pub(super) struct ProjectionPreflightContext<'a> {
     pub(super) submitted_event: &'a Event,
     pub(super) envelope: &'a Value,
     pub(super) projection_operation: Option<&'a arkret_event_draft::ProjectedEventOperation>,
-    pub(super) projected_cell_writes: &'a [arkret_wire::cba::ProjectedCellWrite],
+    pub(super) projected_cell_writes: &'a [arkret_wire::cbs::ProjectedCellWrite],
     pub(super) frozen_pre_state: &'a arkret_schema::FrozenPreState,
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
     pub(super) batch_operations: &'a [arkret_event_draft::ProjectedEventOperation],
@@ -302,7 +302,7 @@ pub(super) async fn apply_projection_preflight(
             // head fails closed with `failed_precondition` and no partial
             // apply.
             if let Err(reason) = proj.check_move_preconditions(operation) {
-                let (code, message) = cba_bottom_reject(reason);
+                let (code, message) = cbs_bottom_reject(reason);
                 let mut error = SubmitOneError::new(StatusCode::PRECONDITION_FAILED, code, message);
                 if reason == "cell_bottom_state" {
                     error = error
@@ -332,7 +332,7 @@ pub(super) async fn apply_projection_preflight(
                 ));
             }
             if let Err(reason) = proj.check_bottom_cell_transition(operation) {
-                let (code, message) = cba_bottom_reject(reason);
+                let (code, message) = cbs_bottom_reject(reason);
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     code,

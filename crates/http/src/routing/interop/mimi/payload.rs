@@ -71,7 +71,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
             )
         })?;
     let digest_suite = state.projections().realm_digest_suite(realm.as_str());
-    // The CBA basis is a producer-signed envelope member, so it belongs on the
+    // The CBS basis is a producer-signed envelope member, so it belongs on the
     // draft. Attaching it after authoring only worked while signing silently
     // re-derived `event_id`, which is exactly the identity hole this closes.
     let auth_context = arkret_wire::AuthContext {

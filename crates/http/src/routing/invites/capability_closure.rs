@@ -4,7 +4,7 @@
 //! The receiving Station is by definition not yet a federation peer of the
 //! inviting Realm, so `ak.peer.seals.read.*` fails closed for it and the
 //! authority closure cannot be fetched. It travels inside the request as
-//! `cba_proof_bundles[]` instead, and this module turns that transport material
+//! `cbs_proof_bundles[]` instead, and this module turns that transport material
 //! into the deterministic joined control view the ordinary Control Move
 //! authorization evaluation already runs against
 //! (`event-auth-state-resolution.md` §6.3.1).
@@ -17,7 +17,7 @@
 //! * Nothing here becomes accepted state. The Seal and cell stores below are process-local, live
 //!   for the duration of one request, and are dropped afterwards. No Realm is materialised, no
 //!   projection is written, no frontier advances.
-//! * The result is a function of `(invite_event, cba_proof_bundles)` alone. No holder row, receive
+//! * The result is a function of `(invite_event, cbs_proof_bundles)` alone. No holder row, receive
 //!   policy, consent cell or quota is read, which is what lets step 4 report a precise, registered
 //!   outcome instead of joining the holder-indistinguishable class.
 //!
@@ -31,12 +31,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{CellRef, RealmId, SealId};
 use arkret_state::lattice::CellState;
 use arkret_wire::{
-    Base64UrlString, CbaProofBundle, Event, Seal, SemanticRefProof, SemanticRefProofKind,
+    Base64UrlString, CbsProofBundle, Event, Seal, SemanticRefProof, SemanticRefProofKind,
     SemanticRefProofRootField,
 };
 use soland_http::error::AppError;
 
-use crate::routing::events::event_log::{cba_proof_bundles_for_targets, digest_suite_from_hash};
+use crate::routing::events::event_log::{cbs_proof_bundles_for_targets, digest_suite_from_hash};
 use crate::state::AppState;
 
 /// The one cell `capabilities.md` §3.2 admits as the Realm authority source and
@@ -47,10 +47,10 @@ use crate::state::AppState;
 /// basis. It is not a Control Move replay. The Event that writes this cell is
 /// `ak.realm.create`, a `seal_basis`-exempt anchor unit
 /// (`event-auth-state-resolution.md` §5) that
-/// `cba-proof-bundle.schema.json` forbids `control_moves[]` from carrying.
+/// `cbs-proof-bundle.schema.json` forbids `control_moves[]` from carrying.
 const INVITE_AUTHORITY_CELL: &str = arkret_wire::REALM_AUTHORITY_ROOT_CELL;
 
-/// Build the `cba_proof_bundles[]` an outbound private invite delivery carries.
+/// Build the `cbs_proof_bundles[]` an outbound private invite delivery carries.
 ///
 /// The inviting Station is a member of the Realm and holds the whole accepted
 /// closure, so this is a local read. One bundle per `seal_basis.leaves` entry,
@@ -60,11 +60,11 @@ const INVITE_AUTHORITY_CELL: &str = arkret_wire::REALM_AUTHORITY_ROOT_CELL;
 pub(super) async fn build_invite_capability_bundles(
     state: &AppState,
     invite_event: &Event,
-) -> Result<Vec<CbaProofBundle>, AppError> {
+) -> Result<Vec<CbsProofBundle>, AppError> {
     let realm_id = &invite_event.realm_id;
     let leaves = invite_capability_leaves(invite_event)?;
     let targets = leaves.iter().cloned().collect::<BTreeSet<_>>();
-    let mut bundles = cba_proof_bundles_for_targets(state, &targets)
+    let mut bundles = cbs_proof_bundles_for_targets(state, &targets)
         .await
         .map_err(|error| {
             AppError::internal(format!(
@@ -209,7 +209,7 @@ pub(super) fn invite_capability_leaves(invite_event: &Event) -> Result<Vec<SealI
 pub(super) async fn invite_capability_closure_from_bundles(
     _state: &AppState,
     invite_event: &Event,
-    bundles: &[CbaProofBundle],
+    bundles: &[CbsProofBundle],
 ) -> Result<BTreeMap<CellRef, CellState>, AppError> {
     let realm_id = &invite_event.realm_id;
     let leaves = invite_capability_leaves(invite_event)?;
@@ -259,7 +259,7 @@ pub(super) async fn invite_capability_closure_from_bundles(
 /// canonical leaf its digest claims, is a `schema_violation`: the bundle is
 /// unsigned transport, so every byte of it has to be re-derived here.
 fn authority_root_value_from_bundle(
-    bundle: &CbaProofBundle,
+    bundle: &CbsProofBundle,
     seal: &Seal,
 ) -> Result<Option<serde_json::Value>, AppError> {
     let digest_suite = digest_suite_from_hash(&seal.state_root).map_err(schema_violation)?;
@@ -358,16 +358,16 @@ fn authority_root_value_from_bundle(
 /// binding rules the ruling adds — every `target_seal_ref` is one of the invite
 /// Control Move's own basis leaves, and every leaf is covered by some bundle.
 fn admit_invite_capability_bundles(
-    bundles: &[CbaProofBundle],
+    bundles: &[CbsProofBundle],
     leaves: &[SealId],
     realm_id: &RealmId,
 ) -> Result<BTreeMap<SealId, Seal>, AppError> {
     if bundles.is_empty()
         || bundles.len()
-            > arkret_models_collaboration::governance::invite_addressing::MAX_INVITE_DELIVERY_CBA_BUNDLES
+            > arkret_models_collaboration::governance::invite_addressing::MAX_INVITE_DELIVERY_CBS_BUNDLES
     {
         return Err(limit_exceeded(
-            "invite delivery carries an out-of-range cba_proof_bundles count",
+            "invite delivery carries an out-of-range cbs_proof_bundles count",
         ));
     }
     let leaf_set = leaves.iter().cloned().collect::<BTreeSet<_>>();
@@ -416,12 +416,12 @@ fn admit_invite_capability_bundles(
             .collect::<Vec<_>>();
         return Err(AppError::new(
             soland_http::error::ErrorCode::DependencyMissing,
-            "invite_event.seal_basis has leaves no cba_proof_bundle covers",
+            "invite_event.seal_basis has leaves no cbs_proof_bundle covers",
         )
         .with_wire_detail("missing_seal_refs", missing)
         .with_wire_detail("missing_event_digests", Vec::<String>::new()));
     }
-    if seals_by_id.len() > arkret_wire::cba_proof_bundle::MAX_BUNDLE_SEALS {
+    if seals_by_id.len() > arkret_wire::cbs_proof_bundle::MAX_BUNDLE_SEALS {
         return Err(limit_exceeded(
             "invite capability bundles exceed the v1 Seal closure bound",
         ));
@@ -429,7 +429,7 @@ fn admit_invite_capability_bundles(
     Ok(seals_by_id)
 }
 
-/// `cba-profiles.md` §5 — an incomplete closure is reported with the exact
+/// `cbs-profiles.md` §5 — an incomplete closure is reported with the exact
 /// Seals the sender still owes, never as an opaque authorization failure.
 fn dependency_missing(
     seals_by_id: &BTreeMap<SealId, Seal>,
@@ -479,7 +479,7 @@ mod tests {
 
     /// One real, structurally valid single-Seal bundle, built from the same
     /// fixture basis builder the development conformance adapter uses.
-    fn fixture_bundle(id_domain: &str) -> CbaProofBundle {
+    fn fixture_bundle(id_domain: &str) -> CbsProofBundle {
         let signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
             arkret_identifiers::Did::new("did:web:inviter-station.example".to_owned())
                 .expect("fixture notary DID"),
@@ -500,7 +500,7 @@ mod tests {
             },
         )
         .expect("fixture Realm basis");
-        CbaProofBundle {
+        CbsProofBundle {
             target_seal_ref: basis.seal.id.clone(),
             seals: vec![basis.seal],
             control_moves: Vec::new(),
@@ -520,15 +520,15 @@ mod tests {
         let bundle = fixture_bundle("soland:invite-capability-test:empty:");
         let leaves = vec![bundle.target_seal_ref.clone()];
         let error = admit_invite_capability_bundles(&[], &leaves, &realm())
-            .expect_err("an empty cba_proof_bundles list must be refused");
+            .expect_err("an empty cbs_proof_bundles list must be refused");
         assert_eq!(error.wire_code(), "limit_exceeded");
     }
 
-    /// §7 step 4 — `cba_proof_bundles` is bounded at 64 because
+    /// §7 step 4 — `cbs_proof_bundles` is bounded at 64 because
     /// `seal_basis.leaves` is, and each bundle serves exactly one leaf.
     #[test]
     fn more_bundles_than_the_basis_can_have_leaves_is_out_of_range() {
-        let over_limit = arkret_models_collaboration::governance::invite_addressing::MAX_INVITE_DELIVERY_CBA_BUNDLES
+        let over_limit = arkret_models_collaboration::governance::invite_addressing::MAX_INVITE_DELIVERY_CBS_BUNDLES
             + 1;
         let mut bundles = (0..over_limit)
             .map(|index| fixture_bundle(&format!("soland:invite-capability-test:bulk-{index}:")))
@@ -545,7 +545,7 @@ mod tests {
 
     /// §7 step 4 — a bundle pointing at a Seal outside the invite Control
     /// Move's own basis is over-disclosure and amplification input, never a
-    /// missing dependency (`cba-profiles.md` §5).
+    /// missing dependency (`cbs-profiles.md` §5).
     #[test]
     fn a_bundle_target_outside_the_basis_leaves_is_a_schema_violation() {
         let bundle = fixture_bundle("soland:invite-capability-test:foreign-target:");
@@ -617,7 +617,7 @@ mod tests {
     }
     // Exercise the portable leaf reader with a matching single-leaf Merkle
     // root. Outer Seal signature admission is covered separately above.
-    fn authority_leaf_bundle(state: serde_json::Value) -> (CbaProofBundle, Seal) {
+    fn authority_leaf_bundle(state: serde_json::Value) -> (CbsProofBundle, Seal) {
         let mut bundle = fixture_bundle("soland:invite-capability-test:authority-leaf:");
         let mut seal = bundle.seals[0].clone();
         let leaf = serde_json::json!({ "cell": INVITE_AUTHORITY_CELL, "state": state });

@@ -1591,7 +1591,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         return;
     }
     let mut seals = submission
-        .cba_proof_bundles
+        .cbs_proof_bundles
         .iter()
         .flat_map(|bundle| bundle.seals.iter().cloned())
         .collect::<Vec<_>>();

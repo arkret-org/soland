@@ -262,7 +262,7 @@ pub(crate) async fn prepare_self_principal_pcr_initial_submissions(
             let submission = arkret_wire::EventInitialSubmission {
                 event,
                 authorization_lease: Some(authorization_lease),
-                cba_proof_bundles: Vec::new(),
+                cbs_proof_bundles: Vec::new(),
                 control_proposal_ack: None,
                 membership_compensation_evidence: None,
             };
@@ -329,7 +329,7 @@ pub(crate) async fn seed_seal_with_direct_event_effects(
     events: &[&arkret_wire::Event],
     projector: &impl Fn(
         &arkret_wire::Event,
-    ) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, String>,
+    ) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, String>,
 ) {
     let mut event_digests = events
         .iter()
@@ -820,7 +820,7 @@ pub(crate) async fn seed_test_realm(
     invitees: &[&str],
 ) -> Value {
     let realm_id =
-        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event_with_visibility(
+        soland_test_support::cbs_basis::seed_event_derived_realm_genesis_event_with_visibility(
             state,
             owner,
             title,
@@ -1242,7 +1242,7 @@ pub(crate) fn signed_canonical_event(
 /// The shared caller-signed envelope builder, bound to this binary's fixture
 /// basis family.
 ///
-/// `soland_test_support::signed_event` owns the envelope: the CBA plane switch,
+/// `soland_test_support::signed_event` owns the envelope: the CBS plane switch,
 /// the device signature and the optional `head_eq` guard are the same everywhere
 /// and used to be restated per test binary. What stays here is only which
 /// fixture basis these HTTP fixtures seal — a different id domain than the one
@@ -1741,18 +1741,18 @@ pub(crate) async fn project_test_authorized_device(
     let station_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
         .expect("fixture local Station core DID");
     let realm_id =
-        soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
+        soland_test_support::cbs_basis::fixture_principal_control_realm_create_for_server(
             actor,
             station_id.clone(),
         )
         .realm_id
         .clone();
-    soland_test_support::cba_basis::seed_realm_genesis_event(state, realm_id.as_str(), actor).await;
-    soland_test_support::cba_basis::seed_realm_basis(
+    soland_test_support::cbs_basis::seed_realm_genesis_event(state, realm_id.as_str(), actor).await;
+    soland_test_support::cbs_basis::seed_realm_basis(
         state,
         realm_id.as_str(),
         actor,
-        soland_test_support::cba_basis::FixtureBasis::shared(&[]),
+        soland_test_support::cbs_basis::FixtureBasis::shared(&[]),
     )
     .await;
     let snapshot = state.test_projections().snapshot();
@@ -2019,8 +2019,8 @@ const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
 /// they had before the builder moved into `soland-test-support`; the cache
 /// itself is the shared one, which is what lets [`test_cited_basis_seal`] find a
 /// Seal whichever family minted it.
-pub(crate) const HTTP_API_FIXTURE_BASIS: soland_test_support::cba_basis::FixtureBasis<'static> =
-    soland_test_support::cba_basis::FixtureBasis::in_domain(
+pub(crate) const HTTP_API_FIXTURE_BASIS: soland_test_support::cbs_basis::FixtureBasis<'static> =
+    soland_test_support::cbs_basis::FixtureBasis::in_domain(
         "soland:http_api:realm-basis:",
         &FIXTURE_DATA_PLANE_GRANT_ACTIONS,
     );
@@ -2034,7 +2034,7 @@ fn test_realm_basis(
         &arkret_identifiers::Did::new(subject.to_owned()).expect("fixture basis subject DID"),
     )
     .expect("fixture basis subject projection");
-    soland_test_support::cba_basis::realm_basis(
+    soland_test_support::cbs_basis::realm_basis(
         state,
         realm_id,
         &subject_core,
@@ -2049,7 +2049,7 @@ pub(crate) fn test_realm_basis_for_station(
     station_id: &str,
 ) -> soland_services::conformance_basis::ConformanceRealmBasis {
     let subject_core = fixture_actor_core_id(subject);
-    soland_test_support::cba_basis::realm_basis_for_station(
+    soland_test_support::cbs_basis::realm_basis_for_station(
         state,
         realm_id,
         &subject_core,
@@ -2096,7 +2096,7 @@ pub(crate) async fn seed_realm_genesis_event(
     realm_id: &str,
     subject: &str,
 ) -> arkret_identifiers::Hash {
-    soland_test_support::cba_basis::seed_realm_genesis_event(state, realm_id, subject).await;
+    soland_test_support::cbs_basis::seed_realm_genesis_event(state, realm_id, subject).await;
     let record = state
         .test_persistence()
         .events()
@@ -2123,7 +2123,7 @@ pub(crate) fn test_realm_basis_seal(realm_id: &str, subject: &str) -> arkret_wir
 /// The fixture basis Seal an already-built Event cites.
 ///
 /// Federation disclosure is keyed off the transported Event, not off its actor:
-/// `event_sync.rs::validate_federation_transport` refuses a `cba_proof_bundles`
+/// `event_sync.rs::validate_federation_transport` refuses a `cbs_proof_bundles`
 /// entry that is not reachable from some transported `seal_ref` or
 /// `seal_basis.leaves` entry. So a fixture that re-authors an Event after the
 /// envelope was built has to disclose the Seal the envelope still names.
@@ -2138,7 +2138,7 @@ pub(crate) fn test_cited_basis_seal(event: &arkret_wire::Event) -> arkret_wire::
                 .and_then(|basis| basis.leaves.first())
         })
         .expect("fixture Event cites a basis Seal");
-    soland_test_support::cba_basis::basis_seal_with_id(cited)
+    soland_test_support::cbs_basis::basis_seal_with_id(cited)
         .expect("cited Seal was built by this fixture")
 }
 

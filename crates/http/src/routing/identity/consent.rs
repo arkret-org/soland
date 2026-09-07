@@ -443,7 +443,7 @@ async fn plan_consent_revoke(
 }
 
 /// Maximum Seals walked while closing one Control Move's `seal_basis`.
-const MAX_CONSENT_BASIS_SEALS: usize = arkret_wire::cba_proof_bundle::MAX_BUNDLE_SEALS;
+const MAX_CONSENT_BASIS_SEALS: usize = arkret_wire::cbs_proof_bundle::MAX_BUNDLE_SEALS;
 
 /// The Event digests a Control Move's frozen `seal_basis` observes.
 ///
@@ -561,14 +561,14 @@ fn projected_consent_remove_dots(
                 "ak.consent.revoke projects a write outside its own consent cell",
             ));
         }
-        let arkret_wire::cba::ProjectedOp::Direct(op) = &write.op else {
+        let arkret_wire::cbs::ProjectedOp::Direct(op) = &write.op else {
             return Err(ConsentRejection::new(
                 StatusCode::BAD_REQUEST,
                 "reducer_projection_failed",
                 "ak.consent.revoke must project direct or_set remove ops",
             ));
         };
-        if op.op_type != arkret_wire::cba::LatticeOpType::Remove {
+        if op.op_type != arkret_wire::cbs::LatticeOpType::Remove {
             return Err(ConsentRejection::new(
                 StatusCode::BAD_REQUEST,
                 "reducer_projection_failed",

@@ -17,7 +17,7 @@ const CONTROLLER_BACKUP_HPKE_PUBLIC_KEY: &str = "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPL
 /// suite is the only defined one.
 pub(crate) fn genesis_projector(
     event: &arkret_wire::Event,
-) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, String> {
+) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, String> {
     arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
         .map_err(|error| error.to_string())
 }
@@ -153,7 +153,7 @@ fn principal_control_notary(
     account_id: arkret_wire::AccountId,
     principal_did: &str,
 ) -> arkret_wire::NotaryValue {
-    let mut notary = soland_test_support::cba_basis::test_single_signer_notary(principal_did);
+    let mut notary = soland_test_support::cbs_basis::test_single_signer_notary(principal_did);
     let arkret_wire::NotaryValue::SingleSigner { signer, .. } = &mut notary else {
         unreachable!("single-signer fixture")
     };
@@ -529,7 +529,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             .unwrap(),
         soland_storage::PrincipalResolutionCasResult::Applied(_)
     ));
-    soland_test_support::cba_basis::seed_realm_genesis_event(state, &realm_id, controller).await;
+    soland_test_support::cbs_basis::seed_realm_genesis_event(state, &realm_id, controller).await;
     let mut realm_entry = soland_http::state::RealmDirectoryEntry::new(
         realm.clone(),
         "Principal Control",
@@ -1791,7 +1791,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
             provision_event: Box::new(arkret_wire::EventInitialSubmission {
                 event: provision_event,
                 authorization_lease: None,
-                cba_proof_bundles: Vec::new(),
+                cbs_proof_bundles: Vec::new(),
                 control_proposal_ack: None,
                 membership_compensation_evidence: None,
             }),

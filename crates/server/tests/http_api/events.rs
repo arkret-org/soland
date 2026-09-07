@@ -1614,7 +1614,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     )
     .await;
     let created_at = chrono::Utc::now();
-    let payload = soland_test_support::cba_basis::realm_genesis_payload(
+    let payload = soland_test_support::cbs_basis::realm_genesis_payload(
         &state,
         &actor,
         "Bootstrap effects realm",
@@ -1637,7 +1637,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     let event = serde_json::to_value(&bootstrap_unit[0]).unwrap();
     // v1 carries no producer `effects[]` and no producer `preconditions` on a
     // genesis anchor: `event-auth-state-resolution.md` §5 makes the
-    // `ak.realm.create` unit carry no CBA basis field at all, and
+    // `ak.realm.create` unit carry no CBS basis field at all, and
     // `event-and-patch.md` §2.4.2 makes the genesis cell writes a pure
     // function of `kind + payload`. Restate the old hand-written effect array as
     // the receiver's own projection — the identical check
@@ -1671,7 +1671,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     // two to disagree about. What survives is the atomicity premise, restated
     // against the rule that replaced it. `event-auth-state-resolution.md` §5
     // requires every member of the `ak.realm.create` anchor unit to carry *no*
-    // CBA basis field, so a late facet that smuggles a `seal_basis` in is a
+    // CBS basis field, so a late facet that smuggles a `seal_basis` in is a
     // `plane_cross_write` and MUST reject the whole unit; the subsequent
     // byte-identical retry of the correct unit then proves neither canonical
     // history nor reducer state leaked.
@@ -1704,7 +1704,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         mismatch_body["detail"]
             .as_str()
             .is_some_and(|message| message.contains("plane_cross_write")),
-        "an anchor-unit member carrying a CBA basis must fail the §5 plane check \
+        "an anchor-unit member carrying a CBS basis must fail the §5 plane check \
          with its normative reason: {mismatch_body}"
     );
     assert!(

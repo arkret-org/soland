@@ -50,7 +50,7 @@ pub struct SealedCapabilityGrant {
 /// Seal the canonical create Event that already produced `grant_id`.
 ///
 /// Formal install/admission paths have already authored and accepted the
-/// capability Event. A test that needs a frozen CBA view must seal that exact
+/// capability Event. A test that needs a frozen CBS view must seal that exact
 /// Move; authoring a second Event with the same object id creates two OR-set
 /// variants and correctly makes the grant conflict/inactive.
 pub async fn seal_accepted_capability_grant(

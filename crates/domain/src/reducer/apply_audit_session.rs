@@ -22,7 +22,7 @@ use arkret_models_collaboration::events_payloads::audit::{
 };
 use arkret_models_collaboration::governance::audit::AuditReleaseAttestation;
 use arkret_state::lattice::CellState;
-use arkret_wire::cba::{LatticeOpType, ProjectedOp};
+use arkret_wire::cbs::{LatticeOpType, ProjectedOp};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 

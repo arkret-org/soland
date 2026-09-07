@@ -122,7 +122,7 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
 /// `POST /_arkret/self/events` path.
 async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: &str) -> String {
     let realm_id =
-        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event_with_history_access(
+        soland_test_support::cbs_basis::seed_event_derived_realm_genesis_event_with_history_access(
             state,
             owner,
             title,
@@ -791,10 +791,10 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     // authorizes the receiver-derived writes — so the genesis unit is sealed
     // here, per author, before the envelope names it.
     let fixture_basis =
-        soland_test_support::cba_basis::FixtureBasis::shared(&DATA_PLANE_GRANT_ACTIONS);
-    soland_test_support::cba_basis::seed_realm_basis(state, realm_id, actor_id, fixture_basis)
+        soland_test_support::cbs_basis::FixtureBasis::shared(&DATA_PLANE_GRANT_ACTIONS);
+    soland_test_support::cbs_basis::seed_realm_basis(state, realm_id, actor_id, fixture_basis)
         .await;
-    soland_test_support::cba_basis::apply_registered_cba_plane(
+    soland_test_support::cbs_basis::apply_registered_cbs_plane(
         &mut event,
         &verification_method,
         fixture_basis,

@@ -251,7 +251,7 @@ async fn peer_invites_submit(
             // openapi_routes.rs draws this line for every other route: a body
             // that parses as JSON but violates the declared schema is a
             // schema_violation, and only a body that never parsed is
-            // json_invalid. A request missing the required cba_proof_bundles
+            // json_invalid. A request missing the required cbs_proof_bundles
             // parses fine, so reporting it as unparseable would name the wrong
             // contract.
             if let salvo::http::ParseError::SerdeJson(serde_error) = &error
@@ -364,7 +364,7 @@ async fn receive_private_invite_delivery(
     }
 
     // §7 step 4, complete and strictly before step 5. Its result is a function
-    // of `(invite_event, cba_proof_bundles)` alone: nothing above this line
+    // of `(invite_event, cbs_proof_bundles)` alone: nothing above this line
     // reads whether the holder exists, its `invite_receive_policy`, a consent
     // cell or the §6.1.1 quota, and nothing above this line writes. A rejection
     // here therefore leaves zero holder-private writes, zero outbox entries and
@@ -578,14 +578,14 @@ async fn self_invites_dispatch(
     // read and needs no new read surface. `self_invite_dispatch_request_body`
     // deliberately does not carry it: the authenticated inviter submits only an
     // Event id.
-    let cba_proof_bundles =
+    let cbs_proof_bundles =
         capability_closure::build_invite_capability_bundles(state, &invite_event).await?;
     let delivery = InviteDeliveryRequestBody {
         schema: dispatch.schema,
         invite_event,
         invite_address: dispatch.invite_address,
         introduction_evidence: dispatch.introduction_evidence,
-        cba_proof_bundles,
+        cbs_proof_bundles,
         idempotency_key: dispatch.idempotency_key,
     };
     let delivery_body = serde_json::to_value(&delivery)
@@ -2333,7 +2333,7 @@ fn resolved_by_allowed(
 /// admits the Move, with the authority closure swapped for the branch's own
 /// source.
 ///
-/// Peer ingress sources the closure from the request's `cba_proof_bundles[]`:
+/// Peer ingress sources the closure from the request's `cbs_proof_bundles[]`:
 /// the receiver is by definition not a federation peer of that Realm, so
 /// `ak.peer.seals.read.*` fails closed for it and it MUST NOT attempt a
 /// dependency fetch. The local branch sources it from this Station's own
@@ -2359,7 +2359,7 @@ async fn evaluate_invite_realm_capability(
             let closure = capability_closure::invite_capability_closure_from_bundles(
                 state,
                 &delivery.invite_event,
-                &delivery.cba_proof_bundles,
+                &delivery.cbs_proof_bundles,
             )
             .await?;
             let validated = super::events::event_log::validate_private_invite_envelope(
@@ -2401,7 +2401,7 @@ async fn evaluate_invite_realm_capability(
 /// codes: a registered top-level code stays top-level, and a registered reason
 /// code (`realm_authority_root_missing`,
 /// `realm_authority_controller_mismatch`, …) rides on `capability_denied`
-/// rather than being flattened into one opaque class. `cba-profiles.md` §5
+/// rather than being flattened into one opaque class. `cbs-profiles.md` §5
 /// forbids inventing a generic "authorization rejected" reason here.
 fn invite_capability_rejection(error: super::events::event_log::EventValidationError) -> AppError {
     match soland_http::error::ErrorCode::from_wire(error.code) {

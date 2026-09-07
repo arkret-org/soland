@@ -306,7 +306,7 @@ async fn seed_remote_claim_prerequisites(
     .await;
     let remote_station = arkret_wire::DidCoreId::new(source_id).unwrap();
     let remote_genesis =
-        soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
+        soland_test_support::cbs_basis::fixture_principal_control_realm_create_for_server(
             alice,
             remote_station.clone(),
         );

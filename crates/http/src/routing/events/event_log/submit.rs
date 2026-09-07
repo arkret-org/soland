@@ -1091,7 +1091,7 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
     }
     // relation.md §4 and the error registry bind this reducer sub-reason to
     // top-level failed_precondition (HTTP 409). Do not preserve the internal
-    // projection-preflight 412 carrier: 412 is reserved for HTTP/CBA
+    // projection-preflight 412 carrier: 412 is reserved for HTTP/CBS
     // preconditions and is not the registered wire status for this verdict.
     if code == arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION {
         return crate::app_error!(FailedPrecondition, message).with_reason_code(code);
@@ -1119,7 +1119,7 @@ fn realm_already_exists_error() -> SubmitOneError {
     )
 }
 
-fn cba_bottom_reject(reason: &'static str) -> (&'static str, &'static str) {
+fn cbs_bottom_reject(reason: &'static str) -> (&'static str, &'static str) {
     if reason == "cell_bottom_state" {
         ("failed_bottom", "cell_in_bottom_state")
     } else {
@@ -1255,7 +1255,7 @@ async fn submit_initial_event_batch_outcome_inner(
         let arkret_wire::EventInitialSubmission {
             event: _,
             authorization_lease,
-            cba_proof_bundles: _,
+            cbs_proof_bundles: _,
             control_proposal_ack,
             membership_compensation_evidence,
         } = submission;
@@ -2644,16 +2644,16 @@ pub(crate) async fn submit_federation_events(
     let arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
         service_binding_ref,
         events: submissions,
-        cba_proof_bundles,
+        cbs_proof_bundles,
     } = submit;
     // The federation rail no longer carries a bare `seals[]`: Seal
-    // prerequisites are disclosed inside receiver-relative CBA proof bundles,
+    // prerequisites are disclosed inside receiver-relative CBS proof bundles,
     // which MAY overlap, so the flat prerequisite list is the deduplicated
     // union in (notary_seq, id) order (`event_sync.rs::transported_seals`).
     let seals = {
         let mut seen = BTreeSet::new();
         let mut out: Vec<arkret_wire::Seal> = Vec::new();
-        for bundle in &cba_proof_bundles {
+        for bundle in &cbs_proof_bundles {
             for seal in &bundle.seals {
                 if seen.insert(seal.id.clone()) {
                     out.push(seal.clone());
@@ -3786,7 +3786,7 @@ use ingress_receipt::*;
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
-pub(in crate::routing) use post_commit::{cba_proof_bundles_for_targets, digest_suite_from_hash};
+pub(in crate::routing) use post_commit::{cbs_proof_bundles_for_targets, digest_suite_from_hash};
 use preflight::*;
 use projection_preflight::*;
 #[cfg(feature = "test-support")]

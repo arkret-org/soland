@@ -28,7 +28,7 @@ impl ProjectionState {
             .iter()
             .find(|write| write.cell_id == config_cell)
             .and_then(ProjectedCellWrite::as_direct)
-            .filter(|direct| direct.op.op_type == arkret_wire::cba::LatticeOpType::Set)
+            .filter(|direct| direct.op.op_type == arkret_wire::cbs::LatticeOpType::Set)
             .and_then(|direct| direct.op.value.clone());
         let state_transition = projected
             .iter()
@@ -40,7 +40,7 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        if state_transition.op_type != arkret_wire::cba::LatticeOpType::Transition
+        if state_transition.op_type != arkret_wire::cbs::LatticeOpType::Transition
             || state_transition.from.as_ref() != Some(&Value::Null)
             || state_transition.to.as_ref().and_then(Value::as_str) != Some("active")
         {
@@ -129,7 +129,7 @@ impl ProjectionState {
             CellState::Value(Value::String(value)) => Some(value.as_str()),
             _ => None,
         });
-        if op.op_type != arkret_wire::cba::LatticeOpType::Transition || !legal {
+        if op.op_type != arkret_wire::cbs::LatticeOpType::Transition || !legal {
             return ProjectionEffect::Rejected {
                 reason: "audit_binding_state_transition_invalid".to_owned(),
             };
@@ -539,7 +539,7 @@ impl ProjectionState {
             };
         };
         let op = &state_write.op;
-        if op.op_type != arkret_wire::cba::LatticeOpType::Transition
+        if op.op_type != arkret_wire::cbs::LatticeOpType::Transition
             || op.from.as_ref() != Some(&Value::Null)
             || op.to.as_ref().and_then(Value::as_str) != Some(initial_state)
         {
@@ -694,7 +694,7 @@ impl ProjectionState {
                 };
             }
             let (next, fsm_head) = match op.op_type {
-                arkret_wire::cba::LatticeOpType::Transition => {
+                arkret_wire::cbs::LatticeOpType::Transition => {
                     match project_call_fsm_transition(
                         self,
                         &cell_id,
@@ -711,10 +711,10 @@ impl ProjectionState {
                         }
                     }
                 }
-                arkret_wire::cba::LatticeOpType::Set => {
+                arkret_wire::cbs::LatticeOpType::Set => {
                     (op.value.clone().map(CellState::Value), None)
                 }
-                arkret_wire::cba::LatticeOpType::Add | arkret_wire::cba::LatticeOpType::Remove => (
+                arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => (
                     project_call_or_set(self.cells.get(&cell_id), op).map(CellState::Value),
                     None,
                 ),
@@ -1204,7 +1204,7 @@ fn project_call_fsm_transition(
     state: &ProjectionState,
     cell_id: &arkret_identifiers::CellRef,
     family: &str,
-    op: &arkret_wire::cba::LatticeOp,
+    op: &arkret_wire::cbs::LatticeOp,
     operation: &Operation,
     recording_start: bool,
 ) -> Result<(Option<CellState>, Option<CallFsmHead>), &'static str> {
@@ -1366,7 +1366,7 @@ fn call_fsm_conflict_basis(operation: &Operation) -> String {
 
 fn project_call_or_set(
     existing: Option<&CellState>,
-    op: &arkret_wire::cba::LatticeOp,
+    op: &arkret_wire::cbs::LatticeOp,
 ) -> Option<Value> {
     let tag = op.tag.as_deref()?;
     let mut entries = existing
@@ -1376,7 +1376,7 @@ fn project_call_or_set(
         })
         .unwrap_or_default();
     match op.op_type {
-        arkret_wire::cba::LatticeOpType::Add => {
+        arkret_wire::cbs::LatticeOpType::Add => {
             let value = op.value.clone()?;
             if let Some(entry) = entries
                 .iter()
@@ -1392,7 +1392,7 @@ fn project_call_or_set(
             });
             Some(Value::Array(entries))
         }
-        arkret_wire::cba::LatticeOpType::Remove => {
+        arkret_wire::cbs::LatticeOpType::Remove => {
             let entry = entries
                 .iter_mut()
                 .find(|entry| entry.get("tag").and_then(Value::as_str) == Some(tag))?;
@@ -1408,10 +1408,10 @@ fn project_call_or_set(
 fn call_observed_remove_matches(
     family: &str,
     existing: Option<&CellState>,
-    op: &arkret_wire::cba::LatticeOp,
+    op: &arkret_wire::cbs::LatticeOp,
     payload: &Value,
 ) -> bool {
-    if op.op_type != arkret_wire::cba::LatticeOpType::Remove {
+    if op.op_type != arkret_wire::cbs::LatticeOpType::Remove {
         return true;
     }
     let Some(tag) = op.tag.as_deref() else {

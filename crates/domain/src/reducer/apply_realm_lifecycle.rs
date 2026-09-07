@@ -202,7 +202,7 @@ impl ProjectionState {
     }
 
     /// Apply one of the two root-cell CAS transitions. The registry-derived
-    /// CBA write remains the canonical state transition; this method enforces
+    /// CBS write remains the canonical state transition; this method enforces
     /// the semantic guards and keeps the structured projection mirror in sync.
     pub(crate) fn apply_realm_authority_transition(
         &mut self,
@@ -453,7 +453,7 @@ impl ProjectionState {
             || cell_id.subject() != member_subject
             || !matches!(
                 &write.op,
-                arkret_wire::cba::ProjectedOp::TransitionTo { to }
+                arkret_wire::cbs::ProjectedOp::TransitionTo { to }
                     if to == &Value::String("join".to_owned())
             )
         {
@@ -526,7 +526,7 @@ impl ProjectionState {
             || cell_id.subject() != member_subject
             || !matches!(
                 &write.op,
-                arkret_wire::cba::ProjectedOp::TransitionTo { to }
+                arkret_wire::cbs::ProjectedOp::TransitionTo { to }
                     if to == &Value::String("join".to_owned())
             )
         {
@@ -1026,7 +1026,7 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
                 };
             };
-            if projected_transition.op_type != arkret_wire::cba::LatticeOpType::Transition
+            if projected_transition.op_type != arkret_wire::cbs::LatticeOpType::Transition
                 || projected_transition.from.as_ref().and_then(Value::as_str)
                     != Some("uninitialized")
                 || projected_transition.to.as_ref().and_then(Value::as_str) != Some("active")

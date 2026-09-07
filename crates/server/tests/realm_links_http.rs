@@ -78,7 +78,7 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
     let genesis = CallerSignedEvent::realm_genesis(
         ALICE,
         ALICE_DEVICE,
-        soland_test_support::cba_basis::realm_genesis_payload(
+        soland_test_support::cbs_basis::realm_genesis_payload(
             state,
             ALICE,
             title,

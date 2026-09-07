@@ -4,7 +4,7 @@
 //! caller: `capabilities.md` sections 118/361 and `key-management.md` section
 //! 411 forbid the service producing that signature. A fixture that exercises one
 //! of those surfaces therefore has to author and sign the Move itself, which is
-//! more than a request-body change — the envelope owes a CBA basis
+//! more than a request-body change — the envelope owes a CBS basis
 //! (`event-auth-state-resolution.md` section 5) and, on a settled CAS register,
 //! its own `head_eq` guard.
 //!
@@ -16,7 +16,7 @@ use arkret_identifiers::{Hlc, RealmId, SealId};
 use arkret_wire::{DidUrl, Event, EventId, EventInitialSubmission, Precondition, ScopeRef};
 use serde_json::Value;
 
-use crate::cba_basis::{FixtureBasis, apply_registered_cba_plane, apply_registered_cba_plane_seal};
+use crate::cbs_basis::{FixtureBasis, apply_registered_cbs_plane, apply_registered_cbs_plane_seal};
 
 /// The Ed25519 seed a fixture actor's device key is derived from.
 ///
@@ -130,16 +130,16 @@ pub fn complete_realm_bootstrap_unit(
     events
 }
 
-/// Where a fixture Event's CBA basis comes from.
+/// Where a fixture Event's CBS basis comes from.
 #[derive(Clone, Debug)]
 pub enum CallerSignedBasis<'a> {
-    /// The synthetic genesis unit [`crate::cba_basis`] seals for a Realm that
+    /// The synthetic genesis unit [`crate::cbs_basis`] seals for a Realm that
     /// was stood up straight in `AppState`.
     Fixture(FixtureBasis<'a>),
     /// A Seal this deployment actually accepted, which is what a Realm
     /// bootstrapped through the real `ak.realm.create` batch has to cite.
     AcceptedSeal(SealId),
-    /// No CBA field at all: a member of an `event-auth-state-resolution.md`
+    /// No CBS field at all: a member of an `event-auth-state-resolution.md`
     /// section 5 anchor unit.
     AnchorUnit,
 }
@@ -192,7 +192,7 @@ impl<'a> CallerSignedEvent<'a> {
     /// `realm_genesis` scope and derives the Realm id from the Event itself, so
     /// this names no Realm at all — the caller reads the id back with
     /// `RealmId::from_event_id(&event.event_id)` once the Event is built. The
-    /// genesis anchor unit also carries no CBA basis field
+    /// genesis anchor unit also carries no CBS basis field
     /// (`event-auth-state-resolution.md` section 5), and it always opens the
     /// Realm-scoped actor chain at `actor_seq = 0`.
     #[must_use]
@@ -293,13 +293,13 @@ impl<'a> CallerSignedEvent<'a> {
         // v1 carries no producer `effects[]`: the receiver derives every write
         // from `kind + payload` through the registered contract
         // (`event-and-patch.md` section 2.4.2). What a fixture still owes is the
-        // CBA envelope shape, which follows from the kind's registered plane.
+        // CBS envelope shape, which follows from the kind's registered plane.
         match self.basis {
             CallerSignedBasis::Fixture(basis) => {
-                apply_registered_cba_plane(&mut event, verification_method.as_str(), basis);
+                apply_registered_cbs_plane(&mut event, verification_method.as_str(), basis);
             }
             CallerSignedBasis::AcceptedSeal(seal_id) => {
-                apply_registered_cba_plane_seal(&mut event, verification_method.as_str(), seal_id);
+                apply_registered_cbs_plane_seal(&mut event, verification_method.as_str(), seal_id);
             }
             CallerSignedBasis::AnchorUnit => {}
         }

@@ -16,7 +16,7 @@ fn fixture_event_id_for_operation(operation_id: &str) -> String {
         .to_string()
 }
 
-mod cba_capability_cell_tests {
+mod cbs_capability_cell_tests {
     use arkret_state::lattice::CellState;
     use serde_json::{Value, json};
 
@@ -58,7 +58,7 @@ mod cba_capability_cell_tests {
         })]));
 
         let grant = engine_grant_from_capability_cell_state(grant_id, &state)
-            .expect("the CBA registry wrapper must resolve to an effective grant");
+            .expect("the CBS registry wrapper must resolve to an effective grant");
         assert_eq!(grant.grant_id, grant_id);
         assert_eq!(grant.realm_id, realm_id);
         assert_eq!(

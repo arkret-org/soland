@@ -17,7 +17,7 @@
 //!   carries the revoked tombstone forward.
 //! - `bottom` is **inert** for or_set: we never produce a Bottom cell here.
 //!
-//! Acceptance / fail-closed: the envelope-level CBA discipline is enforced at
+//! Acceptance / fail-closed: the envelope-level CBS discipline is enforced at
 //! event ingest: DataEvents use `seal_ref`/`auth_context`, while reducer-input
 //! Control Moves with effects must carry `seal_basis.leaves`. The reducer
 //! trusts that gate and does the *structural* acceptance checks reachable at
@@ -1549,7 +1549,7 @@ impl ProjectionState {
         &self,
         event: &arkret_wire::Event,
         digest_suite: arkret_canonical::DigestSuite,
-    ) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, arkret_schema::EventCellContractError>
+    ) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, arkret_schema::EventCellContractError>
     {
         arkret_schema::project_registered_cell_writes_with_authority_resolver(
             event,

@@ -6,7 +6,7 @@ struct PreparedSidecarEvent {
     command: soland_services::events::CommitAcceptedEventCommand,
     operation: arkret_event_draft::ProjectedEventOperation,
     projected_event: soland_services::events::ProjectedEvent,
-    cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
+    cell_writes: Vec<arkret_wire::cbs::ProjectedCellWrite>,
 }
 
 async fn validate_and_prepare(

@@ -19,7 +19,7 @@ struct CallInput {
     /// own content, so tests read it here instead of pinning a literal.
     event_id: arkret_identifiers::EventId,
     operation: Operation,
-    cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
+    cell_writes: Vec<arkret_wire::cbs::ProjectedCellWrite>,
 }
 
 fn call_input(kind: &str, realm: &str, payload: Value) -> CallInput {
@@ -453,7 +453,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
                 "state_transition": {"from": "ringing", "to": to}
             }),
         );
-        // Two siblings resolved against the same accepted CBA basis are
+        // Two siblings resolved against the same accepted CBS basis are
         // concurrent by construction.
         input.operation.context.seal_basis = Some(arkret_wire::SealBasis {
             leaves: vec![
@@ -508,7 +508,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
 }
 
 #[test]
-fn payload_conflict_labels_do_not_create_a_cba_sibling_relation() {
+fn payload_conflict_labels_do_not_create_a_cbs_sibling_relation() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";

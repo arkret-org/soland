@@ -825,22 +825,22 @@ pub(crate) async fn post_recovery_policy(
     )
     .await;
 
-    let realm = soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
+    let realm = soland_test_support::cbs_basis::fixture_principal_control_realm_create_for_server(
         principal_did,
         arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
     )
     .realm_id
     .clone();
     let realm_id = realm.to_string();
-    let fixture_basis = soland_test_support::cba_basis::FixtureBasis::shared(&[]);
-    soland_test_support::cba_basis::seed_realm_basis(
+    let fixture_basis = soland_test_support::cbs_basis::FixtureBasis::shared(&[]);
+    soland_test_support::cbs_basis::seed_realm_basis(
         &state,
         &realm_id,
         principal_did,
         fixture_basis,
     )
     .await;
-    let basis = soland_test_support::cba_basis::realm_basis_seal(
+    let basis = soland_test_support::cbs_basis::realm_basis_seal(
         &state,
         &realm_id,
         &principal_core,
@@ -894,10 +894,10 @@ pub(crate) async fn post_recovery_policy(
     event.prev_refs = prev_refs;
     event.requirements.schema_profile_refs =
         vec![arkret_wire::ProfileRef::new("ak.schema.recovery_policy.v1").unwrap()];
-    soland_test_support::cba_basis::apply_registered_cba_plane(
+    soland_test_support::cbs_basis::apply_registered_cbs_plane(
         &mut event,
         &event_verification_method,
-        soland_test_support::cba_basis::FixtureBasis::shared(&[]),
+        soland_test_support::cbs_basis::FixtureBasis::shared(&[]),
     );
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         event_signing_key.clone(),
@@ -946,7 +946,7 @@ pub(crate) async fn post_recovery_policy(
     let receipt_request = arkret_wire::ControlProposalAckIssueRequest {
         event: event.clone(),
         authorization_lease: lease_outcome.authorization_leases[0].clone(),
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
     };
     let receipt_request_bytes = arkret_canonical::canonical_json_bytes(&receipt_request).unwrap();
     let mut receipt_response = TestClient::post("http://server/_arkret/self/control-proposal-acks")
@@ -981,7 +981,7 @@ pub(crate) async fn post_recovery_policy(
     let request = arkret_models_crypto::RecoveryPolicyPublishRequest {
         event: event.clone(),
         authorization_lease: lease_outcome.authorization_leases[0].clone(),
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
         control_proposal_ack: Some(control_proposal_ack),
     };
     let request_bytes = arkret_canonical::canonical_json_bytes(&request).unwrap();

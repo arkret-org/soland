@@ -21,7 +21,7 @@ use arkret_state::state::{
     SealLeafUnionProof, SealReject, SealStore, SealedControlEventRecord, StoreError, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
-use arkret_wire::cba::ProjectedCellWrite;
+use arkret_wire::cbs::ProjectedCellWrite;
 use arkret_wire::event_envelope::Event;
 use arkret_wire::{
     ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy,
@@ -963,7 +963,7 @@ impl ProjectionService {
         write: &ProjectedCellWrite,
         realm_id: &RealmId,
         pre_state: &BTreeMap<CellRef, CellState>,
-    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject> {
+    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject> {
         arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
     }
 
@@ -1349,7 +1349,7 @@ impl ProjectionService {
         write: &ProjectedCellWrite,
         realm_id: &RealmId,
         pre_state: &BTreeMap<CellRef, CellState>,
-    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject> {
+    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject> {
         arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
     }
 
@@ -1361,7 +1361,7 @@ impl ProjectionService {
         realm_id: &RealmId,
         pre_state: &BTreeMap<CellRef, CellState>,
         verify_proofs: F,
-    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
     where
         F: Fn(&Event) -> Result<(), String>,
     {
@@ -1381,7 +1381,7 @@ impl ProjectionService {
         pre_state: &BTreeMap<CellRef, CellState>,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
     where
         F: Fn(&Event) -> Result<(), String>,
     {
@@ -1403,7 +1403,7 @@ impl ProjectionService {
         digest_suite: arkret_canonical::DigestSuite,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
     where
         F: Fn(&Event) -> Result<(), String>,
     {
@@ -1422,7 +1422,7 @@ impl ProjectionService {
     }
 
     /// Verify a Control Move already committed by the local accepted-event
-    /// admission lane. This retains proof, CBA-basis, state-resolution, and
+    /// admission lane. This retains proof, CBS-basis, state-resolution, and
     /// lattice checks while using the accepted-event projection path for the
     /// previously frozen `ak.invite.cancel` binding.
     pub fn verify_accepted_control_move_in_context<F>(
@@ -1432,7 +1432,7 @@ impl ProjectionService {
         pre_state: &BTreeMap<CellRef, CellState>,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
     where
         F: Fn(&Event) -> Result<(), String>,
     {
@@ -1454,7 +1454,7 @@ impl ProjectionService {
         digest_suite: arkret_canonical::DigestSuite,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
     where
         F: Fn(&Event) -> Result<(), String>,
     {
@@ -1475,7 +1475,7 @@ impl ProjectionService {
     pub async fn verify_recovery_witness(
         &self,
         event: &Event,
-        effects: &[arkret_wire::cba::ProjectionEffect],
+        effects: &[arkret_wire::cbs::ProjectionEffect],
         realm_id: &RealmId,
         pre_state: &BTreeMap<CellRef, CellState>,
         predecessor_closure: &BTreeSet<SealId>,
@@ -1494,7 +1494,7 @@ impl ProjectionService {
     pub async fn verify_recovery_witness_with_digest_suite(
         &self,
         event: &Event,
-        effects: &[arkret_wire::cba::ProjectionEffect],
+        effects: &[arkret_wire::cbs::ProjectionEffect],
         realm_id: &RealmId,
         pre_state: &BTreeMap<CellRef, CellState>,
         predecessor_closure: &BTreeSet<SealId>,

@@ -370,7 +370,7 @@ async fn project_authorized_principal_device(
         soland_test_support::fixture_principal_control_realm(principal_did.as_str()),
     )
     .unwrap();
-    soland_test_support::cba_basis::seed_realm_genesis_event(
+    soland_test_support::cbs_basis::seed_realm_genesis_event(
         state,
         pcr_realm_id.as_str(),
         principal_did.as_str(),
@@ -520,7 +520,7 @@ async fn mls_lifecycle_end_to_end_body() {
     let realm_genesis = CallerSignedEvent::realm_genesis(
         alice_did,
         alice_device,
-        soland_test_support::cba_basis::realm_genesis_payload(
+        soland_test_support::cbs_basis::realm_genesis_payload(
             &state,
             alice_did,
             "MLS lifecycle",

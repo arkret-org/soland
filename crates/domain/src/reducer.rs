@@ -69,7 +69,7 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_state::lattice::CellState;
 use arkret_wire::ReadCursorScope;
-use arkret_wire::cba::ProjectedCellWrite;
+use arkret_wire::cbs::ProjectedCellWrite;
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;

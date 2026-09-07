@@ -674,7 +674,7 @@ fn peer_event_partial_retry(
         })
         .collect::<std::collections::BTreeSet<_>>();
     request
-        .cba_proof_bundles
+        .cbs_proof_bundles
         .retain(|bundle| required_targets.contains(&bundle.target_seal_ref));
     let digest_suites =
         crate::routing::events::event_log::accepted_event_digest_suites(&retained_events).ok()?;
@@ -2864,7 +2864,7 @@ mod tests {
                     submission("000000000001", "00000000ae01", "00000000ce01"),
                     submission("000000000002", "00000000ae02", "00000000ce02"),
                 ],
-                cba_proof_bundles: Vec::new(),
+                cbs_proof_bundles: Vec::new(),
             };
         let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
         let original_receipt =

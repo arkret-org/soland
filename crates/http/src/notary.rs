@@ -166,7 +166,7 @@ struct AcceptedControlMove {
     event_digest: Hash,
     event: Event,
     actor_id: arkret_wire::ActorId,
-    effects: Vec<arkret_wire::cba::ProjectionEffect>,
+    effects: Vec<arkret_wire::cbs::ProjectionEffect>,
 }
 
 type RejectedControlMove = (
@@ -2794,8 +2794,8 @@ mod tests {
                 )),
                 op: SealedOp::new(
                     move_id.clone(),
-                    arkret_wire::cba::LatticeOp {
-                        op_type: arkret_wire::cba::LatticeOpType::Set,
+                    arkret_wire::cbs::LatticeOp {
+                        op_type: arkret_wire::cbs::LatticeOpType::Set,
                         tag: None,
                         value: Some(local_notary),
                         from: None,
@@ -2826,8 +2826,8 @@ mod tests {
                 )),
                 op: SealedOp::new(
                     move_id,
-                    arkret_wire::cba::LatticeOp {
-                        op_type: arkret_wire::cba::LatticeOpType::Set,
+                    arkret_wire::cbs::LatticeOp {
+                        op_type: arkret_wire::cbs::LatticeOpType::Set,
                         tag: None,
                         value: Some(remote_notary),
                         from: None,

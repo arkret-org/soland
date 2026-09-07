@@ -277,8 +277,8 @@ pub(super) fn validate_durable_agent_lifecycle(
         && derived[0].cell_id.as_str() == expected_cell
         && matches!(
             &derived[0].op,
-            arkret_wire::cba::ProjectedOp::Direct(op)
-                if op.op_type == arkret_wire::cba::LatticeOpType::Transition
+            arkret_wire::cbs::ProjectedOp::Direct(op)
+                if op.op_type == arkret_wire::cbs::LatticeOpType::Transition
                     && op.to.as_ref().and_then(Value::as_str) == Some(next_status)
         );
     if !matches_transition {

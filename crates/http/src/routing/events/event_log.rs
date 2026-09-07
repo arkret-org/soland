@@ -113,7 +113,7 @@ pub use submit::attach_fixture_station_admission_proof;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
-    ValidatedEventEnvelope, admit_frontier_backfill_event, cba_proof_bundles_for_targets,
+    ValidatedEventEnvelope, admit_frontier_backfill_event, cbs_proof_bundles_for_targets,
     digest_suite_from_hash, prepare_service_franking_proof_event_value,
     service_event_authoring_lock, submit_account_data_event_value, submit_agent_membership_cascade,
     submit_applet_install_batch, submit_direct_conversation_founding_unit, submit_event_value,

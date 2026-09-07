@@ -83,7 +83,7 @@ async fn accountability_grants_at_frozen_basis(
         return Ok(grants);
     }
 
-    // Test/support callers that construct Operations directly have no CBA
+    // Test/support callers that construct Operations directly have no CBS
     // envelope context. Keep that path deterministic by folding accepted grant
     // events by event id and the profile Event's signed created_at. Production
     // Control Moves always take the sealed-cell path above.

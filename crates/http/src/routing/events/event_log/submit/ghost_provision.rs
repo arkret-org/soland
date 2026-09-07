@@ -8,7 +8,7 @@ struct PreparedGhostEvent {
     canonical_event: Event,
     command: soland_services::events::CommitAcceptedEventCommand,
     operation: Option<arkret_event_draft::ProjectedEventOperation>,
-    projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
+    projected_cell_writes: Vec<arkret_wire::cbs::ProjectedCellWrite>,
     projected_event: Option<soland_services::events::ProjectedEvent>,
     actor_id: String,
     realm_id: String,
@@ -184,7 +184,7 @@ async fn prepare_ghost_event(
         projection
             .check_move_preconditions(operation)
             .map_err(|reason| {
-                let (code, message) = cba_bottom_reject(reason);
+                let (code, message) = cbs_bottom_reject(reason);
                 let error = SubmitOneError::new(StatusCode::PRECONDITION_FAILED, code, message);
                 if reason == "cell_bottom_state" {
                     error.with_details(serde_json::json!({ "reason_code": "cell_in_bottom_state" }))

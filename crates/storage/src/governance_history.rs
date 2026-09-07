@@ -580,7 +580,7 @@ pub fn history_traversal_retained_object_canonical(
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
             // Canonical storage has no covering Seal or complete anchor unit.
             // Validate the proof regime and byte binding here; the retained-cut
-            // verifier owns context-sensitive CBA validation before replay.
+            // verifier owns context-sensitive CBS validation before replay.
             match event.proofs.as_slice() {
                 [EventProof::Producer(producer)] => producer
                     .validate_direct_signer_resolution_evidence()

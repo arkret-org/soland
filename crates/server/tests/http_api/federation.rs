@@ -1770,7 +1770,7 @@ fn peer_submit_body(event: &Value) -> Value {
         // pre-state. `event-auth-state-resolution.md` §8 disclosure travels in
         // the bundle, reachable from the transported Event's basis, never as a
         // bare `seals[]` rail.
-        cba_proof_bundles: vec![arkret_wire::CbaProofBundle {
+        cbs_proof_bundles: vec![arkret_wire::CbsProofBundle {
             target_seal_ref: basis_seal.id.clone(),
             seals: vec![basis_seal],
             control_moves: Vec::new(),

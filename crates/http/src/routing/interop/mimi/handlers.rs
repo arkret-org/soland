@@ -1254,8 +1254,8 @@ pub(super) async fn mimi_report_abuse(
     let report_event_id = event.event_id.to_string();
     let mut submission = typed.report_event.clone();
     submission
-        .cba_proof_bundles
-        .extend(typed.cba_proof_bundles.iter().cloned());
+        .cbs_proof_bundles
+        .extend(typed.cbs_proof_bundles.iter().cloned());
     crate::routing::events::event_log::submit_mimi_reporter_initial_event_submission(
         state, &session, submission, &admission,
     )
@@ -1748,11 +1748,11 @@ mod reporter_event_binding_tests {
             report_event: EventInitialSubmission {
                 event,
                 authorization_lease: None,
-                cba_proof_bundles: Vec::new(),
+                cbs_proof_bundles: Vec::new(),
                 control_proposal_ack: None,
                 membership_compensation_evidence: None,
             },
-            cba_proof_bundles: Vec::new(),
+            cbs_proof_bundles: Vec::new(),
         };
         request.reporter_authority.proof.payload_digest = request.payload_digest().unwrap();
         request

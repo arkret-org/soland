@@ -15,7 +15,7 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
 use arkret_state::lattice::CellState;
 use arkret_state::state::{CellRegistry, CellStore, StoreError};
-use arkret_wire::cba::ProjectedCellWrite;
+use arkret_wire::cbs::ProjectedCellWrite;
 use arkret_wire::{AppletId, ProfileId};
 use serde_json::Value;
 
@@ -642,7 +642,7 @@ impl ProjectionState {
 
     fn store_push_route_cell(&mut self, subject: PushRouteSubject, value: PushRouteCellValue) {
         // Actor-private routes are deliberately absent from `cells`: that map
-        // feeds Realm CBA/Seal/state-root resolution. The recipient Station keeps this revision-CAS
+        // feeds Realm CBS/Seal/state-root resolution. The recipient Station keeps this revision-CAS
         // value only in its private projection.
         self.push_routes.insert(subject, value);
     }
@@ -712,7 +712,7 @@ impl ProjectionState {
     /// evaluated by their dedicated reducer gates.
     pub fn check_move_preconditions(&self, operation: &Operation) -> Result<(), &'static str> {
         for precondition in &operation.context.preconditions {
-            if precondition.predicate.op != arkret_wire::cba::PredicateOp::HeadEq {
+            if precondition.predicate.op != arkret_wire::cbs::PredicateOp::HeadEq {
                 continue;
             }
             let Some(expected) = precondition.predicate.value.as_ref() else {

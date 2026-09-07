@@ -7,7 +7,7 @@ pub(super) struct PreparedAgentMembershipEvent {
     pub(super) control_event: Event,
     pub(super) digest_suite: arkret_canonical::DigestSuite,
     pub(super) operation: arkret_event_draft::ProjectedEventOperation,
-    pub(super) projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
+    pub(super) projected_cell_writes: Vec<arkret_wire::cbs::ProjectedCellWrite>,
     pub(super) projected_event: soland_services::events::ProjectedEvent,
     pub(super) actor_id: String,
     pub(super) ingress_receipts: Vec<arkret_wire::IngressReceipt>,
@@ -192,7 +192,7 @@ pub(super) async fn derive_submit_cell_writes(
     event: &Event,
 ) -> Result<
     (
-        Vec<arkret_wire::cba::ProjectedCellWrite>,
+        Vec<arkret_wire::cbs::ProjectedCellWrite>,
         arkret_schema::FrozenPreState,
     ),
     SubmitOneError,
@@ -260,10 +260,10 @@ pub(super) async fn derive_submit_cell_writes(
 pub(super) fn validate_cas_write_guards(
     state: &AppState,
     operation: &Operation,
-    writes: &[arkret_wire::cba::ProjectedCellWrite],
+    writes: &[arkret_wire::cbs::ProjectedCellWrite],
     frozen: &std::collections::BTreeMap<arkret_wire::CellRef, arkret_state::lattice::CellState>,
 ) -> Result<(), SubmitOneError> {
-    use arkret_wire::cba::{LatticeOpType, ProjectedOp};
+    use arkret_wire::cbs::{LatticeOpType, ProjectedOp};
     for write in writes {
         let produces_set = match &write.op {
             ProjectedOp::Direct(op) => op.op_type == LatticeOpType::Set,
@@ -421,7 +421,7 @@ pub(in crate::routing) async fn submit_event_value(
         .map_err(SubmitOneError::from)?;
     // `event-auth-state-resolution.md` §5(1) — a Agent PCR genesis is
     // the delegated branch of the closed `ak.realm.create` anchor unit and
-    // carries no `seal_basis`, so it needs the bootstrap CBA context. Only a
+    // carries no `seal_basis`, so it needs the bootstrap CBS context. Only a
     // create that `batch_is_agent_pcr_create` already materialized as
     // that unit reaches this point.
     let bootstrap_contexts = single_realm_create_bootstrap_context(&envelope);
@@ -620,7 +620,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
     let arkret_wire::EventInitialSubmission {
         event,
         authorization_lease,
-        cba_proof_bundles: _,
+        cbs_proof_bundles: _,
         control_proposal_ack,
         membership_compensation_evidence,
     } = submission;
@@ -747,7 +747,7 @@ pub(super) async fn prepare_agent_membership_initial_event(
     let arkret_wire::EventInitialSubmission {
         event,
         authorization_lease,
-        cba_proof_bundles: _,
+        cbs_proof_bundles: _,
         control_proposal_ack,
         membership_compensation_evidence: _,
     } = submission;
@@ -2287,7 +2287,7 @@ pub(super) async fn submit_event_value_with_context(
     // Ordinary Events never declare a reducer profile. The receiver resolves
     // it from the Realm's authoritative singleton. The current registry has
     // one profile and no upgrade edges, so the projected singleton is also the
-    // value at every admissible Event CBA.
+    // value at every admissible Event CBS.
     let profile = if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str() {
         envelope
             .get("payload")
@@ -3164,12 +3164,12 @@ mod cas_write_guard_tests {
             arkret_wire::EventKind::RealmPolicyBundle.as_str(),
             json!({"policy_revision": 2, "federation_policy": "restricted"}),
         );
-        let mut op = arkret_wire::cba::LatticeOp::empty();
-        op.op_type = arkret_wire::cba::LatticeOpType::Set;
+        let mut op = arkret_wire::cbs::LatticeOp::empty();
+        op.op_type = arkret_wire::cbs::LatticeOpType::Set;
         op.value = Some(operation.payload.clone());
-        let writes = vec![arkret_wire::cba::ProjectedCellWrite {
+        let writes = vec![arkret_wire::cbs::ProjectedCellWrite {
             cell_id: arkret_wire::CellRef::new(cell).unwrap(),
-            op: arkret_wire::cba::ProjectedOp::Direct(op),
+            op: arkret_wire::cbs::ProjectedOp::Direct(op),
         }];
         let mut frozen = std::collections::BTreeMap::new();
         assert!(validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok());
@@ -3241,12 +3241,12 @@ mod cas_write_guard_tests {
             arkret_wire::EventKind::RealmInheritancePolicy.as_str(),
             json!({"source_realm_id": source, "inherits": {}, "mode": "narrow_only", "max_depth": 1}),
         );
-        let mut op = arkret_wire::cba::LatticeOp::empty();
-        op.op_type = arkret_wire::cba::LatticeOpType::Set;
+        let mut op = arkret_wire::cbs::LatticeOp::empty();
+        op.op_type = arkret_wire::cbs::LatticeOpType::Set;
         op.value = Some(operation.payload.clone());
-        let writes = vec![arkret_wire::cba::ProjectedCellWrite {
+        let writes = vec![arkret_wire::cbs::ProjectedCellWrite {
             cell_id: cell.clone(),
-            op: arkret_wire::cba::ProjectedOp::Direct(op),
+            op: arkret_wire::cbs::ProjectedOp::Direct(op),
         }];
         let mut frozen = std::collections::BTreeMap::new();
         let value = arkret_state::lattice::CellState::Value(operation.payload.clone());
@@ -3288,12 +3288,12 @@ mod cas_write_guard_tests {
             arkret_wire::EventKind::RealmOwnerTransfer.as_str(),
             json!({"controller_actor_id": "ak:did_core:webvh:z6mkfixturebob"}),
         );
-        let mut op = arkret_wire::cba::LatticeOp::empty();
-        op.op_type = arkret_wire::cba::LatticeOpType::Set;
+        let mut op = arkret_wire::cbs::LatticeOp::empty();
+        op.op_type = arkret_wire::cbs::LatticeOpType::Set;
         op.value = Some(operation.payload.clone());
-        let writes = vec![arkret_wire::cba::ProjectedCellWrite {
+        let writes = vec![arkret_wire::cbs::ProjectedCellWrite {
             cell_id: cell.clone(),
-            op: arkret_wire::cba::ProjectedOp::Direct(op),
+            op: arkret_wire::cbs::ProjectedOp::Direct(op),
         }];
         let frozen = std::collections::BTreeMap::from([(cell.clone(), conflict_bottom(&cell))]);
         assert_eq!(

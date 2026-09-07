@@ -214,7 +214,7 @@ async fn mimi_room_update_body(
     let submission = arkret_wire::EventInitialSubmission {
         event: serde_json::from_value(event).unwrap(),
         authorization_lease: None,
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
         control_proposal_ack: None,
         membership_compensation_evidence: None,
     };
@@ -539,7 +539,7 @@ async fn exact_human_mimi_report_body(
             },
         },
         report_event: arkret_wire::EventInitialSubmission::online(report_event),
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
     };
     body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
     body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
@@ -683,7 +683,7 @@ async fn exact_agent_mimi_report_body(
             },
         },
         report_event: arkret_wire::EventInitialSubmission::online(report_event),
-        cba_proof_bundles: Vec::new(),
+        cbs_proof_bundles: Vec::new(),
     };
     body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
     body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
@@ -1253,7 +1253,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let demo_realm = demo_realm_id();
-    let custom_realm_id = soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(
+    let custom_realm_id = soland_test_support::cbs_basis::seed_event_derived_realm_genesis_event(
         &state,
         state.service_did().as_str(),
         "MIMI migration target",

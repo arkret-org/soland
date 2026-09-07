@@ -521,7 +521,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     state
         .test_refresh_grant_from_sealed_cells(&realm, admin_grant_id.as_str())
         .await;
-    soland_test_support::cba_basis::seed_realm_genesis_event(
+    soland_test_support::cbs_basis::seed_realm_genesis_event(
         state,
         demo_realm_id(),
         "did:web:alice.example",
@@ -1045,7 +1045,7 @@ async fn signed_ghost_provision_body(
     // registry, so `event-auth-state-resolution.md` §5 makes it a Control Move:
     // it names the same accepted Seal basis as the accountability grant it
     // travels with. The delegated applet authorization on the envelope is a
-    // separate, additive check — it never substitutes for the CBA basis. Both
+    // separate, additive check — it never substitutes for the CBS basis. Both
     // are producer-signed content, so they ride the intent, and the reference
     // to the grant names its FINAL id.
     let profile_intent = profile
@@ -2114,7 +2114,7 @@ async fn applet_message_event(
     let verification_method = package.webhook_auth.key_ref.clone();
     // `ak.message.create` is a DataEvent. Formal Applet install grants are
     // issued to the executing service, while actor_id remains the accountable
-    // ghost, so the frozen CBA view must cover the exact install
+    // ghost, so the frozen CBS view must cover the exact install
     // authorization_ref for the executing service.
     let seal_id = match &request.seal_ref {
         Some(seal_id) => seal_id.clone(),
@@ -3333,7 +3333,7 @@ async fn signed_revoke_events(
         submissions.push(arkret_wire::EventInitialSubmission {
             event,
             authorization_lease: None,
-            cba_proof_bundles: Vec::new(),
+            cbs_proof_bundles: Vec::new(),
             control_proposal_ack: None,
             membership_compensation_evidence: None,
         });
@@ -3378,7 +3378,7 @@ async fn signed_revoke_events(
         membership_submissions.push(arkret_wire::EventInitialSubmission {
             event,
             authorization_lease: None,
-            cba_proof_bundles: Vec::new(),
+            cbs_proof_bundles: Vec::new(),
             control_proposal_ack: None,
             membership_compensation_evidence: None,
         });

@@ -75,7 +75,7 @@ pub(crate) fn validate_event_envelope_with_context<'a>(
 ///
 /// The peer delivery carries the accepted producer and origin Station proofs.
 /// Verify that binding before reusing its exact producer key at envelope
-/// admission. The receiver gets Realm authority from the supplied CBA closure;
+/// admission. The receiver gets Realm authority from the supplied CBS closure;
 /// it does not substitute its own device directory for the origin's admission.
 pub(in crate::routing) fn validate_private_invite_envelope<'a>(
     state: &'a AppState,
@@ -825,7 +825,7 @@ async fn validate_event_envelope_with_ingress(
     // inside the gate so there is one evaluator, shared with
     // `enforce_registered_cell_contract` below.
     // `event-auth-state-resolution.md` section 5 - the two closed anchor units
-    // carry no CBA basis field at all, so their registry plane check runs in the
+    // carry no CBS basis field at all, so their registry plane check runs in the
     // bootstrap context. Membership of a unit is decided by the batch context
     // this validator was handed (the closed-whitelist owner is
     // `arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit`, already
@@ -1039,14 +1039,14 @@ async fn finalize_validated_event_envelope(
         core.kind == arkret_wire::EventKind::SidecarCreate.as_str()
             && admission.is_sidecar_ensure(session, object)
     });
-    let cba_context = if is_direct_conversation_founding {
+    let cbs_context = if is_direct_conversation_founding {
         arkret_schema::EventCellContractContext::DirectConversationFounding
     } else if bootstrap_unit_member || sidecar_bootstrap || privileged_bootstrap {
         arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
     } else {
         arkret_schema::EventCellContractContext::Standard
     };
-    enforce_registered_cell_contract(envelope, &core.kind, cba_context, core.digest_suite)?;
+    enforce_registered_cell_contract(envelope, &core.kind, cbs_context, core.digest_suite)?;
     enforce_ordered_log_cell_contract(
         state,
         envelope,

@@ -175,7 +175,7 @@ pub fn realm_basis_seal(
 /// The fixture basis Seal an already-built Event cites.
 ///
 /// Federation disclosure is keyed off the transported Event, not off its actor:
-/// a `cba_proof_bundles` entry has to be reachable from some transported
+/// a `cbs_proof_bundles` entry has to be reachable from some transported
 /// `seal_ref` or `seal_basis.leaves` entry. So a fixture that re-authors an
 /// Event after the envelope was built has to disclose the Seal the envelope
 /// still names, whichever fixture family minted it.
@@ -896,7 +896,7 @@ async fn persist_and_project_realm_genesis_event_with_history_access(
     }
 }
 
-/// Give `event` the CBA envelope shape its kind's registry row declares.
+/// Give `event` the CBS envelope shape its kind's registry row declares.
 ///
 /// `event-auth-state-resolution.md` §3 puts `plane` on the cell family, and the
 /// event-kind registry row carries the plane every derived write of that kind
@@ -906,14 +906,14 @@ async fn persist_and_project_realm_genesis_event_with_history_access(
 /// Two closed exceptions carry no basis field at all and are listed by §5, not
 /// derived from the kind's plane: the `ak.realm.create` genesis anchor unit and
 /// the B-model `ak.device.reanchor`, which fixes its frontier in
-/// `payload.pre_fence_seal_frontier`. Non-reducer-input kinds carry no CBA field either
+/// `payload.pre_fence_seal_frontier`. Non-reducer-input kinds carry no CBS field either
 /// (`Event::validate_for_submit_structural`).
-pub fn apply_registered_cba_plane(
+pub fn apply_registered_cbs_plane(
     event: &mut arkret_wire::Event,
     verification_method: &str,
     basis: FixtureBasis<'_>,
 ) {
-    if !carries_a_cba_basis(event) {
+    if !carries_a_cbs_basis(event) {
         return;
     }
     // The stateless envelope builders author against the default fixture
@@ -927,10 +927,10 @@ pub fn apply_registered_cba_plane(
         event.actor_id.signing_principal_id(),
         basis,
     );
-    apply_registered_cba_plane_seal(event, verification_method, seal.id);
+    apply_registered_cbs_plane_seal(event, verification_method, seal.id);
 }
 
-/// Give `event` the CBA envelope shape its kind's registry row declares, citing
+/// Give `event` the CBS envelope shape its kind's registry row declares, citing
 /// a Seal this deployment already accepted.
 ///
 /// A Realm bootstrapped through the real `ak.realm.create` batch has a genuine
@@ -951,12 +951,12 @@ fn fixture_auth_context_key_id(verification_method: &str) -> arkret_wire::Opaque
         .expect("fixture auth_context key id is an opaque local id")
 }
 
-pub fn apply_registered_cba_plane_seal(
+pub fn apply_registered_cbs_plane_seal(
     event: &mut arkret_wire::Event,
     verification_method: &str,
     seal_id: SealId,
 ) {
-    if !carries_a_cba_basis(event) {
+    if !carries_a_cbs_basis(event) {
         return;
     }
     if event.kind.is_data_plane() {
@@ -1022,8 +1022,8 @@ fn apply_invite_live_target_precondition(event: &mut arkret_wire::Event) {
     event.preconditions.push(precondition);
 }
 
-/// Whether `event`'s kind owes a CBA basis field at all.
-fn carries_a_cba_basis(event: &arkret_wire::Event) -> bool {
+/// Whether `event`'s kind owes a CBS basis field at all.
+fn carries_a_cbs_basis(event: &arkret_wire::Event) -> bool {
     (event.kind.is_data_plane() || event.kind.is_control_plane())
         && !matches!(
             &event.kind,

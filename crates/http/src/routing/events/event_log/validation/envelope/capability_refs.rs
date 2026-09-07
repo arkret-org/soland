@@ -130,7 +130,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
     // An Applet-originated act-on-behalf Event is signed and executed by the
     // installed service while `actor_id` remains the accountable ghost/native
     // principal. Formal install grants are normatively issued to that service
-    // (`applet-integration.md` §4b), so the CBA subject is `executed_by`.
+    // (`applet-integration.md` §4b), so the CBS subject is `executed_by`.
     // The Applet-specific validator independently proves the exact
     // registration, namespace and epoch binding; selecting `executed_by` here
     // must never become a generic delegation fallback.
