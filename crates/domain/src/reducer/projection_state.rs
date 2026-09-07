@@ -715,7 +715,7 @@ impl ProjectionState {
     /// This evaluates the generic `head_eq` compare-and-swap predicate:
     /// each entry is `{ "cell_id": "<cell_ref>", "predicate": { "op": "head_eq",
     /// "value": { "<field-path>": <expected> } } }`. For a strand-fields cell
-    /// (`ak.component.strand.fields.v1:<strand_id>`) the `fields.<key>` paths
+    /// (`ak.component.strand.object.v1:<strand_id>`) the `fields.<key>` paths
     /// resolve against the materialized strand `fields`; for any other cell
     /// family the path resolves against the resolved cell JSON value. A
     /// mismatch — or a referenced cell / strand that is absent or in `Bottom`
@@ -764,7 +764,7 @@ impl ProjectionState {
     /// present the JSON null head.
     fn head_eq_holds(&self, realm_id: &str, cell_ref: &str, expected: &Value) -> bool {
         const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
-        const STRAND_FIELDS_FAMILY: &str = arkret_wire::CellFamilyId::STRAND_METADATA_V1;
+        const STRAND_FIELDS_FAMILY: &str = arkret_wire::CellFamilyId::STRAND_OBJECT_V1;
         // CellStore keys are `(realm_id, cell_ref)`. The structured membership
         // projection retains that Realm dimension, while the registered cell
         // subject is the digest of the complete tagged ActorId key.
