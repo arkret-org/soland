@@ -1376,7 +1376,6 @@ async fn plan_contact_commit(
             granted_to_peer_scopes,
             previous_terminal_contact_round_id,
             continuity_evidence,
-            introduction_evidence,
             ..
         } => {
             let same_service_target = if let Some(peer_account_id) = peer.as_account_id() {
@@ -1391,26 +1390,7 @@ async fn plan_contact_commit(
             } else {
                 false
             };
-            let peer_id = if same_service_target
-                || matches!(
-                    introduction_evidence.as_ref(),
-                    ContactIntroductionEvidence::SameStation
-                ) {
-                Some(
-                    arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-                        AppError::internal(format!("invalid local service DID: {error}"))
-                    })?,
-                )
-            } else {
-                contact_request_delivery_address(
-                    state,
-                    &reservation.holder.contact_actor_id(),
-                    &reservation.branch.peer().contact_actor_id(),
-                    introduction_evidence,
-                )
-                .await?
-                .map(|address| address.delivery_station_id().clone())
-            };
+            let peer_id = Some(reservation.branch.peer().delivery_station_id().clone());
             let existing = contacts
                 .contact_any(&holder, &peer)
                 .await
@@ -2059,22 +2039,16 @@ async fn prepare_contact_federation_delivery(
     let ContactOperationOutcome::Accepted { outcome } = outcome else {
         return Ok(None);
     };
-    let holder = reservation.holder.contact_actor_id();
-    let peer = reservation.branch.peer().contact_actor_id();
-    let address = match &reservation.branch {
+    let introduction = match &reservation.branch {
         ContactReservationBranch::Request {
             introduction_evidence,
             ..
-        } => contact_request_delivery_address(state, &holder, &peer, introduction_evidence).await?,
-        // Stored delivery coordinates do not retain the exact authority
-        // instance and therefore cannot authorize a later human-PCR route.
+        } => Some(introduction_evidence.as_ref()),
         _ => None,
     };
-    let Some(contact_address) = address else {
-        // Some introduction profiles intentionally carry no routable service
-        // coordinate. The accepted local request remains pending_outgoing and
-        // cannot be upgraded to accepted authority until a verified delivery
-        // binding becomes available.
+    let Some(contact_address) =
+        contact_delivery_address(state, reservation.branch.peer(), introduction).await?
+    else {
         return Ok(None);
     };
     let key = IdempotencyKey::new(format!("peer-contact:{}", event.event_id))
@@ -2175,16 +2149,58 @@ async fn prepare_contact_federation_delivery(
     .await
 }
 
-async fn contact_request_delivery_address(
-    _state: &AppState,
-    _holder: &arkret_wire::ActorId,
-    _peer: &arkret_wire::ActorId,
-    _evidence: &ContactIntroductionEvidence,
+async fn contact_delivery_address(
+    state: &AppState,
+    peer: &ContactPeer,
+    introduction: Option<&ContactIntroductionEvidence>,
 ) -> Result<Option<PeerContactAddress>, AppError> {
-    // Contact introduction evidence does not carry enough authority to derive
-    // a delivery target. In particular, Realm membership is social context,
-    // not an account-to-Station routing binding.
-    Ok(None)
+    let station_id = peer.delivery_station_id();
+    if station_id.as_str() == state.service_id() {
+        return Ok(None);
+    }
+    // The signed participant fixes the destination. Locator and discovery
+    // records supply transport coordinates only; the shared resolver verifies
+    // their service identity, method history, freshness and Describe binding.
+    let address = if let Some(ContactIntroductionEvidence::LocatorRef { principal_locator }) =
+        introduction
+    {
+        if !matches!(peer, ContactPeer::Human { account_id } if account_id == &principal_locator.account_id)
+        {
+            return Err(AppError::param_invalid(
+                "Contact locator does not address the exact recipient AccountId",
+            ));
+        }
+        PeerContactAddress {
+            recipient: peer.clone(),
+            service_resolution: principal_locator.service_resolution.clone(),
+            route_assistance: principal_locator.route_assistance.clone(),
+        }
+    } else {
+        let route = crate::routing::federation::resolved_peer_route(
+            state,
+            station_id.as_str(),
+            PeerContactAddress::RECIPIENT_SERVICE_KIND,
+            false,
+        )
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FailedPrecondition,
+                format!("Contact recipient route: {error}")
+            )
+        })?;
+        PeerContactAddress::for_recipient(
+            peer.clone(),
+            ServiceResolutionCarrier::CurrentRecordUrl {
+                current_record_url: route.cache_entry.current_record_url,
+                pinned_record_digest: Some(route.cache_entry.record_digest),
+            },
+        )
+    };
+    address.validate_shape().map_err(|error| {
+        AppError::param_invalid(format!("invalid Contact recipient route: {error}"))
+    })?;
+    Ok(Some(address))
 }
 
 async fn contact_introduction_service_resolution(
@@ -2613,7 +2629,7 @@ mod device_authorization_account_tests {
     use arkret_wire::{AccountId, ActorId, DidCoreId, Hash};
 
     use super::{
-        accept_request_slot_transition, contact_mirror_target_holder_key,
+        accept_request_slot_transition, contact_delivery_address, contact_mirror_target_holder_key,
         device_authorization_matches_contact_account, next_request_slot_coordinates,
     };
 
@@ -2626,6 +2642,68 @@ mod device_authorization_account_tests {
 
     fn hash(marker: char) -> Hash {
         Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap()
+    }
+
+    #[tokio::test]
+    async fn contact_locator_route_requires_the_exact_recipient_account() {
+        use arkret_models_collaboration::contact_operations::ContactPeer;
+        use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
+        use soland_storage_postgres::Db;
+
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            Db { pool: None },
+        );
+        let account_id = AccountId::new(
+            DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:remote.example").unwrap(),
+        );
+        let evidence: ContactIntroductionEvidence = serde_json::from_value(serde_json::json!({
+            "kind": "locator_ref",
+            "principal_locator": {
+                "schema": "ak.schema.principal_locator.v1",
+                "account_id": account_id,
+                "service_resolution": {
+                    "current_record_url": "https://remote.example/_arkret/open/services/ak%3Adid_core%3Aweb%3Aremote.example/resolution"
+                },
+                "issued_at": "2026-09-08T00:00:00.000Z",
+                "expires_at": "2026-09-08T00:15:00.000Z",
+                "locator_ref_digest": hash('a'),
+                "proofs": []
+            }
+        })).unwrap();
+        let peer = ContactPeer::Human {
+            account_id: account_id.clone(),
+        };
+        let address = contact_delivery_address(&state, &peer, Some(&evidence))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(address.recipient, peer);
+        assert_eq!(address.delivery_station_id(), &account_id.station_id);
+
+        for wrong_account in [
+            AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                account_id.station_id.clone(),
+            ),
+            AccountId::new(
+                account_id.principal_id.clone(),
+                DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+            ),
+        ] {
+            assert!(
+                contact_delivery_address(
+                    &state,
+                    &ContactPeer::Human {
+                        account_id: wrong_account
+                    },
+                    Some(&evidence),
+                )
+                .await
+                .is_err()
+            );
+        }
     }
 
     #[test]

@@ -44,7 +44,15 @@ pub(super) async fn resolve_agent_pairing(
     ensure_pairing_request_open(&record).map_err(|_| agent_pairing_not_found())?;
     let agent_id = record.id.as_str();
     let pairing_expires_at = required_pairing_expires_at(&record)?;
+    let controller_account_id =
+        crate::routing::identity::agent_pcr::agent_controller_account(state, &record).await?;
+    let runtime_identity = pairing_runtime_identity(
+        &record.controller_authorization_ref,
+        controller_account_id,
+        pairing_request_id,
+    )?;
     let bootstrap = AgentPairingBootstrap {
+        runtime_identity: Some(runtime_identity),
         arkret_base_url: state
             .config()
             .public_base_url
@@ -62,7 +70,36 @@ pub(super) async fn resolve_agent_pairing(
         pairing_code: pairing_code.to_owned(),
         pairing_expires_at,
     };
+    bootstrap
+        .validated_runtime_identity()
+        .map_err(AppError::internal)?;
     json_ok(bootstrap)
+}
+
+fn pairing_runtime_identity(
+    controller_authorization_ref: &arkret_wire::DidUrl,
+    controller_account_id: arkret_wire::AccountId,
+    pairing_request_id: &str,
+) -> Result<arkret_models_collaboration::agent_operations::AgentPairingRuntimeIdentity, AppError> {
+    // The accepted controller delegation retains the complete Agent DID; its
+    // stable identity core alone cannot recover the DID method's locator.
+    let agent_did = arkret_identity::verification_method_did(controller_authorization_ref.as_str())
+        .map_err(|error| {
+            AppError::internal(format!("invalid Agent controller delegation: {error}"))
+        })?;
+    let digest = arkret_canonical::sha256_digest(pairing_request_id.as_bytes());
+    let verification_method = arkret_wire::DidUrl::new(format!(
+        "{}#runtime-{}",
+        agent_did.as_str(),
+        digest.trim_start_matches("sha256:")
+    ))
+    .map_err(|error| AppError::internal(format!("invalid pairing runtime DID URL: {error}")))?;
+    Ok(
+        arkret_models_collaboration::agent_operations::AgentPairingRuntimeIdentity {
+            controller_account_id,
+            verification_method,
+        },
+    )
 }
 
 #[endpoint(
@@ -94,11 +131,6 @@ pub(super) async fn submit_agent_runtime_key_request(
     {
         return Err(AppError::param_invalid(
             "verification_method DID must project to agent_id",
-        ));
-    }
-    if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
-        return Err(AppError::param_invalid(
-            "verification_method fragment must be the stable Agent endpoint device_id",
         ));
     }
     let agent_record = lookup_pairing_record(
@@ -693,11 +725,6 @@ pub(super) async fn agent_key_pair(
     {
         return Err(AppError::param_invalid(
             "verification_method DID must project to agent_id",
-        ));
-    }
-    if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
-        return Err(AppError::param_invalid(
-            "verification_method fragment must be the stable Agent endpoint device_id",
         ));
     }
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
@@ -2005,6 +2032,32 @@ pub(super) fn agent_pairing_not_found() -> AppError {
 #[cfg(test)]
 mod requested_scope_tests {
     use super::*;
+
+    #[test]
+    fn pairing_identity_preserves_complete_did_and_account_across_retries() {
+        let delegation = arkret_wire::DidUrl::new(
+            "did:webvh:z6mkfixture:agent.example#managed-controller".to_owned(),
+        )
+        .unwrap();
+        let account: arkret_wire::AccountId = serde_json::from_value(json!({
+            "principal_id": "ak:did_core:web:controller.example",
+            "station_id": "ak:did_core:web:station.example"
+        }))
+        .unwrap();
+        let first = pairing_runtime_identity(&delegation, account.clone(), "pair-1").unwrap();
+        let retry = pairing_runtime_identity(&delegation, account.clone(), "pair-1").unwrap();
+        let replacement = pairing_runtime_identity(&delegation, account.clone(), "pair-2").unwrap();
+        assert_eq!(first.controller_account_id, account);
+        assert_eq!(first.verification_method, retry.verification_method);
+        assert_ne!(first.verification_method, replacement.verification_method);
+        assert!(
+            first
+                .verification_method
+                .as_str()
+                .starts_with("did:webvh:z6mkfixture:agent.example#runtime-")
+        );
+        assert!(!first.verification_method.as_str().contains("ak:device:"));
+    }
 
     #[test]
     fn pairing_activation_requires_active_portable_authorization_evidence() {

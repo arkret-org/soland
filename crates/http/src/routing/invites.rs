@@ -2366,7 +2366,7 @@ async fn evaluate_invite_realm_capability(
                 state,
                 session,
                 &body["invite_event"],
-                Some(&closure),
+                &closure,
             )
             .await
             .map_err(invite_capability_rejection)?;

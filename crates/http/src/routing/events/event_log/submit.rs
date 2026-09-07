@@ -2370,7 +2370,7 @@ async fn accept_federated_seal_prerequisite(
     Ok(())
 }
 
-async fn verify_federated_event_admission(
+pub(in crate::routing) async fn verify_federated_event_admission(
     state: &AppState,
     event: &arkret_wire::Event,
     digest_suite: arkret_canonical::DigestSuite,

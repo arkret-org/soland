@@ -364,19 +364,6 @@ pub(super) fn verification_method_principal(
     arkret_wire::project_did_to_core_id(&did).ok()
 }
 
-pub(super) fn verification_method_agent_endpoint(
-    verification_method: &str,
-    agent_id: &str,
-) -> Option<arkret_identifiers::DeviceId> {
-    let controller = verification_method_principal(verification_method)?;
-    if controller.as_str() != agent_id {
-        return None;
-    }
-    let (_, fragment) = verification_method.split_once('#')?;
-    let fragment = fragment.split('?').next().unwrap_or("");
-    arkret_identifiers::DeviceId::new(fragment.to_owned()).ok()
-}
-
 #[cfg(test)]
 #[expect(
     clippy::items_after_test_module,

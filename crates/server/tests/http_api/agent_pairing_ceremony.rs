@@ -90,6 +90,32 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         .clone()
         .expect("development provisioning returns the pairing code");
 
+    let pairing_token = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({
+            "r": outcome.pairing_request_id,
+            "c": pairing_code,
+        }))
+        .unwrap(),
+    );
+    let mut resolved = TestClient::post("http://server/_arkret/open/agent-pairing/resolve")
+        .json(&serde_json::json!({"pairing_token": pairing_token}))
+        .send(&app)
+        .await;
+    assert_eq!(resolved.status_code, Some(StatusCode::OK));
+    let bootstrap: arkret_models_collaboration::agent_operations::AgentPairingBootstrap =
+        resolved.take_json().await.unwrap();
+    assert_eq!(bootstrap.agent_id, outcome.agent_id);
+    let runtime_identity = bootstrap.validated_runtime_identity().unwrap();
+    assert_eq!(
+        runtime_identity.controller_account_id.principal_id,
+        controller_core
+    );
+    assert_eq!(
+        runtime_identity.controller_account_id.station_id,
+        service_core
+    );
+    let runtime_verification_method = runtime_identity.verification_method.clone();
+
     // ── 1/4 — the runtime submits its key request on the open surface. ───────
     //
     // Before the method-adapter projection fix, this schema-valid SDK request
@@ -99,20 +125,10 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let runtime_seed: [u8; 32] =
         Sha256::digest(b"agent-pairing-ceremony-runtime-key".as_slice()).into();
     let runtime_key = SigningKey::from_bytes(&runtime_seed);
-    let endpoint_device_id =
-        arkret_identifiers::DeviceId::new(new_prefixed_uuid7("ak:device:")).unwrap();
-    let builder = arkret_signatures::agent::RuntimeKeyRequestBuilder::new(
+    let builder = arkret_signatures::agent::RuntimeKeyRequestBuilder::new_with_verification_method(
         &runtime_key,
-        arkret_models_collaboration::agent_operations::AgentPairingBootstrap {
-            arkret_base_url: "http://server".to_owned(),
-            service_id: service_core.clone(),
-            agent_id: outcome.agent_id.clone(),
-            pairing_request_id: outcome.pairing_request_id.clone(),
-            pairing_code: pairing_code.clone(),
-            pairing_expires_at: outcome.expires_at,
-        },
-        &outcome.did,
-        endpoint_device_id.clone(),
+        bootstrap,
+        &runtime_verification_method,
     );
     let approval_request = builder
         .build_approval_request()

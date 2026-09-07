@@ -400,23 +400,12 @@ fn verification_method_principal_projects_did_to_core_id() {
 }
 
 #[test]
-fn verification_method_agent_endpoint_matches_projected_controller() {
-    let device_id = "ak:device:01904100-0000-7000-8000-000000000042";
+fn verification_method_accepts_runtime_key_labels_without_device_identity() {
     assert_eq!(
-        verification_method_agent_endpoint(&format!("{AGENT_DID}#{device_id}"), AGENT_CORE,)
+        verification_method_principal(&format!("{AGENT_DID}#runtime-pairing"))
             .as_ref()
-            .map(arkret_identifiers::DeviceId::as_str),
-        Some(device_id)
-    );
-    // The schema-valid DID form must not be compared against the raw
-    // core id string, and a core-id controller must never match.
-    assert_eq!(
-        verification_method_agent_endpoint(&format!("{AGENT_DID}#{device_id}"), AGENT_DID),
-        None
-    );
-    assert_eq!(
-        verification_method_agent_endpoint(&format!("{AGENT_CORE}#{device_id}"), AGENT_CORE),
-        None
+            .map(arkret_identifiers::DidCoreId::as_str),
+        Some(AGENT_CORE)
     );
 }
 

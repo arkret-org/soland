@@ -73,18 +73,15 @@ pub(crate) fn validate_event_envelope_with_context<'a>(
 /// Station runs when it admits this Control Move, with the authority closure
 /// supplied by the caller instead of read from local accepted state.
 ///
-/// `governance_closure` is `None` on the local branch, where this Station is a
-/// member of the Realm and its own accepted Seals are the closure, and `Some`
-/// on the peer branch, where the receiver holds no accepted state for the Realm
-/// and the closure arrived in the request's `cba_proof_bundles[]`. The
-/// evaluation after that point is byte-for-byte the same on both branches.
+/// The peer delivery carries the accepted producer and origin Station proofs.
+/// Verify that binding before reusing its exact producer key at envelope
+/// admission. The receiver gets Realm authority from the supplied CBA closure;
+/// it does not substitute its own device directory for the origin's admission.
 pub(in crate::routing) fn validate_private_invite_envelope<'a>(
     state: &'a AppState,
     session: &'a SessionRecord,
     envelope: &'a Value,
-    governance_closure: Option<
-        &'a BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
-    >,
+    governance_closure: &'a BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
 ) -> std::pin::Pin<
     Box<
         dyn std::future::Future<Output = Result<ValidatedEventEnvelope, EventValidationError>>
@@ -92,15 +89,49 @@ pub(in crate::routing) fn validate_private_invite_envelope<'a>(
             + 'a,
     >,
 > {
-    Box::pin(validate_event_envelope_with_ingress(
-        state,
-        session,
-        envelope,
-        &[],
-        None,
-        true,
-        governance_closure,
-    ))
+    Box::pin(async move {
+        let event: arkret_wire::Event =
+            serde_json::from_value(envelope.clone()).map_err(|error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    error.to_string(),
+                )
+            })?;
+        let digest_suite = arkret::signed_event_digest_claim(&event)
+            .and_then(|digest| digest.digest_suite().map_err(Into::into))
+            .map_err(|error| {
+                event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
+            })?;
+        let (method, key) =
+            crate::routing::events::event_log::submit::verify_federated_event_admission(
+                state,
+                &event,
+                digest_suite,
+            )
+            .await
+            .map_err(|error| {
+                event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error)
+            })?;
+        let admission = InternalEventAdmission::peer_federated_event(
+            event.realm_id.to_string(),
+            event.actor_id.clone(),
+            session.device_id.clone(),
+            event.event_id.to_string(),
+            method,
+            key,
+        );
+        validate_event_envelope_with_ingress(
+            state,
+            session,
+            envelope,
+            &[],
+            Some(&admission),
+            true,
+            Some(governance_closure),
+        )
+        .await
+    })
 }
 
 /// Spec `zh/models/event-and-patch.md` section 2.5.1 bound (a).

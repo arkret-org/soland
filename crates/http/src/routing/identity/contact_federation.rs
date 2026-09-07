@@ -10,8 +10,8 @@
 //! projection without re-signing it.
 //!
 //! Surfaces:
-//! - sender: [`federate_contact_fact`] — enqueue a durable outbound delivery when the addressed
-//!   holder is hosted on a configured federation peer.
+//! - sender: [`prepare_peer_contact_carrier`] — prepare a verified outbound route for the exact
+//!   recipient Station; the self operation commits its delivery atomically.
 //! - receiver: [`peer_contacts_submit`] — accept a delivered fact and project it into the local
 //!   target holder's contact projection.
 
@@ -252,11 +252,6 @@ async fn peer_contacts_submit(
                     "Contact request receipt does not bind signed_event",
                 ));
             }
-            super::account::validate_request_receipt_cryptography(
-                state,
-                request_receipt,
-                "request_receipt",
-            )?;
             super::account::validate_request_receipt_cryptography(
                 state,
                 request_receipt,
