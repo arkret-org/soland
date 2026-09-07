@@ -1409,6 +1409,13 @@ async fn try_apply_device_generation_event_seal(
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
             .or_else(|| Some("leave".to_owned()));
+        let basis_heads =
+            crate::routing::events::event_log::governance_proof::event_basis_causal_heads(
+                state,
+                &seal.realm_id,
+                &event,
+            )
+            .await?;
         new_ops.extend(
             crate::routing::events::event_log::governance_proof::canonical_event_ops_with_frozen_pre_state(
                 state,
@@ -1416,6 +1423,7 @@ async fn try_apply_device_generation_event_seal(
                 &event,
                 digest,
                 &predecessor_state,
+                &basis_heads,
                 invite_accept_from.as_deref(),
                 event_digest_suite,
             )?,

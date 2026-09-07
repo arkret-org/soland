@@ -709,12 +709,14 @@ async fn materialize_realm_control_with_transported_seals(
         } else {
             None
         };
+        let basis_heads = event_basis_causal_heads(state, realm_id, &event).await?;
         for (cell, issued) in canonical_event_ops(
             state,
             realm_id,
             &event,
             &move_id,
             &ops_by_cell,
+            &basis_heads,
             invite_accept_from.as_deref(),
             record.digest_suite,
         )? {
@@ -1691,6 +1693,83 @@ async fn join_control_state_batches(
     Ok(joined)
 }
 
+/// The causal-register heads one Event's own signed `seal_basis` observed.
+///
+/// `event-auth-state-resolution.md` §9.3.1.3 item 4: a causal-register write
+/// supersedes exactly the heads its own basis saw. The set is receiver-derived
+/// and never appears on the wire, so every path that rebuilds an Event's ops
+/// has to derive it again — the commit path does so in
+/// [`crate::notary::Notary::derive_sealed_ops`], and this is the same read for
+/// the re-projection paths.
+///
+/// An Event with no basis — Realm genesis, a B-model `seal_ref` Move — observed
+/// nothing and therefore supersedes nothing, exactly as `apply_seal` treats it.
+pub(crate) async fn event_basis_causal_heads(
+    state: &AppState,
+    realm_id: &RealmId,
+    event: &Event,
+) -> Result<arkret_state::CasHeadsByCell, AppError> {
+    let Some(basis) = event.seal_basis.as_ref() else {
+        return Ok(arkret_state::CasHeadsByCell::new());
+    };
+    state
+        .projections()
+        .effective_cas_heads_at(&basis.leaves, realm_id)
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FrontierUnavailable,
+                format!(
+                    "read causal-register basis heads for Event {}: {error}",
+                    event.event_id
+                ),
+            )
+        })
+}
+
+/// Tag one projected write with its issuer and its derived `supersedes` set.
+///
+/// Leaving the set empty is not a neutral default: an empty set says "this
+/// write retired nothing", so the write it actually observed stays a live head
+/// beside it and the causal register reads two divergent heads — `⊥` — on the
+/// second legitimate write. That is how an accepted Invite's `fsm` lifecycle
+/// cell (`pending` then `accepted`) used to Bottom the whole governance view.
+fn issued_with_derived_supersedes(
+    state: &AppState,
+    realm_id: &RealmId,
+    event: &Event,
+    basis_heads: &arkret_state::CasHeadsByCell,
+    cell: CellRef,
+    op: SealedOp,
+) -> Result<(CellRef, IssuedOp), AppError> {
+    let kind = state
+        .projections()
+        .resolve_cell(realm_id, &cell)
+        .map_err(|error| {
+            crate::app_error!(
+                UnsupportedProfile,
+                format!("no lattice registered for governance cell {cell}: {error}"),
+            )
+        })?
+        .lattice
+        .kind();
+    let supersedes = if arkret_state::is_causal_register(kind) {
+        basis_heads
+            .get(&cell)
+            .map(|heads| heads.iter().map(|head| head.move_id.clone()).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Ok((
+        cell,
+        IssuedOp {
+            issuer_id: event.actor_id.clone(),
+            op: op.with_supersedes(supersedes),
+        },
+    ))
+}
+
 /// Canonical sealed effects for one Event, each tagged with the Event's actor.
 ///
 /// The issuer must travel with the op: `ordered_log` keys its slots by
@@ -1702,10 +1781,11 @@ pub(crate) fn canonical_event_ops(
     event: &Event,
     move_id: &Hash,
     accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
+    basis_heads: &arkret_state::CasHeadsByCell,
     invite_accept_from: Option<&str>,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
-    Ok(canonical_event_sealed_ops(
+    canonical_event_sealed_ops(
         state,
         realm_id,
         event,
@@ -1717,15 +1797,9 @@ pub(crate) fn canonical_event_ops(
     )?
     .into_iter()
     .map(|(cell, op)| {
-        (
-            cell,
-            IssuedOp {
-                issuer_id: event.actor_id.clone(),
-                op,
-            },
-        )
+        issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op)
     })
-    .collect())
+    .collect()
 }
 
 /// Canonical sealed effects for a verifier that already resolved the exact
@@ -1738,10 +1812,11 @@ pub(crate) fn canonical_event_ops_with_frozen_pre_state(
     event: &Event,
     move_id: &Hash,
     frozen_pre_state: &BTreeMap<CellRef, CellState>,
+    basis_heads: &arkret_state::CasHeadsByCell,
     invite_accept_from: Option<&str>,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
-    Ok(canonical_event_sealed_ops(
+    canonical_event_sealed_ops(
         state,
         realm_id,
         event,
@@ -1753,15 +1828,9 @@ pub(crate) fn canonical_event_ops_with_frozen_pre_state(
     )?
     .into_iter()
     .map(|(cell, op)| {
-        (
-            cell,
-            IssuedOp {
-                issuer_id: event.actor_id.clone(),
-                op,
-            },
-        )
+        issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op)
     })
-    .collect())
+    .collect()
 }
 
 /// Join the ops accumulated so far into the frozen pre-state the registered
@@ -1940,6 +2009,123 @@ mod tests {
         );
     }
 
+    fn issued_transition(
+        move_byte: u8,
+        from: serde_json::Value,
+        to: serde_json::Value,
+    ) -> IssuedOp {
+        IssuedOp {
+            issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+                "did:web:alice.example",
+            )),
+            op: SealedOp::new(
+                Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
+                LatticeOp {
+                    op_type: LatticeOpType::Transition,
+                    tag: None,
+                    value: None,
+                    from: Some(from),
+                    to: Some(to),
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        }
+    }
+
+    /// An accepted Invite must not Bottom its own lifecycle cell.
+    ///
+    /// `ak.invite.create` writes `pending` and `ak.invite.accept` writes
+    /// `accepted` on the same `fsm` cell. The join reads heads, not arrival
+    /// order (§9.3.1.5), so the accept only retires the pending write if it
+    /// carries the derived `supersedes` its basis observed. Re-projecting the
+    /// Event with an empty set left both live and the cell read `⊥`, which is
+    /// what surfaced to an invitee as
+    /// `409 state_mismatch: governance cell … is in Bottom state`.
+    #[tokio::test]
+    async fn invite_lifecycle_accept_supersedes_the_pending_write_it_observed() {
+        let state = test_state();
+        let event = agent_pcr_create();
+        let realm_id = event.realm_id.clone();
+        let cell = CellRef::new(
+            "ak:cell:ak.component.invite.lifecycle.v1:ak:invite:AUg3kgXpMvW4kMuGtTepFkRVooX03jTSKInIfDj4dDvu"
+                .to_owned(),
+        )
+        .unwrap();
+        let pending = issued_transition(0x21, serde_json::Value::Null, serde_json::json!("pending"));
+        let kind = state
+            .projections()
+            .resolve_cell(&realm_id, &cell)
+            .unwrap()
+            .lattice
+            .kind();
+        let basis_heads = arkret_state::CasHeadsByCell::from([(
+            cell.clone(),
+            arkret_state::causal_heads_for_batches(kind, &[vec![pending.clone()]]),
+        )]);
+
+        let (_, accepted) = issued_with_derived_supersedes(
+            &state,
+            &realm_id,
+            &event,
+            &basis_heads,
+            cell.clone(),
+            issued_transition(
+                0x22,
+                serde_json::json!("pending"),
+                serde_json::json!("accepted"),
+            )
+            .op,
+        )
+        .unwrap();
+        assert_eq!(
+            accepted.op.supersedes,
+            vec![pending.op.move_id.clone()],
+            "the accept supersedes exactly the pending head its basis observed"
+        );
+
+        let ops = vec![pending.clone(), accepted.clone()];
+        let covered = ops
+            .iter()
+            .map(|issued| issued.op.move_id.clone())
+            .collect::<BTreeSet<_>>();
+        let joined = join_control_state_batches(
+            &state,
+            &realm_id,
+            &BTreeMap::from([(cell.clone(), ops)]),
+            &covered,
+        )
+        .await
+        .expect("an accepted Invite must not resolve to Bottom");
+
+        assert_eq!(
+            joined.cells.get(&cell),
+            Some(&CellState::Value(serde_json::json!("accepted")))
+        );
+
+        // The empty set is not a neutral default: without the derived edge the
+        // same two writes stay divergent heads and the cell fails closed.
+        let unlinked = vec![
+            pending.clone(),
+            issued_transition(
+                0x22,
+                serde_json::json!("pending"),
+                serde_json::json!("accepted"),
+            ),
+        ];
+        assert!(
+            join_control_state_batches(
+                &state,
+                &realm_id,
+                &BTreeMap::from([(cell, unlinked)]),
+                &covered,
+            )
+            .await
+            .is_err(),
+            "an accept that supersedes nothing is still two divergent heads"
+        );
+    }
+
     fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
         IssuedOp {
             issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
@@ -2108,6 +2294,7 @@ mod tests {
             &event,
             &move_id,
             &BTreeMap::new(),
+            &arkret_state::CasHeadsByCell::new(),
             None,
             arkret_canonical::DigestSuite::Sha256,
         )
@@ -2144,6 +2331,7 @@ mod tests {
                 &event,
                 &move_id,
                 &BTreeMap::new(),
+                &arkret_state::CasHeadsByCell::new(),
                 None,
                 arkret_canonical::DigestSuite::Sha256,
             )
@@ -2237,6 +2425,7 @@ mod tests {
                 &event,
                 &move_id,
                 &accumulated,
+                &arkret_state::CasHeadsByCell::new(),
                 Some(prior_state),
                 arkret_canonical::DigestSuite::Sha256,
             )
