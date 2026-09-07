@@ -2,6 +2,64 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 
 use super::*;
 
+/// Renew only this Station's attestations, using the accepted directional
+/// heads rather than extending a cached proof's lifetime. Foreign expired
+/// evidence must be refreshed by its issuer, never signed on its behalf.
+pub(crate) async fn fresh_direct_contact_evidence(
+    state: &AppState,
+    record: &ContactRecord,
+) -> Result<Option<arkret_models_collaboration::contact_operations::ContactRoundEvidenceBundle>, AppError> {
+    let Some(mut bundle) = record.contact_round_evidence.clone() else {
+        return Ok(None);
+    };
+    if record.status != "accepted"
+        || record.contact_round_id.as_ref() != Some(&bundle.contact_round_id)
+        || bundle.current_proofs.len() != 2
+    {
+        return Ok(None);
+    }
+    let at = now();
+    for proof in &mut bundle.current_proofs {
+        let peer = proof.peer.contact_actor_id();
+        let (holder, head) = if peer == record.target_id {
+            (&record.requester_id, record.request_event_ref.as_ref())
+        } else if peer == record.requester_id {
+            (&record.target_id, record.response_event_ref.as_ref())
+        } else {
+            return Ok(None);
+        };
+        if proof.terminal || head != Some(&proof.head_event_ref)
+            || proof.contact_round_id != bundle.contact_round_id
+        {
+            return Ok(None);
+        }
+        if proof.fresh_until > at + chrono::Duration::minutes(1) {
+            continue;
+        }
+        if proof.issuer_id != state.service_core_id()
+            || holder.as_account_id().is_none_or(|account| account.station_id != state.service_core_id())
+        {
+            return Ok(None);
+        }
+        let Some(stored) = state.event_queries().canonical_event(proof.head_event_ref.as_str())
+            .await.map_err(|error| AppError::internal(format!("Contact head lookup: {error}")))?
+        else {
+            return Ok(None);
+        };
+        let event: arkret_wire::Event = serde_json::from_value(stored.envelope)
+            .map_err(|error| AppError::internal(format!("accepted Contact head decode: {error}")))?;
+        if event.actor_id != *holder || event.event_id != proof.head_event_ref {
+            return Ok(None);
+        }
+        let digest_suite = event.event_id.event_digest().digest_suite()
+            .map_err(|error| AppError::internal(format!("Contact head digest suite: {error}")))?;
+        *proof = super::contact_write::signed_current_proof(
+            state, bundle.contact_round_id.clone(), proof.peer.clone(), &event, digest_suite,
+        )?;
+    }
+    Ok(Some(bundle))
+}
+
 pub(crate) fn direct_pair_key(
     state: &AppState,
     left: &arkret_wire::ActorId,

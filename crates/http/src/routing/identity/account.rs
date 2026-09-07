@@ -1847,9 +1847,8 @@ async fn direct_conversation_resolve(
         }
         if let Some(contact) = contact.as_ref() {
             let current_contact_evidence =
-                contact
-                    .contact_round_evidence
-                    .as_ref()
+                social::direct::fresh_direct_contact_evidence(state, contact)
+                    .await?
                     .is_some_and(|bundle| {
                         bundle.current_proofs.len() == 2
                             && bundle.current_proofs.iter().all(|proof| {
@@ -1962,7 +1961,7 @@ async fn direct_conversation_resolve(
                     retry_after_ms: None,
                 });
             };
-            let Some(contact_round_evidence) = contact.contact_round_evidence.clone() else {
+            let Some(contact_round_evidence) = social::direct::fresh_direct_contact_evidence(state, contact).await? else {
                 return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
                     retry_after_ms: None,
                 });

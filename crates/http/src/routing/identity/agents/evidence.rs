@@ -1085,7 +1085,6 @@ async fn produce_current_agent_signer_evidence(
         agent_lifecycle_witness: AgentLifecycleWitness {
             component: non_empty(AGENT_STATUS_COMPONENT)?,
             agent_id: agent_id.clone(),
-            status: AgentLifecycleStatus::Active,
             provenance: lifecycle.provenance,
             accepted_status_event: lifecycle.event,
             seal_id: lifecycle_seal.id.clone(),
@@ -1351,7 +1350,7 @@ async fn accepted_current_lifecycle(
         .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let provenance = match event.kind {
         arkret_wire::EventKind::RealmCreate => {
-            let provision = agent
+            let _provision = agent
                 .provision_event_refs
                 .as_ref()
                 .and_then(|refs| refs.get("provision_event_id"))
@@ -1360,11 +1359,10 @@ async fn accepted_current_lifecycle(
                 .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
             AgentLifecycleProvenance::DelegatedPcrGenesis {
                 realm_create_event_id: event.event_id.clone(),
-                agent_provision_event_id: provision,
             }
         }
         arkret_wire::EventKind::SelfAgentResume => {
-            let predecessor = events
+            let _predecessor = events
                 .iter()
                 .rev()
                 .skip(1)
@@ -1373,7 +1371,6 @@ async fn accepted_current_lifecycle(
                 .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
             AgentLifecycleProvenance::ResumeAccepted {
                 resume_event_id: event.event_id.clone(),
-                predecessor_pause_event_id: predecessor,
             }
         }
         _ => return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive),
@@ -1637,7 +1634,7 @@ fn validate_lifecycle_witness(
         || actor.principal_id != witness.agent_id
         || witness.cell_ref.as_str() != lifecycle_cell_ref
         || witness.accepted_status_event.realm_id != witness.seal.realm_id
-        || witness.status != AgentLifecycleStatus::Active
+        || witness.cell_value != AgentLifecycleStatus::Active
     {
         return Err(AgentEvidenceRejectedReason::AuthorizationInactive);
     }

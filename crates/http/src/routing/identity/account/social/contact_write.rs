@@ -1105,7 +1105,7 @@ fn signed_lineage(
     })
 }
 
-fn signed_current_proof(
+pub(super) fn signed_current_proof(
     state: &AppState,
     contact_round_id: Hash,
     peer: ContactPeer,
