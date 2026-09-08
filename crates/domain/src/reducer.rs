@@ -96,7 +96,6 @@ pub(crate) use effects::{ObjectLifecycleTransition, SpaceContainerLifecycleTrans
 pub(crate) use message_helpers::*;
 pub use message_helpers::{
     message_id_from_event_id, message_id_from_payload_or_event_id, message_redaction_target_ref,
-    poll_id_from_content,
 };
 // Spec T07 fanout window const is `pub`.
 pub use patch_helpers::REALM_DESTROY_FANOUT_WINDOW_DAYS;
@@ -115,13 +114,12 @@ pub use projections::{
     InviteProjection, KeyPackageLifetimeProjection, MessageState, MlsCommitEpoch,
     MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
     MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
-    PollOptionState, PollState, PollVoteState, ProjectedMessageView, PushRouteCellValue,
-    PushRouteSubject, ReactionState, RealmInheritancePolicyState, RealmLinkState,
-    RealmOrganizationStatementState, RedactionCellValue, RsvpHead, RsvpProjection,
-    SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,
-    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
-    SpaceContainerProjection, StrandProjection, StrandWatchProjection,
-    object_stage_from_wire_value, object_stage_wire_value,
+    PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
+    RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
+    RedactionCellValue, RsvpHead, RsvpProjection, SidecarContextProjection, SidecarProjection,
+    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
+    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
 pub(crate) use projections::{
     CallFsmHead, operation_history_basis_seals, space_container_id_from_payload,

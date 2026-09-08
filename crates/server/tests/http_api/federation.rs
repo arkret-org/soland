@@ -1346,7 +1346,7 @@ async fn peer_events_submit_preflights_poll_prerequisites_before_durable_accepta
             .poll(&poll_ref)
             .is_some_and(|poll_state| {
                 poll_state.votes.iter().any(|(actor, vote)| {
-                    actor == &account_actor("did:web:alice.example", PEER_SOURCE_ID).to_string()
+                    actor == &account_actor("did:web:alice.example", PEER_SOURCE_ID)
                         && vote.selections == BTreeSet::from(["now".to_owned()])
                 })
             }),

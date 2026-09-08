@@ -237,7 +237,7 @@ impl ProjectionState {
     }
 
     pub fn poll(&self, poll_id: &str) -> Option<&PollState> {
-        self.polls.get(poll_id)
+        self.polls.get(&arkret_wire::MessageId::new(poll_id).ok()?)
     }
 
     /// Get members of a Realm currently in `state="join"`.

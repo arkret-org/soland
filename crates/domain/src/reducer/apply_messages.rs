@@ -1,6 +1,51 @@
+use arkret_models_collaboration::events_payloads::{
+    PollBlock, PollContentBlock, PollResponseBlock,
+};
+
 use super::*;
 
 impl ProjectionState {
+    pub(crate) fn observe_poll_dependency(&mut self, operation: &Operation) {
+        let content = operation.payload.get("content");
+        let known_non_response = operation.event_kind != arkret_wire::EventKind::MessageCreate
+            || content.and_then(content_kind).is_some_and(|kind| {
+                kind != "ak.content.poll.response" && kind != "ak.content.encrypted"
+            });
+        let changes_dependency = self
+            .poll_responses
+            .awaits_classification(&operation.context.canonical_event_digest);
+        if known_non_response
+            && self
+                .poll_responses
+                .observe_non_response(operation.context.canonical_event_digest.clone())
+                .is_ok()
+            && changes_dependency
+        {
+            self.rebuild_poll_votes(operation.created_at);
+        }
+    }
+
+    fn rebuild_poll_votes(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        for poll in self.polls.values_mut() {
+            poll.votes.clear();
+        }
+        for (partition, outcome) in self.poll_responses.project() {
+            let Some(_) = outcome.winner else {
+                continue;
+            };
+            let Some(poll) = self.polls.get_mut(&partition.poll_ref) else {
+                continue;
+            };
+            if poll.realm_id != partition.realm_id
+                || poll.scope_circle_id != partition.scope_circle_id
+            {
+                continue;
+            }
+            poll.votes.insert(partition.actor_id, outcome);
+            poll.updated_at = poll.updated_at.max(now);
+        }
+    }
+
     pub(crate) fn apply_message(
         &mut self,
         operation: &Operation,
@@ -15,13 +60,12 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();
-        // AKP-0007: derive the message's circle scope from its Strand, never
-        // from the message payload (spec: scope_circle_id is a Strand field).
-        let strand_scope = operation
-            .payload
-            .get("strand_id")
-            .and_then(Value::as_str)
-            .and_then(|strand_id| self.strand_scope_circle_id(strand_id));
+        // The receiver has already verified this immutable scope against the
+        // Strand. A missing local Strand projection must not change the scope.
+        let strand_scope = match &operation.context.accepted_scope_ref {
+            arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.to_string()),
+            _ => None,
+        };
         let content = message_content_from_payload(&operation.payload, strand_scope);
         let encrypted = operation
             .payload
@@ -29,11 +73,47 @@ impl ProjectionState {
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| operation.payload.get("encrypted_content").is_some());
 
-        if let Some("ak.content.poll.response") = content_kind(&content) {
-            return self.apply_poll_response(&content, operation, now);
-        }
-
-        let is_poll_create = content_kind(&content) == Some("ak.content.poll");
+        let poll_content = operation
+            .payload
+            .get("content")
+            .filter(|raw| {
+                matches!(
+                    content_kind(raw),
+                    Some("ak.content.poll" | "ak.content.poll.response")
+                )
+            })
+            .map(|raw| serde_json::from_value::<PollContentBlock>(raw.clone()));
+        let definition = match poll_content {
+            Some(Ok(block)) => {
+                let scope_realm = match &operation.context.accepted_scope_ref {
+                    arkret_wire::ScopeRef::Realm { realm_id }
+                    | arkret_wire::ScopeRef::Circle { realm_id, .. } => Some(realm_id),
+                    _ => None,
+                };
+                if scope_realm != Some(&operation.realm_id) {
+                    return ProjectionEffect::Rejected {
+                        reason: "poll_ref_cross_scope".to_owned(),
+                    };
+                }
+                if let Err(error) = block.validate() {
+                    return ProjectionEffect::Rejected {
+                        reason: error.to_string(),
+                    };
+                }
+                match block {
+                    PollContentBlock::Response(response) => {
+                        return self.apply_poll_response(&response, operation, now);
+                    }
+                    PollContentBlock::Definition(definition) => Some(definition),
+                }
+            }
+            Some(Err(error)) => {
+                return ProjectionEffect::Rejected {
+                    reason: format!("invalid Poll content: {error}"),
+                };
+            }
+            None => None,
+        };
         let state = MessageState {
             event_id: event_id.clone(),
             message_id,
@@ -49,119 +129,119 @@ impl ProjectionState {
             redacted_at: None,
         };
         let effect = ProjectionEffect::MessageCreated(state.clone());
-        if is_poll_create {
-            self.apply_poll_create(&state);
+        if let Some(definition) = definition {
+            self.apply_poll_create(operation, definition, now);
         }
         self.messages.insert(event_id, state);
         effect
     }
 
-    pub(crate) fn apply_poll_create(&mut self, message: &MessageState) {
-        let poll_id = poll_id_from_content(&message.content)
-            .unwrap_or_else(|| message.event_id.replacen("ak:event:", "ak:message:", 1));
-        let Some(question) = poll_question_from_content(&message.content) else {
-            return;
+    fn apply_poll_create(
+        &mut self,
+        operation: &Operation,
+        definition: PollBlock,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let scope_circle_id = match &operation.context.accepted_scope_ref {
+            arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.clone()),
+            _ => None,
         };
-        let options = poll_options_from_content(&message.content);
-        if options.len() < 2 {
-            return;
-        }
         self.polls.insert(
-            poll_id.clone(),
+            arkret_wire::MessageId::from_event_id(&operation.context.event_id),
             PollState {
-                poll_id,
-                message_event_id: message.event_id.clone(),
-                realm_id: message.realm_id.clone(),
-                scope_circle_id: message
-                    .content
-                    .get("scope_circle_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                question,
-                options,
+                message_event_id: operation.context.event_id.clone(),
+                realm_id: operation.realm_id.clone(),
+                scope_circle_id,
+                definition,
                 votes: BTreeMap::new(),
-                max_selections: message
-                    .content
-                    .get("poll")
-                    .and_then(|poll| poll.get("max_selections"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(1)
-                    .max(1) as u32,
-                created_at: message.created_at,
-                updated_at: message.created_at,
+                created_at: now,
+                updated_at: now,
             },
         );
+        self.rebuild_poll_votes(now);
     }
 
     pub(crate) fn apply_poll_response(
         &mut self,
-        content: &Value,
+        content: &PollResponseBlock,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(poll_id) = poll_id_from_content(content) else {
-            return ProjectionEffect::Rejected {
-                reason: "poll_ref_missing".to_owned(),
-            };
-        };
-        let choices = poll_choices_from_content(content);
-        if choices.is_empty() {
-            return ProjectionEffect::Rejected {
-                reason: "poll_selection_empty".to_owned(),
-            };
-        }
-        let Some(poll) = self.polls.get_mut(&poll_id) else {
+        let response = &content.poll_response;
+        let Some(poll) = self.polls.get(&response.poll_ref) else {
             return ProjectionEffect::Rejected {
                 reason: "poll_ref_unknown".to_owned(),
             };
         };
-        if poll.realm_id != operation.realm_id.as_str()
-            || poll.scope_circle_id.as_deref()
-                != content.get("scope_circle_id").and_then(Value::as_str)
-        {
+        let accepted_circle = match &operation.context.accepted_scope_ref {
+            arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &operation.realm_id => None,
+            arkret_wire::ScopeRef::Circle {
+                realm_id,
+                circle_id,
+            } if realm_id == &operation.realm_id => Some(circle_id),
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: "poll_ref_cross_scope".to_owned(),
+                };
+            }
+        };
+        if poll.realm_id != operation.realm_id || poll.scope_circle_id.as_ref() != accepted_circle {
             return ProjectionEffect::Rejected {
                 reason: "poll_ref_cross_scope".to_owned(),
             };
         }
-        if choices.len() > poll.max_selections.max(1) as usize {
-            return ProjectionEffect::Rejected {
-                reason: "poll_selection_limit_exceeded".to_owned(),
-            };
-        }
-        let valid: BTreeSet<String> = poll
-            .options
+        let valid = poll
+            .definition
+            .poll
+            .answers
             .iter()
             .map(|option| option.id.clone())
             .collect();
-        if choices.iter().any(|choice| !valid.contains(choice)) {
-            return ProjectionEffect::Rejected {
-                reason: "poll_selection_unknown".to_owned(),
-            };
-        }
-        let selected: BTreeSet<String> = choices.into_iter().collect();
-        if selected.len() > poll.max_selections.max(1) as usize {
-            return ProjectionEffect::Rejected {
-                reason: "poll_selection_limit_exceeded".to_owned(),
-            };
-        }
-        let actor = operation.context.sender.to_string();
-        let candidate = PollVoteState {
+        let selected = match arkret_models_collaboration::poll::validate_poll_selections(
+            &response.selections,
+            &valid,
+            usize::try_from(poll.definition.poll.max_selections).unwrap_or(usize::MAX),
+        ) {
+            Ok(selected) => selected,
+            Err(error) => {
+                return ProjectionEffect::Rejected {
+                    reason: error.to_string(),
+                };
+            }
+        };
+        let scope_circle_id = match &operation.context.accepted_scope_ref {
+            arkret_wire::ScopeRef::Realm { .. } => None,
+            arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.clone()),
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: "poll_ref_cross_scope".to_owned(),
+                };
+            }
+        };
+        let fact = arkret_models_collaboration::poll::PollResponseFact {
+            partition: arkret_models_collaboration::poll::PollPartition {
+                realm_id: operation.realm_id.clone(),
+                scope_circle_id,
+                poll_ref: response.poll_ref.clone(),
+                actor_id: operation.context.sender.clone(),
+            },
             selections: selected,
-            source_event_digest: operation.context.canonical_event_digest.to_string(),
             causal_refs: operation
                 .context
                 .envelope_causal_refs
                 .iter()
-                .map(ToString::to_string)
+                .cloned()
                 .collect(),
         };
-        if let Some(current) = poll.votes.get(&actor)
-            && !poll_vote_candidate_wins(current, &candidate)
+        if let Err(error) = self
+            .poll_responses
+            .insert(operation.context.canonical_event_digest.clone(), fact)
         {
-            return ProjectionEffect::Ignored;
+            return ProjectionEffect::Rejected {
+                reason: error.to_string(),
+            };
         }
-        poll.votes.insert(actor, candidate);
-        poll.updated_at = now;
+        self.rebuild_poll_votes(now);
         ProjectionEffect::Ignored
     }
 
@@ -839,16 +919,6 @@ impl ProjectionState {
         self.read_cursors.insert(key, marker.clone());
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
-}
-
-fn poll_vote_candidate_wins(current: &PollVoteState, candidate: &PollVoteState) -> bool {
-    if candidate.causal_refs.contains(&current.source_event_digest) {
-        return true;
-    }
-    if current.causal_refs.contains(&candidate.source_event_digest) {
-        return false;
-    }
-    candidate.source_event_digest > current.source_event_digest
 }
 
 fn read_cursor_causal_relation(operation: &Operation) -> ReadCursorCausalRelation {

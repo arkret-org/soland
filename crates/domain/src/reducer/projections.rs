@@ -991,30 +991,14 @@ pub struct PinProjection {
 }
 
 #[derive(Clone, Debug)]
-pub struct PollOptionState {
-    pub id: String,
-    pub label: String,
-}
-
-#[derive(Clone, Debug)]
 pub struct PollState {
-    pub poll_id: String,
-    pub message_event_id: String,
-    pub realm_id: String,
-    pub scope_circle_id: Option<String>,
-    pub question: String,
-    pub options: Vec<PollOptionState>,
-    pub votes: BTreeMap<String, PollVoteState>,
-    pub max_selections: u32,
+    pub message_event_id: arkret_wire::EventId,
+    pub realm_id: arkret_wire::RealmId,
+    pub scope_circle_id: Option<arkret_wire::CircleId>,
+    pub definition: arkret_models_collaboration::events_payloads::PollBlock,
+    pub votes: BTreeMap<arkret_wire::ActorId, arkret_models_collaboration::poll::PollOutcome>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PollVoteState {
-    pub selections: BTreeSet<String>,
-    pub source_event_digest: String,
-    pub causal_refs: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug)]

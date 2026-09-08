@@ -7,8 +7,6 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_wire::ReadCursorScope;
 use serde_json::Value;
 
-use super::PollOptionState;
-
 /// The id of an object created by this Event, for the create kinds whose
 /// registry `id_form` is `event_derived`.
 ///
@@ -142,85 +140,6 @@ pub(crate) fn message_content_from_payload(
 
 pub(crate) fn content_kind(content: &Value) -> Option<&str> {
     content.get("kind").and_then(Value::as_str)
-}
-
-pub fn poll_id_from_content(content: &Value) -> Option<String> {
-    content
-        .get("poll_response")
-        .and_then(|poll_response| poll_response.get("poll_ref"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-}
-
-pub(crate) fn text_body(value: &Value) -> Option<&str> {
-    value
-        .as_str()
-        .or_else(|| value.get("body").and_then(Value::as_str))
-}
-
-pub(crate) fn poll_question_from_content(content: &Value) -> Option<String> {
-    content
-        .get("body")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            content
-                .get("poll")
-                .and_then(|poll| poll.get("question"))
-                .and_then(text_body)
-        })
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.trim().to_owned())
-}
-
-pub(crate) fn poll_options_from_content(content: &Value) -> Vec<PollOptionState> {
-    let options = content
-        .get("poll")
-        .and_then(|poll| poll.get("answers"))
-        .and_then(Value::as_array);
-    options
-        .map(|items| {
-            items
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, item)| {
-                    if let Some(label) = item.as_str().filter(|value| !value.trim().is_empty()) {
-                        return Some(PollOptionState {
-                            id: format!("opt-{idx}"),
-                            label: label.trim().to_owned(),
-                        });
-                    }
-                    let id = item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| format!("opt-{idx}"));
-                    let label = item.get("text").and_then(text_body)?.trim().to_owned();
-                    if label.is_empty() {
-                        None
-                    } else {
-                        Some(PollOptionState { id, label })
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-pub(crate) fn poll_choices_from_content(content: &Value) -> Vec<String> {
-    content
-        .get("poll_response")
-        .and_then(|poll_response| poll_response.get("selections"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
 }
 
 pub(crate) fn read_scope_key(scope: &ReadCursorScope) -> String {

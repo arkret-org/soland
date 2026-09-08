@@ -48,8 +48,9 @@ pub struct ProjectionState {
     /// Per-(Strand, Actor) notification watch preferences.
     pub strand_watches: BTreeMap<(String, String), StrandWatchProjection>,
     /// Poll projections keyed by poll_id. Poll create is a message content
-    /// block; responses are per-actor replacements until the poll is closed.
-    pub polls: BTreeMap<String, PollState>,
+    /// block; current votes are derived from the complete response causal set.
+    pub polls: BTreeMap<arkret_wire::MessageId, PollState>,
+    pub poll_responses: arkret_models_collaboration::poll::PollResponseSet,
     /// Structured side-band cache keyed by
     /// `(realm_id, actor_id)`. Holds the FSM state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
@@ -967,13 +968,17 @@ impl ProjectionState {
                 reason: "unknown_event_kind".to_owned(),
             };
         };
-        match APPLY_REGISTRY.get(&kind) {
+        let effect = match APPLY_REGISTRY.get(&kind) {
             Some(dispatch) => dispatch(self, operation, hlc),
             None if !kind.is_reducer_input() => ProjectionEffect::Ignored,
             None => ProjectionEffect::Rejected {
                 reason: "unregistered_reducer_event_kind".to_owned(),
             },
+        };
+        if !matches!(effect, ProjectionEffect::Rejected { .. }) {
+            self.observe_poll_dependency(operation);
         }
+        effect
     }
 
     /// Apply accepted Events that intentionally sit outside the shared Realm
@@ -1018,7 +1023,11 @@ impl ProjectionState {
             };
         };
         if !kind.is_reducer_input() {
-            return self.apply_non_reducer_event(kind, operation);
+            let effect = self.apply_non_reducer_event(kind, operation);
+            if !matches!(effect, ProjectionEffect::Rejected { .. }) {
+                self.observe_poll_dependency(operation);
+            }
+            return effect;
         }
         self.apply_projected(operation, &[], hlc)
     }

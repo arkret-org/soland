@@ -54,10 +54,6 @@ pub fn validate_join_policy_payload(join_policy: &Value) -> Result<(), &'static 
     soland_domain::reducer::validate_join_policy_payload(join_policy)
 }
 
-pub fn poll_id_from_content(content: &Value) -> Option<String> {
-    soland_domain::reducer::poll_id_from_content(content)
-}
-
 pub fn inheritance_allowed_policies(payload: &Value) -> Vec<String> {
     soland_domain::reducer::inheritance_allowed_policies(payload)
 }
