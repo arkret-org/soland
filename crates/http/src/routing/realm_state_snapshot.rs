@@ -418,22 +418,6 @@ fn realm_state_snapshot_auth_state_digest(
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
 }
 
-pub(crate) fn device_inventory_to_json(
-    device: &soland_services::identity::DeviceIdentity,
-) -> serde_json::Value {
-    json!({
-        "actor": device.actor_id,
-        "device_id": device.device_id,
-        "display_name": device.display_name,
-        "verification": device.verification_state,
-        "verification_state": device.verification_state,
-        "payload": device.payload,
-        "created_at": device.created_at,
-        "updated_at": device.updated_at,
-        "revoked_at": device.revoked_at,
-    })
-}
-
 pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee_id: &str) -> String {
     format!(
         "ak:invite-token:{}",

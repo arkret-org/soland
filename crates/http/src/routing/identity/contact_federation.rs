@@ -2943,16 +2943,11 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         || returned_proof.peer.contact_actor_id() != signed_event.actor_id
         || returned_proof.contact_round_id != sent_proof.contact_round_id
         || returned_proof.terminal != terminal
-        || returned_proof.head_event_ref != signed_event.event_id
-        || returned_proof.head_digest() != sent_proof.head_digest()
-        || !returned_proof
-            .accepted_frontier
-            .contains(&signed_event.event_id)
         || returned_proof.complete_through == 0
         || returned_proof.fresh_until <= now()
     {
         return Err(super::super::events::peer::schema_violation(
-            "recipient Contact current proof does not bind the outbound lineage head",
+            "recipient Contact current proof does not bind the addressed direction",
         ));
     }
     verify_contact_evidence_signature(
@@ -2983,6 +2978,26 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::internal("outbound Contact projection disappeared"))?;
+    // A non-terminal recipient proof covers the opposite directional head,
+    // not the source Event just delivered. Only tombstones share one head.
+    let expected_head = if terminal {
+        Some(&signed_event.event_id)
+    } else if returned_proof.peer.contact_actor_id() == record.target_id {
+        record.request_event_ref.as_ref()
+    } else if returned_proof.peer.contact_actor_id() == record.requester_id {
+        record.response_event_ref.as_ref()
+    } else {
+        None
+    };
+    if expected_head != Some(&returned_proof.head_event_ref)
+        || !returned_proof
+            .accepted_frontier
+            .contains(&returned_proof.head_event_ref)
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "recipient Contact current proof does not bind its directional head",
+        ));
+    }
     let mut bundle = record.contact_round_evidence.clone().ok_or_else(|| {
         crate::app_error!(
             FailedPrecondition,
@@ -4226,6 +4241,25 @@ mod tests {
             .await
             .expect("contact store lookup")
             .expect("pending_incoming row was projected");
+
+        let reverse = state
+            .contacts()
+            .contact_any(&target_actor, &requester)
+            .await
+            .expect("recipient-side lookup")
+            .expect("the recipient must find the same directional row");
+        assert_eq!(reverse.requester_id, record.requester_id);
+        assert_eq!(reverse.target_id, record.target_id);
+        assert_eq!(reverse.request_event_ref, record.request_event_ref);
+        let wrong_station = account_actor(target, source_id);
+        assert!(
+            state
+                .contacts()
+                .contact_any(&requester, &wrong_station)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         assert_eq!(
             record.peer_host_id.as_ref().map(|value| value.as_str()),

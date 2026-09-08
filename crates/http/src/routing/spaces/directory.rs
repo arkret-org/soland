@@ -68,9 +68,9 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::space::{InviteTokenRealmResolution, invite_token_realm_resolution};
 use super::{
-    authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,
-    is_realm_deleted, now, realm_discoverability, realm_has_member, realm_history_access,
-    realm_resolvable_to, realm_search_visible_to,
+    authenticated_session, handle_for_did, invite_token_matches_realm, is_realm_deleted, now,
+    realm_discoverability, realm_has_member, realm_history_access, realm_resolvable_to,
+    realm_search_visible_to,
 };
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery};

@@ -392,7 +392,13 @@ impl crate::identity::ContactPort for PersistenceContacts {
         requester_id: &arkret_wire::ActorId,
         target_id: &arkret_wire::ActorId,
     ) -> crate::ServiceResult<Option<crate::identity::ContactRecord>> {
-        Ok(self.0.contacts().get(requester_id, target_id).await?)
+        // The durable row retains request direction; pair consumers may query
+        // from either participant without changing that signed direction.
+        let contacts = self.0.contacts();
+        if let Some(record) = contacts.get(requester_id, target_id).await? {
+            return Ok(Some(record));
+        }
+        Ok(contacts.get(target_id, requester_id).await?)
     }
 
     async fn contacts_for_actor(
