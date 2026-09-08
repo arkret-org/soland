@@ -107,14 +107,16 @@ pub(crate) async fn put_governance_dependency_exact_in_transaction(
 
     let (seal_id, event_digest) = match &write.source {
         GovernanceDependencySource::Seal(seal_id) => (Some(seal_id.as_str()), None),
-        GovernanceDependencySource::ControlEvent(event_digest) => {
-            (None, Some(event_digest.as_str()))
-        }
+        GovernanceDependencySource::Event(event_digest) => (None, Some(event_digest.as_str())),
     };
     let edge_rows = sql_query(
         "INSERT INTO governance_dependency_edges \
-            (realm_id, seal_id, event_digest, dependency_kind, object_digest, edge_index) \
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+            (realm_id, seal_id, event_digest, dependency_kind, object_digest, edge_index, event_pk) \
+         VALUES ($1, $2, $3, $4, $5, $6, \
+             (SELECT pk FROM canonical_events WHERE realm_id = $1 \
+              AND digest = decode(split_part($3, ':', 2), 'hex') \
+              AND digest_suite = CASE split_part($3, ':', 1) WHEN 'sha256' THEN 1 WHEN 'blake3' THEN 2 END)) \
+         ON CONFLICT DO NOTHING",
     )
     .bind::<Text, _>(write.realm_id.as_str())
     .bind::<Nullable<Text>, _>(seal_id)
@@ -171,7 +173,7 @@ pub(crate) async fn governance_dependencies_match_in_transaction(
     let (source_kind, source_ref) = source.storage_parts();
     let source_column = match source_kind {
         "seal" => "edge.seal_id",
-        "control_event" => "edge.event_digest",
+        "event" => "edge.event_digest",
         _ => unreachable!("closed governance dependency source"),
     };
     let query = format!(
@@ -255,6 +257,18 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
         ));
     }
     let item = match row.dependency_kind.as_str() {
+        "applet_installation_authority" => GovernanceDependency::AppletInstallationAuthority {
+            selector: GovernanceDependencySelector::AppletInstallationAuthority {
+                content_digest: stored_hash(
+                    selector_value,
+                    "Applet installation authority selector",
+                )?,
+            },
+            applet_installation_authority: Box::new(
+                serde_json::from_value(object_json)
+                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            ),
+        },
         "availability_receipt" => GovernanceDependency::AvailabilityReceipt {
             selector: GovernanceDependencySelector::AvailabilityReceipt {
                 content_digest: stored_hash(selector_value, "availability receipt selector")?,
@@ -550,7 +564,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
         let (source_kind, source_ref) = source.storage_parts();
         let source_column = match source_kind {
             "seal" => "edge.seal_id",
-            "control_event" => "edge.event_digest",
+            "event" => "edge.event_digest",
             _ => unreachable!("closed governance dependency source"),
         };
         let mut conn = pg_conn(&self.pool).await?;

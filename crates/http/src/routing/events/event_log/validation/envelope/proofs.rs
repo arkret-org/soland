@@ -375,6 +375,19 @@ pub(crate) async fn validate_event_proofs(
                 &created_at,
                 proof_object,
             )?;
+            // A verified peer admission freezes the producer key at original
+            // acceptance. Later installation revocation or key rotation must
+            // not reinterpret an accepted historical Event through live gates.
+            if let Some(signing_key) = verify_with_federated_signer_evidence(
+                internal_admission,
+                session,
+                object,
+                &verification_method,
+                &proof_binding_bytes,
+                &jws,
+            )? {
+                return Ok(signing_key);
+            }
             // Genesis and re-anchor authorize their candidate key in the same
             // atomic unit in which it first signs. The durable device
             // directory therefore cannot resolve it yet. Use a unit-local
@@ -648,16 +661,7 @@ pub(crate) async fn validate_event_proofs(
             // algorithm to be Ed25519. Handing hand-built
             // binding bytes to the generic verifier — as this call site used to
             // do — silently dropped both checks.
-            if let Some(signing_key) = verify_with_federated_signer_evidence(
-                internal_admission,
-                session,
-                object,
-                &verification_method,
-                &proof_binding_bytes,
-                &jws,
-            )? {
-                return Ok(signing_key);
-            } else {
+            {
                 let verification = if object.get("kind").and_then(Value::as_str)
                     == Some(arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
                 {
@@ -745,12 +749,11 @@ async fn verify_with_installed_applet_registration_epoch(
     let Some(applet_id) = object.get("applet_id").and_then(Value::as_str) else {
         return Ok(None);
     };
-    // `applet_id` is also provenance on native administrator-authored Events
-    // (for example a formal managed-membership transition). Only delegated
-    // Events carrying `executed_by` use the installed Applet registration
-    // epoch as their producer-key authority; native Events continue through
-    // the ordinary actor proof path below.
-    if object.get("executed_by").is_none() {
+    let producer = object
+        .get("executed_by")
+        .or_else(|| object.get("actor_id"))
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok());
+    if !matches!(producer, Some(arkret_wire::ActorId::Service { .. })) {
         return Ok(None);
     }
     let fail = |code: &'static str, message: &'static str| {

@@ -653,6 +653,7 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
         arkret_wire::DidUrl::new(format!("{PEER_SOURCE_DID}#notary-key"))
             .expect("fixture admission verification method is a DID URL");
     let mut admission = arkret_wire::StationAdmissionProof {
+        applet_installation_digest: None,
         kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method: admission_verification_method.clone(),
         event_digest: producer.event_digest.clone(),

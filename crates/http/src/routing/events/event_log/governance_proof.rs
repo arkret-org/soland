@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, MAX_GOVERNANCE_DEPENDENCY_SELECTORS,
-    governance_attester_evidence_selectors,
 };
 use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -1197,7 +1196,7 @@ async fn load_checkpoint_dependencies(
         load_source_dependencies(
             state,
             realm_id,
-            soland_storage::GovernanceDependencySource::ControlEvent(digest.clone()),
+            soland_storage::GovernanceDependencySource::Event(digest.clone()),
             &mut dependencies,
             &mut queue,
         )
@@ -1205,19 +1204,10 @@ async fn load_checkpoint_dependencies(
     }
     let mut cursor = 0;
     while cursor < queue.len() {
-        let selectors = match &queue[cursor] {
-            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                authenticated_signer_resolution_evidence,
-                ..
-            } => governance_attester_evidence_selectors(std::slice::from_ref(
-                authenticated_signer_resolution_evidence,
-            )),
-            _ => Ok(Vec::new()),
-        }
-        .map_err(|error| {
+        let selectors = queue[cursor].dependency_selectors().map_err(|error| {
             crate::app_error!(
                 FrontierUnavailable,
-                format!("governance dependency closure is invalid: {error}"),
+                format!("governance dependency closure is invalid: {error}")
             )
         })?;
         cursor += 1;

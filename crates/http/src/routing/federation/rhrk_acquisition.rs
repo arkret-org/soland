@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
-    PeerGovernanceDependencyResolveRequest, governance_attester_evidence_selectors,
+    PeerGovernanceDependencyResolveRequest,
     governance_runtime_dependency_selector_coordinates_for_acquisition,
 };
 use arkret_models_collaboration::history_key::{
@@ -575,19 +575,14 @@ pub(crate) async fn fetch_peer_governance_dependencies(
 fn next_dependency_selectors<'a>(
     items: impl Iterator<Item = &'a GovernanceDependency>,
 ) -> Result<Vec<GovernanceDependencySelector>, String> {
-    let items = items.collect::<Vec<_>>();
-    let evidence = items
-        .into_iter()
-        .filter_map(|item| match item {
-            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                authenticated_signer_resolution_evidence,
-                ..
-            } => Some(authenticated_signer_resolution_evidence.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    governance_attester_evidence_selectors(&evidence)
-        .map_err(|error| format!("attester_evidence_selectors:{error}"))
+    let mut selectors = Vec::new();
+    for item in items {
+        selectors.extend(
+            item.dependency_selectors()
+                .map_err(|error| format!("dependency_selectors:{error}"))?,
+        );
+    }
+    Ok(selectors)
 }
 
 fn validate_container_event<'a>(

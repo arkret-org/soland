@@ -168,6 +168,13 @@ pub(super) async fn commit_accepted_event_stage(
                 "device generation is revoked",
             ));
         }
+        if conflict == Some(ConflictCode::AppletRevoked) {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "applet_revoked",
+                "Applet authority was revoked before the Event commit",
+            ));
+        }
         if conflict == Some(ConflictCode::ApprovalNonceReused) {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,

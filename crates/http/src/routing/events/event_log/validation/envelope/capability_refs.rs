@@ -127,22 +127,22 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         .sealed_at;
     let historical_snapshot: Vec<crate::authz::Grant> =
         historical_grants.values().cloned().collect();
-    // An Applet-originated act-on-behalf Event is signed and executed by the
-    // installed service while `actor_id` remains the accountable ghost/native
-    // principal. Formal install grants are normatively issued to that service
-    // (`applet-integration.md` §4b), so the CBS subject is `executed_by`.
-    // The Applet-specific validator independently proves the exact
-    // registration, namespace and epoch binding; selecting `executed_by` here
-    // must never become a generic delegation fallback.
+    // Applet capability checks use the actual producer, including a service
+    // acting as itself. Installation, namespace and epoch are independently
+    // checked by the Applet authority gate.
     let capability_subject = if object.contains_key("applet_id") {
         serde_json::from_value::<arkret_wire::ActorId>(
-            object.get("executed_by").cloned().ok_or_else(|| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    "applet-originated DataEvent requires executed_by",
-                )
-            })?,
+            object
+                .get("executed_by")
+                .or_else(|| object.get("actor_id"))
+                .cloned()
+                .ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "applet-originated DataEvent requires a producer ActorId",
+                    )
+                })?,
         )
         .map_err(|error| {
             event_validation_error(

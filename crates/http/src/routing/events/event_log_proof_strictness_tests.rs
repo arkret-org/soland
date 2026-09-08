@@ -1925,6 +1925,22 @@ async fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     .await
     .expect("Applet DataEvent must use its executor's exact install grant");
 
+    let mut self_action = object.clone();
+    let producer = self_action.remove("executed_by").unwrap();
+    self_action.insert("actor_id".to_owned(), producer);
+    validate_data_event_capability_refs(
+        &state,
+        APPLET_SERVICE,
+        DATA_EVENT_STATION,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &self_action,
+        &data_event_derived_cells(),
+        false,
+    )
+    .await
+    .expect("Applet service acting as itself uses the same exact service grant");
+
     object.insert(
         "authorization_ref".to_owned(),
         json!("ak:grant:AXt8OgxCpSbRBVYm7b5yaEOTqGwqu3EiAxcRhN7K2raF"),

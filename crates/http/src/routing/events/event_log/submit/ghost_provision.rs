@@ -232,7 +232,7 @@ async fn prepare_ghost_event(
         )
         .await?
     } else {
-        (typed, envelope, parsed.canonical_bytes.clone(), None)
+        (typed, envelope, parsed.canonical_bytes.clone(), Vec::new())
     };
     let is_applet_managed_pcr_genesis = parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
         && typed

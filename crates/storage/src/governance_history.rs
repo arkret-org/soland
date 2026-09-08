@@ -32,14 +32,14 @@ pub enum StorageCasOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GovernanceDependencySource {
     Seal(SealId),
-    ControlEvent(Hash),
+    Event(Hash),
 }
 
 impl GovernanceDependencySource {
     pub fn storage_parts(&self) -> (&'static str, &str) {
         match self {
             Self::Seal(id) => ("seal", id.as_str()),
-            Self::ControlEvent(digest) => ("control_event", digest.as_str()),
+            Self::Event(digest) => ("event", digest.as_str()),
         }
     }
 }
@@ -84,6 +84,15 @@ pub fn governance_dependency_canonical(
     .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
 
     let (dependency_kind, selector_value, object_digest, object_json) = match item {
+        GovernanceDependency::AppletInstallationAuthority {
+            selector: GovernanceDependencySelector::AppletInstallationAuthority { content_digest },
+            applet_installation_authority,
+        } => (
+            "applet_installation_authority",
+            content_digest.as_str().to_owned(),
+            content_digest.clone(),
+            serde_json::to_value(applet_installation_authority),
+        ),
         GovernanceDependency::AvailabilityReceipt {
             selector: GovernanceDependencySelector::AvailabilityReceipt { content_digest },
             availability_receipt,
@@ -240,6 +249,9 @@ pub fn governance_dependency_selector_parts(
     .validate()
     .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     Ok(match selector {
+        GovernanceDependencySelector::AppletInstallationAuthority { content_digest } => {
+            ("applet_installation_authority", content_digest.clone())
+        }
         GovernanceDependencySelector::AvailabilityReceipt { content_digest } => {
             ("availability_receipt", content_digest.clone())
         }
@@ -274,6 +286,10 @@ pub fn governance_dependency_selector_storage_parts(
     .validate()
     .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     Ok(match selector {
+        GovernanceDependencySelector::AppletInstallationAuthority { content_digest } => (
+            "applet_installation_authority",
+            content_digest.as_str().to_owned(),
+        ),
         GovernanceDependencySelector::AvailabilityReceipt { content_digest } => {
             ("availability_receipt", content_digest.as_str().to_owned())
         }

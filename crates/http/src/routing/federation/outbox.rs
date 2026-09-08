@@ -2745,6 +2745,7 @@ mod tests {
                 .clone();
             event.proofs.push(
                 arkret_wire::primitives::StationAdmissionProof {
+        applet_installation_digest: None,
                     kind: arkret_wire::primitives::StationAdmissionProofKind::StationAdmission,
                     verification_method: arkret_wire::DidUrl::new(
                         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#federation-fanout-key",

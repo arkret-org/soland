@@ -10,7 +10,13 @@ pub(in crate::routing) async fn verify_frontier_backfill_event(
         .map_err(|error| format!("event_id_digest_mismatch:{error}"))?;
     verify_federated_event_admission(state, event, suite)
         .await
-        .map_err(|error| format!("invalid_proof:{error}"))?;
+        .map_err(|error| {
+            if error.starts_with("dependency_missing:") {
+                error
+            } else {
+                format!("invalid_proof:{error}")
+            }
+        })?;
     Ok(())
 }
 
@@ -38,7 +44,14 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         })?;
     let (method, key) = verify_federated_event_admission(state, event, digest_suite)
         .await
-        .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_proof", error))?;
+        .map_err(|error| {
+            let code = if error.starts_with("dependency_missing:") {
+                "dependency_missing"
+            } else {
+                "invalid_proof"
+            };
+            SubmitOneError::new(StatusCode::BAD_REQUEST, code, error)
+        })?;
     submission
         .validate_structural(digest_suite)
         .map_err(|error| {
@@ -86,15 +99,16 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         .enforce_event(&envelope)
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, error.code, error.message))?;
     let realm_id = event.realm_id.as_str();
-    if !crate::routing::federation::federation_actor_origin_acceptable(
-        state,
-        &event.actor_id,
-        source_id,
-        Some(event.actor_id.route_service_id().as_str()),
-        realm_id,
-        Some(event.kind.as_str()),
-    )
-    .await
+    if event.applet_id.is_none()
+        && !crate::routing::federation::federation_actor_origin_acceptable(
+            state,
+            &event.actor_id,
+            source_id,
+            Some(event.actor_id.route_service_id().as_str()),
+            realm_id,
+            Some(event.kind.as_str()),
+        )
+        .await
     {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,

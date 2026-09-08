@@ -2322,7 +2322,7 @@ async fn build_member_history_retention(
             let event_bytes_digest = collect_history_dependencies(
                 state,
                 realm_id,
-                soland_storage::GovernanceDependencySource::ControlEvent(event_digest.clone()),
+                soland_storage::GovernanceDependencySource::Event(event_digest.clone()),
                 Some(&event),
                 &mut pins,
                 &mut pin_keys,
@@ -2479,16 +2479,9 @@ async fn collect_history_dependencies(
         .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     let mut cursor = 0;
     while cursor < dependencies.len() {
-        let next_selectors = match &dependencies[cursor] {
-            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                authenticated_signer_resolution_evidence,
-                ..
-            } => governance_attester_evidence_selectors(std::slice::from_ref(
-                authenticated_signer_resolution_evidence,
-            ))
-            .map_err(|error| crate::app_error!(DependencyMissing, error.to_string()))?,
-            _ => Vec::new(),
-        };
+        let next_selectors = dependencies[cursor]
+            .dependency_selectors()
+            .map_err(|error| crate::app_error!(DependencyMissing, error.to_string()))?;
         cursor += 1;
         for selector in next_selectors {
             let key = selector

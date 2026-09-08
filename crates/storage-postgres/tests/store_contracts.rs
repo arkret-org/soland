@@ -1855,7 +1855,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 .unwrap();
             }
             "source" => {
-                write.source = GovernanceDependencySource::ControlEvent(event_digest.clone());
+                write.source = GovernanceDependencySource::Event(event_digest.clone());
             }
             "index" => write.edge_index = 1,
             "object" => {}

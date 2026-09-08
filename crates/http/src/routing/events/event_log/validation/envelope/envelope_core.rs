@@ -494,14 +494,18 @@ async fn validate_event_envelope_with_ingress(
     // this exact signed Event. Its first formal profile Event is authorized by
     // the accountability-grant Event persisted immediately before it, rather
     // than by an `ak:grant:*` capability object in the runtime grant index.
-    let managed_actor = validate_applet_managed_actor_liveness(
-        state,
-        object,
-        actor_id.as_str(),
-        &kind,
-        realm_id.as_str(),
-    )
-    .await?;
+    let managed_actor = if is_authorized_internal_adapter {
+        false
+    } else {
+        validate_applet_managed_actor_liveness(
+            state,
+            object,
+            actor_id.as_str(),
+            &kind,
+            realm_id.as_str(),
+        )
+        .await?
+    };
     if !is_authorized_internal_adapter && !managed_actor {
         validate_applet_delegated_authorization_chain(
             state,
