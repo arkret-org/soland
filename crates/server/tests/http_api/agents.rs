@@ -1231,12 +1231,32 @@ async fn provision_agent_sdk_commit_attempt_inner(
         "{receiptless_error}"
     );
     let controller_seal_body = arkret_canonical::canonical_json_bytes(&controller_seal).unwrap();
+    // A registered Account's durable PCR binding must authorize its Seal even
+    // before the asynchronous owner projection has caught up.
+    let projected_owner = state
+        .test_projections()
+        .test_state()
+        .lock()
+        .realm_states
+        .get_mut(controller_seal.realm_id.as_str())
+        .expect("controller PCR projection")
+        .owner
+        .take();
+    assert!(projected_owner.is_some());
     let mut controller_seal_response = TestClient::post("http://server/_arkret/self/seals")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(controller_seal_body)
         .send(&app)
         .await;
+    state
+        .test_projections()
+        .test_state()
+        .lock()
+        .realm_states
+        .get_mut(controller_seal.realm_id.as_str())
+        .expect("controller PCR projection")
+        .owner = projected_owner;
     let controller_seal_status = controller_seal_response.status_code;
     let controller_seal_response_body = controller_seal_response
         .take_string()
