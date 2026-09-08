@@ -47,22 +47,20 @@ pub(super) async fn mls_governance_proof(
         AppError::param_invalid("MLS governance proof scope does not name a Realm")
     })?;
     let realm_value = realm_id.as_str();
-    let own_pcr = state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let own_pcr = durable_account_owns_pcr(state, &session_actor, realm_id).await?;
+    let agent_pcr = if let Some(account_id) = session_actor.as_account_id() {
+        crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
+            state,
+            account_id,
             realm_value,
-            &crate::routing::identity::session_actor::session_actor_from_credential(
-                state, &session,
-            )?
-            .to_string(),
-        );
-    let agent_pcr = crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
-        state,
-        &session.actor,
-        realm_value,
-    )
-    .await?;
+        )
+        .await?
+        .is_some()
+    } else {
+        false
+    };
     let realm_accessible = own_pcr
         || agent_pcr
         || crate::routing::spaces::space::realm_id_accessible(state, realm_value, Some(&session))

@@ -1085,11 +1085,7 @@ fn consent_grant_dot(operation: &Operation) -> String {
 fn active_grant_dots(cell: &ConsentCellRecord, at: DateTime<Utc>) -> Vec<String> {
     cell.grant_dots
         .iter()
-        .filter(|(dot, grant)| {
-            !cell.revoked_dots.contains(*dot)
-                && grant.not_before.is_none_or(|not_before| not_before <= at)
-                && grant.expires_at.is_none_or(|expires_at| expires_at > at)
-        })
+        .filter(|(dot, grant)| !cell.revoked_dots.contains(*dot) && grant.is_active_at(at))
         .map(|(_, grant)| grant.dot.clone())
         .collect()
 }

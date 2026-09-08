@@ -27,6 +27,16 @@ pub struct ConsentGrantDot {
     pub granted_at: DateTime<Utc>,
 }
 
+impl ConsentGrantDot {
+    /// Consent windows are closed at both ends: `[not_before, expires_at]`.
+    /// `granted_at` records the signed Event time for audit and does not move
+    /// either caller-supplied boundary.
+    pub fn is_active_at(&self, at: DateTime<Utc>) -> bool {
+        self.not_before.is_none_or(|not_before| not_before <= at)
+            && self.expires_at.is_none_or(|expires_at| at <= expires_at)
+    }
+}
+
 /// One holder-private `ak.component.consent.grant.v1` or_set cell.
 ///
 /// `peer` and `consent_scope` are the intent frozen by the cell's first
@@ -41,6 +51,73 @@ pub struct ConsentCellRecord {
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl ConsentCellRecord {
+    pub fn has_active_grant_at(&self, at: DateTime<Utc>) -> bool {
+        self.grant_dots
+            .iter()
+            .any(|(dot, grant)| !self.revoked_dots.contains(dot) && grant.is_active_at(at))
+    }
+}
+
+#[cfg(test)]
+mod consent_time_tests {
+    use super::*;
+
+    fn at(second: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(second, 0).unwrap()
+    }
+
+    fn dot() -> ConsentGrantDot {
+        ConsentGrantDot {
+            dot: "event:0".to_owned(),
+            not_before: Some(at(20)),
+            expires_at: Some(at(30)),
+            granted_at: at(10),
+        }
+    }
+
+    #[test]
+    fn consent_window_uses_signed_closed_boundaries() {
+        let grant = dot();
+        assert!(!grant.is_active_at(at(19)));
+        assert!(grant.is_active_at(at(20)));
+        assert!(grant.is_active_at(at(25)));
+        assert!(grant.is_active_at(at(30)));
+        assert!(!grant.is_active_at(at(31)));
+    }
+
+    #[test]
+    fn missing_or_revoked_grant_is_no_consent() {
+        let holder = AccountId::new(
+            DidCoreId::new("ak:did_core:web:holder.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        let mut cell = ConsentCellRecord {
+            cell_id: CellRef::new(
+                "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-000000000001"
+                    .to_owned(),
+            )
+            .unwrap(),
+            holder_account_id: holder,
+            peer: ConsentPeer::Actor {
+                actor_id: ActorId::account(AccountId::new(
+                    DidCoreId::new("ak:did_core:web:peer.example").unwrap(),
+                    DidCoreId::new("ak:did_core:web:peer-station.example").unwrap(),
+                )),
+            },
+            consent_scope: "invite".to_owned(),
+            grant_dots: BTreeMap::new(),
+            revoked_dots: BTreeSet::new(),
+            updated_at: at(10),
+        };
+        assert!(!cell.has_active_grant_at(at(25)));
+        cell.grant_dots.insert("event:0".to_owned(), dot());
+        assert!(cell.has_active_grant_at(at(25)));
+        cell.revoked_dots.insert("event:0".to_owned());
+        assert!(!cell.has_active_grant_at(at(25)));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use arkret_models_collaboration::objects::relation::{RelationCardinality, RelationEndpoint};
+use arkret_models_collaboration::objects::relation::{
+    RelationCardinality, RelationConflictCandidate, RelationConflictDiagnostic, RelationEndpoint,
+};
 
 use super::*;
 
@@ -225,6 +227,74 @@ impl ProjectionState {
         constrains_to
             && count_with_candidate(&|other| other.to_ref == relation.to_ref)
                 > RELATION_CONFLICT_FANOUT_LIMIT
+    }
+
+    /// Build the projection-only, bounded diagnostics required by
+    /// `models/relation.md` section 6. The result is derived exclusively from
+    /// retained Relation heads and never feeds back into reducer decisions.
+    pub fn relation_conflict_diagnostics(
+        &self,
+    ) -> arkret_wire::Result<Vec<RelationConflictDiagnostic>> {
+        let mut groups = std::collections::BTreeMap::<String, BTreeSet<String>>::new();
+        for relation in self
+            .relations
+            .values()
+            .filter(|relation| relation.state != "tombstoned")
+        {
+            let cardinality = registered_relation_cardinality(&relation.relation_kind);
+            let mut keys = vec![relation_conflict_key(relation, "tuple", true, true)?];
+            if matches!(
+                cardinality,
+                RelationCardinality::OneToOne | RelationCardinality::ManyToOne
+            ) {
+                keys.push(relation_conflict_key(relation, "from", true, false)?);
+            }
+            if matches!(
+                cardinality,
+                RelationCardinality::OneToOne | RelationCardinality::OneToMany
+            ) {
+                keys.push(relation_conflict_key(relation, "to", false, true)?);
+            }
+            for key in keys {
+                groups
+                    .entry(key)
+                    .or_default()
+                    .insert(relation.relation_id.clone());
+            }
+        }
+
+        let mut diagnostics = Vec::new();
+        for (dedupe_key, relation_ids) in groups {
+            if relation_ids.len() < 2 {
+                continue;
+            }
+            let mut heads = Vec::with_capacity(relation_ids.len());
+            for relation_id in relation_ids {
+                let relation = self.relations.get(&relation_id).ok_or_else(|| {
+                    arkret_wire::WireError::Protocol(
+                        "relation conflict diagnostic references a missing projection head"
+                            .to_owned(),
+                    )
+                })?;
+                if relation.state != "review_required" {
+                    continue;
+                }
+                let source_event_id = relation.source_event_id.as_ref().ok_or_else(|| {
+                    arkret_wire::WireError::Protocol(
+                        "relation conflict projection head is missing source_event_id".to_owned(),
+                    )
+                })?;
+                heads.push(RelationConflictCandidate {
+                    event_id: arkret_wire::EventId::new(source_event_id.clone())?,
+                    reason: None,
+                });
+            }
+            if heads.len() < 2 {
+                continue;
+            }
+            diagnostics.push(RelationConflictDiagnostic::try_new(dedupe_key, heads)?);
+        }
+        Ok(diagnostics)
     }
 
     fn enforce_relation_cardinality_for(
@@ -696,6 +766,27 @@ impl ProjectionState {
     }
 }
 
+fn relation_conflict_key(
+    relation: &SolandRelationState,
+    constraint: &str,
+    include_from: bool,
+    include_to: bool,
+) -> arkret_wire::Result<String> {
+    arkret_canonical::canonical_json_string(&serde_json::json!({
+        "constraint": constraint,
+        "from_ref": include_from.then_some(relation.from_ref.as_ref()).flatten(),
+        "realm_id": relation.realm_id,
+        "relation_kind": relation.relation_kind,
+        "scope_circle_id": relation.scope_circle_id,
+        "to_ref": include_to.then_some(relation.to_ref.as_ref()).flatten(),
+    }))
+    .map_err(|error| {
+        arkret_wire::WireError::Protocol(format!(
+            "failed to canonicalize relation conflict key: {error}"
+        ))
+    })
+}
+
 fn container_position_cell_id(container_ref: &str, item_ref: &str) -> Option<CellRef> {
     let subject = arkret_wire::composite_subject(&[container_ref, item_ref]).ok()?;
     CellRef::new(format!(
@@ -1146,6 +1237,63 @@ mod cross_realm_relation_tests {
             low_state.source_event_digest.as_deref(),
             Some("sha256:0000000000000000000000000000000000000000000000000000000000000001")
         );
+
+        let diagnostics = proj.relation_conflict_diagnostics().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].heads.len(), 2);
+        assert_eq!(
+            diagnostics[0]
+                .heads
+                .iter()
+                .map(|head| head.event_id.clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([high.context.event_id.clone(), low.context.event_id.clone()])
+        );
+        assert!(!diagnostics[0].validates_resolution_heads([&diagnostics[0].heads[0].event_id]));
+    }
+
+    #[test]
+    fn relation_conflict_diagnostic_fails_closed_on_missing_or_over_limit_heads() {
+        let mut projection = proj();
+        let now = chrono::Utc::now();
+        let first = relation_op("references", STRAND_A, STRAND_A2);
+        let second = relation_op_with_digest(
+            "000000000d03",
+            "references",
+            STRAND_A,
+            STRAND_A2,
+            "sha256:0303030303030303030303030303030303030303030303030303030303030303",
+        );
+        projection.apply_relation_create(&first, now);
+        projection.apply_relation_create(&second, now);
+        projection
+            .relations
+            .get_mut(relation_id_of(&first).as_str())
+            .unwrap()
+            .source_event_id = None;
+        assert!(projection.relation_conflict_diagnostics().is_err());
+
+        let template = projection
+            .relations
+            .get(relation_id_of(&second).as_str())
+            .unwrap()
+            .clone();
+        projection.relations.clear();
+        for seed in 1..=17_u8 {
+            let event_id = arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [seed; 32],
+            );
+            let mut relation = template.clone();
+            relation.relation_id =
+                arkret_identifiers::RelationId::from_event_id(&event_id).to_string();
+            relation.source_event_id = Some(event_id.to_string());
+            relation.state = "review_required".to_owned();
+            projection
+                .relations
+                .insert(relation.relation_id.clone(), relation);
+        }
+        assert!(projection.relation_conflict_diagnostics().is_err());
     }
 
     #[test]

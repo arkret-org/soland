@@ -439,6 +439,28 @@ pub(crate) async fn agent_record_for_controller_pcr(
     }))
 }
 
+/// Resolve delegated PCR authority for one exact controller AccountId.
+///
+/// The principal-only index is an implementation lookup aid; authorization
+/// must still compare the immutable controller Account binding, including its
+/// Station component.
+pub(crate) async fn agent_record_for_controller_account_pcr(
+    state: &AppState,
+    controller_account_id: &AccountId,
+    pcr_id: &str,
+) -> Result<Option<AgentPrincipalRecord>, AppError> {
+    let Some(record) =
+        agent_record_for_controller_pcr(state, controller_account_id.principal_id.as_str(), pcr_id)
+            .await?
+    else {
+        return Ok(None);
+    };
+    if agent_controller_account(state, &record).await? != *controller_account_id {
+        return Ok(None);
+    }
+    Ok(Some(record))
+}
+
 pub(crate) async fn agent_event_seal_head(
     state: &AppState,
     pcr_id: &str,
@@ -1073,6 +1095,18 @@ mod tests {
             super::agent_record_for_actor(&state, &foreign_actor)
                 .await
                 .is_err()
+        );
+        assert!(
+            super::agent_record_for_controller_account_pcr(&state, &local, PCR)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            super::agent_record_for_controller_account_pcr(&state, &foreign, PCR)
+                .await
+                .unwrap()
+                .is_none()
         );
         record.controller_account_pk = Some(foreign_pk);
         assert!(

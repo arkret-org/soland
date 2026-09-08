@@ -1,4 +1,3 @@
-use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_state::state::store::ControlProposalIngressClass;
 
 use super::*;
@@ -372,25 +371,20 @@ async fn issue_seal_availability_receipts(
             format!("availability requester_id DID core id is invalid: {error}"),
         )
     })?;
-    let own_pcr = state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(
-            request.realm_id.as_str(),
-            &crate::routing::identity::session_actor::session_actor_from_credential(
-                state, &session,
-            )?
-            .to_string(),
-        );
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let own_pcr = durable_account_owns_pcr(state, &session_actor, &request.realm_id).await?;
     let agent = if own_pcr {
         None
-    } else {
-        crate::routing::identity::agent_pcr::agent_record_for_controller_pcr(
+    } else if let Some(account_id) = session_actor.as_account_id() {
+        crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
             state,
-            &session.actor,
+            account_id,
             request.realm_id.as_str(),
         )
         .await?
+    } else {
+        None
     };
     if !own_pcr && agent.is_none() {
         return Err(crate::app_error!(
@@ -696,27 +690,18 @@ async fn submit_event_seal(
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     // PCR registration commits the exact Account binding durably before
     // projections catch up. Authorization must use that accepted binding.
-    let own_pcr = if let Some(account) = session_actor.as_account_id() {
-        state
-            .persistence()
-            .principal_resolution_by_account_id(account)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("principal resolution lookup failed: {error}"))
-            })?
-            .is_some_and(|resolution| resolution.pcr_realm_id == seal.realm_id)
-    } else {
-        false
-    };
+    let own_pcr = durable_account_owns_pcr(state, &session_actor, &seal.realm_id).await?;
     let agent = if own_pcr {
         None
-    } else {
-        crate::routing::identity::agent_pcr::agent_record_for_controller_pcr(
+    } else if let Some(account_id) = session_actor.as_account_id() {
+        crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
             state,
-            &session.actor,
+            account_id,
             seal.realm_id.as_str(),
         )
         .await?
+    } else {
+        None
     };
     if !own_pcr && agent.is_none() {
         return Err(crate::app_error!(
@@ -1592,16 +1577,18 @@ async fn seals_frontier(
             AppError::json_invalid("invalid ak.self.seals.read.frontier.v1 request body")
         })?;
     let realm_id = query_body.realm_id;
-    let own_pcr = state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string());
-    let agent_pcr = crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
-        state,
-        &session.actor,
-        realm_id.as_str(),
-    )
-    .await?;
+    let own_pcr = durable_account_owns_pcr(state, &session_actor, &realm_id).await?;
+    let agent_pcr = if let Some(account_id) = session_actor.as_account_id() {
+        crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
+            state,
+            account_id,
+            realm_id.as_str(),
+        )
+        .await?
+        .is_some()
+    } else {
+        false
+    };
     let accessible = own_pcr
         || agent_pcr
         || crate::routing::spaces::space::realm_id_accessible(
@@ -1698,22 +1685,23 @@ async fn events_frontier(
     if let Some(realm_value) = realm_selector {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
-        let own_actor_pcr = is_session_actor
-            && state
-                .projections()
-                .snapshot()
-                .realm_is_principal_control_for_actor(&realm_value, &actor);
-        let agent_pcr = state
-            .agent_pairings()
-            .agent(actor_id.as_str())
-            .await
-            .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
-            .is_some_and(|record| {
-                is_local_account
-                    && record.controller_principal_id == session.actor
-                    && record.state != AgentLifecycleState::Deactivated
-                    && record.principal_control_realm_id == realm_value
-            });
+        let own_actor_pcr =
+            is_session_actor && durable_account_owns_pcr(state, &session_actor, &realm_id).await?;
+        let agent_pcr = if is_local_account {
+            if let Some(account_id) = session_actor.as_account_id() {
+                crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
+                    state,
+                    account_id,
+                    realm_id.as_str(),
+                )
+                .await?
+                .is_some_and(|record| record.id == actor_id.as_str())
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         let applet_managed_access =
             applet_managed_actor_pcr_access(state, actor_id.as_str(), &session.actor).await?;
         let applet_managed_actor_pcr = applet_managed_access.as_ref().is_some_and(|access| {
@@ -1772,17 +1760,27 @@ async fn events_frontier(
         });
     }
 
-    let agent_pcr = state
+    let agent_record = state
         .agent_pairings()
         .agent(actor_id.as_str())
         .await
-        .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
-        .filter(|record| {
-            is_local_account
-                && record.controller_principal_id == session.actor
-                && record.state != AgentLifecycleState::Deactivated
-        })
-        .map(|record| record.principal_control_realm_id);
+        .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?;
+    let agent_pcr = if is_local_account {
+        if let (Some(account_id), Some(record)) = (session_actor.as_account_id(), agent_record) {
+            crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
+                state,
+                account_id,
+                &record.principal_control_realm_id,
+            )
+            .await?
+            .filter(|owned| owned.id == record.id)
+            .map(|owned| owned.principal_control_realm_id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     // Applet-managed principals are not Agents. Their immutable
     // provision/PCR anchors live in the Applet record and are visible only to
     // the exact registration service. Revocation keeps historical reads
@@ -1793,19 +1791,21 @@ async fn events_frontier(
         .as_ref()
         .filter(|access| is_local_account && access.owned_by_session)
         .map(|access| access.pcr_realm_id.as_str());
-    let own_actor_pcr =
-        if is_session_actor && let Some(session_account) = session_actor.as_account_id() {
-            state
-                .persistence()
-                .principal_resolution_by_account_id(session_account)
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("principal resolution lookup failed: {error}"))
-                })?
-                .map(|resolution| resolution.pcr_realm_id.to_string())
-        } else {
-            None
-        };
+    let own_actor_pcr = if is_session_actor {
+        let account = session_actor
+            .as_account_id()
+            .expect("authenticated human session actor is an AccountId");
+        state
+            .persistence()
+            .principal_resolution_by_account_id(account)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("principal resolution lookup failed: {error}"))
+            })?
+            .map(|resolution| resolution.pcr_realm_id.to_string())
+    } else {
+        None
+    };
     let records = state
         .event_queries()
         .canonical_events_for_actor(&actor)

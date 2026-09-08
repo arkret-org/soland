@@ -41,7 +41,9 @@ use arkret_models_collaboration::http_bodies::{
 use arkret_models_collaboration::objects::query_projection::{
     DocumentMorphProjectionOutcome, ReferenceProjectionState,
 };
-use arkret_models_collaboration::objects::relation::RelationEndpoint;
+use arkret_models_collaboration::objects::relation::{
+    RelationConflictDiagnostic, RelationEndpoint,
+};
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
@@ -1175,6 +1177,7 @@ struct RelationEdgeView {
 #[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
 struct RelationEdgeList {
     items: Vec<RelationEdgeView>,
+    diagnostics: Vec<RelationConflictDiagnostic>,
     total: u64,
 }
 
@@ -1579,9 +1582,10 @@ async fn list_relation_projections(
     let state_filter =
         soland_http::util::query_param(req, "state").unwrap_or_else(|| "active".to_owned());
 
-    let candidates: Vec<SolandRelationState> = {
+    let (candidates, diagnostics): (Vec<SolandRelationState>, Vec<RelationConflictDiagnostic>) = {
         let proj = state.projections().snapshot();
-        proj.relations
+        let candidates = proj
+            .relations
             .values()
             .filter(|relation| match state_filter.as_str() {
                 "any" | "all" => true,
@@ -1612,13 +1616,21 @@ async fn list_relation_projections(
                 })
             })
             .cloned()
-            .collect()
+            .collect();
+        let diagnostics = proj.relation_conflict_diagnostics().map_err(|error| {
+            AppError::internal(format!("invalid relation conflict projection: {error}"))
+        })?;
+        (candidates, diagnostics)
     };
 
     let mut items = Vec::new();
+    let mut visible_event_ids = std::collections::BTreeSet::new();
     for relation in candidates {
         if !realm_id_accessible(state, &relation.realm_id, Some(&session)).await {
             continue;
+        }
+        if let Some(source_event_id) = relation.source_event_id.as_ref() {
+            visible_event_ids.insert(source_event_id.clone());
         }
         items.push(RelationEdgeView {
             relation_id: relation.relation_id,
@@ -1634,8 +1646,21 @@ async fn list_relation_projections(
         });
     }
     items.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
+    let diagnostics = diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .heads
+                .iter()
+                .all(|head| visible_event_ids.contains(head.event_id.as_str()))
+        })
+        .collect();
     let total = total_count(items.len())?;
-    json_ok(RelationEdgeList { items, total })
+    json_ok(RelationEdgeList {
+        items,
+        diagnostics,
+        total,
+    })
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.morph.resource.get", tags("events"))]

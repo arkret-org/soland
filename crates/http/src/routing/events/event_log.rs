@@ -76,6 +76,28 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::describe;
 
+/// Match a human session's exact AccountId against its durable PCR lineage.
+///
+/// Registration commits this record before the rebuildable projection catches
+/// up, so every self PCR authorization surface must use the same durable
+/// source. Looking up by the complete AccountId also keeps equal principals at
+/// different Stations isolated.
+async fn durable_account_owns_pcr(
+    state: &AppState,
+    actor: &arkret_wire::ActorId,
+    realm_id: &RealmId,
+) -> Result<bool, AppError> {
+    let Some(account_id) = actor.as_account_id() else {
+        return Ok(false);
+    };
+    state
+        .persistence()
+        .principal_resolution_by_account_id(account_id)
+        .await
+        .map(|resolution| resolution.is_some_and(|record| record.pcr_realm_id == *realm_id))
+        .map_err(|error| AppError::internal(format!("principal resolution lookup failed: {error}")))
+}
+
 // scalability-constraints.md §2: prev_refs ≤ 128 (with MUST-dedup), refs[] total
 // ≤ 128, and the `authorized_by` role ≤ 64 within that total. These are the v1
 // interop maxima a conformant receiver MUST accept; a stricter local cap would

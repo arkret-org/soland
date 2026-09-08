@@ -1138,6 +1138,20 @@ async fn provision_agent_sdk_commit_attempt_inner(
             predecessor_refs: vec![predecessor.id.clone()],
             event_digests: target.difference(&predecessor_covered).cloned().collect(),
         };
+    // Registration durably binds the exact AccountId to this PCR before the
+    // rebuildable owner projection catches up. Availability preparation and
+    // the subsequent Seal submission must both remain authorized in that
+    // cold-projection window.
+    let projected_owner = state
+        .test_projections()
+        .test_state()
+        .lock()
+        .realm_states
+        .get_mut(controller_realm_id.as_str())
+        .expect("controller PCR projection")
+        .owner
+        .take();
+    assert!(projected_owner.is_some());
     let mut availability_response =
         TestClient::post("http://server/_arkret/self/seals/availability-receipts")
             .add_header("authorization", format!("Bearer {token}"), true)
@@ -1232,18 +1246,6 @@ async fn provision_agent_sdk_commit_attempt_inner(
         "{receiptless_error}"
     );
     let controller_seal_body = arkret_canonical::canonical_json_bytes(&controller_seal).unwrap();
-    // A registered Account's durable PCR binding must authorize its Seal even
-    // before the asynchronous owner projection has caught up.
-    let projected_owner = state
-        .test_projections()
-        .test_state()
-        .lock()
-        .realm_states
-        .get_mut(controller_seal.realm_id.as_str())
-        .expect("controller PCR projection")
-        .owner
-        .take();
-    assert!(projected_owner.is_some());
     let mut controller_seal_response = TestClient::post("http://server/_arkret/self/seals")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
