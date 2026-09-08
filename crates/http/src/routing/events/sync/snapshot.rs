@@ -125,14 +125,43 @@ pub(crate) async fn build_sync_snapshot(
             .get(&realm_id)
             .copied()
             .unwrap_or_default();
-        let (timeline_events, timeline_siblings, timeline_position) = timeline_events_for_realm(
-            state,
-            &projection,
-            &realm_id,
-            after_timeline_position,
-            session,
-        )
-        .await;
+        let (mut timeline_events, mut timeline_siblings, timeline_position) =
+            timeline_events_for_realm(
+                state,
+                &projection,
+                &realm_id,
+                after_timeline_position,
+                session,
+            )
+            .await;
+        // Filter only the data-plane timeline. Current security and object
+        // baselines below remain available even when no timeline kind matches.
+        // Keep the unfiltered position so excluded writes are not replayed.
+        let mut timeline_limited = false;
+        if let Some(filter) = &body.filter {
+            timeline_events.retain(|event| {
+                (filter.event_types.is_empty()
+                    || filter
+                        .event_types
+                        .iter()
+                        .any(|kind| kind == event.kind.as_str()))
+                    && !filter
+                        .not_event_types
+                        .iter()
+                        .any(|kind| kind == event.kind.as_str())
+            });
+            if let Some(limit) = filter.timeline_limit {
+                let omitted = timeline_events.len().saturating_sub(limit as usize);
+                timeline_limited = omitted > 0;
+                timeline_events.drain(..omitted);
+            }
+            // A sibling diagnostic is meaningful only for a delivered slot.
+            timeline_siblings.retain(|sibling| {
+                timeline_events
+                    .iter()
+                    .any(|event| sibling.event_ids.contains(&event.event_id))
+            });
+        }
         let (state_events, state_position) = state_events_for_realm(
             state,
             &realm_id,
@@ -188,9 +217,9 @@ pub(crate) async fn build_sync_snapshot(
             entry.timeline = Some(
                 arkret_models_collaboration::sync_frames::account_sync::Timeline {
                     events: timeline_events,
-                    limited: false,
+                    limited: timeline_limited,
                     prev_cursor: None,
-                    preview_only: None,
+                    preview_only: timeline_limited.then_some(true),
                     ordered_log_siblings: timeline_siblings,
                     extra: BTreeMap::new(),
                 },
@@ -217,6 +246,12 @@ pub(crate) async fn build_sync_snapshot(
                 },
                 e2ee_epoch: arkret_models_collaboration::sync_frames::account_sync::WindowStartNullableE2eeEpoch::Null(()),
             });
+            // We have current metadata, not the first retained Event's seal
+            // basis and causal closure. client-sync §5.2 requires preview_only
+            // instead of claiming that current state is historical state.
+            if timeline_limited {
+                entry.state_at_window_start = None;
+            }
             entry.summary = Some(arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeRealmSummary {
                 joined_member_count: Some(roster.len() as u64),
                 invited_member_count: None,

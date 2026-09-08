@@ -100,7 +100,13 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         .get_typed::<AppState>()
         .expect("state injected")
         .clone();
-    let body = account_subscribe_query(req);
+    let body = match account_subscribe_query(req) {
+        Ok(body) => body,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", &message);
+            return;
+        }
+    };
     let session = match account_subscribe_session_or_render(&state, req, res).await {
         Some(session) => session,
         None => return,
@@ -449,13 +455,67 @@ pub(crate) async fn account_subscribe_notification_should_wake(
     false
 }
 
-fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
-    SyncRequestBody {
+fn account_subscribe_query(req: &mut Request) -> Result<SyncRequestBody, String> {
+    // Decode the dotted deepObject binding shared with the SDK HTTP client.
+    // Invalid filters must fail closed rather than silently widening scope.
+    let mut filter = serde_json::Map::new();
+    for (name, value) in
+        url::form_urlencoded::parse(req.uri().query().unwrap_or_default().as_bytes())
+    {
+        if name == "filter" {
+            return Err("use filter.<field> query parameters for account filters".to_owned());
+        }
+        let Some(field) = name.strip_prefix("filter.") else {
+            continue;
+        };
+        match field {
+            "realms" | "event_kinds" | "not_event_kinds" => {
+                if value.is_empty() {
+                    return Err(format!("filter.{field} must not contain empty values"));
+                }
+                filter
+                    .entry(field.to_owned())
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                    .expect("collection field")
+                    .push(Value::String(value.into_owned()));
+            }
+            "timeline_limit" | "lazy_load_members" | "include_redundant_members" => {
+                if filter.contains_key(field) {
+                    return Err(format!("filter.{field} must appear once"));
+                }
+                let parsed = if field == "timeline_limit" {
+                    json!(
+                        value
+                            .parse::<u32>()
+                            .map_err(|_| "invalid filter.timeline_limit".to_owned())?
+                    )
+                } else {
+                    json!(
+                        value
+                            .parse::<bool>()
+                            .map_err(|_| format!("invalid filter.{field}"))?
+                    )
+                };
+                filter.insert(field.to_owned(), parsed);
+            }
+            _ => return Err(format!("unsupported account filter field {field}")),
+        }
+    }
+    let filter = if filter.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::from_value(Value::Object(filter))
+                .map_err(|error| format!("invalid account filter: {error}"))?,
+        )
+    };
+    Ok(SyncRequestBody {
         after: query_param(req, "after"),
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
-        filter: query_param(req, "filter").and_then(|value| serde_json::from_str(&value).ok()),
+        filter,
         subscriptions: None,
-    }
+    })
 }
 
 pub(crate) async fn wait_for_account_projection_barrier(

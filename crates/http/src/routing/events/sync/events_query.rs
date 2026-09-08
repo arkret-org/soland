@@ -947,13 +947,18 @@ pub(crate) async fn events_read_body(
             .filters
             .map(|filters| Value::Object(filters.into_iter().collect())),
     };
-    events_query_impl(state, req, parts).await
+    let wait_for = depot
+        .get_typed::<soland_http::openapi_routes::WaitForSyncToken>()
+        .ok()
+        .map(|token| token.0.as_str());
+    events_query_impl(state, req, parts, wait_for).await
 }
 
 async fn events_query_impl(
     state: &AppState,
     req: &Request,
     parts: EventsQueryParts,
+    wait_for: Option<&str>,
 ) -> soland_http::result::JsonResult<EventsQueryOutcome> {
     validate_events_query_order(&parts.order)?;
     reject_events_query_filter_digest_pseudo_fields(parts.filters.as_ref())?;
@@ -995,6 +1000,44 @@ async fn events_query_impl(
             session,
             arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
         )?;
+    }
+    if let Some(token) = wait_for {
+        let session = session.as_ref().ok_or_else(|| {
+            soland_http::error::AppError::unauthenticated(
+                "wait-for requires an authenticated session",
+            )
+        })?;
+        let event_id = parse_and_validate_barrier_cursor(
+            token,
+            state,
+            session,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .map_err(events_query_cursor_error)?;
+        // Subscribe before checking the projection, so a write landing during
+        // the check cannot lose its wake-up. A cursor is authority only after
+        // its stored account/device binding has been verified above.
+        let mut notifications = state.subscribe_event_notifications();
+        if !wait_for_account_projection_barrier(state, &mut notifications, &event_id).await {
+            let current = build_sync_snapshot(
+                state,
+                Some(session),
+                &SyncRequestBody {
+                    after: None,
+                    catchup: Some(true),
+                    filter: None,
+                    subscriptions: None,
+                },
+                &SyncCursor::default(),
+            )
+            .await;
+            return Err(crate::app_error!(
+                TemporarilyUnavailable,
+                "event projection did not reach the requested barrier"
+            )
+            .with_wire_detail("frontier", current.cursor));
+        }
     }
     if realms.is_empty() {
         authorize_actor_only_selectors(state, session.as_ref(), &actor_filter).await?;

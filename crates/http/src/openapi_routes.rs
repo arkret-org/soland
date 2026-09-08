@@ -5,7 +5,7 @@ use salvo::http::Method;
 use salvo::prelude::*;
 use serde_json::Value;
 
-use crate::util::{is_valid_sync_token, render_error};
+use crate::util::render_error;
 
 #[derive(Clone)]
 pub struct ArkretOpenApiDoc(pub Value);
@@ -281,12 +281,16 @@ pub async fn wait_for_sync_token(
         return;
     };
     let token = header_value.trim();
-    if token.is_empty() || token.contains(',') || !is_valid_sync_token(token) {
+    if token.is_empty()
+        || token.contains(',')
+        || !arkret_hlc::Cursor::decode(token)
+            .is_ok_and(|cursor| cursor.purpose == arkret_hlc::CursorPurpose::Barrier)
+    {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "param_invalid",
-            "X-Arkret-Wait-For must contain exactly one ak:cursor token",
+            "X-Arkret-Wait-For must contain exactly one barrier cursor",
         );
         return;
     }

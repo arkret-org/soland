@@ -733,9 +733,10 @@ async fn ack_device_messages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let ack_token = body.ack_token.trim();
-    if ack_token.is_empty() {
-        return Err(AppError::param_invalid("invalid_ack_token"));
+    let ack_token = body.ack_token.as_str();
+    if ack_token.is_empty() || ack_token.len() > 1024 {
+        return Err(AppError::param_invalid("invalid ack token")
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_ACK_TOKEN));
     }
     let Some(pruned_count) = state
         .deliveries()
@@ -743,7 +744,8 @@ async fn ack_device_messages(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
-        return Err(AppError::param_invalid("invalid_ack_token"));
+        return Err(AppError::param_invalid("invalid ack token")
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_ACK_TOKEN));
     };
     json_ok(DeviceMessagesAckOutcome {
         pruned_count: pruned_count as u64,

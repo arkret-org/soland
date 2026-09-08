@@ -687,7 +687,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     }
     let cursor = decode_sync_cursor(token, now_ms)?;
     if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
-        return Err(SyncCursorError::Integrity(
+        return Err(SyncCursorError::Invalid(
             "cursor purpose does not match stream",
         ));
     }
@@ -824,7 +824,7 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 }
 
 const FILTER_DIGEST_COLLECTION_KEYS: &[&str] =
-    &["realms", "actors", "event_types", "not_event_types", "kind"];
+    &["realms", "actors", "event_kinds", "not_event_kinds", "kind"];
 const FILTER_DIGEST_FALSE_DEFAULT_KEYS: &[&str] =
     &["lazy_load_members", "include_redundant_members"];
 
