@@ -177,9 +177,10 @@ pub(crate) use social::direct::{
 use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, direct_binding_conflict,
-    direct_binding_matches_projection, local_requester_current_proof, project_canonical_direct_binding,
-    validate_direct_binding_operation, validate_request_receipt_cryptography,
-    verify_contact_service_signature, verify_contact_service_signature_bytes,
+    direct_binding_matches_projection, local_requester_current_proof,
+    project_canonical_direct_binding, validate_direct_binding_operation,
+    validate_request_receipt_cryptography, verify_contact_service_signature,
+    verify_contact_service_signature_bytes,
 };
 pub(crate) mod lifecycle;
 // Re-export the lifecycle surface used by sibling routing modules.

@@ -3724,13 +3724,17 @@ async fn project_delivered_contact_fact(
                     &request_receipt,
                 )
                 .await?
-                .ok_or_else(|| crate::app_error!(
-                    TemporarilyUnavailable,
-                    "accepted local Contact requester proof is unavailable",
-                ))?;
+                .ok_or_else(|| {
+                    crate::app_error!(
+                        TemporarilyUnavailable,
+                        "accepted local Contact requester proof is unavailable",
+                    )
+                })?;
                 let mut current_proofs = vec![remote_proof.clone(), local_proof];
                 current_proofs.sort_by(|left, right| {
-                    left.peer.contact_actor_id().cmp(&right.peer.contact_actor_id())
+                    left.peer
+                        .contact_actor_id()
+                        .cmp(&right.peer.contact_actor_id())
                 });
                 contact.contact_round_evidence = Some(ContactRoundEvidenceBundle {
                     contact_round_id: accepted.contact_round_id.clone(),
