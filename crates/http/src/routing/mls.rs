@@ -99,8 +99,35 @@ async fn ensure_keypackage_owner_account_active(
 
 async fn local_keypackage_owner_account_pk(
     state: &AppState,
-    actor_id: &str,
+    session: &SessionRecord,
 ) -> Result<soland_storage::AccountPk, AppError> {
+    if session.agent_session.is_some() {
+        let principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
+            .map_err(|_| AppError::capability_denied("Agent principal id is invalid"))?;
+        let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+            .map_err(|_| AppError::internal("local Station id is invalid"))?;
+        let actor =
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal_id, station_id));
+        let agent = crate::routing::identity::agent_pcr::agent_record_for_actor(state, &actor)
+            .await?
+            .ok_or_else(|| AppError::capability_denied("Agent principal is unavailable"))?;
+        let controller =
+            crate::routing::identity::agent_pcr::agent_controller_account(state, &agent).await?;
+        let account = state
+            .identities()
+            .account(&controller)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("Agent controller Account lookup failed: {error}"))
+            })?
+            .ok_or_else(|| {
+                AppError::capability_denied("Agent controller Account is unavailable")
+            })?;
+        ensure_keypackage_owner_account_active(state, account.pk).await?;
+        return Ok(account.pk);
+    }
+
+    let actor_id = &session.actor;
     let principal_id = arkret_wire::DidCoreId::new(actor_id.to_owned())
         .map_err(|_| AppError::capability_denied("owner principal id is invalid"))?;
     let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
@@ -287,15 +314,17 @@ async fn upload_keypackage(
 ) -> JsonResult<KeyPackagesUploadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    session.account_pk.as_ref().ok_or_else(|| {
-        AppError::capability_denied("KeyPackage upload requires an account-bound session")
-    })?;
+    if session.account_pk.is_none() && session.agent_session.is_none() {
+        return Err(AppError::capability_denied(
+            "KeyPackage upload requires an account- or Agent-bound session",
+        ));
+    }
     // `account_pk` belongs to the credential issuer (normally the
     // Account Authority process), whereas KeyPackage rows are owned by this Station's local account
     // id. Resolve that local id through the stable principal carried by the authenticated
     // session; never reinterpret one service's local account id in another service's account
     // namespace.
-    let owner_account_pk = local_keypackage_owner_account_pk(state, &session.actor).await?;
+    let owner_account_pk = local_keypackage_owner_account_pk(state, &session).await?;
 
     let body = body.into_inner();
     body.validate_shape().map_err(AppError::param_invalid)?;
