@@ -224,4 +224,3 @@ pub(crate) use features_schema::{
 };
 pub(crate) use join_gate_proofs::validate_join_gate_proof_signatures;
 pub(crate) use proofs::validate_event_proofs;
-pub(in crate::routing) use realm_authority_root::validate_realm_authority_root_authorization;

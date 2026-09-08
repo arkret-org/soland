@@ -30,9 +30,15 @@ pub(super) fn validate_direct_conversation_realm_policy(
     // The envelope verifier separately proves the registered provisional
     // founder source, exact founding unit, exporter Seal and current gates.
     // A missing final binding is expected in that phase (§7.2), not a bad roster.
-    if kinds::operation_is_message_create(operation) && binding.is_none()
-        && operation.context.authorization_ref.as_ref().map(|reference| reference.as_str())
-            != Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1) {
+    if kinds::operation_is_message_create(operation)
+        && binding.is_none()
+        && operation
+            .context
+            .authorization_ref
+            .as_ref()
+            .map(|reference| reference.as_str())
+            != Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1)
+    {
         return Err("direct_conversation_member_count_invalid");
     }
     if kinds::operation_is_invite(operation) {

@@ -325,18 +325,18 @@ async fn server_describe_accepts_only_its_selected_role_body() {
 }
 
 #[test]
-fn open_service_resolution_serves_byte_canonical_record() {
+fn open_service_resolution_serves_byte_canonical_evidence() {
     run_on_deep_stack(
-        "open_service_resolution_serves_byte_canonical_record",
-        open_service_resolution_serves_byte_canonical_record_body,
+        "open_service_resolution_serves_byte_canonical_evidence",
+        open_service_resolution_serves_byte_canonical_evidence_body,
     );
 }
 
-async fn open_service_resolution_serves_byte_canonical_record_body() {
+async fn open_service_resolution_serves_byte_canonical_evidence_body() {
     let state = soland_test_support::app_state(test_config());
     let service = app_from_state(state.clone());
     let service_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
-    let path = arkret_models_identity::canonical_service_current_record_path(&service_id);
+    let path = arkret_models_identity::canonical_service_resolution_path(&service_id);
 
     let mut response = TestClient::get(format!("http://server{path}"))
         .send(&service)
@@ -348,14 +348,53 @@ async fn open_service_resolution_serves_byte_canonical_record_body() {
     // `Json` rendering of the record is not a valid encoding here.
     let resolution: arkret_models_identity::AuthenticatedServiceResolution =
         arkret_canonical::canonical::from_canonical_json_slice(body.as_bytes())
-            .expect("current-record response body must be byte-for-byte canonical JSON");
+            .expect("resolution response body must be byte-for-byte canonical JSON");
+    assert_eq!(resolution.service_id.as_str(), state.service_id().as_str());
+    let projection = resolution.projection().unwrap();
+    let store = state.test_persistence();
+    let now = chrono::Utc::now();
+    for offset in [0, 601, 1801] {
+        let verified_at = now + chrono::Duration::seconds(offset);
+        let entry = arkret_models_identity::ServiceRouteCacheEntry {
+            service_id: projection.service_id.clone(),
+            service_kind: projection.service_kind.clone(),
+            did: projection.did.clone(),
+            method_history_head: projection.method_history_head.clone(),
+            version_id: projection.version_id.clone(),
+            base_url: projection.base_url.clone(),
+            verified_at,
+            cache_expires_at: verified_at + chrono::Duration::seconds(300),
+        };
+        assert!(matches!(
+            store
+                .service_routes()
+                .publish_route_cache(resolution.clone(), entry)
+                .await
+                .unwrap(),
+            soland_storage::MonotonicRouteWrite::Applied
+                | soland_storage::MonotonicRouteWrite::Replay
+        ));
+    }
+    store
+        .service_routes()
+        .evict_route_cache(&service_id, "station")
+        .await
+        .unwrap();
+    let durable = store
+        .service_routes()
+        .method_state(&service_id, "station")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(durable.method_history_head, projection.method_history_head);
+    assert_eq!(durable.version_id, projection.version_id);
+    let mut again = TestClient::get(format!("http://server{path}"))
+        .send(&service)
+        .await;
     assert_eq!(
-        resolution
-            .service_resolution_record
-            .record
-            .service_id
-            .as_str(),
-        state.service_id().as_str()
+        again.take_string().await.unwrap(),
+        body,
+        "refreshing an unchanged DID must not produce a new artifact"
     );
 }
 

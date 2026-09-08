@@ -416,23 +416,6 @@ pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
     Ok(bundles)
 }
 
-/// The digest suite a self-describing `Hash` was computed under.
-///
-/// Seal roots and Seal deltas both carry their suite in the value itself, which
-/// is the only source a private invite receiver has: it holds no projection for
-/// the Realm whose Seals it is being asked to verify, so it cannot look the
-/// live suite up, and both sides must still agree.
-pub(in crate::routing) fn digest_suite_from_hash(
-    value: &arkret_identifiers::Hash,
-) -> Result<arkret_canonical::DigestSuite, String> {
-    let (prefix, _) = value
-        .as_str()
-        .split_once(':')
-        .ok_or_else(|| format!("digest {value} carries no digest suite"))?;
-    arkret_canonical::digest_suite(prefix)
-        .map_err(|error| format!("digest {value} names an unsupported digest suite: {error}"))
-}
-
 /// Pair delayed Events with the publication evidence they were admitted under
 /// and transport online Events without offline publication evidence
 /// (`offline-publication.md` §2.1).

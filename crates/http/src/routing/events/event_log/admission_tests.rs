@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn event_submit_rejects_bare_and_malformed_carriers() {
+    for body in [
+        json!({"kind": "ak.message.create", "payload": {"text": "bare"}}),
+        json!({"event": {}, "unregistered_sidecar": {}}),
+        json!({"events": [], "unregistered_sidecar": {}}),
+    ] {
+        assert!(serde_json::from_value::<SolandEventsSubmitRequestBody>(body).is_err());
+    }
+}
+
+#[test]
 fn malformed_direct_conversation_unit_cannot_fall_through_to_ordinary_batch() {
     let parsed = serde_json::from_value::<SolandEventsSubmitRequestBody>(json!({
         "unit_kind": "direct_conversation_founding",

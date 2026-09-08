@@ -902,26 +902,6 @@ impl AppState {
             .ok_or_else(|| "durable service identity is unavailable".to_owned())
     }
 
-    pub async fn current_signed_service_resolution(
-        &self,
-    ) -> Result<Option<arkret_models_identity::ServiceResolutionRecord>, String> {
-        self.persistence
-            .current_service_resolution()
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    pub async fn compare_and_set_signed_service_resolution(
-        &self,
-        expected_digest: Option<&Hash>,
-        record: arkret_models_identity::ServiceResolutionRecord,
-    ) -> Result<bool, String> {
-        self.persistence
-            .compare_and_set_service_resolution(expected_digest, record)
-            .await
-            .map_err(|error| error.to_string())
-    }
-
     pub fn install_federation_peer_verifying_key(
         &self,
         previous_service_id: Option<&str>,

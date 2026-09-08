@@ -52,7 +52,7 @@ pub struct ServiceIdentityBootstrap {
     pub key_store: Option<Arc<dyn KeyStore>>,
     pub state: DidCoreIdentityState,
     /// Stable DID plus the exact current method-history coordinates that
-    /// every ServiceDescribe and signed ServiceResolutionRecord must share.
+    /// every ServiceDescribe and authenticated DID evidence must share.
     pub resolution_commitment: Option<arkret_models_identity::ResolutionCommitment>,
     /// Signing seed resolved through the verified identity's active KeyRef.
     /// AppState must use this exact seed and must never independently mint or
@@ -252,6 +252,7 @@ async fn resolve_service_identity(
     )
     .await?;
 
+    let stored = ensure_service_endpoint(persistence, config, key_store, stored).await?;
     ensure_identity_bundle(persistence, config, key_store, bundle_backend, &stored).await?;
 
     if stored.identity.registration_key != configured_key {
@@ -770,8 +771,20 @@ async fn ensure_identity_bundle(
             .pointer("/parameters/updateKeys/0")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("service WebVH entry has no active update key"))?;
+        let mut historical = stored.clone();
+        historical.identity.did = arkret_wire::Did::new(
+            entry
+                .operation
+                .pointer("/state/id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("bundle entry omits DID"))?,
+        )?;
+        historical.registration_receipt.did = historical.identity.did.clone();
+        historical.registration_receipt.proof.verification_method =
+            arkret_wire::DidUrl::new(format!("{}#notary-key", historical.identity.did))
+                .map_err(anyhow::Error::msg)?;
         receipts.push(reissue_registration_receipt(
-            stored,
+            &historical,
             version_id,
             &entry.event_digest,
             update_key,
@@ -858,7 +871,7 @@ async fn restore_identity_bundle(
     let now = chrono::Utc::now();
     let event_digest = outcome.registration_receipt.log_head_digest.clone();
     let document = WebvhDocumentRecord {
-        did: bundle.identity.identity.did.to_string(),
+        did: inception.state.id.to_string(),
         did_document: serde_json::to_value(&outcome.did_document)?,
         key_log_head: Some(event_digest.clone()),
         seq: 1,
@@ -875,7 +888,7 @@ async fn restore_identity_bundle(
     };
     let event = WebvhLogRecord {
         event_digest,
-        did: bundle.identity.identity.did.to_string(),
+        did: inception.state.id.to_string(),
         seq: 1,
         operation: inception_value,
         created_at: now,
@@ -910,8 +923,13 @@ async fn restore_identity_bundle(
             .ok_or_else(|| anyhow::anyhow!("identity bundle WebVH entry has no versionTime"))?
             .parse::<chrono::DateTime<chrono::Utc>>()
             .map_err(|error| anyhow::anyhow!("identity bundle versionTime is invalid: {error}"))?;
+        let entry_did = state
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("bundle entry omits DID"))?
+            .to_owned();
         let document = WebvhDocumentRecord {
-            did: bundle.identity.identity.did.to_string(),
+            did: entry_did.clone(),
             did_document: state,
             key_log_head: Some(event_digest.clone()),
             seq,
@@ -925,7 +943,7 @@ async fn restore_identity_bundle(
         };
         let event = WebvhLogRecord {
             event_digest: event_digest.clone(),
-            did: bundle.identity.identity.did.to_string(),
+            did: entry_did.clone(),
             seq,
             operation: operation.clone(),
             created_at,
@@ -1003,7 +1021,13 @@ fn validate_bundle_receipt_signatures(bundle: &DidCoreIdentityBundle) -> anyhow:
     {
         if receipt.provider_id != bundle.identity.identity.service_id
             || receipt.proof.verification_method.as_str()
-                != format!("{}#notary-key", bundle.identity.identity.did)
+                != format!(
+                    "{}#notary-key",
+                    entry
+                        .pointer("/state/id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow::anyhow!("bundle entry omits DID"))?
+                )
         {
             anyhow::bail!("identity bundle receipt was issued by an unexpected Provider method");
         }
@@ -1706,6 +1730,50 @@ async fn authorize_account_authority_key(
         assertions.push(json!(method_id));
     }
 
+    publish_service_document_successor(persistence, config, key_store, stored, state).await
+}
+
+async fn ensure_service_endpoint(
+    persistence: &PersistenceHandle,
+    config: &AppConfig,
+    key_store: Option<&dyn KeyStore>,
+    stored: StoredDidCoreIdentity,
+) -> anyhow::Result<StoredDidCoreIdentity> {
+    let desired = CanonicalServiceUrl::canonicalize(&config.public_base_url)?;
+    desired.require_https()?;
+    let mut document = serde_json::to_value(&stored.did_document)?;
+    let services = document
+        .get_mut("service")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow::anyhow!("service DID omits endpoints"))?;
+    let mut entries = services
+        .iter_mut()
+        .filter(|e| e["type"] == "ArkretService" && e["serviceKind"] == "station");
+    let entry = entries
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("service DID omits Station endpoint"))?;
+    if entries.next().is_some() {
+        anyhow::bail!("ambiguous Station DID endpoints");
+    }
+    if entry["serviceEndpoint"] == desired.as_str() {
+        return Ok(stored);
+    }
+    entry["serviceEndpoint"] = Value::String(desired.to_string());
+    publish_service_document_successor(persistence, config, key_store, stored, document).await
+}
+
+async fn publish_service_document_successor(
+    persistence: &PersistenceHandle,
+    config: &AppConfig,
+    key_store: Option<&dyn KeyStore>,
+    stored: StoredDidCoreIdentity,
+    state: Value,
+) -> anyhow::Result<StoredDidCoreIdentity> {
+    let did = stored.identity.did.clone();
+    let entries = persistence.webvh_history(did.as_str()).await?;
+    let head = entries
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("service DID has no native history"))?;
     let key_store = required_key_store(key_store)?;
     // The head pre-committed the next generation, so that is the only key
     // allowed to sign this successor.
@@ -1773,7 +1841,7 @@ async fn authorize_account_authority_key(
         seq,
         method_evidence: json!({
             "mode": "self_hosted_service_rotation",
-            "reason": "account_authority_assertion_key",
+            "reason": "service_document_update",
             "version_id": rotation.version_id,
             "self_provisioned": true,
         }),
@@ -1835,9 +1903,8 @@ async fn authorize_account_authority_key(
     updated.stored_at = now;
     tracing::info!(
         did = %did,
-        method = %method_id,
         version_id = %updated.identity.version_id,
-        "authorized the Account Authority key in the Station DID document"
+        "published a service DID document successor"
     );
     persist_stored_identity(persistence, updated).await
 }
@@ -2129,7 +2196,7 @@ fn seed_public_multibase(seed: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use arkret_keystore::{InMemoryKeyStore, KeyStore};
-    use soland_storage::DeliveryPolicyStoreRegistry;
+    use soland_storage::{DeliveryPolicyStoreRegistry, ResolutionStoreRegistry};
     use soland_storage_postgres::PgPersistenceStore;
     use soland_storage_postgres::test_database::TestDatabase;
 
@@ -2365,6 +2432,250 @@ mod tests {
             committed.identity.control_key_ref
         );
         assert!(key_store.load(canonical_next.as_str()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn endpoint_change_advances_native_did_once_and_survives_restart() {
+        let store = leased_store().await;
+        let persistence = PersistenceHandle::new(store.clone());
+        let keys = InMemoryKeyStore::new();
+        let first =
+            resolve_service_identity(&persistence, &bootstrap_config(), Some(&keys), None, true)
+                .await
+                .unwrap();
+        let original = first.identity().unwrap().clone();
+        let first_stored = store.service_identity().get().await.unwrap().unwrap();
+        let first_log = persistence
+            .webvh_history(original.did.as_str())
+            .await
+            .unwrap();
+        let first_evidence = arkret_identity::build_authenticated_webvh_service_resolution(
+            original.service_id.clone(),
+            "station".into(),
+            serde_json::from_value(serde_json::to_value(&first_stored.did_document).unwrap())
+                .unwrap(),
+            first_log.into_iter().map(|e| e.operation).collect(),
+            vec![],
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let cache_from = |e: &arkret_models_identity::AuthenticatedServiceResolution, at| {
+            let p = e.projection().unwrap();
+            arkret_models_identity::ServiceRouteCacheEntry {
+                service_id: p.service_id,
+                service_kind: p.service_kind,
+                did: p.did,
+                method_history_head: p.method_history_head,
+                version_id: p.version_id,
+                base_url: p.base_url,
+                verified_at: at,
+                cache_expires_at: at + chrono::Duration::seconds(300),
+            }
+        };
+        store
+            .service_routes()
+            .publish_route_cache(
+                first_evidence.clone(),
+                cache_from(&first_evidence, chrono::Utc::now()),
+            )
+            .await
+            .unwrap();
+        let changed = AppConfig {
+            public_base_url: "https://relocated.example/station/".into(),
+            ..bootstrap_config()
+        };
+        let updated = resolve_service_identity(&persistence, &changed, Some(&keys), None, false)
+            .await
+            .unwrap();
+        assert_eq!(updated.identity().unwrap().service_id, original.service_id);
+        assert_eq!(updated.identity().unwrap().did, original.did);
+        assert_ne!(updated.identity().unwrap().version_id, original.version_id);
+        let stored = store.service_identity().get().await.unwrap().unwrap();
+        let doc = serde_json::to_value(&stored.did_document).unwrap();
+        assert_eq!(
+            doc["service"][0]["serviceEndpoint"],
+            changed.public_base_url
+        );
+        let log = persistence
+            .webvh_history(original.did.as_str())
+            .await
+            .unwrap();
+        assert_eq!(log.len(), 2);
+        resolve_service_identity(&persistence, &changed, Some(&keys), None, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            persistence
+                .webvh_history(original.did.as_str())
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "same DID and endpoint must not create refresh versions"
+        );
+        let next = AppConfig {
+            public_base_url: "https://final.example/".into(),
+            ..bootstrap_config()
+        };
+        resolve_service_identity(&persistence, &next, Some(&keys), None, false)
+            .await
+            .unwrap();
+        let latest = store.service_identity().get().await.unwrap().unwrap();
+        let logs = persistence
+            .webvh_history(original.did.as_str())
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 3);
+        let latest = arkret_identity::build_authenticated_webvh_service_resolution(
+            original.service_id.clone(),
+            "station".into(),
+            serde_json::from_value(serde_json::to_value(&latest.did_document).unwrap()).unwrap(),
+            logs.into_iter().map(|e| e.operation).collect(),
+            vec![],
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert!(matches!(
+            store
+                .service_routes()
+                .publish_route_cache(latest.clone(), cache_from(&latest, chrono::Utc::now()))
+                .await
+                .unwrap(),
+            soland_storage::MonotonicRouteWrite::Applied
+        ));
+        store
+            .service_routes()
+            .evict_route_cache(&original.service_id, "station")
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .service_routes()
+                .publish_route_cache(
+                    first_evidence.clone(),
+                    cache_from(
+                        &first_evidence,
+                        chrono::Utc::now() + chrono::Duration::minutes(15)
+                    )
+                )
+                .await
+                .unwrap(),
+            soland_storage::MonotonicRouteWrite::Stale
+        ));
+        assert_eq!(
+            store
+                .service_routes()
+                .method_state(&original.service_id, "station")
+                .await
+                .unwrap()
+                .unwrap()
+                .version_id,
+            latest.projection().unwrap().version_id
+        );
+    }
+
+    #[tokio::test]
+    async fn portable_bundle_restore_preserves_each_native_entry_did() {
+        let config = bootstrap_config();
+        let source = leased_store().await;
+        let persistence = PersistenceHandle::new(source.clone());
+        let keys = InMemoryKeyStore::new();
+        resolve_service_identity(&persistence, &config, Some(&keys), None, true)
+            .await
+            .unwrap();
+        let first = source.service_identity().get().await.unwrap().unwrap();
+        let old_did = first.identity.did.to_string();
+        let scid = old_did.split(':').nth(2).unwrap();
+        let new_did = format!("did:webvh:{scid}:moved.example:webvh:service");
+        let mut logs = persistence
+            .webvh_history(&old_did)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.operation)
+            .collect::<Vec<_>>();
+        let mut state: Value = serde_json::from_str(
+            &serde_json::to_string(&logs[0]["state"])
+                .unwrap()
+                .replace(&old_did, &new_did),
+        )
+        .unwrap();
+        state["alsoKnownAs"] = json!([old_did]);
+        let active = next_control_key_ref(&first.identity.control_key_ref).unwrap();
+        let seed = load_seed(&keys, &active).unwrap();
+        let following = next_control_key_ref(&active).unwrap();
+        let following_seed = [0x77; 32];
+        keys.store(following.as_str(), &following_seed).unwrap();
+        let moved = arkret_signatures::webvh::prepare_webvh_relocation(
+            &arkret_signatures::webvh::WebvhRelocationInput {
+                current_did: &old_did,
+                target_did: &new_did,
+                previous_entries: &logs,
+                version_time: next_webvh_version_time(&logs[0]).unwrap(),
+                current_update_seed: &seed,
+                next_update_public_key_multibase: &seed_public_multibase(&following_seed),
+                state: &state,
+            },
+        )
+        .unwrap();
+        let head = event_digest_for_restore(&moved.log_entry).unwrap();
+        logs.push(moved.log_entry.clone());
+        let mut latest = first.clone();
+        latest.identity.did = Did::new(&new_did).unwrap();
+        latest.identity.version_id = moved.version_id.clone();
+        latest.identity.control_key_ref = active;
+        latest.did_document = serde_json::from_value(state).unwrap();
+        latest.registration_receipt.did = latest.identity.did.clone();
+        latest.registration_receipt.proof.verification_method =
+            arkret_wire::DidUrl::new(format!("{new_did}#notary-key")).unwrap();
+        latest.registration_receipt = reissue_registration_receipt(
+            &latest,
+            &moved.version_id,
+            &head,
+            &seed_public_multibase(&seed),
+            &config.notary_signing_key_seed.unwrap(),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let bundle = DidCoreIdentityBundle {
+            schema: DidCoreIdentityBundle::SCHEMA.into(),
+            identity: latest.clone(),
+            webvh_history_entries: logs,
+            receipt_chains: vec![
+                first.registration_receipt,
+                latest.registration_receipt.clone(),
+            ],
+            exported_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+        };
+        let destination = leased_store().await;
+        let restored_persistence = PersistenceHandle::new(destination.clone());
+        restore_identity_bundle(
+            &restored_persistence,
+            &config,
+            Some(&keys),
+            latest.identity.registration_key.clone(),
+            bundle,
+        )
+        .await
+        .unwrap();
+        let history = restored_persistence.webvh_history(&new_did).await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].did, old_did);
+        assert_eq!(history[1].did, new_did);
+        assert_eq!(
+            destination
+                .service_identity()
+                .get()
+                .await
+                .unwrap()
+                .unwrap()
+                .identity
+                .service_id,
+            latest.identity.service_id
+        );
+        validate_stored_service_identity(&restored_persistence, &config, Some(&keys), &latest)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

@@ -955,51 +955,11 @@ fn submit_event_authenticated<'a>(
                     return;
                 }
             }
-            let (status, body, idempotency_committed) = match submit {
-                SolandEventsSubmitRequestBody::Single(envelope) => {
-                    let envelope_for_chaos = envelope.clone();
-                    let result = submit_event_value_with_idempotency(
-                        state,
-                        session,
-                        envelope,
-                        EventCommitIdempotency {
-                            authenticated_actor: authenticated_actor.clone(),
-                            operation_id: "ak.self.events.command.submit.v1".to_owned(),
-                            key: key.to_owned(),
-                            request_hash: request_hash.clone(),
-                        },
-                    )
-                    .await;
-                    match result {
-                        Ok(response) => {
-                            maybe_delay_test_chaos_breakpoint(
-                                state,
-                                &envelope_for_chaos,
-                                &response,
-                            )
-                            .await;
-                            let committed = !response.duplicate;
-                            (
-                                StatusCode::OK,
-                                submit_outcome_value(&response.outcome),
-                                committed,
-                            )
-                        }
-                        Err(error) => {
-                            let (status, body) = submit_one_error_value(error);
-                            (status, body, false)
-                        }
-                    }
-                }
-                other => {
-                    let (status, body) = submit_event_dispatch(state, session, other).await;
-                    (status, body, false)
-                }
-            };
+            let (status, body) = submit_event_dispatch(state, session, submit).await;
             // Only deterministic outcomes are cached: a 5xx is transient, so caching
             // it would wrongly pin a server-side failure under the key and block a
             // legitimate retry. The client may safely re-send the same key.
-            if !status.is_server_error() && !idempotency_committed {
+            if !status.is_server_error() {
                 persist_idempotency_first_response(
                     state,
                     &authenticated_actor,
@@ -1036,25 +996,19 @@ fn submit_event_authenticated<'a>(
                 }
             }
             SolandEventsSubmitRequestBody::Initial(submission) => {
+                let envelope =
+                    serde_json::to_value(&submission.event).expect("Event serialization");
                 match submit_initial_event_submission(state, session, submission).await {
-                    Ok(response) => res.render(Json(response.outcome)),
+                    Ok(response) => {
+                        maybe_delay_test_chaos_breakpoint(state, &envelope, &response).await;
+                        res.render(Json(response.outcome));
+                    }
                     Err(error) => render_submit_one_error(res, error),
                 }
             }
             SolandEventsSubmitRequestBody::InitialBatch(batch) => {
                 match submit_initial_event_batch_outcome(state, session, batch.events).await {
                     Ok(outcome) => res.render(Json(outcome)),
-                    Err(error) => render_submit_one_error(res, error),
-                }
-            }
-            SolandEventsSubmitRequestBody::Single(envelope) => {
-                let envelope_for_chaos = envelope.clone();
-                match submit_event_value(state, session, envelope).await {
-                    Ok(response) => {
-                        maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response)
-                            .await;
-                        res.render(Json(response.outcome));
-                    }
                     Err(error) => render_submit_one_error(res, error),
                 }
             }
@@ -1094,24 +1048,18 @@ async fn submit_event_dispatch(
             }
         }
         SolandEventsSubmitRequestBody::Initial(submission) => {
+            let envelope = serde_json::to_value(&submission.event).expect("Event serialization");
             match submit_initial_event_submission(state, session, submission).await {
-                Ok(response) => (StatusCode::OK, submit_outcome_value(&response.outcome)),
+                Ok(response) => {
+                    maybe_delay_test_chaos_breakpoint(state, &envelope, &response).await;
+                    (StatusCode::OK, submit_outcome_value(&response.outcome))
+                }
                 Err(error) => submit_one_error_value(error),
             }
         }
         SolandEventsSubmitRequestBody::InitialBatch(batch) => {
             match submit_initial_event_batch_outcome(state, session, batch.events).await {
                 Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
-                Err(error) => submit_one_error_value(error),
-            }
-        }
-        SolandEventsSubmitRequestBody::Single(envelope) => {
-            let envelope_for_chaos = envelope.clone();
-            match submit_event_value(state, session, envelope).await {
-                Ok(response) => {
-                    maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
-                    (StatusCode::OK, submit_outcome_value(&response.outcome))
-                }
                 Err(error) => submit_one_error_value(error),
             }
         }

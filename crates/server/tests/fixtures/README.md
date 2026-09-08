@@ -1,0 +1,1 @@
+These disposable test-only TLS keys serve the loopback federation outbox mock. They grant no production trust. Run federation_outbox with SSL_CERT_FILE pointing to outbox-test-ca.pem, alongside SOLAND_TEST_DATABASE_URL. The leaf is valid for 127.0.0.1 only.

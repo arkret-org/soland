@@ -318,32 +318,6 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn stored_service_route_notice_states(
-        &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        limit: usize,
-    ) -> crate::ServiceResult<Vec<arkret_models_identity::ServiceRouteNoticeState>> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .notice_states(service_id, service_kind, limit)
-            .await?)
-    }
-
-    pub async fn stored_service_route_mirrors(
-        &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        limit: usize,
-    ) -> crate::ServiceResult<Vec<soland_storage::ServiceResolutionMirrorEntry>> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .handover_mirror_entries(service_id, service_kind, limit)
-            .await?)
-    }
-
     pub async fn stored_service_route_quarantine(
         &self,
         service_id: &arkret_wire::DidCoreId,
@@ -369,63 +343,15 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn service_route_floor(
+    pub async fn service_route_method_state(
         &self,
         service_id: &arkret_wire::DidCoreId,
         service_kind: &str,
-    ) -> crate::ServiceResult<Option<arkret_models_identity::ServiceResolutionLastSeenFloor>> {
+    ) -> crate::ServiceResult<Option<arkret_models_identity::ServiceMethodState>> {
         Ok(self
             .persistence
             .service_routes()
-            .last_seen_floor(service_id, service_kind)
-            .await?)
-    }
-
-    pub async fn commit_service_route_mirror(
-        &self,
-        entry: soland_storage::ServiceResolutionMirrorEntry,
-    ) -> crate::ServiceResult<soland_storage::ServiceResolutionMirrorCommit> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .commit_mirror(entry)
-            .await?)
-    }
-
-    pub async fn service_route_successors(
-        &self,
-        source_id: &arkret_wire::DidCoreId,
-        realm_id: &arkret_wire::RealmId,
-        target_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        after_sequence: u64,
-        limit: usize,
-    ) -> crate::ServiceResult<Vec<arkret_models_identity::ServiceResolutionRecord>> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .successor_records(
-                source_id,
-                realm_id,
-                target_id,
-                service_kind,
-                after_sequence,
-                limit,
-            )
-            .await?)
-    }
-
-    pub async fn latest_service_route_notice(
-        &self,
-        source_id: &arkret_wire::DidCoreId,
-        realm_id: &arkret_wire::RealmId,
-        target_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-    ) -> crate::ServiceResult<Option<arkret_models_identity::ServiceRouteHandoverNotice>> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .latest_notice(source_id, realm_id, target_id, service_kind)
+            .method_state(service_id, service_kind)
             .await?)
     }
 
@@ -465,24 +391,6 @@ impl PersistenceHandle {
     ) -> crate::ServiceResult<()> {
         self.persistence.service_identity().put(identity).await?;
         Ok(())
-    }
-
-    pub async fn current_service_resolution(
-        &self,
-    ) -> crate::ServiceResult<Option<arkret_models_identity::ServiceResolutionRecord>> {
-        Ok(self.persistence.service_identity().get_resolution().await?)
-    }
-
-    pub async fn compare_and_set_service_resolution(
-        &self,
-        expected_digest: Option<&arkret_wire::Hash>,
-        record: arkret_models_identity::ServiceResolutionRecord,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .persistence
-            .service_identity()
-            .compare_and_set_resolution(expected_digest, record)
-            .await?)
     }
 
     pub async fn principal_resolution_by_account_id(
@@ -936,30 +844,6 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
             .await
     }
 
-    async fn notice_states(
-        &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        limit: usize,
-    ) -> PersistenceResult<Vec<arkret_models_identity::ServiceRouteNoticeState>> {
-        self.persistence
-            .service_routes()
-            .notice_states(service_id, service_kind, limit)
-            .await
-    }
-
-    async fn handover_mirror_entries(
-        &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        limit: usize,
-    ) -> PersistenceResult<Vec<soland_storage::ServiceResolutionMirrorEntry>> {
-        self.persistence
-            .service_routes()
-            .handover_mirror_entries(service_id, service_kind, limit)
-            .await
-    }
-
     async fn quarantine_evidence(
         &self,
         service_id: &arkret_wire::DidCoreId,
@@ -972,99 +856,25 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
             .await
     }
 
-    async fn last_seen_floor(
+    async fn method_state(
         &self,
         service_id: &arkret_wire::DidCoreId,
         service_kind: &str,
-    ) -> PersistenceResult<Option<arkret_models_identity::ServiceResolutionLastSeenFloor>> {
+    ) -> PersistenceResult<Option<arkret_models_identity::ServiceMethodState>> {
         self.persistence
             .service_routes()
-            .last_seen_floor(service_id, service_kind)
-            .await
-    }
-
-    async fn advance_last_seen_floor(
-        &self,
-        floor: arkret_models_identity::ServiceResolutionLastSeenFloor,
-    ) -> PersistenceResult<soland_storage::MonotonicRouteWrite> {
-        self.persistence
-            .service_routes()
-            .advance_last_seen_floor(floor)
+            .method_state(service_id, service_kind)
             .await
     }
 
     async fn publish_route_cache(
         &self,
-        floor: arkret_models_identity::ServiceResolutionLastSeenFloor,
+        evidence: arkret_models_identity::AuthenticatedServiceResolution,
         entry: arkret_models_identity::ServiceRouteCacheEntry,
     ) -> PersistenceResult<soland_storage::MonotonicRouteWrite> {
         self.persistence
             .service_routes()
-            .publish_route_cache(floor, entry)
-            .await
-    }
-
-    async fn notice_state(
-        &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        handover_id: &str,
-    ) -> PersistenceResult<Option<arkret_models_identity::ServiceRouteNoticeState>> {
-        self.persistence
-            .service_routes()
-            .notice_state(service_id, service_kind, handover_id)
-            .await
-    }
-
-    async fn advance_notice_state(
-        &self,
-        state: arkret_models_identity::ServiceRouteNoticeState,
-    ) -> PersistenceResult<soland_storage::MonotonicRouteWrite> {
-        self.persistence
-            .service_routes()
-            .advance_notice_state(state)
-            .await
-    }
-
-    async fn commit_mirror(
-        &self,
-        entry: soland_storage::ServiceResolutionMirrorEntry,
-    ) -> PersistenceResult<soland_storage::ServiceResolutionMirrorCommit> {
-        self.persistence.service_routes().commit_mirror(entry).await
-    }
-
-    async fn successor_records(
-        &self,
-        source_id: &arkret_wire::DidCoreId,
-        realm_id: &arkret_wire::RealmId,
-        target_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        after_sequence: u64,
-        limit: usize,
-    ) -> PersistenceResult<Vec<arkret_models_identity::ServiceResolutionRecord>> {
-        self.persistence
-            .service_routes()
-            .successor_records(
-                source_id,
-                realm_id,
-                target_id,
-                service_kind,
-                after_sequence,
-                limit,
-            )
-            .await
-    }
-
-    async fn latest_notice(
-        &self,
-        source_id: &arkret_wire::DidCoreId,
-        realm_id: &arkret_wire::RealmId,
-        target_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-    ) -> PersistenceResult<Option<arkret_models_identity::ServiceRouteHandoverNotice>> {
-        self.persistence
-            .service_routes()
-            .latest_notice(source_id, realm_id, target_id, service_kind)
+            .publish_route_cache(evidence, entry)
             .await
     }
 
@@ -1097,16 +907,6 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
         self.persistence
             .service_routes()
             .route_cache(service_id, service_kind)
-            .await
-    }
-
-    async fn put_route_cache(
-        &self,
-        entry: arkret_models_identity::ServiceRouteCacheEntry,
-    ) -> PersistenceResult<()> {
-        self.persistence
-            .service_routes()
-            .put_route_cache(entry)
             .await
     }
 

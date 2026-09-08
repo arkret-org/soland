@@ -386,7 +386,6 @@ async fn build_server_description_resolved(
     state: &AppState,
 ) -> Result<ServiceDescribe, soland_http::error::AppError> {
     let description = build_server_description(state);
-    super::service_resolution::ensure_current_record(state, &description).await?;
     Ok(description)
 }
 

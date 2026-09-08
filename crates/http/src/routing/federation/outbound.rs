@@ -120,7 +120,7 @@ pub(crate) async fn resolved_peer_route(
         Err(soland_services::ServiceError::NotFound(_)) => {
             // Configuration and endpoint discovery supply only a candidate
             // locator. The expected identity comes from the business target;
-            // the shared resolver independently verifies the signed record,
+            // the shared resolver independently verifies the native DID evidence,
             // full method history, anti-rollback floor and Describe binding.
             let endpoint = peer_url_for_service_id(state, service_id)
                 .ok_or_else(|| "verified service route unavailable".to_owned())?;
@@ -149,14 +149,13 @@ fn configured_peer_resolution_carrier(
     let base =
         arkret_models_identity::service_identity::CanonicalServiceUrl::canonicalize(endpoint)
             .map_err(|error| error.to_string())?;
-    let carrier = arkret_models_identity::ServiceResolutionCarrier::CurrentRecordUrl {
-        current_record_url: format!(
+    let carrier = arkret_models_identity::ServiceResolutionCarrier::ResolutionUrl {
+        resolution_url: format!(
             "{}{}",
             base,
-            arkret_models_identity::canonical_service_current_record_path(service_id)
+            arkret_models_identity::canonical_service_resolution_path(service_id)
                 .trim_start_matches('/')
         ),
-        pinned_record_digest: None,
     };
     carrier
         .validate_shape(service_id)

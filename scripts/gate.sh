@@ -52,7 +52,7 @@ sh "$(dirname -- "$0")/stale-literal-scan.sh"
 python "$(dirname -- "$0")/check-test-support-surface.py"
 
 set +e
-CARGO_TARGET_DIR="$target_dir" cargo test --locked --quiet \
+SSL_CERT_FILE="$PWD/crates/server/tests/fixtures/outbox-test-ca.pem" CARGO_TARGET_DIR="$target_dir" cargo test --locked --quiet \
     --jobs "$jobs" --no-fail-fast "$@" > "$log" 2>&1
 code=$?
 set -e

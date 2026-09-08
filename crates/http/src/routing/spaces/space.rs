@@ -346,14 +346,6 @@ pub async fn realm_id_accessible(
     }
 }
 
-pub async fn realm_visible_to(
-    state: &AppState,
-    realm: &RealmDirectoryEntry,
-    session: Option<&SessionRecord>,
-) -> bool {
-    realm_visible_to_for_entry(state, realm, session).await
-}
-
 pub async fn realm_history_access(state: &AppState, realm_or_internal_id: &str) -> String {
     match realm_scope_to_realm_id(realm_or_internal_id) {
         Some(realm_id) => realm_history_access_for_id(state, &realm_id).await,
@@ -520,20 +512,6 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     // Only the exact projected member and its effective Agent binding prove
     // membership. Principal-only directory entries are not authority.
     true
-}
-
-pub async fn realm_visible_to_for_entry(
-    state: &AppState,
-    realm: &RealmDirectoryEntry,
-    session: Option<&SessionRecord>,
-) -> bool {
-    if realm_meta_deleted(state, realm.realm_id.as_str()).await {
-        return false;
-    }
-    if realm_discoverability_for_id(state, realm.realm_id.as_str()).await == "public" {
-        return true;
-    }
-    realm_id_accessible_for_id(state, realm.realm_id.as_str(), session).await
 }
 
 pub async fn realm_search_visible_to(

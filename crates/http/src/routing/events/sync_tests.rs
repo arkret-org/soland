@@ -1562,6 +1562,31 @@ fn roster_limits_large_inline_handle_claim_payloads() {
 }
 
 #[tokio::test]
+async fn sync_snapshot_excludes_public_realms_without_exact_account_membership() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+    let session = roster_session(&state, ROSTER_CALLER);
+    state.realm_directory().upsert(roster_realm(true, false));
+    insert_projected_membership(&state, ROSTER_ACTOR, "join");
+    let body = roster_body(state.service_id());
+
+    let outsider = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let outsider_json = serde_json::to_value(outsider).unwrap();
+    assert!(outsider_json["realms"].get(ROSTER_REALM).is_none());
+
+    insert_projected_membership(&state, ROSTER_CALLER, "join");
+    let member = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let member_json = serde_json::to_value(member).unwrap();
+    assert!(member_json["realms"].get(ROSTER_REALM).is_some());
+
+    insert_projected_membership(&state, ROSTER_CALLER, "leave");
+    let left = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let left_json = serde_json::to_value(left).unwrap();
+    assert!(left_json["realms"].get(ROSTER_REALM).is_none());
+}
+
+#[tokio::test]
 async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() {
     let mut config = test_config();
     config.seed_demo_data = false;

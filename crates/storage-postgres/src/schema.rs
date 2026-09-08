@@ -1386,8 +1386,6 @@ diesel::table! {
     service_identity (id) {
         id -> Text,
         identity -> Jsonb,
-        resolution -> Nullable<Jsonb>,
-        resolution_digest -> Nullable<Text>,
     }
 }
 
@@ -1416,35 +1414,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    service_resolution_last_seen_floors (service_id, service_kind) {
+    service_method_states (service_id, service_kind) {
         service_id -> Text,
         service_kind -> Text,
-        floor -> Jsonb,
+        method_state -> Jsonb,
         updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    service_route_notice_states (service_id, service_kind, handover_id) {
-        service_id -> Text,
-        service_kind -> Text,
-        handover_id -> Text,
-        notice_state -> Jsonb,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    service_resolution_mirror_ledger (source_id, realm_id, request_id) {
-        source_id -> Text,
-        realm_id -> Text,
-        request_id -> Text,
-        request_digest -> Text,
-        artifact_key -> Text,
-        artifact_digest -> Text,
-        artifact -> Jsonb,
-        ack -> Jsonb,
-        accepted_at -> Timestamptz,
     }
 }
 
@@ -1993,10 +1967,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     service_identity,
     service_identity_registrations,
     service_resolution_fork_quarantine,
-    service_resolution_last_seen_floors,
-    service_resolution_mirror_ledger,
+    service_method_states,
     service_route_cache,
-    service_route_notice_states,
     sessions,
     publication_evidence,
     signal_relay,

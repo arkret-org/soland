@@ -64,6 +64,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     envelopes: Vec<Value>,
     internal_admissions: Option<&[InternalEventAdmission]>,
     authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
+    inbound_publication_evidence: Option<&BTreeMap<String, InboundPublicationEvidence>>,
     direct_conversation_founding: Option<DirectConversationFoundingCommitContext>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if internal_admissions.is_some_and(|admissions| admissions.len() != envelopes.len()) {
@@ -145,7 +146,16 @@ pub(super) async fn submit_realm_bootstrap_batch(
     validate_actor_chain(&validated)?;
     let received_at = now();
     let mut ingress_receipts = Vec::new();
-    if let Some(leases) = authorization_leases {
+    if let Some(evidence) = inbound_publication_evidence {
+        // Preserve the origin's first-publication evidence. A receiving
+        // Station cannot reissue a receipt under another authority's lease.
+        for event in &typed_events {
+            if let Some(item) = evidence.get(event.event_id.as_str()) {
+                store_inbound_publication_evidence(state, item).await?;
+                ingress_receipts.extend(item.ingress_receipts.iter().cloned());
+            }
+        }
+    } else if let Some(leases) = authorization_leases {
         if leases.iter().any(Option::is_some) && leases.iter().any(Option::is_none) {
             return Err(SubmitOneError::new(
                 StatusCode::BAD_REQUEST,

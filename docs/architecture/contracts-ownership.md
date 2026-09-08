@@ -69,11 +69,9 @@
 | `admin::server` | `AdminServerStatus` | local contract | Soland、Sodmin | `GET /_soland/admin/server/status` 可达性探针响应；未命中 spec wire 类型 |
 | `admin::service_routes` | `AdminServiceRouteSummary` | local contract | Soland、Sodmin | `GET /_soland/admin/service-routes` 列表行；Sodmin 经 `AdminServiceRouteList` 内嵌消费；字段复用 SDK 类型，整体未命中 spec wire 类型 |
 | `admin::service_routes` | `AdminServiceRouteList` | local contract | Soland、Sodmin | `GET /_soland/admin/service-routes` 列表 envelope；未命中 spec wire 类型 |
-| `admin::service_routes` | `AdminServiceRouteFloor` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.floor` 内嵌字段消费；未命中 spec wire 类型 |
-| `admin::service_routes` | `AdminServiceRouteCurrentRecord` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.current_record` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceMethodState` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.method_state` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteCurrent` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.current_route` 内嵌字段消费；未命中 spec wire 类型 |
 | `admin::service_routes` | `AdminServiceRouteCache` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.cache` 内嵌字段消费；未命中 spec wire 类型 |
-| `admin::service_routes` | `AdminServiceRouteNotice` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.notices` 内嵌字段消费；未命中 spec wire 类型 |
-| `admin::service_routes` | `AdminServiceRouteAck` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.acks` 内嵌字段消费；未命中 spec wire 类型 |
 | `admin::service_routes` | `AdminServiceRouteQuarantine` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.quarantine` 内嵌字段消费；未命中 spec wire 类型 |
 | `admin::service_routes` | `AdminServiceRouteDetail` | local contract | Soland、Sodmin | `GET /_soland/admin/service-routes/{service_id}/{service_kind}` 详情投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
 

@@ -2504,32 +2504,6 @@ pub(in crate::routing) async fn validate_peer_request(
     Ok(())
 }
 
-/// Realm-scoped route mirrors reuse the canonical peer policy and additionally
-/// require both requester_id scope and an effective, requester_id-visible reference
-/// to the target service. The caller deliberately receives only a boolean so
-/// unknown, invisible and not-held targets remain indistinguishable.
-pub(in crate::routing) async fn peer_route_visibility(
-    state: &AppState,
-    source_id: &str,
-    realm_id: &str,
-    target_id: &str,
-) -> Result<bool, AppError> {
-    let records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| AppError::internal(format!("peer route visibility: {error}")))?;
-    let authz = PeerReadAuthz::build(state, source_id, &records).await?;
-    if !authz.frontier_visible_for_realm(realm_id) {
-        return Ok(false);
-    }
-    Ok(records.iter().any(|record| {
-        super::event_log::canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
-            && authz.record_visible(record)
-            && json_contains_string(&record.envelope, target_id)
-    }))
-}
-
 pub(in crate::routing) async fn peer_realm_visibility(
     state: &AppState,
     source_id: &str,
@@ -2634,19 +2608,6 @@ pub(in crate::routing) async fn peer_mls_scope_visibility(
         }
         _ => false,
     })
-}
-
-fn json_contains_string(value: &Value, expected: &str) -> bool {
-    match value {
-        Value::String(value) => value == expected,
-        Value::Array(values) => values
-            .iter()
-            .any(|value| json_contains_string(value, expected)),
-        Value::Object(values) => values
-            .values()
-            .any(|value| json_contains_string(value, expected)),
-        _ => false,
-    }
 }
 
 pub(in crate::routing) fn source_id_from_request(req: &Request) -> Result<String, AppError> {

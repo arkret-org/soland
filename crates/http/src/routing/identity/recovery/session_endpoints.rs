@@ -599,7 +599,7 @@ pub(super) async fn recovery_session_create(
     ) = if let Some(generation) = device_generation {
         let mut entries = state
             .dids()
-            .log_events(&principal)
+            .log_events(authority_record.projection.did.as_str())
             .await
             .map_err(recovery_service_error)?;
         entries.sort_by_key(|entry| entry.seq);

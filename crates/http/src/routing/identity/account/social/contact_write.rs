@@ -297,7 +297,8 @@ async fn validate_request_acceptance_receipt(
             "request_receipt.core.issuer does not match the durable request source service",
         ));
     }
-    let stored = state
+    let (request_event, digest_suite) = if expected_issuer == state.service_id() {
+        let stored = state
         .event_queries()
         .accepted_event(receipt.core.request_event_ref.as_str())
         .await
@@ -307,11 +308,56 @@ async fn validate_request_acceptance_receipt(
                 "request_receipt.core.request_event_ref cannot be verified: the durable accepted source Event is unavailable",
             )
         })?;
-    let request_event = serde_json::from_value::<Event>(stored.envelope)
-        .map_err(|error| AppError::internal(format!("stored Contact request Event: {error}")))?;
+        let event = serde_json::from_value::<Event>(stored.envelope).map_err(|error| {
+            AppError::internal(format!("stored Contact request Event: {error}"))
+        })?;
+        (event, stored.digest_suite)
+    } else {
+        // A peer Contact is holder-private mirror material, not an Event in
+        // the recipient's principal-control Realm. Its verified source receipt
+        // and exact canonical Event must remain bound to this pending slot.
+        let target = contact_mirror_target_holder_key(&responder.contact_actor_id());
+        let mirror = state
+            .persistence()
+            .contact_verified_mirror(&target, receipt.core.request_event_ref.as_str())
+            .await
+            .map_err(|error| AppError::internal(format!("Contact request mirror lookup: {error}")))?
+            .ok_or_else(|| {
+                crate::app_error!(
+                    FailedPrecondition,
+                    "verified Contact request mirror is unavailable"
+                )
+            })?;
+        let event: Event =
+            serde_json::from_slice(&mirror.canonical_event_bytes).map_err(|error| {
+                AppError::internal(format!("Contact request mirror decode: {error}"))
+            })?;
+        if mirror.target_holder_principal_id != target
+            || mirror.request_event_id != receipt.core.request_event_ref.as_str()
+            || mirror.issuer_id != expected_issuer
+            || mirror.source_receipt != *receipt
+            || mirror.request_digest != receipt.core.request_digest().as_str()
+            || arkret_canonical::canonical_json_bytes(&event).map_err(|error| {
+                AppError::internal(format!("Contact request mirror canonicalize: {error}"))
+            })? != mirror.canonical_event_bytes
+        {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "verified Contact request mirror differs from its source receipt"
+            ));
+        }
+        let suite = receipt
+            .core
+            .request_digest()
+            .digest_suite()
+            .map_err(|error| {
+                AppError::internal(format!("Contact request mirror digest suite: {error}"))
+            })?;
+        (event, suite)
+    };
     let request_digest = Hash::new(
         request_event
-            .event_digest_with_digest_suite(stored.digest_suite)
+            .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| {
                 AppError::internal(format!("stored Contact request Event digest: {error}"))
             })?,
@@ -958,7 +1004,9 @@ fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactRound, Has
         request_event_ref: receipt.core.request_event_ref.clone(),
         request_acceptance_receipt_digest: canonical_contact_digest(receipt)?,
     };
-    let contact_round_id = contact_hash("ak.contact.round.v1", &contact_round)?;
+    let contact_round_id =
+        arkret_models_collaboration::direct_conversation_ops::contact_round_id(&contact_round)
+            .map_err(|error| AppError::internal(format!("Contact round digest: {error}")))?;
     Ok((contact_round, contact_round_id))
 }
 
@@ -2191,9 +2239,15 @@ async fn contact_delivery_address(
         })?;
         PeerContactAddress::for_recipient(
             peer.clone(),
-            ServiceResolutionCarrier::CurrentRecordUrl {
-                current_record_url: route.cache_entry.current_record_url,
-                pinned_record_digest: Some(route.cache_entry.record_digest),
+            ServiceResolutionCarrier::ResolutionUrl {
+                resolution_url: format!(
+                    "{}{}",
+                    route.cache_entry.base_url,
+                    arkret_models_identity::canonical_service_resolution_path(
+                        &route.cache_entry.service_id
+                    )
+                    .trim_start_matches('/')
+                ),
             },
         )
     };
@@ -2214,13 +2268,7 @@ async fn contact_introduction_service_resolution(
         // Realm membership proves social context, not transport routing. The
         // removed membership delivery binding must not be resurrected here.
         ContactIntroductionEvidence::SharedRealm { .. } => None,
-        ContactIntroductionEvidence::SameStation => state
-            .current_signed_service_resolution()
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("current service resolution unavailable: {error}"))
-            })?
-            .map(|inline| ServiceResolutionCarrier::Inline { inline }),
+        ContactIntroductionEvidence::SameStation => Some(ServiceResolutionCarrier::Inline{inline:crate::routing::system::service_resolution::current_authenticated_service_resolution(state).await?}),
         ContactIntroductionEvidence::HandleClaim { .. }
         | ContactIntroductionEvidence::ExplicitAddress => None,
     };
@@ -2664,7 +2712,7 @@ mod device_authorization_account_tests {
                 "schema": "ak.schema.principal_locator.v1",
                 "account_id": account_id,
                 "service_resolution": {
-                    "current_record_url": "https://remote.example/_arkret/open/services/ak%3Adid_core%3Aweb%3Aremote.example/resolution"
+                    "resolution_url": "https://remote.example/_arkret/open/services/ak%3Adid_core%3Aweb%3Aremote.example/resolution"
                 },
                 "issued_at": "2026-09-08T00:00:00.000Z",
                 "expires_at": "2026-09-08T00:15:00.000Z",

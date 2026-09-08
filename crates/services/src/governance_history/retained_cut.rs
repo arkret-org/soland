@@ -117,21 +117,30 @@ pub fn prepare_retained_history_cut(
     let mut replay_events = Vec::new();
     let mut replay_dependencies = Vec::new();
     let mut anchor_events = BTreeSet::new();
-    for seal in retained_seal_map.values().filter(|seal| seal.predecessor_refs.is_empty()) {
+    for seal in retained_seal_map
+        .values()
+        .filter(|seal| seal.predecessor_refs.is_empty())
+    {
         let mut unit = Vec::new();
         for digest in &seal.delta {
-            let event = traversal.pins.iter().zip(&traversal.objects)
+            let event = traversal
+                .pins
+                .iter()
+                .zip(&traversal.objects)
                 .find_map(|(pin, object)| match (pin, object) {
-                    (soland_storage::HistoryTraversalPin::ControlEvent { event_digest, .. },
-                     soland_storage::HistoryTraversalRetainedObject::ControlEvent(event))
-                        if event_digest == digest => Some(event.clone()),
+                    (
+                        soland_storage::HistoryTraversalPin::ControlEvent { event_digest, .. },
+                        soland_storage::HistoryTraversalRetainedObject::ControlEvent(event),
+                    ) if event_digest == digest => Some(event.clone()),
                     _ => None,
                 })
                 .ok_or_else(|| frontier("retained anchor unit is incomplete"))?;
             unit.push((digest.clone(), event));
         }
         let unit = arkret_state::state::deterministic_order(unit)
-            .into_iter().map(|(_, event)| event).collect::<Vec<_>>();
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect::<Vec<_>>();
         arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&unit)
             .map_err(|error| frontier(error.to_string()))?;
         anchor_events.extend(seal.delta.iter().cloned());
@@ -168,10 +177,7 @@ pub fn prepare_retained_history_cut(
                 replay_seals.push(seal.clone());
             }
             (
-                soland_storage::HistoryTraversalPin::ControlEvent {
-                    event_digest,
-                    ..
-                },
+                soland_storage::HistoryTraversalPin::ControlEvent { event_digest, .. },
                 soland_storage::HistoryTraversalRetainedObject::ControlEvent(event),
             ) => {
                 let event_digest_suite = event_digest
@@ -198,10 +204,7 @@ pub fn prepare_retained_history_cut(
                         .validate_for_direct_history_structural_in_context(context)
                         .map_err(|error| frontier(error.to_string()))?,
                     _ => event
-                        .validate_for_federation_structural_in_context(
-                            context,
-                            event_digest_suite,
-                        )
+                        .validate_for_federation_structural_in_context(context, event_digest_suite)
                         .map_err(|error| frontier(error.to_string()))?,
                 }
                 replay_events.push(event.clone());

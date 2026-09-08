@@ -113,12 +113,12 @@ pub use submit::attach_fixture_station_admission_proof;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
-    ValidatedEventEnvelope, admit_frontier_backfill_event, cbs_proof_bundles_for_targets,
-    digest_suite_from_hash, prepare_service_franking_proof_event_value,
-    service_event_authoring_lock, submit_account_data_event_value, submit_agent_membership_cascade,
-    submit_applet_install_batch, submit_direct_conversation_founding_unit, submit_event_value,
-    submit_ghost_provision_batch, submit_initial_event_batch_outcome,
-    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
+    ValidatedEventEnvelope, admit_frontier_backfill_event,
+    prepare_service_franking_proof_event_value, service_event_authoring_lock,
+    submit_account_data_event_value, submit_agent_membership_cascade, submit_applet_install_batch,
+    submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
+    submit_initial_event_batch_outcome, submit_initial_event_submission,
+    submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_initial_identity_anchor_batch,
     submit_mimi_event_value, submit_mimi_reporter_initial_event_submission,
     submit_one_error_to_app_error, submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
@@ -127,14 +127,12 @@ pub(in crate::routing) use submit::{
 use submit::{
     IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
     event_validation_error, events_submit_outcome, render_submit_one_error,
-    submit_event_value_with_idempotency,
 };
 
 mod validation;
 use validation::*;
 pub(in crate::routing) use validation::{
     validate_event_envelope_with_context, validate_private_invite_envelope,
-    validate_realm_authority_root_authorization,
 };
 mod sdk_projection;
 pub(crate) use sdk_projection::*;

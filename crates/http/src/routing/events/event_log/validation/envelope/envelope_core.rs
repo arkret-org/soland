@@ -64,73 +64,80 @@ pub(crate) fn validate_event_envelope_with_context<'a>(
         envelope,
         realm_bootstrap_contexts,
         internal_admission,
-        false,
-        None,
     ))
 }
 
-/// `invite-addressing.md` §7 step 4 — the same envelope verifier a member
-/// Station runs when it admits this Control Move, with the authority closure
-/// supplied by the caller instead of read from local accepted state.
-///
-/// The peer delivery carries the accepted producer and origin Station proofs.
-/// Verify that binding before reusing its exact producer key at envelope
-/// admission. The receiver gets Realm authority from the supplied CBS closure;
-/// it does not substitute its own device directory for the origin's admission.
-pub(in crate::routing) fn validate_private_invite_envelope<'a>(
-    state: &'a AppState,
-    session: &'a SessionRecord,
-    envelope: &'a Value,
-    governance_closure: &'a BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
-) -> std::pin::Pin<
-    Box<
-        dyn std::future::Future<Output = Result<ValidatedEventEnvelope, EventValidationError>>
-            + Send
-            + 'a,
-    >,
-> {
-    Box::pin(async move {
-        let event: arkret_wire::Event =
-            serde_json::from_value(envelope.clone()).map_err(|error| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    error.to_string(),
-                )
-            })?;
-        let digest_suite = arkret::signed_event_digest_claim(&event)
-            .and_then(|digest| digest.digest_suite().map_err(Into::into))
-            .map_err(|error| {
-                event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
-            })?;
-        let (method, key) =
-            crate::routing::events::event_log::submit::verify_federated_event_admission(
-                state,
-                &event,
-                digest_suite,
-            )
-            .await
-            .map_err(|error| {
-                event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error)
-            })?;
-        let admission = InternalEventAdmission::peer_federated_event(
-            event.realm_id.to_string(),
-            event.actor_id.clone(),
-            session.device_id.clone(),
-            event.event_id.to_string(),
-            method,
-            key,
-        );
-        validate_event_envelope_with_ingress(
-            state,
-            session,
-            envelope,
-            &[],
-            Some(&admission),
-            true,
-            Some(governance_closure),
+/// Authenticate the private notification without consulting Realm authority.
+pub(in crate::routing) async fn validate_private_invite_envelope(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: &Value,
+) -> Result<ValidatedEventEnvelope, EventValidationError> {
+    let event: arkret_wire::Event = serde_json::from_value(envelope.clone()).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            error.to_string(),
         )
-        .await
+    })?;
+    let object = envelope.as_object().expect("typed Event is an object");
+    if event.kind != arkret_wire::EventKind::InviteCreate
+        || event.actor_id.signing_principal_id().as_str() != session.actor
+        || !invite_create_actor_is_inviter(object, &session.actor)
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ErrorCode::SIGNATURE_INVALID,
+            "invite producer binding mismatch",
+        ));
+    }
+    let schema_id = event_requirements_schema_id(state, object)?;
+    validate_event_schema_and_payload(state, event.kind.as_str(), &schema_id, envelope, object)?;
+    validate_event_time_fields(state, object)?;
+    let digest_suite = arkret::signed_event_digest_claim(&event)
+        .and_then(|digest| digest.digest_suite().map_err(Into::into))
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::UNAUTHORIZED,
+                arkret_wire::ErrorCode::SIGNATURE_INVALID,
+                error.to_string(),
+            )
+        })?;
+    let canonical_bytes = event_canonical_bytes(envelope)?;
+    let canonical_digest = event_digest_for_suite(&canonical_bytes, digest_suite.as_str())?;
+    validate_prelookup_event_identity(
+        event.event_id.as_str(),
+        &canonical_digest,
+        &canonical_bytes,
+    )?;
+    validate_content_bound_event_id(envelope, digest_suite)?;
+    let (_, key) = crate::routing::events::event_log::submit::verify_federated_event_admission(
+        state,
+        &event,
+        digest_suite,
+    )
+    .await
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::UNAUTHORIZED,
+            arkret_wire::ErrorCode::SIGNATURE_INVALID,
+            error,
+        )
+    })?;
+    Ok(ValidatedEventEnvelope {
+        event_id: event.event_id,
+        actor_id: event.actor_id.signing_principal_id().clone(),
+        actor: event.actor_id,
+        device_id: None,
+        actor_seq: event.actor_seq,
+        realm_id: event.realm_id,
+        kind: event.kind.as_str().to_owned(),
+        schema_id,
+        prev_refs: event.prev_refs,
+        canonical_digest,
+        digest_suite,
+        canonical_bytes,
+        producer_signing_key: Some(key),
     })
 }
 
@@ -191,10 +198,6 @@ async fn validate_event_envelope_with_ingress(
     envelope: &Value,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     internal_admission: Option<&InternalEventAdmission>,
-    private_invite_delivery: bool,
-    governance_closure: Option<
-        &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
-    >,
 ) -> Result<ValidatedEventEnvelope, EventValidationError> {
     let object = envelope.as_object().ok_or_else(|| {
         event_validation_error(
@@ -210,7 +213,7 @@ async fn validate_event_envelope_with_ingress(
             format!("session actor is invalid: {error}"),
         )
     })?;
-    let session_actor = if internal_admission.is_some() || private_invite_delivery {
+    let session_actor = if internal_admission.is_some() {
         // These closed lanes independently verify the signed full Actor and
         // exact internal admission context; a remote peer is not a local Account.
         object
@@ -324,18 +327,14 @@ async fn validate_event_envelope_with_ingress(
     // self-describing EventId. The subsequent digest and content-bound-id
     // checks still prove that the complete canonical Event matches that id.
     let canonical_bytes = event_canonical_bytes(envelope)?;
-    let digest_suite = if private_invite_delivery {
-        event_id.digest_suite_code().as_str().to_owned()
-    } else {
-        event_digest_suite(
-            state,
-            &kind,
-            realm_id.as_str(),
-            object,
-            realm_bootstrap_contexts,
-        )
-        .await?
-    };
+    let digest_suite = event_digest_suite(
+        state,
+        &kind,
+        realm_id.as_str(),
+        object,
+        realm_bootstrap_contexts,
+    )
+    .await?;
     let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
     validate_prelookup_event_identity(event_id.as_str(), &canonical_digest, &canonical_bytes)?;
     let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)
@@ -691,14 +690,6 @@ async fn validate_event_envelope_with_ingress(
         realm_id.as_str(),
     )
     .await;
-    // `/_arkret/peer/invites` verifies the original signed Event before
-    // projecting a holder-private inbox record. This explicit ingress context
-    // bypasses only the local shared-Realm membership lookup: it never commits
-    // the Event or advances a reducer/frontier on the recipient service.
-    let is_private_invite_delivery = private_invite_delivery
-        && kind == arkret_wire::EventKind::InviteCreate.as_str()
-        && invite_create_actor_is_inviter(object, session_actor_id.as_str())
-        && !realm_exists;
     let is_direct_conversation_founding = realm_bootstrap_contexts
         .iter()
         .any(|context| context.direct_conversation_founding);
@@ -752,7 +743,6 @@ async fn validate_event_envelope_with_ingress(
         && !is_invite_acceptance_join
         && !is_invitee_invite_cancel
         && !is_third_party_invite_claim
-        && !is_private_invite_delivery
         && !applet_membership_bypass
         && !managed_actor_pcr_rotation
         && !agent_delegation
@@ -856,7 +846,6 @@ async fn validate_event_envelope_with_ingress(
         &actor,
         bootstrap_unit_member,
         realm_bootstrap_contexts,
-        governance_closure,
     )
     .await?;
     let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;

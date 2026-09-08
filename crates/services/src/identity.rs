@@ -2453,8 +2453,24 @@ pub fn select_pinned_did_webvh_state(
         .filter_map(Value::as_str)
         .map(ToOwned::to_owned)
         .collect();
+    let selected_did = selected
+        .state
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            PinnedDidResolutionError::HistoryUnverifiable("native state omits DID".into())
+        })?;
+    let selected_did = Did::new(selected_did)
+        .map_err(|e| PinnedDidResolutionError::HistoryUnverifiable(e.to_string()))?;
+    if arkret_wire::project_did_to_core_id(&selected_did).ok()
+        != arkret_wire::project_did_to_core_id(did).ok()
+    {
+        return Err(PinnedDidResolutionError::HistoryUnverifiable(
+            "native state changed service core".into(),
+        ));
+    }
     Ok(PinnedDidDocumentState {
-        did: did.clone(),
+        did: selected_did,
         version_id: selected.version_id.clone(),
         log_head_digest: log_head_digest.clone(),
         document: selected.state.clone(),
@@ -2559,6 +2575,12 @@ pub trait DidDocumentPort: Send + Sync {
 #[async_trait]
 pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
     async fn resolve_did_async(&self, did: &Did) -> Result<arkret_identity::DidDocument, String>;
+    async fn resolve_current_service_did(
+        &self,
+        _did: &Did,
+    ) -> Result<arkret_identity::ResolvedDid, String> {
+        Err("current service DID resolver unavailable".into())
+    }
     async fn resolve_current_external_webvh_state(
         &self,
         did: &Did,
@@ -2578,6 +2600,26 @@ pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
         &self,
         document: DidDocumentState,
     ) -> Result<arkret_identity::DidDocument, String>;
+}
+
+fn verify_local_service_history(
+    did: &Did,
+    entries: &[Value],
+) -> arkret_identity::Result<arkret_identity::VerifiedDidWebvhLog> {
+    let current = entries
+        .last()
+        .and_then(|e| e.pointer("/state/id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            arkret_identity::IdentityError::Protocol("native history omits head DID".into())
+        })?;
+    let current = Did::new(current)?;
+    if arkret_wire::project_did_to_core_id(&current)? != arkret_wire::project_did_to_core_id(did)? {
+        return Err(arkret_identity::IdentityError::Protocol(
+            "native history changed identity core".into(),
+        ));
+    }
+    arkret_identity::verify_did_webvh_v1_chain(&current, entries)
 }
 
 #[derive(Clone)]
@@ -2633,7 +2675,7 @@ impl DidService {
                 .resolve_external_pinned_webvh_state(did, version_id, log_head_digest)
                 .await;
         }
-        let history = arkret_identity::verify_did_webvh_v1_chain(did, &local_events)
+        let history = verify_local_service_history(did, &local_events)
             .map_err(|error| PinnedDidResolutionError::HistoryUnverifiable(error.to_string()))?;
         select_pinned_did_webvh_state(did, &history, version_id, log_head_digest)
     }
@@ -2653,7 +2695,7 @@ impl DidService {
         if local_events.is_empty() {
             return self.resolver.resolve_external_webvh_state_at(did, at).await;
         }
-        let history = arkret_identity::verify_did_webvh_v1_chain(did, &local_events)
+        let history = verify_local_service_history(did, &local_events)
             .map_err(|error| PinnedDidResolutionError::HistoryUnverifiable(error.to_string()))?;
         select_did_webvh_state_at(did, &history, at)
     }
@@ -2662,6 +2704,13 @@ impl DidService {
     /// current method-native head. This is used before issuing a registration
     /// challenge so an unresolvable or deactivated DID never receives a
     /// challenge that no valid control proof can satisfy.
+    pub async fn resolve_current_service_did(
+        &self,
+        did: &Did,
+    ) -> Result<arkret_identity::ResolvedDid, String> {
+        self.resolver.resolve_current_service_did(did).await
+    }
+
     pub async fn resolve_current_webvh_state(
         &self,
         did: &Did,
@@ -2676,7 +2725,7 @@ impl DidService {
                 .resolve_current_external_webvh_state(did)
                 .await;
         }
-        let history = arkret_identity::verify_did_webvh_v1_chain(did, &local_events)
+        let history = verify_local_service_history(did, &local_events)
             .map_err(|error| PinnedDidResolutionError::HistoryUnverifiable(error.to_string()))?;
         let head = history.raw_entries.last().ok_or_else(|| {
             PinnedDidResolutionError::HistoryUnverifiable(
@@ -2709,7 +2758,14 @@ impl DidService {
         let mut raw_entries = Vec::with_capacity(local_events.len());
         for (index, event) in local_events.iter().enumerate() {
             let expected_seq = index as u64 + 1;
-            if event.did != did.as_str() || event.seq != expected_seq {
+            let entry_did = Did::new(&event.did)
+                .map_err(|e| PinnedDidResolutionError::HistoryUnverifiable(e.to_string()))?;
+            if arkret_wire::project_did_to_core_id(&entry_did).ok()
+                != arkret_wire::project_did_to_core_id(did).ok()
+                || event.operation.pointer("/state/id").and_then(Value::as_str)
+                    != Some(event.did.as_str())
+                || event.seq != expected_seq
+            {
                 return Err(PinnedDidResolutionError::HistoryUnverifiable(
                     "local did:webvh log identity or sequence is inconsistent".to_owned(),
                 ));

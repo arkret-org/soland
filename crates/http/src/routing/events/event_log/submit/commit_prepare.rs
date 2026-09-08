@@ -10,7 +10,6 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
     pub(super) accepted_canonical_bytes: &'a [u8],
     pub(super) governance_dependency: Option<soland_storage::GovernanceDependencyWrite>,
     pub(super) projected_event: Option<&'a soland_services::events::ProjectedEvent>,
-    pub(super) accepted_response: &'a SubmittedEventOutcome,
     pub(super) deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
     pub(super) device_revoke_target_device_id: Option<&'a str>,
     pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
@@ -32,11 +31,8 @@ pub(super) struct PreparedAcceptedEventCommand {
 
 /// Freeze every atomic sidecar into the canonical Event commit command.
 ///
-/// The caller must first finish federation fanout construction and add the
-/// ingress receipt, canonical Ack and delivery summary to `accepted_response`.
-/// This stage then binds that final response to idempotency and performs no
-/// persistence write; the caller keeps all submit-lane guards alive through
-/// the later commit and post-commit stages.
+/// This stage performs no persistence write. The caller keeps all submit-lane
+/// guards alive through the later commit and post-commit stages.
 pub(super) async fn prepare_accepted_event_command(
     preparation: AcceptedEventCommandPreparation<'_, '_>,
 ) -> Result<PreparedAcceptedEventCommand, SubmitOneError> {
@@ -48,7 +44,6 @@ pub(super) async fn prepare_accepted_event_command(
         accepted_canonical_bytes,
         governance_dependency,
         projected_event,
-        accepted_response,
         deliveries,
         device_revoke_target_device_id,
         control_proposal_ack,
@@ -182,20 +177,6 @@ pub(super) async fn prepare_accepted_event_command(
             .and_then(|options| options.idempotency.as_ref())
             .map(|source| match source {
                 SubmitCommitIdempotency::Prepared(record) => record.clone(),
-                SubmitCommitIdempotency::CommitKey(record) => {
-                    let created_at = now();
-                    soland_services::events::IdempotentResponse {
-                        authenticated_actor: record.authenticated_actor.clone(),
-                        operation_id: record.operation_id.clone(),
-                        key: record.key.clone(),
-                        request_hash: record.request_hash.clone(),
-                        status: StatusCode::OK.as_u16() as i32,
-                        body: serde_json::to_value(&accepted_response.outcome)
-                            .unwrap_or_else(|_| json!({"status": "accepted"})),
-                        created_at,
-                        expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
-                    }
-                }
             }),
         deliveries,
     };

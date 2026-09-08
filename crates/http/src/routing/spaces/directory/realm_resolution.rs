@@ -780,16 +780,11 @@ pub(super) async fn join_candidates_for_resolved_realm(
     else {
         return Vec::new();
     };
-    let own_description = crate::routing::system::describe::build_server_description(state);
     let own_resolution =
-        crate::routing::system::service_resolution::ensure_current_record(state, &own_description)
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
             .await
             .ok()
-            .filter(|record| {
-                record.record.service_id.as_str() == state.service_id()
-                    && record.record.service_kind == "station"
-                    && observed_at < record.record.expires_at
-            });
+            .filter(|e| e.service_id.as_str() == state.service_id() && e.service_kind == "station");
     // Disclose the current accepted Realm Seal view to resolvers the Directory
     // has already authorized to resolve this Realm (this function is only
     // reached after `realm_resolvable_to`). An invitee_id who is not yet a member
@@ -881,7 +876,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     {
         candidates.push(RealmJoinCandidate {
             realm_id: realm_id_typed,
-            service_id: own_resolution.record.service_id.clone(),
+            service_id: own_resolution.service_id.clone(),
             service_resolution: ServiceResolutionCarrier::Inline {
                 inline: own_resolution,
             },

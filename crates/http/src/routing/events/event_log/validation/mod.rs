@@ -8,6 +8,7 @@ pub(crate) use audit::is_encrypted_message;
 pub(in crate::routing) use audit::validate_watch_set_others_audit_pairs;
 #[cfg(test)]
 pub(crate) use envelope::validate_event_envelope;
+pub(in crate::routing) use envelope::validate_private_invite_envelope;
 pub(crate) use envelope::{canonical_json_hash, validate_event_envelope_with_context};
 #[cfg(test)]
 pub(super) use envelope::{
@@ -15,9 +16,6 @@ pub(super) use envelope::{
     validate_event_critical_features, validate_event_proofs, validate_event_schema_and_payload,
     validate_event_time_fields, validate_join_gate_proof_signatures,
     validate_member_identity_proof,
-};
-pub(in crate::routing) use envelope::{
-    validate_private_invite_envelope, validate_realm_authority_root_authorization,
 };
 #[cfg(test)]
 pub(crate) use mls_governance::payload_declares_media_plaintext_service;

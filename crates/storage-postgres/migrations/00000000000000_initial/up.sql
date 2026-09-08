@@ -3026,6 +3026,8 @@ ALTER TABLE ONLY public.webvh_log_events
     ADD CONSTRAINT webvh_log_events_did_seq_key UNIQUE (did, seq);
 
 CREATE INDEX webvh_log_events_did_seq_idx ON public.webvh_log_events USING btree (did, seq);
+CREATE INDEX webvh_log_events_scid_seq_idx ON public.webvh_log_events ((split_part(did, ':', 3)), seq) WHERE did LIKE 'did:webvh:%';
+CREATE INDEX webvh_documents_scid_seq_idx ON public.webvh_documents ((split_part(id, ':', 3)), seq DESC) WHERE id LIKE 'did:webvh:%';
 
 -- The deployment's own authoritative service identity (identity-did.md §3.7).
 -- Singleton: at most one row keyed by the fixed id 'self'. `identity` is the
@@ -3034,9 +3036,7 @@ CREATE INDEX webvh_log_events_did_seq_idx ON public.webvh_log_events USING btree
 -- Secrets/KeyStore backend and MUST NOT be copied into PostgreSQL.
 CREATE TABLE public.service_identity (
     id text PRIMARY KEY,
-    identity jsonb NOT NULL,
-    resolution jsonb,
-    resolution_digest text
+    identity jsonb NOT NULL
 );
 
 -- Rebuildable owner-side PCR resolution projection. Canonical Events and
@@ -3071,38 +3071,16 @@ CREATE UNIQUE INDEX principal_resolution_events_predecessor_idx
     WHERE previous_event_id IS NOT NULL;
 
 -- Durable remote-route safety state is deliberately split from the
--- replaceable TTL cache. Restart or cache eviction must never lower a floor,
--- forget an accepted notice/fork, or lose a mirror receipt transcript.
-CREATE TABLE public.service_resolution_last_seen_floors (
+-- replaceable TTL cache. Restart or cache eviction cannot forget native DID state.
+CREATE TABLE public.service_method_states (
     service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     service_kind text NOT NULL,
-    floor jsonb NOT NULL,
+    method_state jsonb NOT NULL,
     updated_at timestamptz NOT NULL,
     PRIMARY KEY (service_id, service_kind)
 );
 
-CREATE TABLE public.service_route_notice_states (
-    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
-    service_kind text NOT NULL,
-    handover_id text NOT NULL,
-    notice_state jsonb NOT NULL,
-    updated_at timestamptz NOT NULL,
-    PRIMARY KEY (service_id, service_kind, handover_id)
-);
 
-CREATE TABLE public.service_resolution_mirror_ledger (
-    source_id text NOT NULL CHECK (source_id LIKE 'ak:did_core:%'),
-    realm_id text NOT NULL,
-    request_id text NOT NULL,
-    request_digest text NOT NULL,
-    artifact_key text NOT NULL,
-    artifact_digest text NOT NULL,
-    artifact jsonb NOT NULL,
-    ack jsonb NOT NULL,
-    accepted_at timestamptz NOT NULL,
-    PRIMARY KEY (source_id, realm_id, request_id),
-    UNIQUE (source_id, realm_id, artifact_key)
-);
 
 CREATE TABLE public.service_resolution_fork_quarantine (
     service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),

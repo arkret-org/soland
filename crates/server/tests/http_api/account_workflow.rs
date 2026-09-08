@@ -166,12 +166,11 @@ async fn create_and_dispatch_local_realm_invite(
 
     let recipient_id =
         DidCoreId::new(state.service_id().to_owned()).expect("configured service core DID");
-    let service_resolution = ServiceResolutionCarrier::CurrentRecordUrl {
-        current_record_url: format!(
+    let service_resolution = ServiceResolutionCarrier::ResolutionUrl {
+        resolution_url: format!(
             "https://soland.local{}",
-            arkret_models_identity::canonical_service_current_record_path(&recipient_id)
+            arkret_models_identity::canonical_service_resolution_path(&recipient_id)
         ),
-        pinned_record_digest: None,
     };
     let introduction_evidence = IntroductionEvidence::ExplicitAddress;
     let introduction_evidence_digest = arkret_canonical::canonical_sha256(&introduction_evidence)

@@ -101,7 +101,7 @@ clippy:
 
 # Run the Rust test suite.
 test:
-    CARGO_TARGET_DIR=target/test cargo test --locked
+    SSL_CERT_FILE="$PWD/crates/server/tests/fixtures/outbox-test-ca.pem" CARGO_TARGET_DIR=target/test cargo test --locked
     CARGO_TARGET_DIR=target/test cargo test --locked -p soland-keystore-keygen
 
 # Run the HTTP API integration suite in an isolated target directory so a

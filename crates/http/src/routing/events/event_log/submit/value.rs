@@ -71,9 +71,6 @@ pub(in crate::routing) struct DevicePairingAdmission {
 /// on one commit were only ever a caller bug; the enum makes that state
 /// unrepresentable instead of a runtime rejection.
 pub(super) enum SubmitCommitIdempotency {
-    /// A submit-surface idempotency key; the lane materializes the stored
-    /// response from the accepted outcome.
-    CommitKey(EventCommitIdempotency),
     /// A fully built response record from a two-phase commit surface.
     Prepared(soland_services::events::IdempotentResponse),
 }
@@ -383,6 +380,7 @@ async fn submit_ordinary_realm_genesis(
         vec![envelope],
         None,
         authorization_leases,
+        None,
         None,
     )
     .await?;
@@ -922,38 +920,6 @@ pub(in crate::routing) async fn prepare_service_franking_proof_event_value(
             "franking proof preparation encountered an already accepted Event",
         )
     })
-}
-
-pub(in crate::routing) async fn submit_event_value_with_idempotency(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: Value,
-    idempotency: EventCommitIdempotency,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_wire::EventKind::RealmCreate.as_str())
-        && !batch_is_agent_pcr_create(std::slice::from_ref(&envelope))
-    {
-        return submit_ordinary_realm_genesis(state, session, envelope, None).await;
-    }
-    if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
-        return Err(SubmitOneError::new(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
-        ));
-    }
-    submit_event_value_with_context(
-        state,
-        session,
-        envelope,
-        SubmitEventContext::empty(),
-        SubmitMode::Commit(Box::new(SubmitCommitOptions {
-            idempotency: Some(SubmitCommitIdempotency::CommitKey(idempotency)),
-            ..SubmitCommitOptions::none()
-        })),
-    )
-    .await
 }
 
 /// Attach the STORED ingress receipt to a submit outcome.
@@ -1567,12 +1533,14 @@ pub async fn attach_fixture_station_admission_proof(
         .current_service_receipt_binding()
         .await
         .map_err(|error| error.to_string())?;
-    let signer_evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
-        authenticated_resolution,
-        &service_id,
-        accepted_at,
-    )
-    .map_err(|error| error.to_string())?;
+    let signer_evidence =
+        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+            authenticated_resolution,
+            &service_id,
+            verification_method.clone(),
+            accepted_at,
+        )
+        .map_err(|error| error.to_string())?;
     let content_digest = signer_evidence
         .canonical_sha256_digest()
         .map_err(|error| error.to_string())?;
@@ -1753,18 +1721,20 @@ pub(super) async fn accepted_event_envelope(
                     format!("Station signer evidence is unavailable: {error}"),
                 )
             })?;
-    let signer_evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
-        authenticated_resolution,
-        &service_id,
-        accepted_at,
-    )
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "temporarily_unavailable",
-            format!("Station signer evidence is invalid: {error}"),
+    let signer_evidence =
+        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+            authenticated_resolution,
+            &service_id,
+            verification_method.clone(),
+            accepted_at,
         )
-    })?;
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                format!("Station signer evidence is invalid: {error}"),
+            )
+        })?;
     let signer_resolution_evidence_digest =
         signer_evidence.canonical_sha256_digest().map_err(|error| {
             SubmitOneError::new(
@@ -2721,7 +2691,6 @@ pub(super) async fn submit_event_value_with_context(
         accepted_canonical_bytes: &accepted_canonical_bytes,
         governance_dependency,
         projected_event: projected_event.as_ref(),
-        accepted_response: &accepted_response,
         deliveries: outbox,
         device_revoke_target_device_id: device_revoke_target_device_id.as_deref(),
         control_proposal_ack: control_proposal_ack.as_ref(),

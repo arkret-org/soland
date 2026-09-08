@@ -174,17 +174,18 @@ impl From<WebvhValidationError> for AppError {
 }
 
 fn did_from_log(log: &[WebvhLogEntry]) -> Result<arkret_wire::Did, WebvhValidationError> {
-    let first = log.first().ok_or(WebvhValidationError::EmptyLog)?;
-    let did = first
+    let head = log.last().ok_or(WebvhValidationError::EmptyLog)?;
+    let at_index = log.len() - 1;
+    let did = head
         .payload
         .pointer("/state/id")
         .and_then(Value::as_str)
         .ok_or_else(|| WebvhValidationError::MalformedEntry {
-            at_index: 0,
+            at_index,
             reason: "state.id is required".to_owned(),
         })?;
     arkret_wire::Did::new(did).map_err(|error| WebvhValidationError::MalformedEntry {
-        at_index: 0,
+        at_index,
         reason: error.to_string(),
     })
 }
@@ -288,15 +289,28 @@ pub fn verify_scid_against_did(
 }
 
 pub fn verify_log_subject(did: &str, log: &[WebvhLogEntry]) -> Result<(), WebvhValidationError> {
-    for (at_index, entry) in log.iter().enumerate() {
-        if entry.payload.pointer("/state/id").and_then(Value::as_str) != Some(did) {
-            return Err(WebvhValidationError::MalformedEntry {
-                at_index,
-                reason: "state.id does not match the requested DID".to_owned(),
-            });
-        }
+    if log
+        .iter()
+        .all(|entry| entry.payload.pointer("/state/id").and_then(Value::as_str) == Some(did))
+    {
+        return Ok(());
     }
-    Ok(())
+    // A changed hosting location is admissible only through the method's full
+    // portability transition, never merely because its service core matches.
+    let did = arkret_wire::Did::new(did).map_err(|e| WebvhValidationError::MalformedEntry {
+        at_index: 0,
+        reason: e.to_string(),
+    })?;
+    let entries = log
+        .iter()
+        .map(|entry| entry.payload.clone())
+        .collect::<Vec<_>>();
+    arkret_identity::verify_did_webvh_v1_chain(&did, &entries)
+        .map(|_| ())
+        .map_err(|e| WebvhValidationError::MalformedEntry {
+            at_index: log.len().saturating_sub(1),
+            reason: e.to_string(),
+        })
 }
 
 /// Reject every entry that declares a witness policy.

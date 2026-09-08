@@ -107,22 +107,20 @@ pub(super) async fn current_history_release_service_signer_evidence(
     let resolution =
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
             .await?;
-    let service_id = resolution
-        .service_resolution_record
-        .record
-        .service_id
-        .clone();
-    let evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
-        resolution,
-        &service_id,
-        signed_at,
-    )
-    .map_err(|error| {
-        crate::app_error!(
-            ServiceIdentityUnavailable,
-            format!("history release service signer evidence is unavailable: {error}"),
+    let service_id = resolution.service_id.clone();
+    let evidence =
+        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+            resolution,
+            &service_id,
+            history_service_verification_method(state)?,
+            signed_at,
         )
-    })?;
+        .map_err(|error| {
+            crate::app_error!(
+                ServiceIdentityUnavailable,
+                format!("history release service signer evidence is unavailable: {error}"),
+            )
+        })?;
     let content_digest = evidence
         .canonical_sha256_digest()
         .map_err(|error| AppError::internal(error.to_string()))?;

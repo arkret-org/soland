@@ -185,7 +185,7 @@ impl WebvhStore for PgWebvhStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id AS event_digest, did, seq, operation, created_at \
-             FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, id ASC",
+             FROM webvh_log_events WHERE (did = $1 OR (did LIKE 'did:webvh:%' AND $1 LIKE 'did:webvh:%' AND split_part(did, ':', 3) = split_part($1, ':', 3))) ORDER BY seq ASC, id ASC",
         )
         .bind::<Text, _>(did)
         .load::<WebvhLogRow>(&mut *conn)
@@ -206,6 +206,14 @@ impl WebvhStore for PgWebvhStore {
         {
             return Ok(WebvhLogCommitOutcome::Conflict);
         }
+        let native_did = arkret_wire::Did::new(event.did.clone())
+            .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+        let core = arkret_wire::project_did_to_core_id(&native_did)
+            .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+        if event.operation.pointer("/state/id").and_then(Value::as_str) != Some(event.did.as_str())
+        {
+            return Ok(WebvhLogCommitOutcome::Conflict);
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -213,7 +221,7 @@ impl WebvhStore for PgWebvhStore {
                 let lock = sql_query(
                     "SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtextextended($1, 0))) AS held",
                 )
-                .bind::<Text, _>(&event.did)
+                .bind::<Text, _>(core.as_str())
                 .get_result::<WebvhCommitLockRow>(&mut *conn)
                 .await.map_err(PersistenceError::database)?;
                 let _ = lock.ok;
@@ -221,7 +229,7 @@ impl WebvhStore for PgWebvhStore {
                 let current = sql_query(
                     "SELECT id AS did, did_document, key_log_head, seq, method_evidence, \
                      fetched_at, expires_at, updated_at \
-                     FROM webvh_documents WHERE id = $1 FOR UPDATE",
+                     FROM webvh_documents WHERE (id = $1 OR (id LIKE 'did:webvh:%' AND $1 LIKE 'did:webvh:%' AND split_part(id, ':', 3) = split_part($1, ':', 3))) ORDER BY seq DESC LIMIT 1 FOR UPDATE",
                 )
                 .bind::<Text, _>(&event.did)
                 .get_result::<WebvhDocumentRow>(&mut *conn)
@@ -229,7 +237,7 @@ impl WebvhStore for PgWebvhStore {
                 .optional().map_err(PersistenceError::database)?;
                 let existing_events = sql_query(
                     "SELECT id AS event_digest, did, seq, operation, created_at \
-                     FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, id ASC FOR UPDATE",
+                     FROM webvh_log_events WHERE (did = $1 OR (did LIKE 'did:webvh:%' AND $1 LIKE 'did:webvh:%' AND split_part(did, ':', 3) = split_part($1, ':', 3))) ORDER BY seq ASC, id ASC FOR UPDATE",
                 )
                 .bind::<Text, _>(&event.did)
                 .load::<WebvhLogRow>(&mut *conn)
@@ -270,6 +278,10 @@ impl WebvhStore for PgWebvhStore {
                     }
                     _ => false,
                 };
+                if current.as_ref().is_some_and(|row|row.did!=event.did) {
+                    let mut chain=existing_events.iter().map(|row|row.operation.clone()).collect::<Vec<_>>();chain.push(event.operation.clone());
+                    if arkret_identity::verify_did_webvh_v1_chain(&native_did,&chain).is_err(){return Ok(WebvhLogCommitOutcome::Conflict);}
+                }
                 let current_head = current.and_then(|record| record.key_log_head);
                 if !stored_state_matches_log
                     || current_head != expected_current_head

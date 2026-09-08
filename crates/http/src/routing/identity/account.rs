@@ -171,7 +171,9 @@ pub(crate) async fn local_account_primary_handle_claim(
 use crate::{JsonResult, json_ok};
 
 mod social;
-pub(crate) use social::direct::{validate_direct_message_bootstrap, validate_direct_message_participant};
+pub(crate) use social::direct::{
+    validate_direct_message_bootstrap, validate_direct_message_participant,
+};
 use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, direct_binding_conflict,

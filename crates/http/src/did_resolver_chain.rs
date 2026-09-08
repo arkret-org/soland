@@ -393,6 +393,29 @@ impl soland_services::identity::DidResolverPort for SolandDidResolver {
             .map_err(|error| error.to_string())
     }
 
+    async fn resolve_current_service_did(
+        &self,
+        did: &Did,
+    ) -> Result<arkret_identity::ResolvedDid, String> {
+        if !matches!(did.method(), "web" | "webvh") || !self.method_allowed(did.method()) {
+            return Err("service DID method trust policy is not enabled".into());
+        }
+        let configured = self
+            .external
+            .as_ref()
+            .ok_or_else(|| "current DID resolver unavailable".to_owned())?;
+        let egress = if self.development_mode {
+            OutboundPolicy::local_development()
+        } else {
+            OutboundPolicy::public_https()
+        };
+        let fresh = HttpDidResolver::with_policy_and_egress(configured.policy().clone(), egress)
+            .map_err(|e| e.to_string())?;
+        tokio::time::timeout(Duration::from_secs(5), fresh.resolve_did_async(did))
+            .await
+            .map_err(|_| "current service DID resolution exceeded 5 seconds".to_owned())?
+            .map_err(|e| e.to_string())
+    }
     async fn resolve_current_external_webvh_state(
         &self,
         did: &Did,

@@ -758,15 +758,22 @@ async fn create_history_key_request(
             .await?;
     let (release_id, release_service_binding_ref) =
         validate_local_history_release_binding(state, &request).await?;
-    let description = super::system::describe::build_server_description(state);
     let resolution =
-        super::system::service_resolution::ensure_current_record(state, &description).await?;
-    if resolution.record.service_id != release_id {
+        super::system::service_resolution::current_authenticated_service_resolution(state).await?;
+    let projection = resolution
+        .projection()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let release_service_route_digest = arkret_wire::Hash::new(
+        arkret_canonical::canonical_sha256(&projection)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    if resolution.service_id != release_id {
         return Err(AppError::conflict(
             "current service resolution does not match the requester Station route",
         ));
     }
-    let release_service_resolution_record_digest = arkret_wire::Hash::new(
+    let release_service_resolution_digest = arkret_wire::Hash::new(
         arkret_canonical::canonical_sha256(&resolution)
             .map_err(|error| AppError::internal(error.to_string()))?,
     )
@@ -785,11 +792,9 @@ async fn create_history_key_request(
             effective_scope: request.effective_scope.clone(),
             release_id: release_id.clone(),
             release_service_binding_ref: release_service_binding_ref.clone(),
-            release_service_resolution_ref: resolution.record.resolution_event_ref.clone(),
-            release_service_resolution_sequence: resolution.record.record_sequence,
-            release_service_resolution_record_digest: release_service_resolution_record_digest
-                .clone(),
-            release_service_route_digest: resolution.record.describe_digest.clone(),
+            release_service_resolution_ref: projection.resolution_event_ref.clone(),
+            release_service_resolution_digest: release_service_resolution_digest.clone(),
+            release_service_route_digest: release_service_route_digest.clone(),
             expires_at: request.expires_at,
         };
         let sealed_history_response_capability =
@@ -823,11 +828,9 @@ async fn create_history_key_request(
                 trusted_current_basis: request.trusted_current_basis.clone(),
                 release_id: release_id.clone(),
                 release_service_binding_ref: release_service_binding_ref.clone(),
-                release_service_resolution_ref: resolution.record.resolution_event_ref.clone(),
-                release_service_resolution_sequence: resolution.record.record_sequence,
-                release_service_resolution_record_digest: release_service_resolution_record_digest
-                    .clone(),
-                release_service_route_digest: resolution.record.describe_digest.clone(),
+                release_service_resolution_ref: projection.resolution_event_ref.clone(),
+                release_service_resolution_digest: release_service_resolution_digest.clone(),
+                release_service_route_digest: release_service_route_digest.clone(),
                 history_traversal_retention: retention.clone(),
                 accepted_at,
                 expires_at: request.expires_at,

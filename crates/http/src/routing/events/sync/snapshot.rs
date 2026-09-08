@@ -59,7 +59,11 @@ pub(crate) async fn build_sync_snapshot(
         {
             continue;
         }
-        if realm_visible_to(state, realm_entry, session).await {
+        // Account aggregate membership is narrower than public discovery.
+        // Only the exact session ActorId may receive this Realm's delta.
+        if !is_realm_deleted(state, realm_entry.realm_id.as_str()).await
+            && realm_id_accessible(state, realm_entry.realm_id.as_str(), session).await
+        {
             let members = roster_members_for_realm(state, realm_entry, session, body);
             visible_realms.push((
                 realm_entry.realm_id.to_string(),
@@ -1547,7 +1551,7 @@ async fn account_data_events(
     let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_wire::Event)>::new();
     for record in state
         .event_queries()
-        .canonical_events()
+        .canonical_events_for_actor(&actor.to_string())
         .await
         .unwrap_or_default()
     {

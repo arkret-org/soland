@@ -16,15 +16,11 @@ pub struct AdminServiceRouteSummary {
     pub service_kind: String,
     pub known: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_seen_sequence: Option<u64>,
+    pub method_history_head: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_seen_digest: Option<String>,
+    pub version_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_expires_at: Option<DateTime<Utc>>,
-    pub notice_count: u32,
-    pub notices_truncated: bool,
-    pub ack_count: u32,
-    pub acks_truncated: bool,
     pub quarantined: bool,
 }
 
@@ -42,63 +38,31 @@ pub struct AdminServiceRouteList {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AdminServiceRouteFloor {
-    pub record_sequence: u64,
-    pub record_digest: String,
+pub struct AdminServiceMethodState {
+    pub did: String,
+    pub method_history_head: String,
+    pub version_id: String,
     pub verified_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AdminServiceRouteCurrentRecord {
+pub struct AdminServiceRouteCurrent {
     pub did: String,
     pub method_history_head: String,
     pub version_id: String,
-    pub record_sequence: u64,
-    pub record_digest: String,
     pub base_url: String,
-    pub current_record_url: String,
-    pub describe_digest: String,
     pub verified_at: DateTime<Utc>,
-    pub refresh_after: DateTime<Utc>,
-    pub signed_expires_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminServiceRouteCache {
-    pub cached_at: DateTime<Utc>,
+    pub verified_at: DateTime<Utc>,
     pub cache_expires_at: DateTime<Utc>,
     pub routable_at_observed_at: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-#[serde(deny_unknown_fields)]
-pub struct AdminServiceRouteNotice {
-    pub handover_id: String,
-    pub notice_revision: u32,
-    pub notice_digest: String,
-    pub state: String,
-    pub from_record_sequence: u64,
-    pub from_record_digest: String,
-    pub expires_at: DateTime<Utc>,
-    pub verified_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-#[serde(deny_unknown_fields)]
-pub struct AdminServiceRouteAck {
-    pub request_id: String,
-    pub source_id: String,
-    pub receiver_id: String,
-    pub realm_id: String,
-    pub request_digest: String,
-    pub artifact_digest: String,
-    pub accepted_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -124,44 +88,14 @@ pub struct AdminServiceRouteDetail {
     /// False means no locally persisted verified state exists for this key.
     pub known: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub floor: Option<AdminServiceRouteFloor>,
+    pub method_state: Option<AdminServiceMethodState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_record: Option<AdminServiceRouteCurrentRecord>,
+    pub current_route: Option<AdminServiceRouteCurrent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<AdminServiceRouteCache>,
-    #[serde(default)]
-    pub notices: Vec<AdminServiceRouteNotice>,
-    pub notices_truncated: bool,
-    #[serde(default)]
-    pub acks: Vec<AdminServiceRouteAck>,
-    pub acks_truncated: bool,
     #[serde(default)]
     pub quarantine: Vec<AdminServiceRouteQuarantine>,
     pub quarantine_truncated: bool,
     pub observed_at: DateTime<Utc>,
     pub authority: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unknown_route_is_explicit_and_sparse() {
-        let detail: AdminServiceRouteDetail = serde_json::from_value(serde_json::json!({
-            "service_id": "ak:did_core:webvh:z6Mkroute",
-            "service_kind": "station",
-            "known": false,
-            "notices_truncated": false,
-            "acks_truncated": false,
-            "quarantine_truncated": false,
-            "observed_at": "2026-08-10T00:00:00Z",
-            "authority": "local_verified_persistence"
-        }))
-        .unwrap();
-        assert!(!detail.known);
-        assert!(detail.floor.is_none());
-        assert!(detail.current_record.is_none());
-        assert!(detail.notices.is_empty());
-    }
 }

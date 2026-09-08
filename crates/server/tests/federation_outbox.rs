@@ -19,12 +19,8 @@ use std::io::{Read, Write};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use arkret_models_identity::{
-    ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
-};
-use arkret_wire::{
-    Base64UrlString, Did, DidCoreId, DidUrl, ProtocolSignature, ServiceKind, TrustDomainId,
-};
+use arkret_models_identity::ResolutionCommitment;
+use arkret_wire::{Did, DidCoreId, ServiceKind, TrustDomainId};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -36,7 +32,7 @@ use soland_http::routing::federation::outbox_operator;
 use soland_http::state::AppState;
 use soland_services::ServiceResult;
 use soland_services::service_route::{
-    RouteSource, ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
+    ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
 };
 use soland_storage::FederationOutboxState;
 use soland_test_support::AppStateTestExt as _;
@@ -60,10 +56,10 @@ struct FixtureVerifiedRouteFetcher {
 }
 
 impl FixtureVerifiedRouteFetcher {
-    /// Model the output of independent record, DID-method, proof, and Describe
+    /// Model the output of independent current DID-method and Describe
     /// verification without turning the delivery peer into a second mock
     /// discovery server. The production resolver still validates every stable
-    /// binding and monotonic floor before exposing the route to the dispatcher.
+    /// binding and accepted native method state before exposing the route to the dispatcher.
     fn new(routes: &[VerifiedPeerRoute]) -> Self {
         Self {
             routes: routes
@@ -97,14 +93,6 @@ impl ServiceRouteFetcher for FixtureVerifiedRouteFetcher {
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok(self.route(service_id, service_kind))
     }
-
-    async fn fetch_notice_candidate(
-        &self,
-        _service_id: &DidCoreId,
-        _service_kind: &str,
-    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
-        Ok(None)
-    }
 }
 
 fn verified_peer_route(
@@ -118,61 +106,22 @@ fn verified_peer_route(
         arkret_wire::project_did_to_core_id(&did).expect("fixture peer core projection");
     assert_eq!(service_id.as_str(), expected_core_id);
     let base_url = format!("{}/", base_url.trim_end_matches('/'));
-    let method_history_head = format!("sha256:{}", "1".repeat(64));
-    let version_id = "fixture-route-v1".to_owned();
+    let evidence = fixture_route_evidence(&did, &service_id, &base_url);
+    let boundary = evidence.method_history_evidence.boundary();
     let commitment = ResolutionCommitment {
         did: did.clone(),
-        method_history_head: method_history_head.clone(),
-        version_id: version_id.clone(),
-    };
-    let describe_digest = arkret_models_identity::route_binding_describe_digest(
-        &service_id,
-        ServiceKind::Station.as_str(),
-        &commitment,
-        &base_url,
-    )
-    .expect("fixture route-binding digest");
-    let issued_at = chrono::Utc::now();
-    let current_record_url = format!(
-        "{}{}",
-        base_url.trim_end_matches('/'),
-        arkret_models_identity::canonical_service_current_record_path(&service_id)
-    );
-    let record = ServiceResolutionRecord {
-        record: ServiceResolutionRecordCore {
-            service_id: service_id.clone(),
-            service_kind: ServiceKind::Station.as_str().to_owned(),
-            did: did.clone(),
-            method_history_head: method_history_head.clone(),
-            version_id: version_id.clone(),
-            resolution_event_ref: "fixture-verified-route".to_owned(),
-            record_sequence: 0,
-            previous_record_digest: None,
-            current_record_url,
-            base_url: base_url.clone(),
-            describe_digest: describe_digest.clone(),
-            issued_at,
-            refresh_after: issued_at + chrono::Duration::hours(1),
-            expires_at: issued_at + chrono::Duration::hours(2),
-        },
-        proof: ProtocolSignature {
-            verification_method: DidUrl::new(format!("{did}#assertion-1"))
-                .expect("fixture verification method"),
-            created_at: issued_at,
-            jws: Base64UrlString::new("AA").expect("fixture proof bytes"),
-        },
+        method_history_head: boundary.to_method_history_head.clone(),
+        version_id: boundary.to_version_id.clone(),
     };
     VerifiedPeerRoute {
         service_id: service_id.clone(),
         candidate: VerifiedRouteCandidate {
-            source: RouteSource::CurrentRecord,
-            record,
+            evidence,
             description: VerifiedServiceDescribeMetadata {
                 service_id,
                 service_kind: ServiceKind::Station.as_str().to_owned(),
                 service_resolution: commitment,
                 http_json_base_url: base_url,
-                route_binding_digest: describe_digest,
                 trust_domain: TrustDomainId::new(trust_domain).expect("fixture peer trust domain"),
                 protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
             },
@@ -193,7 +142,7 @@ fn denied_peer_route() -> VerifiedPeerRoute {
     verified_peer_route(
         DENIED_PEER_SERVICE_DID,
         DENIED_PEER_SERVICE_ID,
-        "http://169.254.169.254",
+        "https://169.254.169.254",
         "ak:trust_domain:denied-peer.example",
     )
 }
@@ -269,22 +218,60 @@ fn spawn_mock_peer_with_status(
 /// (retry, resubmission) need more than the single-shot peer.
 fn spawn_mock_peer_responses(responses: Vec<MockResponse>) -> (String, mpsc::Receiver<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("https://{}", listener.local_addr().unwrap());
+    let certificate = rustls::pki_types::CertificateDer::from(
+        include_bytes!("fixtures/outbox-test-cert.der").to_vec(),
+    );
+    let private_key =
+        rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+            include_bytes!("fixtures/outbox-test-key.der").to_vec(),
+        ));
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let tls = Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![certificate], private_key)
+            .unwrap(),
+    );
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         for response in responses {
-            let Ok((mut stream, _)) = listener.accept() else {
+            let Ok((stream, _)) = listener.accept() else {
                 return;
             };
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            // Read the request headers + (most of) the body. For a tiny
-            // test payload one read is enough — production servers loop,
-            // but here we just want to inspect the captured bytes.
-            let mut buffer = [0_u8; 16384];
-            let read = stream.read(&mut buffer).unwrap_or(0);
-            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let mut stream = rustls::StreamOwned::new(
+                rustls::ServerConnection::new(tls.clone()).unwrap(),
+                stream,
+            );
+            let mut received = Vec::new();
+            let mut buffer = [0u8; 16384];
+            loop {
+                let n = stream.read(&mut buffer).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                received.extend_from_slice(&buffer[..n]);
+                if let Some(end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&received[..end]).to_ascii_lowercase();
+                    let length = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if received.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+                assert!(received.len() < 1024 * 1024, "mock request exceeds 1 MiB");
+            }
+            let request = String::from_utf8_lossy(&received).to_string();
             let head = format!(
                 "HTTP/1.1 {}\r\ncontent-type: application/json\r\n{}content-length: {}\r\nconnection: close\r\n\r\n",
                 response.status,
@@ -680,7 +667,7 @@ async fn egress_policy_denial_is_policy_suppressed_rather_than_delivered() {
     // this exercises a denial without depending on env-var configuration.
     let row = enqueue_outbound(
         &state,
-        "http://169.254.169.254",
+        "https://169.254.169.254",
         DENIED_PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
@@ -739,7 +726,7 @@ async fn persisted_peer_url_is_not_service_resolution_evidence() {
     let state = soland_test_support::app_state(outbox_test_config());
     let row = enqueue_outbound(
         &state,
-        "http://127.0.0.1:9",
+        "https://127.0.0.1:9",
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
@@ -776,7 +763,7 @@ async fn a_stale_lease_holder_cannot_overwrite_the_new_holders_state() {
     let outbox = outbox.federation_outbox();
     let row = enqueue_outbound(
         &state,
-        "http://127.0.0.1:9",
+        "https://127.0.0.1:9",
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
@@ -1153,7 +1140,7 @@ async fn postgres_terminal_rows_are_not_resent_after_restart() {
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("404 Not Found", br#"{"error":"unknown_peer"}"#);
     let peer_route = unique_peer_route("restart-dead", &peer_url);
-    let denied_route = unique_peer_route("restart-denied", "http://169.254.169.254");
+    let denied_route = unique_peer_route("restart-denied", "https://169.254.169.254");
     install_verified_routes(&state, &[peer_route.clone(), denied_route.clone()]);
     let dead_key = unique_key("restart-dead");
     let dead = enqueue_outbound(
@@ -1170,7 +1157,7 @@ async fn postgres_terminal_rows_are_not_resent_after_restart() {
     let suppressed_key = unique_key("restart-suppressed");
     let suppressed = enqueue_outbound(
         &state,
-        "http://169.254.169.254",
+        "https://169.254.169.254",
         denied_route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &suppressed_key,
@@ -1248,7 +1235,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
 
     let first = enqueue_outbound(
         &state,
-        "http://127.0.0.1:9",
+        "https://127.0.0.1:9",
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
@@ -1258,7 +1245,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
     .expect("first enqueue");
     let second = enqueue_outbound(
         &state,
-        "http://127.0.0.1:9",
+        "https://127.0.0.1:9",
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
@@ -1453,4 +1440,38 @@ fn parse_headers(captured: &str) -> BTreeMap<String, String> {
         }
     }
     headers
+}
+
+fn fixture_route_evidence(
+    did: &arkret_wire::Did,
+    service_id: &DidCoreId,
+    base_url: &str,
+) -> arkret_models_identity::AuthenticatedServiceResolution {
+    use arkret_models_identity::*;
+    let document:DidDocument=serde_json::from_value(serde_json::json!({"id":did,"service":[{"id":format!("{did}#station"),"type":"ArkretService","serviceKind":"station","serviceEndpoint":base_url}]})).unwrap();
+    let digest = arkret_identity::document_canonical_digest(&document).unwrap();
+    let head = digest.to_string();
+    let version = format!(
+        "synthetic-jcs-sha256:{}",
+        head.trim_start_matches("sha256:")
+    );
+    AuthenticatedServiceResolution {
+        service_id: service_id.clone(),
+        service_kind: "station".into(),
+        normalized_did_document: document,
+        method_history_evidence: ResolutionMethodHistoryEvidence::DidWebDocument {
+            boundary: ResolutionMethodEvidenceBoundary {
+                from_method_history_head: head.clone(),
+                to_method_history_head: head,
+                from_version_id: version.clone(),
+                to_version_id: version,
+            },
+            evidence: ResolutionDidBindingEvidenceReceipt {
+                kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                method: "web".into(),
+                document_digest: digest,
+                method_proofs: vec![],
+            },
+        },
+    }
 }

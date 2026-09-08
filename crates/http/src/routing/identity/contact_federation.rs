@@ -572,7 +572,7 @@ async fn peer_contacts_submit(
     }
     let mirror_receipt = sign_contact_mirror_receipt(state, &delivery, signed_event, outcome)?;
     if matches!(delivery, PeerContactSubmitRequestBody::Request { .. }) {
-        persist_request_mirror_receipt(state, &subject_core_id, &issuer_core_id, &mirror_receipt)
+        persist_request_mirror_receipt(state, &issuer_core_id, &subject_core_id, &mirror_receipt)
             .await?;
         enqueue_glare_finalize_if_ready(state, &subject_core_id, &issuer_core_id).await?;
     }
@@ -2216,13 +2216,7 @@ fn normal_contact_round(
         request_event_ref: receipt.core.request_event_ref.clone(),
         request_acceptance_receipt_digest: super::account::canonical_contact_digest(receipt)?,
     };
-    let mut transcript = serde_json::to_value(&contact_round)
-        .map_err(|error| AppError::internal(format!("Contact round encode: {error}")))?;
-    transcript
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("Contact round must encode as an object"))?
-        .insert("domain".to_owned(), json!("ak.contact.round.v1"));
-    let contact_round_id = super::account::canonical_contact_digest(&transcript)?;
+    let contact_round_id = contact_round_id(&contact_round)?;
     Ok((contact_round, contact_round_id))
 }
 
@@ -2554,16 +2548,8 @@ fn derive_glare_basis(
 }
 
 fn contact_round_id(contact_round: &ContactRound) -> Result<Hash, AppError> {
-    #[derive(serde::Serialize)]
-    struct BasisDigestTranscript<'a> {
-        domain: &'static str,
-        #[serde(flatten)]
-        contact_round: &'a ContactRound,
-    }
-    super::account::canonical_contact_digest(&BasisDigestTranscript {
-        domain: "ak.contact.round.v1",
-        contact_round,
-    })
+    arkret_models_collaboration::direct_conversation_ops::contact_round_id(contact_round)
+        .map_err(|error| AppError::internal(format!("Contact round digest: {error}")))
 }
 
 pub(crate) async fn accept_outbound_contact_control_outcome(

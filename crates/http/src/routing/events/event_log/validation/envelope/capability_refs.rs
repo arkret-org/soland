@@ -369,14 +369,28 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
     }
     if direct_bootstrap_authorized {
         if kind != arkret_wire::EventKind::MessageCreate.as_str() {
-            return Err(event_validation_error(StatusCode::FORBIDDEN, "capability_denied",
-                "bootstrap data authority only permits provisional messages"));
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "bootstrap data authority only permits provisional messages",
+            ));
         }
         crate::routing::identity::account::validate_direct_message_bootstrap(
-            state, realm_id, object, derived_cells, &state_at_ref).await
-            .map_err(|reason| event_validation_error(StatusCode::FORBIDDEN, "capability_denied", reason))?;
+            state,
+            realm_id,
+            object,
+            derived_cells,
+            &state_at_ref,
+        )
+        .await
+        .map_err(|reason| {
+            event_validation_error(StatusCode::FORBIDDEN, "capability_denied", reason)
+        })?;
     }
-    if !realm_authority_root_authorized && !independently_admitted && !direct_participant_authorized && !direct_bootstrap_authorized
+    if !realm_authority_root_authorized
+        && !independently_admitted
+        && !direct_participant_authorized
+        && !direct_bootstrap_authorized
     {
         // Restrictive effects are global across every effective grant whose
         // action/resource selector matches this operation. A second broad

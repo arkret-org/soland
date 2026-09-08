@@ -1608,6 +1608,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         envelopes,
         None,
         Some(&leases),
+        None,
         Some(realm_bootstrap::DirectConversationFoundingCommitContext {
             slot,
             receipt: receipt.clone(),
@@ -1726,6 +1727,7 @@ async fn submit_event_batch_outcome_with_leases(
             envelopes,
             None,
             authorization_leases,
+            None,
             None,
         )
         .await;
@@ -2962,7 +2964,7 @@ pub(crate) async fn submit_federation_events(
                     .get(&event_id)
                     .expect("every typed federated Event was admission-verified");
                 InternalEventAdmission::peer_federated_event(
-                    event_string_field_from_value(event, "realm_id").unwrap_or_default(),
+                    binding_realm.clone(),
                     serde_json::from_value(event["actor_id"].clone())
                         .expect("admitted Event ActorId"),
                     device_id.clone(),
@@ -2987,6 +2989,7 @@ pub(crate) async fn submit_federation_events(
             events,
             Some(admissions.as_slice()),
             Some(authorization_leases.as_slice()),
+            Some(&inbound_publication_evidence),
             None,
         )
         .await
@@ -3695,12 +3698,51 @@ async fn submit_direct_conversation_federation(
         .iter()
         .map(|item| item.authorization_lease.clone())
         .collect::<Vec<_>>();
+    let mut inbound_publication_evidence = BTreeMap::new();
+    for (item, suite) in submission.events.iter().zip(&founding_digest_suites) {
+        if let Some(lease) = &item.authorization_lease {
+            if let Err(error) =
+                validate_authorization_lease_for_event(state, None, &item.event, lease).await
+            {
+                render_error(res, error.status(), &error.code(), &error.message());
+                return;
+            }
+            if let Err(error) =
+                validate_ingress_receipt_proofs(state, &item.ingress_receipts, lease).await
+            {
+                render_error(res, error.status(), &error.code(), &error.message());
+                return;
+            }
+            let event_digest = match item.event.event_digest_with_digest_suite(*suite) {
+                Ok(digest) => digest,
+                Err(error) => {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        &error.to_string(),
+                    );
+                    return;
+                }
+            };
+            inbound_publication_evidence.insert(
+                item.event.event_id.to_string(),
+                InboundPublicationEvidence {
+                    event_digest,
+                    realm_id: plan.realm_id.to_string(),
+                    authorization_lease: lease.clone(),
+                    ingress_receipts: item.ingress_receipts.clone(),
+                },
+            );
+        }
+    }
     match submit_realm_bootstrap_batch(
         state,
         &session,
         envelopes,
         Some(&admissions),
         Some(&leases),
+        Some(&inbound_publication_evidence),
         None,
     )
     .await
@@ -3786,11 +3828,11 @@ use ingress_receipt::*;
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
-pub(in crate::routing) use post_commit::{cbs_proof_bundles_for_targets, digest_suite_from_hash};
 use preflight::*;
 use projection_preflight::*;
 #[cfg(feature = "test-support")]
 pub use value::attach_fixture_station_admission_proof;
+pub(in crate::routing::events::event_log) use value::replay_ackless_self_principal_ingress;
 use value::*;
 pub(in crate::routing) use value::{
     DevicePairingAdmission, prepare_service_franking_proof_event_value,
@@ -3798,9 +3840,6 @@ pub(in crate::routing) use value::{
     submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
     submit_mimi_reporter_initial_event_submission,
-};
-pub(in crate::routing::events::event_log) use value::{
-    replay_ackless_self_principal_ingress, submit_event_value_with_idempotency,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no
 // re-export here; `event_log.rs` names it directly.

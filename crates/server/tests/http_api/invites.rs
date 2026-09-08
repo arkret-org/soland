@@ -10,14 +10,11 @@ use std::sync::Arc;
 use arkret_models_collaboration::governance::invite_addressing::{
     IntroductionEvidence, InviteAddress, InviteReceivePolicy, SelfInviteDispatchRequestBody,
 };
-use arkret_models_identity::{
-    ResolutionCommitment, ServiceResolutionCarrier, ServiceResolutionRecord,
-    ServiceResolutionRecordCore,
-};
+use arkret_models_identity::{ResolutionCommitment, ServiceResolutionCarrier};
 use async_trait::async_trait;
 use soland_services::ServiceResult;
 use soland_services::service_route::{
-    RouteSource, ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
+    ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
 };
 
 use super::common::*;
@@ -69,14 +66,6 @@ impl ServiceRouteFetcher for RemoteCarrierFetcher {
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok(None)
     }
-
-    async fn fetch_notice_candidate(
-        &self,
-        _service_id: &DidCoreId,
-        _service_kind: &str,
-    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
-        Ok(None)
-    }
 }
 
 fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRouteCandidate) {
@@ -86,58 +75,25 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
     assert_eq!(service_id.as_str(), REMOTE_SERVICE_ID);
     let service_kind = arkret_wire::ServiceKind::Station;
     let base_url = "https://remote.example/";
-    let issued_at = chrono::Utc::now();
-    let method_history_head = format!("sha256:{}", "1".repeat(64));
-    let version_id = "fixture-route-v1".to_owned();
+    let evidence = fixture_route_evidence(&did, &service_id, base_url);
+    let route = evidence.projection().unwrap();
     let resolution = ResolutionCommitment {
         did: did.clone(),
-        method_history_head: method_history_head.clone(),
-        version_id: version_id.clone(),
+        method_history_head: route.method_history_head,
+        version_id: route.version_id,
     };
-    let describe_digest = arkret_models_identity::route_binding_describe_digest(
-        &service_id,
-        service_kind.as_str(),
-        &resolution,
-        base_url,
-    )
-    .expect("remote route binding digest");
-    let current_record_url = format!(
+    let resolution_url = format!(
         "{}{}",
         base_url.trim_end_matches('/'),
-        arkret_models_identity::canonical_service_current_record_path(&service_id)
+        arkret_models_identity::canonical_service_resolution_path(&service_id)
     );
     let candidate = VerifiedRouteCandidate {
-        source: RouteSource::CurrentRecord,
-        record: ServiceResolutionRecord {
-            record: ServiceResolutionRecordCore {
-                service_id: service_id.clone(),
-                service_kind: service_kind.as_str().to_owned(),
-                did: did.clone(),
-                method_history_head,
-                version_id,
-                resolution_event_ref: "fixture-verified-route".to_owned(),
-                record_sequence: 0,
-                previous_record_digest: None,
-                current_record_url: current_record_url.clone(),
-                base_url: base_url.to_owned(),
-                describe_digest: describe_digest.clone(),
-                issued_at,
-                refresh_after: issued_at + chrono::Duration::hours(1),
-                expires_at: issued_at + chrono::Duration::hours(2),
-            },
-            proof: arkret_wire::ProtocolSignature {
-                verification_method: arkret_wire::DidUrl::new(format!("{did}#assertion-1"))
-                    .expect("remote verification method"),
-                created_at: issued_at,
-                jws: arkret_wire::Base64UrlString::new("AA").expect("fixture proof bytes"),
-            },
-        },
+        evidence,
         description: VerifiedServiceDescribeMetadata {
             service_id: service_id.clone(),
             service_kind: service_kind.as_str().to_owned(),
             service_resolution: resolution,
             http_json_base_url: base_url.to_owned(),
-            route_binding_digest: describe_digest,
             trust_domain: arkret_identifiers::TrustDomainId::new(
                 "ak:trust_domain:remote.example".to_owned(),
             )
@@ -147,10 +103,7 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
     };
     (
         service_id,
-        ServiceResolutionCarrier::CurrentRecordUrl {
-            current_record_url,
-            pinned_record_digest: None,
-        },
+        ServiceResolutionCarrier::ResolutionUrl { resolution_url },
         candidate,
     )
 }
@@ -204,15 +157,14 @@ impl DispatchFixture {
 }
 
 fn local_service_resolution(state: &AppState) -> ServiceResolutionCarrier {
-    ServiceResolutionCarrier::CurrentRecordUrl {
-        current_record_url: format!(
+    ServiceResolutionCarrier::ResolutionUrl {
+        resolution_url: format!(
             "https://soland.local{}",
-            arkret_models_identity::canonical_service_current_record_path(
+            arkret_models_identity::canonical_service_resolution_path(
                 &DidCoreId::new(state.service_id().to_owned())
                     .expect("configured service id is a core DID")
             )
         ),
-        pinned_record_digest: None,
     }
 }
 
@@ -292,10 +244,14 @@ async fn seed_dispatch_fixture_for_target(
     event["seal_basis"] = seeded["seal_basis"].clone();
     resign_canonical_event(&mut event);
     let event_id = authored_event_id(&event).to_owned();
+    let submission = arkret_wire::EventInitialSubmission::online(
+        serde_json::from_value(event).expect("typed invite Event"),
+    );
 
     let submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&event)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&submission))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -590,4 +546,38 @@ async fn self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor_bo
         fixture.quarantine_entries().await.is_empty(),
         "a closed precondition rejection MUST NOT produce a holder-private write"
     );
+}
+
+fn fixture_route_evidence(
+    did: &arkret_wire::Did,
+    service_id: &DidCoreId,
+    base_url: &str,
+) -> arkret_models_identity::AuthenticatedServiceResolution {
+    use arkret_models_identity::*;
+    let document:DidDocument=serde_json::from_value(serde_json::json!({"id":did,"service":[{"id":format!("{did}#station"),"type":"ArkretService","serviceKind":"station","serviceEndpoint":base_url}]})).unwrap();
+    let digest = arkret_identity::document_canonical_digest(&document).unwrap();
+    let head = digest.to_string();
+    let version = format!(
+        "synthetic-jcs-sha256:{}",
+        head.trim_start_matches("sha256:")
+    );
+    AuthenticatedServiceResolution {
+        service_id: service_id.clone(),
+        service_kind: "station".into(),
+        normalized_did_document: document,
+        method_history_evidence: ResolutionMethodHistoryEvidence::DidWebDocument {
+            boundary: ResolutionMethodEvidenceBoundary {
+                from_method_history_head: head.clone(),
+                to_method_history_head: head,
+                from_version_id: version.clone(),
+                to_version_id: version,
+            },
+            evidence: ResolutionDidBindingEvidenceReceipt {
+                kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                method: "web".into(),
+                document_digest: digest,
+                method_proofs: vec![],
+            },
+        },
+    }
 }

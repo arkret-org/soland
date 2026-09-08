@@ -1,31 +1,16 @@
 use std::collections::BTreeSet;
 
-use arkret_models_collaboration::objects::relation::{
-    RelationCardinality, RelationConflictPolicy, RelationEndpoint, RelationProfile, RelationScope,
-};
+use arkret_models_collaboration::objects::relation::{RelationCardinality, RelationEndpoint};
 
 use super::*;
 
 const RELATION_CONFLICT_FANOUT_LIMIT: usize = 16;
 
-fn default_relation_profile(relation_kind: &str) -> RelationProfile {
-    let cardinality = arkret_wire::RelationKind::from_wire(relation_kind)
+fn registered_relation_cardinality(relation_kind: &str) -> RelationCardinality {
+    arkret_wire::RelationKind::from_wire(relation_kind)
         .descriptor()
         .and_then(|metadata| RelationCardinality::from_registry_value(metadata.default_cardinality))
-        .unwrap_or(RelationCardinality::ManyToMany);
-    RelationProfile {
-        relation_kind: relation_kind.to_owned(),
-        from_kind: None,
-        to_kind: None,
-        relation_scope: RelationScope::Realm,
-        cardinality,
-        dedupe_key: Vec::new(),
-        max_to_per_from: None,
-        max_from_per_to: None,
-        multi_edge: false,
-        rank_field: None,
-        on_conflict: RelationConflictPolicy::RequireReview,
-    }
+        .unwrap_or(RelationCardinality::ManyToMany)
 }
 
 impl ProjectionState {
@@ -104,21 +89,14 @@ impl ProjectionState {
             history_basis_seals: operation_history_basis_seals(operation),
             updated_at: now,
         };
-        let profile = match self.relation_profile_for(&state) {
-            Ok(profile) => profile,
-            Err(reason) => {
-                return ProjectionEffect::Rejected {
-                    reason: reason.as_str().to_owned(),
-                };
-            }
-        };
-        if self.relation_conflict_fanout_exceeded(&state, &profile) {
+        let cardinality = registered_relation_cardinality(&state.relation_kind);
+        if self.relation_conflict_fanout_exceeded(&state, cardinality) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
             };
         }
         self.relations.insert(relation_id.clone(), state);
-        self.enforce_relation_cardinality_for(&relation_id, &profile, now);
+        self.enforce_relation_cardinality_for(&relation_id, cardinality, now);
         ProjectionEffect::RelationCreated(
             self.relations
                 .get(&relation_id)
@@ -127,126 +105,18 @@ impl ProjectionState {
         )
     }
 
-    fn relation_profile_for(
-        &self,
-        relation: &SolandRelationState,
-    ) -> Result<RelationProfile, arkret_wire::ReasonCode> {
-        let mut profile = default_relation_profile(&relation.relation_kind);
-        for profile_value in self.relation_profile_values(&relation.realm_id) {
-            if profile_value.get("relation_kind").and_then(Value::as_str)
-                != Some(relation.relation_kind.as_str())
-            {
-                continue;
-            }
-            let candidate: RelationProfile = serde_json::from_value(profile_value.clone())
-                .map_err(|_| arkret_wire::ReasonCode::RelationProfileCardinalityConflict)?;
-            candidate.validate_cardinality_consistency()?;
-            if !self.relation_profile_matches_endpoint(
-                candidate.from_kind.as_deref(),
-                relation.from_ref.as_ref(),
-            ) {
-                continue;
-            }
-            if !self.relation_profile_matches_endpoint(
-                candidate.to_kind.as_deref(),
-                relation.to_ref.as_ref(),
-            ) {
-                continue;
-            }
-            profile = candidate;
-        }
-        Ok(profile)
-    }
-
-    fn relation_profile_values(&self, realm_id: &str) -> Vec<&Value> {
-        let mut values = Vec::new();
-        if let Some(components) = self.realm_policy_bundle_cell_value(realm_id) {
-            values.extend(
-                components
-                    .get("relation_profiles")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten(),
-            );
-        }
-        if let Some(create_log) = self.realm_create_log(realm_id)
-            && let Some(latest) = create_log.last()
-        {
-            values.extend(
-                latest
-                    .get("relation_profiles")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten(),
-            );
-        }
-        values
-    }
-
-    fn relation_profile_matches_endpoint(
-        &self,
-        type_constraint: Option<&str>,
-        endpoint: Option<&RelationEndpoint>,
-    ) -> bool {
-        let Some(type_constraint) = type_constraint else {
-            return true;
-        };
-        let Some(endpoint) = endpoint else {
-            return false;
-        };
-        if type_constraint == "actor" {
-            return endpoint.as_actor_id().is_some();
-        }
-        let Some(object_ref) = endpoint.as_object_ref() else {
-            return false;
-        };
-        // A relation profile's type constraint is satisfied only by a
-        // canonical value of that id-kind: `id-kind-registry.json` fixes each
-        // kind's payload shape, so an `ak:<kind>:` prefix on its own is not
-        // the constraint's value space.
-        match type_constraint {
-            "realm" => arkret_identifiers::RealmId::new(object_ref).is_ok(),
-            "space" => arkret_identifiers::SpaceId::new(object_ref).is_ok(),
-            "space:board" => self
-                .space_containers
-                .get(object_ref)
-                .is_some_and(|space| space.kind == "board"),
-            "space:list" => self
-                .space_containers
-                .get(object_ref)
-                .is_some_and(|space| space.kind == "list"),
-            "strand" => arkret_identifiers::StrandId::new(object_ref).is_ok(),
-            "message" => {
-                arkret_identifiers::MessageId::new(object_ref).is_ok()
-                    || arkret_identifiers::EventId::new(object_ref).is_ok()
-            }
-            "morph" => arkret_identifiers::MorphId::new(object_ref).is_ok(),
-            type_constraint if type_constraint.starts_with("morph:") => {
-                arkret_identifiers::MorphId::new(object_ref).is_ok()
-            }
-            "relation" => arkret_identifiers::RelationId::new(object_ref).is_ok(),
-            "event" => arkret_identifiers::EventId::new(object_ref).is_ok(),
-            "view" => arkret_identifiers::ViewId::new(object_ref).is_ok(),
-            "blob" => crate::capability::is_typed_blob_ref(object_ref),
-            _ => false,
-        }
-    }
-
     fn relation_constraint_sets(
         &self,
         relation: &SolandRelationState,
-        profile: &RelationProfile,
+        cardinality: RelationCardinality,
     ) -> Vec<(Vec<String>, usize)> {
-        let mut sets = Vec::new();
-        if !profile.multi_edge {
-            sets.push((
-                self.active_relation_ids_matching(relation, |other| {
-                    other.from_ref == relation.from_ref && other.to_ref == relation.to_ref
-                }),
-                1,
-            ));
-        }
-        match profile.cardinality {
+        let mut sets = vec![(
+            self.active_relation_ids_matching(relation, |other| {
+                other.from_ref == relation.from_ref && other.to_ref == relation.to_ref
+            }),
+            1,
+        )];
+        match cardinality {
             RelationCardinality::OneToOne => {
                 if relation.from_ref.is_some() {
                     sets.push((
@@ -287,26 +157,6 @@ impl ProjectionState {
             }
             RelationCardinality::ManyToMany => {}
         }
-        if let Some(max_to_per_from) = profile.max_to_per_from
-            && relation.from_ref.is_some()
-        {
-            sets.push((
-                self.active_relation_ids_matching(relation, |other| {
-                    other.from_ref == relation.from_ref
-                }),
-                usize::try_from(max_to_per_from).unwrap_or(usize::MAX),
-            ));
-        }
-        if let Some(max_from_per_to) = profile.max_from_per_to
-            && relation.to_ref.is_some()
-        {
-            sets.push((
-                self.active_relation_ids_matching(relation, |other| {
-                    other.to_ref == relation.to_ref
-                }),
-                usize::try_from(max_from_per_to).unwrap_or(usize::MAX),
-            ));
-        }
         sets
     }
 
@@ -329,12 +179,9 @@ impl ProjectionState {
     fn relation_conflict_fanout_exceeded(
         &self,
         relation: &SolandRelationState,
-        profile: &RelationProfile,
+        cardinality: RelationCardinality,
     ) -> bool {
-        if profile.on_conflict != RelationConflictPolicy::RequireReview
-            || profile.multi_edge
-            || !relation.is_active()
-        {
+        if !relation.is_active() {
             return false;
         }
         let candidates = self
@@ -362,9 +209,9 @@ impl ProjectionState {
             return true;
         }
         let constrains_from = matches!(
-            profile.cardinality,
+            cardinality,
             RelationCardinality::OneToOne | RelationCardinality::ManyToOne
-        ) || profile.max_to_per_from.is_some();
+        );
         if constrains_from
             && count_with_candidate(&|other| other.from_ref == relation.from_ref)
                 > RELATION_CONFLICT_FANOUT_LIMIT
@@ -372,9 +219,9 @@ impl ProjectionState {
             return true;
         }
         let constrains_to = matches!(
-            profile.cardinality,
+            cardinality,
             RelationCardinality::OneToOne | RelationCardinality::OneToMany
-        ) || profile.max_from_per_to.is_some();
+        );
         constrains_to
             && count_with_candidate(&|other| other.to_ref == relation.to_ref)
                 > RELATION_CONFLICT_FANOUT_LIMIT
@@ -383,7 +230,7 @@ impl ProjectionState {
     fn enforce_relation_cardinality_for(
         &mut self,
         relation_id: &str,
-        profile: &RelationProfile,
+        cardinality: RelationCardinality,
         now: chrono::DateTime<chrono::Utc>,
     ) {
         let Some(relation) = self.relations.get(relation_id).cloned() else {
@@ -393,7 +240,7 @@ impl ProjectionState {
             return;
         }
         let constraint_sets = self
-            .relation_constraint_sets(&relation, profile)
+            .relation_constraint_sets(&relation, cardinality)
             .into_iter()
             .filter(|(ids, max)| ids.len() > *max)
             .collect::<Vec<_>>();
@@ -402,24 +249,13 @@ impl ProjectionState {
         }
 
         let mut inactive = BTreeSet::new();
-        match profile.on_conflict {
-            RelationConflictPolicy::RequireReview => {
-                for (ids, _) in constraint_sets {
-                    inactive.extend(ids);
-                }
-            }
-            RelationConflictPolicy::Reject | RelationConflictPolicy::ClosePrevious => {
-                inactive.insert(relation_id.to_owned());
-            }
+        for (ids, _) in constraint_sets {
+            inactive.extend(ids);
         }
 
         for inactive_id in inactive {
             if let Some(relation) = self.relations.get_mut(&inactive_id) {
-                relation.state = if profile.on_conflict == RelationConflictPolicy::RequireReview {
-                    "review_required".to_owned()
-                } else {
-                    "tombstoned".to_owned()
-                };
+                relation.state = "review_required".to_owned();
                 relation.updated_at = now;
             }
         }
@@ -708,15 +544,8 @@ impl ProjectionState {
         if let Some(patch) = &patch {
             apply_relation_patch(&mut candidate_relation, patch);
         }
-        let profile = match self.relation_profile_for(&candidate_relation) {
-            Ok(profile) => profile,
-            Err(reason) => {
-                return ProjectionEffect::Rejected {
-                    reason: reason.as_str().to_owned(),
-                };
-            }
-        };
-        if self.relation_conflict_fanout_exceeded(&candidate_relation, &profile) {
+        let cardinality = registered_relation_cardinality(&candidate_relation.relation_kind);
+        if self.relation_conflict_fanout_exceeded(&candidate_relation, cardinality) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
             };
@@ -729,7 +558,7 @@ impl ProjectionState {
             apply_relation_patch(relation, patch);
         }
         relation.updated_at = now;
-        self.enforce_relation_cardinality_for(&relation_id, &profile, now);
+        self.enforce_relation_cardinality_for(&relation_id, cardinality, now);
         ProjectionEffect::RelationUpdated(
             self.relations
                 .get(&relation_id)
@@ -1195,10 +1024,6 @@ mod cross_realm_relation_tests {
                 .and_then(RelationEndpoint::as_actor_id),
             Some(&second_actor)
         );
-        assert!(projection.relation_profile_matches_endpoint(
-            Some("actor"),
-            projection.relations[&first_id].to_ref.as_ref()
-        ));
         let remove = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000000a03",
@@ -1850,44 +1675,7 @@ mod relation_endpoint_typing_tests {
     use super::*;
 
     const EVENT_A: &str = "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D";
-    const MESSAGE_A: &str = "ak:message:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D";
     const STRAND: &str = "ak:strand:ATXlnYLuNA5AB7Pide0IGeEtDJ6YeQ19_FUbKXtjQhum";
-
-    // A relation profile type constraint is a value-space check, not a prefix
-    // check: `ak:event:not-a-token` is not an Event id and must not satisfy
-    // the `event` (or `message`) constraint.
-    #[test]
-    fn type_constraints_reject_a_kind_prefix_without_a_canonical_payload() {
-        let projection = ProjectionState::new();
-        assert!(projection.relation_profile_matches_endpoint(Some("event"), Some(&EVENT_A.into())));
-        assert!(
-            !projection
-                .relation_profile_matches_endpoint(Some("event"), Some(&"ak:event:x".into()))
-        );
-        assert!(
-            projection.relation_profile_matches_endpoint(Some("message"), Some(&MESSAGE_A.into()))
-        );
-        assert!(
-            projection.relation_profile_matches_endpoint(Some("message"), Some(&EVENT_A.into()))
-        );
-        assert!(
-            !projection
-                .relation_profile_matches_endpoint(Some("message"), Some(&"ak:message:1".into()))
-        );
-        assert!(projection.relation_profile_matches_endpoint(Some("strand"), Some(&STRAND.into())));
-        assert!(
-            !projection
-                .relation_profile_matches_endpoint(Some("strand"), Some(&"ak:strand:a".into()))
-        );
-        assert!(projection.relation_profile_matches_endpoint(
-            Some("blob"),
-            Some(&format!("ak:blob:sha256:{}", "a".repeat(64)).into())
-        ));
-        assert!(
-            !projection
-                .relation_profile_matches_endpoint(Some("blob"), Some(&"ak:blob:abc".into()))
-        );
-    }
 
     #[test]
     fn only_canonical_endpoints_are_resolved_against_projections() {

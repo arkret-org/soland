@@ -724,8 +724,10 @@ impl NotaryWorker {
                 .iter()
                 .map(|(_, event)| event.clone())
                 .collect::<Vec<_>>();
-            arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&anchor_events)
-                .map_err(|error| NotaryError::Construction(error.to_string()))?;
+            arkret_policy::realm_bootstrap::validate_accepted_realm_seal_genesis_unit(
+                &anchor_events,
+            )
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
         }
         let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<RejectedControlMove> = Vec::new();
@@ -1836,16 +1838,22 @@ impl NotaryWorker {
                     "availability holder service resolution is unavailable: {error}"
                 ))
             })?;
-        let evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
-            authenticated_resolution,
-            &holder_service_id,
-            sealed_at,
-        )
-        .map_err(|error| {
-            NotaryError::Construction(format!(
-                "availability holder signer evidence is invalid: {error}"
-            ))
-        })?;
+        let (_, verification_method) = state
+            .current_service_receipt_binding()
+            .await
+            .map_err(NotaryError::Construction)?;
+        let evidence =
+            arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+                authenticated_resolution,
+                &holder_service_id,
+                verification_method,
+                sealed_at,
+            )
+            .map_err(|error| {
+                NotaryError::Construction(format!(
+                    "availability holder signer evidence is invalid: {error}"
+                ))
+            })?;
         let evidence_digest = evidence
             .canonical_sha256_digest()
             .map_err(|error| NotaryError::Construction(error.to_string()))?;

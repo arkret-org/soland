@@ -153,7 +153,6 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         SEAL_COMPACT.to_owned(),
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
-        SERVICE_ROUTE_HANDOVER.to_owned(),
     ];
     let principal_id =
         arkret_identifiers::DidCoreId::new(session.actor.clone()).unwrap_or_else(|_| {

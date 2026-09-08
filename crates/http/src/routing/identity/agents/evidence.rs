@@ -159,9 +159,14 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         &local_service_evidence,
     )
     .await?;
-    let account_authority_evidence =
-        fetch_service_signer_evidence(state, &gate.authority_id, None, None, chrono::Utc::now())
-            .await?;
+    let account_authority_evidence = fetch_service_signer_evidence(
+        state,
+        &gate.authority_id,
+        None,
+        Some(&gate.verification_method),
+        gate.issued_at,
+    )
+    .await?;
     // The current branch is also the standard cold-recipient federation
     // branch.  When the verifier is a foreign recipient Station, retain its
     // authenticated Service evidence in the closure instead of requiring the
@@ -324,14 +329,15 @@ async fn current_service_signer_evidence(
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
             .await
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let service_id = resolution
-        .service_resolution_record
-        .record
-        .service_id
-        .clone();
-    arkret_identity::service_signer_evidence_from_authenticated_resolution(
+    let service_id = resolution.service_id.clone();
+    let (_, method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
         resolution,
         &service_id,
+        method,
         chrono::Utc::now(),
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
@@ -404,7 +410,7 @@ pub(crate) async fn fetch_service_signer_evidence(
                 &resolved_base
             }
         };
-        let path = arkret_models_identity::canonical_service_current_record_path(service_id);
+        let path = arkret_models_identity::canonical_service_resolution_path(service_id);
         let target = format!("{}{}", base_url.trim_end_matches('/'), path);
         let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
             &target,
@@ -444,9 +450,37 @@ pub(crate) async fn fetch_service_signer_evidence(
                 at,
             )
         }
-        None => arkret_identity::service_signer_evidence_from_authenticated_resolution(
-            resolution, service_id, at,
-        ),
+        None => {
+            let document =
+                arkret_identity::authenticated_service_document_at(&resolution, service_id, at)
+                    .map_err(|_| {
+                        AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+                    })?;
+            let methods: Vec<_> = document
+                .verification_methods
+                .keys()
+                .filter_map(|value| {
+                    let method = arkret_wire::DidUrl::new(value.clone()).ok()?;
+                    arkret_identity::validate_verification_method_relationship(
+                        &document,
+                        &method,
+                        &document.id,
+                        arkret_identity::DidVerificationRelationship::AssertionMethod,
+                    )
+                    .ok()?;
+                    Some(method)
+                })
+                .collect();
+            if methods.len() != 1 {
+                return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+            }
+            arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+                resolution,
+                service_id,
+                methods[0].clone(),
+                at,
+            )
+        }
     }
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }

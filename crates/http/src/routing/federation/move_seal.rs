@@ -2245,6 +2245,120 @@ fn is_sha256_digest(s: &str) -> bool {
 mod seal_delta_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn inbound_seal_authentication_precedes_every_state_write() {
+        use soland_services::conformance_basis::{
+            ConformanceNotarySigner, build_conformance_realm_basis,
+        };
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm = RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC").unwrap();
+        let signer = ConformanceNotarySigner::ed25519(
+            arkret_wire::Did::new("did:web:notary.example").unwrap(),
+            arkret_wire::DidUrl::new("did:web:notary.example#notary-key").unwrap(),
+            [0x53; 32],
+        )
+        .unwrap();
+        let basis = build_conformance_realm_basis(
+            realm.as_str(),
+            "ak:did_core:web:owner.example",
+            state.service_id(),
+            &signer,
+            true,
+            &[],
+        )
+        .unwrap();
+        let projections = state.projections();
+        projections
+            .conformance_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
+            .await
+            .unwrap();
+        projections
+            .conformance_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+            .await
+            .unwrap();
+        let before = projections.realm_seal_leaves(&realm).await.unwrap();
+        let before_state = projections
+            .effective_state_at(&before, &realm)
+            .await
+            .unwrap();
+        let mut candidate = basis.seal.clone();
+        candidate.predecessor_refs = vec![basis.seal.id.clone()];
+        candidate.delta.clear();
+        candidate.notary_seq += 1;
+        candidate.sealed_at = chrono::Utc::now();
+        candidate.hlc = arkret_wire::Hlc::new(format!(
+            "{:012x}-0000-aabbccee",
+            candidate.sealed_at.timestamp_millis(),
+        ))
+        .unwrap();
+        fn sign(seal: &mut Seal, method: arkret_wire::DidUrl, seed: [u8; 32]) {
+            let bytes = seal.canonical_bytes_for_id().unwrap();
+            seal.id = Seal::id_from_canonical_bytes(&bytes, arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+            seal.notary_signature = NotarySig::Single(arkret_wire::SealSignature {
+                verification_method: method.clone(),
+                payload_digest: arkret_wire::Hash::new(
+                    arkret_canonical::canonical_digest_with_suite(&bytes, "sha256").unwrap(),
+                )
+                .unwrap(),
+                jws: soland_services::identity::sign_ed25519_frozen_notary_jws(
+                    &bytes,
+                    &method,
+                    &ed25519_dalek::SigningKey::from_bytes(&seed),
+                )
+                .unwrap(),
+            });
+        }
+        sign(
+            &mut candidate,
+            signer.descriptor.verification_method.clone(),
+            signer.signing_seed,
+        );
+        candidate
+            .validate_id(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        candidate.validate_structural().unwrap();
+        verify_realm_notary_seal(&state, &candidate)
+            .await
+            .expect("authorized signature verifies");
+        for unauthorized_method in [false, true] {
+            let mut forged = candidate.clone();
+            if unauthorized_method {
+                forged.state_root =
+                    arkret_wire::Hash::new(format!("sha256:{}", "ab".repeat(32))).unwrap();
+            }
+            let method = if unauthorized_method {
+                arkret_wire::DidUrl::new("did:web:attacker.example#notary-key").unwrap()
+            } else {
+                signer.descriptor.verification_method.clone()
+            };
+            sign(&mut forged, method, [0x71; 32]);
+            forged
+                .validate_id(arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+            forged.validate_structural().unwrap();
+            let error = apply_inbound_seal(&state, &forged)
+                .await
+                .expect_err("untrusted Seal rejected");
+            assert_eq!(
+                error.wire_code(),
+                "directory_governance_proof_signature_invalid"
+            );
+            assert!(projections.seal_by_id(&forged.id).await.unwrap().is_none());
+            assert_eq!(projections.realm_seal_leaves(&realm).await.unwrap(), before);
+            assert_eq!(
+                projections
+                    .effective_state_at(&before, &realm)
+                    .await
+                    .unwrap(),
+                before_state
+            );
+        }
+    }
+
     #[test]
     fn b_model_control_classification_projects_capability_grant_with_frozen_authority() {
         let state = AppState::new(

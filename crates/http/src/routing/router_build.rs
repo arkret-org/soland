@@ -373,7 +373,6 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
         .push(
             Router::with_path("peer")
                 .push(events::peer_router())
-                .push(system::peer_router())
                 .push(invites::peer_router())
                 .push(identity::contact_federation::peer_router())
                 .push(identity::current_signer_evidence::peer_router())

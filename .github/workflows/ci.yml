@@ -184,7 +184,7 @@ jobs:
       - name: Test (whole workspace, real database)
         env:
           CARGO_TARGET_DIR: target/test
-        run: cargo +1.98 test --locked --workspace
+        run: SSL_CERT_FILE="$PWD/crates/server/tests/fixtures/outbox-test-ca.pem" cargo +1.98 test --locked --workspace
         working-directory: soland
 
   migration-cycle:

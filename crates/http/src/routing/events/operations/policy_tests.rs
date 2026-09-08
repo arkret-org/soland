@@ -1517,12 +1517,24 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
 async fn direct_conversation_provisional_message_uses_registered_bootstrap_source() {
     let (state, realm_id) = state_with_direct_binding();
     state.contacts().clear_runtime_direct_bindings();
-    let mut message = op(realm_id, "000000000608", arkret_wire::EventKind::MessageCreate,
-        json!({"sender":"ak:did_core:web:alice.example", "content":[{"type":"text","text":"provisional"}]}));
-    assert_eq!(validate_operation_policy(&state, &[message.clone()]).await.unwrap_err(),
-        "direct_conversation_member_count_invalid");
-    message.context.authorization_ref = Some(arkret_wire::AuthorizationRef::new(
-        arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1).unwrap());
+    let mut message = op(
+        realm_id,
+        "000000000608",
+        arkret_wire::EventKind::MessageCreate,
+        json!({"sender":"ak:did_core:web:alice.example", "content":[{"type":"text","text":"provisional"}]}),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[message.clone()])
+            .await
+            .unwrap_err(),
+        "direct_conversation_member_count_invalid"
+    );
+    message.context.authorization_ref = Some(
+        arkret_wire::AuthorizationRef::new(
+            arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1,
+        )
+        .unwrap(),
+    );
     // This is the policy stage after envelope authority verification. The
     // envelope test and joint flow enforce the actual founder/Seal proof.
     validate_operation_policy(&state, &[message]).await.unwrap();

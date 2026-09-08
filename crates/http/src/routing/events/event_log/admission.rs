@@ -5,16 +5,9 @@ use super::*;
 // (spec B1.6 / T02 / T07 / T08 / T09 / T12 / T23).
 // ════════════════════════════════════════════════════════════════════════
 
-/// Spec B1.6 — discriminated `/_arkret/self/events` POST body. Account-client
-/// event envelopes stay as raw JSON Values until proof validation, because
-/// `proof.event_digest` binds the producer's canonical envelope bytes. Parsing
-/// into SDK `Event` here would reserialize defaults and change the signed
-/// object before verification.
-///
-/// Wire-breaking: producers MUST use spec `events[]`; producers that
-/// include the `service_binding_ref` are routed to [`Self::Federation`].
-/// Client-account writes omit `service_binding_ref`; federation writes are
-/// gated by federation authentication.
+/// Registered `/_arkret/self/events` submission carriers. Ordinary online writes
+/// use `EventInitialSubmission { event, ... }`, individually or in `events[]`.
+/// Bare Events and malformed registered carriers are rejected during parsing.
 #[derive(Debug, Clone, serde::Serialize)]
 // Untagged wire union mirroring the SDK submit bodies; boxing a variant would
 // change the public constructor shape without changing the JSON.
@@ -34,15 +27,10 @@ pub enum SolandEventsSubmitRequestBody {
     /// evidence that lets the Event be federated later. It is transport
     /// evidence: it is not an Event field and never enters the Event digest.
     ///
-    /// Ordered before [`Self::Single`] because that variant is a strictly more
-    /// permissive shape — `Single(Value)` matches any JSON object at all, so it
-    /// MUST stay last.
     Initial(arkret_wire::EventInitialSubmission),
     /// Account-client batch form. Every Event carries its own authorization
     /// lease outside the signed Event envelope.
     InitialBatch(SolandEventsInitialSubmitBatchRequestBody),
-    /// Single Event Envelope (dominant shape).
-    Single(Value),
 }
 
 impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
@@ -55,8 +43,7 @@ impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
         let value = Value::deserialize(deserializer)?;
         let object = value.as_object();
         // `unit_kind` is a protocol discriminator, not an ignorable extension.
-        // Dispatch it before the permissive ordinary carriers so a malformed
-        // founding unit cannot silently degrade into InitialBatch/Single.
+        // A malformed founding unit cannot degrade into an ordinary submission.
         if object.is_some_and(|object| object.contains_key("unit_kind")) {
             return match object
                 .and_then(|object| object.get("unit_kind"))
@@ -85,17 +72,14 @@ impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
                 .map(Self::Federation)
                 .map_err(D::Error::custom);
         }
-        if let Ok(initial) =
-            serde_json::from_value::<arkret_wire::EventInitialSubmission>(value.clone())
-        {
-            return Ok(Self::Initial(initial));
+        if object.is_some_and(|object| object.contains_key("events")) {
+            return serde_json::from_value::<SolandEventsInitialSubmitBatchRequestBody>(value)
+                .map(Self::InitialBatch)
+                .map_err(D::Error::custom);
         }
-        if let Ok(batch) =
-            serde_json::from_value::<SolandEventsInitialSubmitBatchRequestBody>(value.clone())
-        {
-            return Ok(Self::InitialBatch(batch));
-        }
-        Ok(Self::Single(value))
+        serde_json::from_value::<arkret_wire::EventInitialSubmission>(value)
+            .map(Self::Initial)
+            .map_err(D::Error::custom)
     }
 }
 
