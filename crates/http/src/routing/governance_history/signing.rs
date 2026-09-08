@@ -188,7 +188,11 @@ pub(super) fn history_response_signer_dependencies(
         .iter()
         .find(|dependency| dependency.selector() == release_dependency.selector())
     {
-        if existing != release_dependency {
+        if arkret_canonical::canonical_json_bytes(existing)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != arkret_canonical::canonical_json_bytes(release_dependency)
+                .map_err(|error| AppError::internal(error.to_string()))?
+        {
             return Err(AppError::conflict(
                 "history signer evidence digest is bound to different bytes",
             ));
@@ -288,4 +292,114 @@ pub(super) fn history_service_jws(state: &AppState, binding: &[u8]) -> arkret_wi
 pub(super) fn zero_sha256_hash() -> Result<arkret_wire::Hash, AppError> {
     arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
         .map_err(|error| AppError::internal(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_models_identity::{
+        AuthenticatedServiceResolution, AuthenticatedSignerResolutionEvidence, DidDocument,
+        ResolutionDidBindingEvidenceKind, ResolutionDidBindingEvidenceReceipt,
+        ResolutionMethodEvidenceBoundary, ResolutionMethodHistoryEvidence,
+    };
+
+    use super::*;
+
+    fn service_dependency() -> GovernanceDependency {
+        let document: DidDocument = serde_json::from_value(serde_json::json!({
+            "id":"did:web:station.example",
+            "verificationMethod":[{
+                "id":"did:web:station.example#signing",
+                "controller":"did:web:station.example",
+                "type":"Multikey",
+                "publicKeyMultibase":"z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuVkhY7g94pVQyG98x"
+            }],
+            "assertionMethod":["did:web:station.example#signing"]
+        }))
+        .unwrap();
+        let document_digest =
+            arkret_models_identity::normalized_did_document_digest(&document).unwrap();
+        let head = document_digest.to_string();
+        let version = format!(
+            "synthetic-jcs-sha256:{}",
+            head.trim_start_matches("sha256:")
+        );
+        let service_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap();
+        let evidence = AuthenticatedSignerResolutionEvidence::Service {
+            signer_id: service_id.clone(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:station.example#signing".to_owned(),
+            )
+            .unwrap(),
+            authenticated_resolution: AuthenticatedServiceResolution {
+                service_id,
+                service_kind: "station".to_owned(),
+                normalized_did_document: document,
+                method_history_evidence: ResolutionMethodHistoryEvidence::DidWebDocument {
+                    boundary: ResolutionMethodEvidenceBoundary {
+                        from_method_history_head: head.clone(),
+                        to_method_history_head: head,
+                        from_version_id: version.clone(),
+                        to_version_id: version,
+                    },
+                    evidence: ResolutionDidBindingEvidenceReceipt {
+                        kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                        method: "web".to_owned(),
+                        document_digest,
+                        method_proofs: Vec::new(),
+                    },
+                },
+            },
+        };
+        GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                content_digest: evidence.canonical_sha256_digest().unwrap(),
+            },
+            authenticated_signer_resolution_evidence: Box::new(evidence),
+        }
+    }
+
+    #[test]
+    fn history_signer_dependency_reuses_identical_normalized_wire_bytes() {
+        let fresh = service_dependency();
+        let wire = arkret_canonical::canonical_json_bytes(&fresh).unwrap();
+        let retained: GovernanceDependency = serde_json::from_slice(&wire).unwrap();
+        assert_ne!(
+            fresh, retained,
+            "raw DID properties differ from the normalized projection"
+        );
+        assert_eq!(
+            arkret_canonical::canonical_json_bytes(&retained).unwrap(),
+            wire
+        );
+        assert_eq!(
+            history_response_signer_dependencies(vec![retained], &fresh)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn history_signer_dependency_rejects_same_selector_with_different_wire_bytes() {
+        let fresh = service_dependency();
+        let mut conflicting = fresh.clone();
+        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            authenticated_signer_resolution_evidence,
+            ..
+        } = &mut conflicting
+        else {
+            unreachable!()
+        };
+        let AuthenticatedSignerResolutionEvidence::Service {
+            verification_method,
+            ..
+        } = authenticated_signer_resolution_evidence.as_mut()
+        else {
+            unreachable!()
+        };
+        *verification_method =
+            arkret_wire::DidUrl::new("did:web:station.example#other".to_owned()).unwrap();
+        assert!(history_response_signer_dependencies(vec![conflicting], &fresh).is_err());
+    }
 }

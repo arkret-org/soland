@@ -1324,55 +1324,24 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             error.to_string(),
         )
     })?;
+    let peer_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
+        serde_json::from_value(serde_json::to_value(&submission.events[2].event.payload)
+            .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error.to_string()))?)
+            .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error.to_string()))?;
     let trust_domain_id = state.config().trust_domain.clone();
-    let (pair_key, founder_id, authorization_core) = match &submission.founding_authority_evidence {
-        evidence @ arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human { .. } => {
-            evidence
-                .human_pair_key_and_authorization_core(trust_domain_id.clone())
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "direct_conversation_founding_unit_invalid",
-                        error.to_string(),
-                    )
-                })?
-        }
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
-            agent_provision_ref,
-            controller_binding_digest,
-        } => {
-            let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
-                serde_json::from_value(serde_json::to_value(&submission.events[1].event.payload).map_err(|error| {
-                    SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string())
-                })?).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
-            let peer = member_payload.member_id;
-            let founder = submission.events[0].event.actor_id.clone();
-            let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
-                trust_domain_id.clone(),
-                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(founder.clone()),
-                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    peer,
-                ),
-            ).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
-            (
-                pair_key,
-                founder,
-                DirectConversationFoundingAuthorizationCore::ControllerAgent {
-                    agent_provision_ref: agent_provision_ref.clone(),
-                    controller_binding_digest: controller_binding_digest.clone(),
-                },
-            )
-        }
-    };
-    if founder_id.signing_principal_id().as_str() != session.actor
-        || submission.events[0].event.actor_id != founder_id
-    {
+    let founder_id = submission.events[0].event.actor_id.clone();
+    if founder_id.signing_principal_id().as_str() != session.actor {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "only the founder derived from the root Contact round may submit this unit",
+            "founding author differs from authenticated principal",
         ));
     }
+    let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
+        trust_domain_id.clone(),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(founder_id.clone()),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(peer_payload.member_id.clone()),
+    ).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
     if let Some(stored) = state
         .event_queries()
         .direct_conversation_founding_slot(
@@ -1405,14 +1374,84 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             receipt: stored_receipt,
         });
     }
+    let founding_authority_evidence =
+        crate::routing::identity::account::current_direct_founding_evidence(
+            state,
+            &submission.events[0].event.actor_id,
+            &peer_payload.member_id,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                error.to_string(),
+            )
+        })?;
+    let trust_domain_id = state.config().trust_domain.clone();
+    let expected_ref = founding_authority_evidence.founding_ref();
+    if !submission.events[0].event.refs.contains(&expected_ref) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "direct_conversation_founding_unit_invalid",
+            "signed founding ref differs from current accepted authority",
+        ));
+    }
+    let (pair_key, founder_id, authorization_core) = match &founding_authority_evidence {
+        evidence @ arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human { .. } => {
+            evidence
+                .human_pair_key_and_authorization_core(trust_domain_id.clone())
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "direct_conversation_founding_unit_invalid",
+                        error.to_string(),
+                    )
+                })?
+        }
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
+            agent_provision_ref,
+            controller_binding_digest,
+        } => {
+            let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
+                serde_json::from_value(serde_json::to_value(&submission.events[2].event.payload).map_err(|error| {
+                    SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string())
+                })?).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
+            let peer = member_payload.member_id;
+            let founder = submission.events[0].event.actor_id.clone();
+            let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
+                trust_domain_id.clone(),
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(founder.clone()),
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
+                    peer,
+                ),
+            ).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
+            (
+                pair_key,
+                founder,
+                DirectConversationFoundingAuthorizationCore::ControllerAgent {
+                    agent_provision_ref: agent_provision_ref.clone(),
+                    controller_binding_digest: controller_binding_digest.clone(),
+                },
+            )
+        }
+    };
+    if founder_id.signing_principal_id().as_str() != session.actor
+        || submission.events[0].event.actor_id != founder_id
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "only the founder derived from the root Contact round may submit this unit",
+        ));
+    }
     let accepted_at = now();
-    match &submission.founding_authority_evidence {
+    match &founding_authority_evidence {
         arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human {
             contact_round_evidence,
             ..
         } => {
-            let ([left, right], _) = submission
-                .founding_authority_evidence
+            let ([left, right], _) = founding_authority_evidence
                 .participants_and_founder()
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -1473,9 +1512,13 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             controller_binding_digest,
         } => {
             let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
-                serde_json::from_value(serde_json::to_value(&submission.events[1].event.payload).map_err(|error| {
+                serde_json::from_value(serde_json::to_value(&submission.events[2].event.payload).map_err(|error| {
                     SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string())
                 })?).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
+            if member_payload.agent_controller_binding.is_none() {
+                return Err(SubmitOneError::new(StatusCode::BAD_REQUEST,
+                    "direct_conversation_founding_unit_invalid", "Agent founding join requires an explicit controller generation"));
+            }
             let agent_id = member_payload.member_id;
             let agent = state
                 .agent_pairings()
@@ -1614,7 +1657,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         .iter()
         .map(|event| event.authorization_lease.clone())
         .collect::<Vec<_>>();
-    let contact_round_evidence = submission.founding_authority_evidence.clone();
+    let contact_round_evidence = founding_authority_evidence.clone();
     let ordinary_outcome = submit_realm_bootstrap_batch(
         state,
         session,
@@ -3593,7 +3636,7 @@ async fn submit_direct_conversation_federation(
         );
         return;
     }
-    let peer_actor = serde_json::to_value(&submission.events[1].event.payload).ok();
+    let peer_actor = serde_json::to_value(&submission.events[2].event.payload).ok();
     let peer_actor = serde_json::from_value::<
         arkret_models_collaboration::governance::membership_invite::MembershipPayload,
     >(peer_actor.unwrap_or(Value::Null))

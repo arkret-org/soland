@@ -1697,20 +1697,9 @@ fn validate_glare_finalize_evidence(
         "glare_concurrency_attestation",
     )?;
 
-    let mut ordered = request_receipts
-        .iter()
-        .map(|receipt| {
-            Ok((
-                receipt.core.request_event_ref.clone(),
-                super::account::canonical_contact_digest(receipt)?,
-                receipt,
-            ))
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
-    ordered.sort_by(|left, right| left.0.as_str().as_bytes().cmp(right.0.as_str().as_bytes()));
-    let [first, second] = ordered.as_slice() else {
-        unreachable!("request_receipts is a fixed pair")
-    };
+    contact_round
+        .validate_canonical_order()
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
     let local_subject_actor = request_receipts
         .iter()
         .find(|receipt| receipt.core.issuer_id.as_str() == state.service_id())
@@ -1725,23 +1714,14 @@ fn validate_glare_finalize_evidence(
             "glare contact_address.recipient does not match the local receipt holder",
         ));
     }
-    let mut pair = [
-        request_receipts[0].core.holder.contact_actor_id(),
-        request_receipts[1].core.holder.contact_actor_id(),
-    ];
-    pair.sort();
-    let expected_contact_round = ContactRound::Glare {
-        sorted_pair_member_ids: pair,
-        requests: [
-            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
-                request_event_ref: first.0.clone(),
-                request_acceptance_receipt_digest: first.1.clone(),
-            },
-            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
-                request_event_ref: second.0.clone(),
-                request_acceptance_receipt_digest: second.1.clone(),
-            },
-        ],
+    let expected_contact_round = ContactRound::glare_from_request_receipts(request_receipts)
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    let ContactRound::Glare {
+        requests: [first, second],
+        ..
+    } = &expected_contact_round
+    else {
+        unreachable!("glare constructor returns the glare branch")
     };
     if super::account::canonical_contact_digest(contact_round)?
         != super::account::canonical_contact_digest(&expected_contact_round)?
@@ -1751,9 +1731,17 @@ fn validate_glare_finalize_evidence(
         ));
     }
     if &self::contact_round_id(&expected_contact_round)? != contact_round_id
-        || attestation.request_receipt_digests != [first.1.clone(), second.1.clone()]
-        || !attestation.observed_frontier.contains(&first.0)
-        || !attestation.observed_frontier.contains(&second.0)
+        || attestation.request_receipt_digests
+            != [
+                first.request_acceptance_receipt_digest.clone(),
+                second.request_acceptance_receipt_digest.clone(),
+            ]
+        || !attestation
+            .observed_frontier
+            .contains(&first.request_event_ref)
+        || !attestation
+            .observed_frontier
+            .contains(&second.request_event_ref)
         || attestation.complete_through == 0
     {
         return Err(super::super::events::peer::schema_violation(
@@ -2171,38 +2159,6 @@ fn terminal_ack_contact_current_proof(
     Ok(proof)
 }
 
-fn mirrored_contact_current_proof(
-    state: &AppState,
-    peer: ContactPeer,
-    source: &ContactCurrentProof,
-) -> Result<ContactCurrentProof, AppError> {
-    if source.terminal {
-        return Err(AppError::internal(
-            "terminal Contact proof requires the terminal acknowledgement transcript",
-        ));
-    }
-    let created_at = now();
-    let mut proof = ContactCurrentProof {
-        contact_round_id: source.contact_round_id.clone(),
-        issuer_id: state.service_core_id(),
-        peer,
-        terminal: false,
-        head_event_ref: source.head_event_ref.clone(),
-        accepted_frontier: source.accepted_frontier.clone(),
-        complete_through: source.complete_through,
-        fresh_until: created_at + chrono::Duration::minutes(10),
-        signature: placeholder_contact_signature(state, created_at)?,
-    };
-    proof.signature = sign_contact_evidence_bytes(
-        state,
-        created_at,
-        &proof.canonical_signing_bytes().map_err(|error| {
-            AppError::internal(format!("mirrored Contact proof transcript: {error}"))
-        })?,
-    )?;
-    Ok(proof)
-}
-
 fn normal_contact_round(
     receipt: &RequestAcceptanceReceipt,
 ) -> Result<(ContactRound, Hash), AppError> {
@@ -2435,11 +2391,10 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
     };
     let mut receipts = record.request_receipts.clone();
     receipts.sort_by(|left, right| {
-        left.core
-            .request_event_ref
-            .as_str()
-            .as_bytes()
-            .cmp(right.core.request_event_ref.as_str().as_bytes())
+        arkret_models_collaboration::contact_operations::compare_contact_request_event_refs(
+            &left.core.request_event_ref,
+            &right.core.request_event_ref,
+        )
     });
     if receipts[0].core.holder.contact_actor_id() != *holder
         || receipts[0].core.peer.contact_actor_id() != *peer
@@ -2521,28 +2476,14 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
 fn derive_glare_basis(
     request_receipts: &[RequestAcceptanceReceipt; 2],
 ) -> Result<(Hash, ContactRound, [Hash; 2]), AppError> {
-    let receipt_digests = [
-        super::account::canonical_contact_digest(&request_receipts[0])?,
-        super::account::canonical_contact_digest(&request_receipts[1])?,
-    ];
-    let mut pair = [
-        request_receipts[0].core.holder.contact_actor_id().clone(),
-        request_receipts[1].core.holder.contact_actor_id().clone(),
-    ];
-    pair.sort();
-    let contact_round = ContactRound::Glare {
-        sorted_pair_member_ids: pair,
-        requests: [
-            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
-                request_event_ref: request_receipts[0].core.request_event_ref.clone(),
-                request_acceptance_receipt_digest: receipt_digests[0].clone(),
-            },
-            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
-                request_event_ref: request_receipts[1].core.request_event_ref.clone(),
-                request_acceptance_receipt_digest: receipt_digests[1].clone(),
-            },
-        ],
+    let contact_round = ContactRound::glare_from_request_receipts(request_receipts)
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    let ContactRound::Glare { requests, .. } = &contact_round else {
+        unreachable!("glare constructor returns the glare branch")
     };
+    let receipt_digests = requests
+        .each_ref()
+        .map(|request| request.request_acceptance_receipt_digest.clone());
     let contact_round_id = contact_round_id(&contact_round)?;
     Ok((contact_round_id, contact_round, receipt_digests))
 }
@@ -3775,13 +3716,22 @@ async fn project_delivered_contact_fact(
                         "ak.contact.accepted current proof has invalid contact_round or terminal state",
                     ));
                 }
-                let local_proof = mirrored_contact_current_proof(
+                // A non-terminal proof must bind this Station's own directional head.
+                // Re-signing the remote responder head would certify the wrong actor.
+                let local_proof = super::account::local_requester_current_proof(
                     state,
-                    request_receipt.core.peer.clone(),
-                    remote_proof,
-                )?;
+                    &accepted.contact_round_id,
+                    &request_receipt,
+                )
+                .await?
+                .ok_or_else(|| crate::app_error!(
+                    TemporarilyUnavailable,
+                    "accepted local Contact requester proof is unavailable",
+                ))?;
                 let mut current_proofs = vec![remote_proof.clone(), local_proof];
-                current_proofs.sort_by(|left, right| left.issuer_id.cmp(&right.issuer_id));
+                current_proofs.sort_by(|left, right| {
+                    left.peer.contact_actor_id().cmp(&right.peer.contact_actor_id())
+                });
                 contact.contact_round_evidence = Some(ContactRoundEvidenceBundle {
                     contact_round_id: accepted.contact_round_id.clone(),
                     previous_terminal_contact_round_id: request_receipt
@@ -4156,6 +4106,35 @@ mod tests {
         .expect("request receipt fixture")
     }
 
+    #[test]
+    fn glare_basis_uses_wire_order_for_both_arrival_orders_and_rejects_duplicate_refs() {
+        let first = request_receipt(
+            ALICE,
+            BOB,
+            ALICE_SERVICE,
+            "ak:event:AQ0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        let mut second = request_receipt(
+            BOB,
+            ALICE,
+            BOB_SERVICE,
+            "ak:event:AQYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        let forward = derive_glare_basis(&[first.clone(), second.clone()]).unwrap();
+        let reverse = derive_glare_basis(&[second.clone(), first.clone()]).unwrap();
+        assert_eq!(forward, reverse);
+        let ContactRound::Glare { requests, .. } = &forward.1 else {
+            unreachable!()
+        };
+        assert_eq!(requests[0].request_event_ref, first.core.request_event_ref);
+        assert_eq!(
+            forward.2[0],
+            super::super::account::canonical_contact_digest(&first).unwrap()
+        );
+        second.core.request_event_ref = first.core.request_event_ref.clone();
+        assert!(derive_glare_basis(&[first, second]).is_err());
+    }
+
     /// Cross-PS `ak.contact.requested` delivery: the projected pending_incoming
     /// row on the recipient (target holder) MUST record the *originating*
     /// requester_id's home Station as `peer_id` — the
@@ -4325,7 +4304,7 @@ mod tests {
                 .signing_principal_id()
                 .as_str(),
             ALICE,
-            "requests[0] issuer is the sole mechanical glare initiator"
+            "requests[0] signed request author is the sole mechanical glare initiator"
         );
     }
 

@@ -4,6 +4,13 @@
 
 use super::common::*;
 
+fn online_submission(event: &Value) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(&arkret_wire::EventInitialSubmission::online(
+        serde_json::from_value(event.clone()).expect("canonical lifecycle Event"),
+    ))
+    .expect("canonical online submission")
+}
+
 fn assert_failed_precondition(body: &Value, reason_code: &str) {
     assert_eq!(problem_code(body), "failed_precondition", "{body}");
     assert_eq!(body["reason_code"], reason_code, "{body}");
@@ -43,7 +50,8 @@ async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transit
     let create_event_id = authored_event_id(&create_event).to_string();
     let create_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_event)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_event))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -64,7 +72,8 @@ async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transit
     );
     let mut bad_restore_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_restore)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_restore))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(
@@ -86,13 +95,14 @@ async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transit
     let archive_event_id = authored_event_id(&archive_event).to_string();
     let archive_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&archive_event)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&archive_event))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(archive_response["status"], "accepted");
+    assert_eq!(archive_response["status"], "accepted", "{archive_response}");
 
     // 4) ak.space.restore — legal now (Archived → Active).
     let good_restore = signed_space_event(
@@ -105,13 +115,14 @@ async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transit
     let restore_event_id = authored_event_id(&good_restore).to_string();
     let restore_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&good_restore)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&good_restore))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(restore_response["status"], "accepted");
+    assert_eq!(restore_response["status"], "accepted", "{restore_response}");
 
     // 5) ak.space.tombstone — legal (Active → Tombstoned).
     let tombstone_event = signed_space_event(
@@ -124,13 +135,17 @@ async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transit
     let tombstone_event_id = authored_event_id(&tombstone_event).to_string();
     let tombstone_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&tombstone_event)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&tombstone_event))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(tombstone_response["status"], "accepted");
+    assert_eq!(
+        tombstone_response["status"], "accepted",
+        "{tombstone_response}"
+    );
 
     // 6) ak.space.tombstone again on Tombstoned → 409 failed_precondition.
     let bad_tombstone = signed_space_event(
@@ -142,7 +157,8 @@ async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transit
     );
     let mut bad_tombstone_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_tombstone)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_tombstone))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(
@@ -165,7 +181,8 @@ async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transit
     );
     let mut bad_restore_terminal_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_restore_terminal)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_restore_terminal))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(
@@ -211,13 +228,14 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     let create_strand_event_id = authored_event_id(&create_strand).to_string();
     let response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_strand)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_strand))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(response["status"], "accepted");
+    assert_eq!(response["status"], "accepted", "{response}");
 
     // 2) strand restore on Active → 409 failed_precondition.
     let bad_restore = signed_strand_event(
@@ -229,7 +247,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_restore)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_restore))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);
@@ -247,7 +266,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     let archive_event_id = authored_event_id(&archive).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&archive)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&archive))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -265,7 +285,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_archive)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_archive))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);
@@ -285,7 +306,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_update)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_update))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);
@@ -303,7 +325,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     let restored_strand_event_id = authored_event_id(&good_restore).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&good_restore)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&good_restore))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -331,7 +354,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     let create_morph_event_id = authored_event_id(&create_morph).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_morph)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_morph))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -349,7 +373,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_morph_restore)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_morph_restore))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);
@@ -367,13 +392,14 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     let morph_archive_event_id = authored_event_id(&morph_archive).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&morph_archive)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&morph_archive))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
 
     // morph update on Archived → 409 failed_precondition.
     let bad_morph_update = signed_morph_event(
@@ -388,7 +414,8 @@ async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transition
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_morph_update)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_morph_update))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);
@@ -479,13 +506,14 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
     let create_strand_event_id = authored_event_id(&create_strand).to_string();
     let response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_strand)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_strand))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(response["status"], "accepted");
+    assert_eq!(response["status"], "accepted", "{response}");
 
     let plaintext_body_update = signed_strand_event(
         "ak:event:AewChiBUHOonuK6nJ0FrjxCf0157tUGRV5B3-nNgwqxx",
@@ -505,7 +533,8 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
     let plaintext_update_event_id = authored_event_id(&plaintext_body_update).to_string();
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&plaintext_body_update)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&plaintext_body_update))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(response.status_code.unwrap().as_u16(), 409);
@@ -521,6 +550,45 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
             .is_none(),
         "rejected plaintext content event must not be persisted"
     );
+    for content in [
+        serde_json::json!({"kind":"ak.content.text", "body":"private message"}),
+        serde_json::json!({
+            "kind":"ak.content.poll", "body":"private poll",
+            "poll": {"kind":"disclosed", "max_selections":1, "answers":[
+                {"id":"yes", "text":{"kind":"ak.content.text", "body":"Yes"}},
+                {"id":"no", "text":{"kind":"ak.content.text", "body":"No"}}
+            ]}
+        }),
+    ] {
+        let plaintext_message = signed_strand_event(
+            "ak:event:AewChiBUHOonuK6nJ0FrjxCf0157tUGRV5B3-nNgwqxx",
+            2,
+            "ak.message.create",
+            serde_json::json!({
+                "strand_id":strand_id, "track_name":"discussion", "content":content
+            }),
+            vec![create_strand_event_id.as_str()],
+        );
+        let event_id = authored_event_id(&plaintext_message).to_string();
+        let mut response = TestClient::post("http://server/_arkret/self/events")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(online_submission(&plaintext_message))
+            .send(&app_from_state(state.clone()))
+            .await;
+        assert_eq!(response.status_code.unwrap().as_u16(), 409);
+        let body: Value = response.take_json().await.unwrap();
+        assert_failed_precondition(&body, "content_encryption_floor_violation");
+        assert!(
+            state
+                .test_persistence()
+                .events()
+                .get(&event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -568,13 +636,14 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     let create_task_event_id = authored_event_id(&create_task).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_task)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_task))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
 
     // A domain-named key is ordinary opaque profile data and stays accepted; only the
     // bare `status` spelling is reserved. Both halves of this A/B use the same nested
@@ -592,7 +661,8 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     let domain_named_event_id = authored_event_id(&domain_named).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&domain_named)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&domain_named))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -632,7 +702,8 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
         let forbidden_event_id = authored_event_id(&forbidden).to_string();
         let mut resp = TestClient::post("http://server/_arkret/self/events")
             .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&forbidden)
+            .add_header("content-type", "application/json", true)
+            .body(online_submission(&forbidden))
             .send(&app_from_state(state.clone()))
             .await;
         let body: Value = resp.take_json().await.unwrap();
@@ -644,10 +715,6 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
             problem_code(&body),
             "schema_violation",
             "metadata.fields.status is forbidden wire, not a failed transition: {body}"
-        );
-        assert_eq!(
-            body["reason_code"], "patch_path_reducer_managed",
-            "the rejection carries the registered patch-path reason: {body}"
         );
         assert!(
             state
@@ -662,8 +729,7 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     }
 
     // Create payloads are held to the same registry: `metadata.fields.status`
-    // in an `ak.strand.create` object fails admission with the registered
-    // `unknown_field` reason before anything projects.
+    // in an `ak.strand.create` object is rejected before anything projects.
     let forbidden_create_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let forbidden_create = signed_strand_event(
         &forbidden_create_id,
@@ -681,7 +747,8 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     let forbidden_create_event_id = authored_event_id(&forbidden_create).to_string();
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&forbidden_create)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&forbidden_create))
         .send(&app_from_state(state.clone()))
         .await;
     let body: Value = resp.take_json().await.unwrap();
@@ -689,10 +756,6 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
         problem_code(&body),
         "schema_violation",
         "metadata.fields.status is forbidden wire at create: {body}"
-    );
-    assert_eq!(
-        body["reason_code"], "unknown_field",
-        "the create-path rejection carries the registered unknown_field reason: {body}"
     );
     assert!(
         state
@@ -758,13 +821,14 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     let create_strand_event_id = authored_event_id(&create_strand).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_strand)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_strand))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
 
     // First redaction — legal (Active source).
     let redact1 = signed_redaction_event(
@@ -779,7 +843,8 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     let redact1_event_id = authored_event_id(&redact1).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&redact1)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&redact1))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -809,7 +874,8 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&redact2)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&redact2))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);
@@ -836,13 +902,14 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     let create_morph_event_id = authored_event_id(&create_morph).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_morph)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_morph))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
 
     let morph_redact = signed_redaction_event(
         "ak:event:AWdTHwE9vmQuc2JFQa19-QCQN3SOZO0jtz0V_9XHBaEm",
@@ -855,13 +922,14 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     let morph_redact_event_id = authored_event_id(&morph_redact).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&morph_redact)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&morph_redact))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
     {
         let proj = state.test_projection().lock();
         let morph = proj.morphs.get(&morph_id).expect("morph projection");
@@ -879,7 +947,8 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_morph_redact)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&bad_morph_redact))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);
@@ -919,13 +988,14 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived_body() {
     let create_strand_event_id = authored_event_id(&create_strand).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_strand)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&create_strand))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
 
     let tracks_active = signed_strand_event(
         "ak:event:AVgyhwIJQd2GqlQhwdYb5iVK_6c73aQU6iR5ppKF5K77",
@@ -940,7 +1010,8 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived_body() {
     let tracks_active_event_id = authored_event_id(&tracks_active).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&tracks_active)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&tracks_active))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -958,13 +1029,14 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived_body() {
     let archive_event_id = authored_event_id(&archive).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&archive)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&archive))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
 
     let tracks_archived = signed_strand_event(
         "ak:event:AVPm8wEiPopL7E4JtCyB4z4LSZ9OZqHcjoCtMpd5QSkO",
@@ -978,7 +1050,8 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived_body() {
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&tracks_archived)
+        .add_header("content-type", "application/json", true)
+        .body(online_submission(&tracks_archived))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 409);

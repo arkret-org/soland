@@ -177,7 +177,7 @@ pub(crate) use social::direct::{
 use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, direct_binding_conflict,
-    direct_binding_matches_projection, project_canonical_direct_binding,
+    direct_binding_matches_projection, local_requester_current_proof, project_canonical_direct_binding,
     validate_direct_binding_operation, validate_request_receipt_cryptography,
     verify_contact_service_signature, verify_contact_service_signature_bytes,
 };
@@ -658,6 +658,66 @@ async fn enforce_account_registration_policy(
         AccountRegistrationAuditOutcome::Accepted,
         None,
     )
+}
+
+pub(crate) async fn current_direct_founding_evidence(
+    state: &AppState,
+    founder: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
+) -> Result<arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence, AppError>{
+    use arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence;
+    if let Some(basis) = agent_direct_authorization_basis(
+        state,
+        founder.signing_principal_id().as_str(),
+        peer.signing_principal_id().as_str(),
+    )
+    .await?
+    {
+        for event_ref in basis.event_refs {
+            let Some(accepted) = state
+                .event_queries()
+                .accepted_event(event_ref.as_str())
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+            else {
+                continue;
+            };
+            if accepted.kind != arkret_wire::EventKind::AgentProvision.as_str() {
+                continue;
+            }
+            let payload: arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload =
+                serde_json::from_value(accepted.envelope.get("payload").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+            if payload.agent_id != *peer.signing_principal_id()
+                || payload.controller_principal_id != *founder.signing_principal_id()
+                || accepted.actor_id != founder.to_string()
+                || accepted.canonical_digest != event_ref.event_digest().as_str()
+            {
+                return Err(AppError::internal(
+                    "accepted provision does not bind the founding pair",
+                ));
+            }
+            return DirectConversationFoundingAuthorityEvidence::from_agent_provision(
+                event_ref, &payload,
+            )
+            .map_err(|error| AppError::internal(error.to_string()));
+        }
+    } else if let Some(contact) =
+        accepted_contact_for_pair(state, founder, peer, "direct_message").await?
+    {
+        if let Some(evidence) =
+            social::direct::fresh_direct_contact_evidence(state, &contact).await?
+        {
+            return Ok(DirectConversationFoundingAuthorityEvidence::Human {
+                contact_round_evidence: evidence,
+                contact_round_continuity_chains: contact.contact_round_evidence_history.clone(),
+            });
+        }
+    }
+    Err(direct_resolve_precondition(
+        arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+        "current founding evidence is unavailable",
+    ))
 }
 
 async fn agent_direct_authorization_basis(

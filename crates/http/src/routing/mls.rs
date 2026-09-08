@@ -205,7 +205,9 @@ fn trust_binding_from_keypackage(
         kp.agent_key_authorize_event_id.clone(),
         (kp.device_authorize_event_id.is_none() && kp.agent_key_authorize_event_id.is_none())
             .then(|| kp.actor_id.clone()),
-        kp.endpoint_verification_method.clone(),
+        (kp.device_authorize_event_id.is_none() && kp.agent_key_authorize_event_id.is_none())
+            .then(|| kp.endpoint_verification_method.clone())
+            .flatten(),
         "KeyPackage trust binding is invalid",
     )
 }
@@ -216,7 +218,9 @@ fn trust_binding_from_row(row: &MlsKeyPackageRow) -> Result<KeyPackageTrustBindi
         row.agent_key_authorize_event_id.clone(),
         (row.device_authorize_event_id.is_none() && row.agent_key_authorize_event_id.is_none())
             .then(|| row.actor_id.clone()),
-        row.endpoint_verification_method.clone(),
+        (row.device_authorize_event_id.is_none() && row.agent_key_authorize_event_id.is_none())
+            .then(|| row.endpoint_verification_method.clone())
+            .flatten(),
         "KeyPackage claim is missing a valid trust binding",
     )
 }
@@ -4566,7 +4570,9 @@ async fn current_keypackage_claim_trust_selector(
                 now(),
             )
             .await
-            .map_err(|_| {
+            .map_err(|error| {
+                tracing::warn!(agent_id = %principal, %realm_id, error = %error,
+                    "Agent KeyPackage claim rejected by effective membership");
                 crate::app_error!(FailedPrecondition, "Agent is not an effective Realm member",)
                     .with_reason_code("claim_generation_mismatch")
             })?;
@@ -5431,6 +5437,49 @@ mod trust_binding_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn stored_agent_endpoint_preserves_exclusive_authorization_binding() {
+        let authorization = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+        let mut row = MlsKeyPackageRow {
+            id: "keypackage-fixture".into(),
+            keypackage_ref: format!("sha256:{}", "1".repeat(64)),
+            keypackage_digest: format!("sha256:{}", "2".repeat(64)),
+            owner_account_pk: soland_storage::AccountPk(1),
+            actor_id: "ak:did_core:web:agent.example".into(),
+            device_id: None,
+            endpoint_verification_method: Some("did:web:agent.example#runtime-1".into()),
+            intended_realm_id: None,
+            key_package_bytes: vec![],
+            capabilities: vec![],
+            capabilities_digest: format!("sha256:{}", "3".repeat(64)),
+            last_resort: false,
+            last_resort_realm_id: None,
+            lifetime_not_before: 0,
+            lifetime_not_after: i64::MAX,
+            claimed_by_mls_group_id: None,
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: Some(authorization.into()),
+            claimed_at: None,
+            claim_expires_at_unix_ms: None,
+            consumed_at: None,
+            created_at: 0,
+        };
+        for binding in [
+            trust_binding_from_keypackage(&row),
+            trust_binding_from_row(&row),
+        ] {
+            let binding = binding.unwrap();
+            assert_eq!(
+                binding.agent_key_authorize_event_id.as_deref(),
+                Some(authorization)
+            );
+            assert!(binding.pairwise_verification_method.is_none());
+        }
+        row.device_authorize_event_id = Some(authorization.into());
+        assert!(trust_binding_from_keypackage(&row).is_err());
+        assert!(trust_binding_from_row(&row).is_err());
     }
 
     #[tokio::test]

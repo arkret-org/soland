@@ -1211,7 +1211,7 @@ pub(super) fn signed_current_proof(
     })
 }
 
-async fn local_requester_current_proof(
+pub(crate) async fn local_requester_current_proof(
     state: &AppState,
     contact_round_id: &Hash,
     request_receipt: &RequestAcceptanceReceipt,
@@ -1668,14 +1668,7 @@ async fn plan_contact_commit(
                 request_receipt,
             )
             .await?;
-            if record.status != "pending"
-                || record.request_event_ref.as_ref()
-                    != Some(&request_receipt.core.request_event_ref)
-            {
-                return Err(AppError::conflict(
-                    "Contact request slot is already consumed",
-                ));
-            }
+            validate_normal_response_slot(&record, &reservation.holder, request_receipt)?;
             let (contact_round, expected_contact_round_id) = normal_basis(request_receipt)?;
             if &expected_contact_round_id != contact_round_id {
                 return Err(AppError::conflict(
@@ -2481,6 +2474,41 @@ pub(super) async fn request(
     }
 }
 
+fn validate_normal_response_slot(
+    record: &soland_services::identity::ContactRecord,
+    responder: &ContactPeer,
+    request_receipt: &RequestAcceptanceReceipt,
+) -> Result<(), AppError> {
+    if record.status != "pending"
+        || record.request_event_ref.as_ref() != Some(&request_receipt.core.request_event_ref)
+    {
+        return Err(AppError::conflict(
+            "Contact request slot is already consumed",
+        ));
+    }
+    // contact_any returns the same pair row in either lookup direction. The
+    // retained receipt set, not the direction of that lookup, records whether
+    // a reverse outgoing request coexists. Check again at commit; the row CAS
+    // prevents a concurrent request from invalidating this absence proof.
+    if record.requester_id != request_receipt.core.holder.contact_actor_id()
+        || record.target_id != responder.contact_actor_id()
+        || request_receipt.core.peer != *responder
+        || record.request_receipts.len() != 1
+    {
+        return Err(AppError::conflict(
+            "normal Contact response requires one incoming request and no outgoing request slot",
+        ));
+    }
+    if canonical_contact_digest(&record.request_receipts[0])?
+        != canonical_contact_digest(request_receipt)?
+    {
+        return Err(AppError::conflict(
+            "Contact response does not match the retained request receipt",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) async fn respond(
     state: &AppState,
     session: &SessionRecord,
@@ -2498,18 +2526,8 @@ pub(super) async fn respond(
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
             validate_request_acceptance_receipt(state, &record, &holder, &body.request_receipt)
                 .await?;
+            validate_normal_response_slot(&record, &holder, &body.request_receipt)?;
             let (_, contact_round_id) = normal_basis(&body.request_receipt)?;
-            if state
-                .contacts()
-                .contact_any(&holder.contact_actor_id(), &peer.contact_actor_id())
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-                .is_some()
-            {
-                return Err(AppError::conflict(
-                    "normal Contact response requires no outgoing request slot",
-                ));
-            }
             let payload = ContactAcceptedPayload {
                 peer: peer.clone(),
                 contact_round_id: contact_round_id.clone(),
@@ -2690,6 +2708,91 @@ mod device_authorization_account_tests {
 
     fn hash(marker: char) -> Hash {
         Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap()
+    }
+
+    #[test]
+    fn normal_response_requires_the_exact_unconsumed_incoming_receipt() {
+        use soland_services::identity::ContactRecord;
+
+        use super::{RequestAcceptanceReceipt, validate_normal_response_slot};
+
+        for peer_station in [
+            "ak:did_core:web:station.example",
+            "ak:did_core:web:remote.example",
+        ] {
+            let receipt: RequestAcceptanceReceipt = serde_json::from_value(serde_json::json!({
+                "core": {
+                    "holder": {"kind":"human", "account_id": {
+                        "principal_id":"ak:did_core:web:alice.example", "station_id":peer_station
+                    }},
+                    "peer": {"kind":"human", "account_id": {
+                        "principal_id":"ak:did_core:web:bob.example", "station_id":"ak:did_core:web:station.example"
+                    }},
+                    "slot_version":1,
+                    "request_event_ref":"ak:event:AQ0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "source_checkpoint":hash('a'),
+                    "accepted_at":"2026-09-09T00:00:00.000Z",
+                    "issuer_id":peer_station
+                },
+                "receipt_digest":hash('b'),
+                "signature": {
+                    "verification_method":"did:web:station.example#signing",
+                    "created_at":"2026-09-09T00:00:00.000Z",
+                    "jws":"YWJj"
+                }
+            })).unwrap();
+            let record = ContactRecord {
+                requester_id: receipt.core.holder.contact_actor_id(),
+                target_id: receipt.core.peer.contact_actor_id(),
+                contact_round_id: None,
+                version: None,
+                granted_to_target_scopes: Vec::new(),
+                granted_to_requester_scopes: Vec::new(),
+                status: "pending".to_owned(),
+                request_event_ref: Some(receipt.core.request_event_ref.clone()),
+                request_slot_states: Vec::new(),
+                request_receipts: vec![receipt.clone()],
+                request_mirror_receipts: Vec::new(),
+                contact_round_evidence: None,
+                contact_round_evidence_history: Vec::new(),
+                control_outcomes: Vec::new(),
+                response_event_ref: None,
+                tombstone_event_ref: None,
+                message: None,
+                peer_host_id: Some(receipt.core.issuer_id.clone()),
+                peer_service_resolution: None,
+                created_at: receipt.core.accepted_at,
+                updated_at: receipt.core.accepted_at,
+            };
+            let responder = &receipt.core.peer;
+            validate_normal_response_slot(&record, responder, &receipt).unwrap();
+            assert!(
+                validate_normal_response_slot(&record, &receipt.core.holder, &receipt).is_err()
+            );
+
+            let mut reverse = receipt.clone();
+            std::mem::swap(&mut reverse.core.holder, &mut reverse.core.peer);
+            reverse.core.request_event_ref = arkret_wire::EventId::new(
+                "ak:event:AQYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            )
+            .unwrap();
+            let mut glare = record.clone();
+            glare.request_receipts.push(reverse);
+            assert!(validate_normal_response_slot(&glare, responder, &receipt).is_err());
+
+            let mut changed = record.clone();
+            changed.request_receipts[0].signature.jws =
+                super::Base64UrlString::new("ZGVm").unwrap();
+            assert!(validate_normal_response_slot(&changed, responder, &receipt).is_err());
+            changed.request_receipts.clear();
+            assert!(validate_normal_response_slot(&changed, responder, &receipt).is_err());
+
+            for status in ["accepted", "rejected", "tombstoned"] {
+                let mut consumed = record.clone();
+                consumed.status = status.to_owned();
+                assert!(validate_normal_response_slot(&consumed, responder, &receipt).is_err());
+            }
+        }
     }
 
     #[tokio::test]

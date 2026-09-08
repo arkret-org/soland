@@ -627,12 +627,7 @@ fn direct_binding_payload_from_operation(
     arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
     &'static str,
 > {
-    // The Event-to-Operation adapter deliberately exposes receiver-owned
-    // envelope context (Seal/CAS fields as well as identity/HLC fields) to
-    // reducers.  The canonical DirectConversationBoundPayload is closed, so
-    // parse the same stripped wire payload used by the schema validator.  A
-    // hand-maintained subset here regressed as soon as direct authoring began
-    // attaching `seal_ref`, `seal_basis` and `preconditions`.
+    // The adapter keeps envelope context separate from the closed wire payload.
     let payload = operation.payload.clone();
     serde_json::from_value(payload).map_err(|_| "direct_conversation_binding_invalid")
 }
@@ -879,7 +874,7 @@ async fn validate_direct_binding_event_refs(
     }
     let membership: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
         serde_json::from_value(
-            serde_json::to_value(&exact[1].payload).map_err(|_| "founding_payload")?,
+            serde_json::to_value(&exact[2].payload).map_err(|_| "founding_payload")?,
         )
         .map_err(|_| "founding_membership")?;
     if membership.member_id != *peer {
@@ -1222,6 +1217,9 @@ pub(crate) fn direct_founding_authority_from_contact(
             .contact_round_evidence_history
             .last()
             .unwrap_or(bundle);
+        root.contact_round
+            .validate_canonical_order()
+            .map_err(|_| "direct_conversation_founding_authority_unavailable")?;
         if let arkret_models_collaboration::contact_operations::ContactRound::Glare {
             requests,
             ..
@@ -1259,7 +1257,7 @@ pub(crate) fn direct_founding_authority_from_contact(
             }
             return Ok(
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthority::Glare {
-                    first_request_issuer: receipt.core.holder.contact_actor_id().clone(),
+                    first_request_author_actor_id: receipt.core.holder.contact_actor_id().clone(),
                 },
             );
         }
@@ -1270,7 +1268,7 @@ pub(crate) fn direct_founding_authority_from_contact(
         else {
             unreachable!("glare returned above")
         };
-        let request_issuer = root
+        let request_author_actor_id = root
             .request_receipts
             .iter()
             .find(|receipt| receipt.core.request_event_ref == *request_event_ref)
@@ -1278,7 +1276,7 @@ pub(crate) fn direct_founding_authority_from_contact(
             .ok_or("direct_conversation_founding_authority_unavailable")?;
         return Ok(
             arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthority::Normal {
-                request_issuer,
+                request_author_actor_id,
             },
         );
     }

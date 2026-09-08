@@ -13,7 +13,7 @@ pub(crate) use direct::{
 mod contact_write;
 
 pub(crate) use contact_write::{
-    canonical_contact_digest, validate_request_receipt_cryptography,
+    canonical_contact_digest, local_requester_current_proof, validate_request_receipt_cryptography,
     verify_contact_service_signature, verify_contact_service_signature_bytes,
 };
 

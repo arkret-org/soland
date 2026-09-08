@@ -451,16 +451,16 @@ async fn hydrate_canonical_realm_bootstraps(
     Ok(())
 }
 
-/// Rebuild Applet-managed PCR identity state from canonical Events.
+/// Rebuild Agent and Applet-managed PCR state from canonical Events.
 ///
 /// These PCRs deliberately do not enter the ordinary Realm bootstrap unit:
-/// their genesis is admitted only inside the closed Applet install/Ghost
-/// aggregate. Once accepted, however, the canonical genesis and its ordinary
+/// their genesis is admitted inside a closed Agent or Applet aggregate.
+/// Once accepted, however, the canonical genesis and its ordinary
 /// `ak.identity.resolution.update` successors are the sole source of current
 /// identity state. Replay therefore derives the same registered cells as live
-/// admission, in acceptance order, including `since_join`, while the registry
-/// condition ensures no Agent status cell is materialized.
-async fn hydrate_applet_managed_pcr_identity(
+/// admission, in acceptance order. Agent lifecycle must be restored before
+/// ordinary Realm membership is replayed; Applet PCRs never gain Agent status.
+async fn hydrate_managed_pcr_identity(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
@@ -469,36 +469,42 @@ async fn hydrate_applet_managed_pcr_identity(
     use soland_domain::reducer::ProjectionEffect;
 
     let records = persistence.events().snapshot_all().await?;
-    let mut applet_pcr_realms = BTreeSet::new();
+    let mut managed_pcr_realms = BTreeSet::new();
     for record in records
         .iter()
         .filter(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
     {
         let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
             soland_storage::PersistenceError::Internal(format!(
-                "canonical Applet PCR create failed SDK Event decode: {error}"
+                "canonical Managed PCR create failed SDK Event decode: {error}"
             ))
         })?;
         let payload = event
             .typed_payload::<arkret_wire::event_spec::RealmCreate>()
             .map_err(|error| {
                 soland_storage::PersistenceError::Internal(format!(
-                    "canonical Applet PCR create failed typed payload decode: {error}"
+                    "canonical Managed PCR create failed typed payload decode: {error}"
                 ))
             })?;
-        if payload.object.purpose == RealmPurpose::AppletManagedControl {
-            applet_pcr_realms.insert(record.realm_id.clone());
+        if matches!(
+            payload.object.purpose,
+            RealmPurpose::AppletManagedControl | RealmPurpose::AgentControl
+        ) {
+            managed_pcr_realms.insert(record.realm_id.clone());
         }
     }
 
     let mut lineage = records
         .into_iter()
         .filter(|record| {
-            applet_pcr_realms.contains(&record.realm_id)
+            managed_pcr_realms.contains(&record.realm_id)
                 && matches!(
                     arkret_wire::EventKind::from_wire(&record.kind),
                     arkret_wire::EventKind::RealmCreate
                         | arkret_wire::EventKind::IdentityResolutionUpdate
+                        | arkret_wire::EventKind::SelfAgentPause
+                        | arkret_wire::EventKind::SelfAgentResume
+                        | arkret_wire::EventKind::SelfAgentDeactivate
                 )
         })
         .collect::<Vec<_>>();
@@ -514,7 +520,7 @@ async fn hydrate_applet_managed_pcr_identity(
     for record in lineage {
         let typed = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
             soland_storage::PersistenceError::Internal(format!(
-                "Applet PCR Event {} failed SDK Event decode: {error}",
+                "Managed PCR Event {} failed SDK Event decode: {error}",
                 record.event_id
             ))
         })?;
@@ -522,7 +528,7 @@ async fn hydrate_applet_managed_pcr_identity(
             .operation_from_canonical_record(&application_canonical_event(&record))
             .ok_or_else(|| {
                 soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR Event {} cannot rebuild its projection operation",
+                    "Managed PCR Event {} cannot rebuild its projection operation",
                     record.event_id
                 ))
             })?;
@@ -533,20 +539,20 @@ async fn hydrate_applet_managed_pcr_identity(
             )
             .map_err(|error| {
                 soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR Event {} has no derivable cell contract: {error}",
+                    "Managed PCR Event {} has no derivable cell contract: {error}",
                     record.event_id
                 ))
             })?;
         match proj.apply_projected(&operation, &cell_writes, hydration_hlc) {
             ProjectionEffect::Rejected { reason } => {
                 return Err(soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR Event {} failed deterministic hydration: {reason}",
+                    "Managed PCR Event {} failed deterministic hydration: {reason}",
                     record.event_id
                 )));
             }
             ProjectionEffect::Ignored => {
                 return Err(soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR Event {} was ignored during deterministic hydration",
+                    "Managed PCR Event {} was ignored during deterministic hydration",
                     record.event_id
                 )));
             }
@@ -555,7 +561,12 @@ async fn hydrate_applet_managed_pcr_identity(
         if typed.kind == arkret_wire::EventKind::RealmCreate {
             genesis_by_realm.insert(typed.realm_id.clone(), typed.clone());
         }
-        current_by_realm.insert(typed.realm_id.clone(), typed);
+        if matches!(
+            typed.kind,
+            arkret_wire::EventKind::RealmCreate | arkret_wire::EventKind::IdentityResolutionUpdate
+        ) {
+            current_by_realm.insert(typed.realm_id.clone(), typed);
+        }
     }
 
     // Repair the durable read index from the same canonical lineage. This is
@@ -568,7 +579,7 @@ async fn hydrate_applet_managed_pcr_identity(
             .cloned()
             .ok_or_else(|| {
                 soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR {} has no canonical genesis during hydration",
+                    "Managed PCR {} has no canonical genesis during hydration",
                     pcr_realm_id
                 ))
             })?;
@@ -577,13 +588,13 @@ async fn hydrate_applet_managed_pcr_identity(
             .cloned()
             .ok_or_else(|| {
                 soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR {} did not materialize current resolution during hydration",
+                    "Managed PCR {} did not materialize current resolution during hydration",
                     pcr_realm_id
                 ))
             })?;
         let projection = serde_json::from_value(projection_value).map_err(|error| {
             soland_storage::PersistenceError::Internal(format!(
-                "Applet PCR {} materialized invalid resolution: {error}",
+                "Managed PCR {} materialized invalid resolution: {error}",
                 pcr_realm_id
             ))
         })?;
@@ -606,7 +617,7 @@ async fn hydrate_applet_managed_pcr_identity(
             .cloned()
             .ok_or_else(|| {
                 soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR {} genesis actor is not an AccountId",
+                    "Managed PCR {} genesis actor is not an AccountId",
                     pcr_realm_id
                 ))
             })?;
@@ -628,7 +639,7 @@ async fn hydrate_applet_managed_pcr_identity(
                 if record.current_event.event_id == expected_current_event_id => {}
             soland_storage::PrincipalResolutionCasResult::Conflict(_) => {
                 return Err(soland_storage::PersistenceError::Internal(format!(
-                    "Applet PCR {} read-index repair CAS conflict",
+                    "Managed PCR {} read-index repair CAS conflict",
                     pcr_realm_id
                 )));
             }
@@ -767,9 +778,8 @@ pub async fn hydrate_projections_from_persistence(
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
 
+    hydrate_managed_pcr_identity(persistence, proj, &hydration_hlc, projection_adapter).await?;
     hydrate_canonical_realm_bootstraps(persistence, proj, &hydration_hlc, projection_adapter)
-        .await?;
-    hydrate_applet_managed_pcr_identity(persistence, proj, &hydration_hlc, projection_adapter)
         .await?;
     hydrate_canonical_realm_memberships(persistence, proj, projection_adapter).await?;
     hydrate_sidecar_projections(persistence, proj, &hydration_hlc).await?;

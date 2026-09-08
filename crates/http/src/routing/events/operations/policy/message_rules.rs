@@ -105,6 +105,11 @@ pub(super) fn operation_target_scope_circle_id(
             relation_scope("relation_id").or_else(|| relation_scope("target_ref"))
         }
         arkret_wire::EventKind::MessageCreate => strand_scope("strand_id"),
+        arkret_wire::EventKind::MessageRevise => {
+            let message_id = operation.payload.get("message_id")?.as_str()?;
+            let (_, _, strand_id) = projection.message_origin(message_id)?;
+            projection.strand_scope_circle_id(&strand_id)
+        }
         arkret_wire::EventKind::StrandUpdate => strand_scope("target_ref"),
         arkret_wire::EventKind::MorphUpdate
         | arkret_wire::EventKind::MorphArchive
@@ -565,10 +570,20 @@ pub async fn validate_content_encryption_floor(
             }
             _ => {}
         }
-        if strand_operation_carries_plaintext_private_content(operation)
-            && realm_content_floor_requires_e2ee(state, operation.realm_id.as_str())
-        {
-            return Err(CONTENT_ENCRYPTION_FLOOR_VIOLATION);
+        if operation_carries_plaintext_private_content(operation) {
+            let circle_requires_e2ee = {
+                let projection = state.projections().snapshot();
+                operation_target_scope_circle_id(&projection, operation)
+                    .and_then(|circle_id| projection.circle(&circle_id))
+                    .is_some_and(|circle| {
+                        circle.content_encryption_floor.as_deref() == Some("e2ee_required")
+                    })
+            };
+            if circle_requires_e2ee
+                || realm_content_floor_requires_e2ee(state, operation.realm_id.as_str())
+            {
+                return Err(CONTENT_ENCRYPTION_FLOOR_VIOLATION);
+            }
         }
     }
     Ok(())

@@ -104,8 +104,11 @@ fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
         .is_some_and(|object| object.contains_key(field))
 }
 
-pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
+pub(crate) fn operation_carries_plaintext_private_content(operation: &Operation) -> bool {
     match kinds::canonical_kind_for_operation(operation) {
+        Some(arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise) => {
+            operation.payload.get("content").is_some()
+        }
         Some(arkret_wire::EventKind::StrandCreate) => [
             &["synthesis"][..],
             &["object", "synthesis"][..],
@@ -196,12 +199,7 @@ fn patch_touches_plaintext_content_path(payload: &Value, private_paths: &[&str])
 }
 
 pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
-    operation
-        .payload
-        .get("encrypted")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
-        || operation.payload.get("encrypted_content").is_some()
+    operation.payload.get("encrypted_content").is_some()
 }
 
 pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &str) -> bool {

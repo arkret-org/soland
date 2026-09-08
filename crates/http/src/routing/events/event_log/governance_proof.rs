@@ -1270,7 +1270,11 @@ fn insert_checkpoint_dependency(
         .map(|(kind, bytes)| (kind.to_owned(), bytes))
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(previous) = dependencies.get(&key) {
-        if previous != &item {
+        if canonical::canonical_json_bytes(previous)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != canonical::canonical_json_bytes(&item)
+                .map_err(|error| AppError::internal(error.to_string()))?
+        {
             return Err(proof_state_error(
                 "one governance dependency selector resolves to different bytes",
             ));

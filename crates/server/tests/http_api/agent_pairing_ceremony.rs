@@ -793,7 +793,7 @@ async fn verify_owned_agent_direct_founding(
     token: &str,
     controller: &str,
     resolve_request: &arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody,
-    evidence: Value,
+    _evidence: Value,
 ) {
     use arkret_models_collaboration::direct_conversation_ops::*;
     use arkret_models_collaboration::objects::direct_conversation::*;
@@ -804,15 +804,14 @@ async fn verify_owned_agent_direct_founding(
     let founder =
         arkret_wire::AccountId::new(fixture_actor_core_id(controller), state.service_core_id());
     let peer = resolve_request.peer.contact_actor_id();
-    let created_at = chrono::Utc::now();
-    let create_payload = direct_conversation_realm_create_payload(
-        arkret_wire::GenesisSalt::generate().unwrap(),
-        state.config().trust_domain.clone(),
-        arkret_wire::NotaryValue::single_signer(state.service_notary_signer_descriptor().unwrap()),
-        created_at,
-    )
-    .unwrap();
+    let evidence: DirectConversationFoundingAuthorityEvidence =
+        serde_json::from_value(_evidence.clone()).unwrap();
+    let founding_ref = evidence.founding_ref();
     let sign = |mut event: arkret_wire::Event| {
+        event
+            .refs
+            .retain(|reference| reference.role != founding_ref.role);
+        event.refs.push(founding_ref.clone());
         event.proofs.clear();
         sign_fixture_event(
             event,
@@ -821,100 +820,256 @@ async fn verify_owned_agent_direct_founding(
             super::agents::CONTROLLER_DEVICE_SIGNING_SEED,
         )
     };
-    let create = sign(
-        CallerSignedEvent::realm_genesis(
-            controller,
-            super::agents::CONTROLLER_DEVICE_ID,
-            serde_json::to_value(create_payload).unwrap(),
+    let make_submission = || {
+        let created_at = chrono::Utc::now();
+        let create_payload = direct_conversation_realm_create_payload(
+            arkret_wire::GenesisSalt::generate().unwrap(),
+            state.config().trust_domain.clone(),
+            arkret_wire::NotaryValue::single_signer(
+                state.service_notary_signer_descriptor().unwrap(),
+            ),
+            created_at,
         )
-        .with_preconditions(vec![head_eq_precondition(
-            &arkret_wire::null_subject_cell(arkret_wire::CellFamilyId::REALM_CREATE_V1),
-            Value::Null,
-        )])
-        .build(),
-    );
-    let realm_id = arkret_wire::RealmId::from_event_id(&create.event_id);
-    let peer_account = peer.as_account_id().unwrap();
-    let payloads = [
-        (
-            "ak.member.state",
-            serde_json::to_value(
-                direct_conversation_peer_membership_bootstrap(
+        .unwrap();
+        let create = sign(
+            CallerSignedEvent::realm_genesis(
+                controller,
+                super::agents::CONTROLLER_DEVICE_ID,
+                serde_json::to_value(create_payload).unwrap(),
+            )
+            .with_preconditions(vec![head_eq_precondition(
+                &arkret_wire::null_subject_cell(arkret_wire::CellFamilyId::REALM_CREATE_V1),
+                Value::Null,
+            )])
+            .build(),
+        );
+        let realm_id = arkret_wire::RealmId::from_event_id(&create.event_id);
+        let peer_account = peer.as_account_id().unwrap();
+        let payloads = [
+            (
+                "ak.member.state",
+                serde_json::to_value(direct_conversation_member_join_payload(
                     realm_id.clone(),
-                    &founder,
-                    [founder.clone(), peer_account.clone()],
+                    founder.clone(),
+                ))
+                .unwrap(),
+                Some(arkret_wire::ActorId::account(founder.clone())),
+            ),
+            (
+                "ak.member.state",
+                serde_json::to_value(
+                    direct_conversation_peer_membership_bootstrap(
+                        realm_id.clone(),
+                        &founder,
+                        [founder.clone(), peer_account.clone()],
+                    )
+                    .unwrap(),
                 )
                 .unwrap(),
+                Some(peer.clone()),
+            ),
+            (
+                "ak.strand.create",
+                serde_json::to_value(direct_conversation_main_strand_create_payload(
+                    realm_id.clone(),
+                    arkret_wire::ActorId::account(founder.clone()),
+                    created_at,
+                ))
+                .unwrap(),
+                None,
+            ),
+        ];
+        let mut events = vec![create];
+        for (index, (kind, mut payload, member)) in payloads.into_iter().enumerate() {
+            if index == 1 {
+                payload["agent_controller_binding"] = serde_json::to_value(
+                arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
+                    controller_account_id: founder.clone(),
+                    controller_membership_generation_ref: events[1].event_id.clone(),
+                    controller_terminal_event_ref: None,
+                }).unwrap();
+            }
+            let previous = events.last().unwrap().event_id.to_string();
+            let mut builder = CallerSignedEvent::new(
+                kind,
+                controller,
+                super::agents::CONTROLLER_DEVICE_ID,
+                realm_id.as_str(),
+                payload,
             )
-            .unwrap(),
-            Some(peer.clone()),
-        ),
-        (
-            "ak.strand.create",
-            serde_json::to_value(direct_conversation_main_strand_create_payload(
-                realm_id.clone(),
-                arkret_wire::ActorId::account(founder.clone()),
-                created_at,
-            ))
-            .unwrap(),
-            None,
-        ),
-        (
-            "ak.member.state",
-            serde_json::to_value(direct_conversation_member_join_payload(
-                realm_id.clone(),
-                founder.clone(),
-            ))
-            .unwrap(),
-            Some(arkret_wire::ActorId::account(founder)),
-        ),
-    ];
-    let mut events = vec![create];
-    for (index, (kind, payload, member)) in payloads.into_iter().enumerate() {
-        let previous = events.last().unwrap().event_id.to_string();
-        let mut builder = CallerSignedEvent::new(
-            kind,
-            controller,
-            super::agents::CONTROLLER_DEVICE_ID,
-            realm_id.as_str(),
-            payload,
-        )
-        .with_actor_seq((index + 1) as u64)
-        .with_prev_refs(vec![&previous])
-        .with_basis(CallerSignedBasis::AnchorUnit);
-        if let Some(member) = member {
-            builder = builder.with_preconditions(vec![head_eq_precondition(
-                &format!(
-                    "ak:cell:ak.component.member.state.v1:{}",
-                    arkret_wire::composite_subject(&[member.canonical_key().unwrap()]).unwrap()
-                ),
-                Value::Null,
-            )]);
+            .with_actor_seq((index + 1) as u64)
+            .with_prev_refs(vec![&previous])
+            .with_basis(CallerSignedBasis::AnchorUnit);
+            if let Some(member) = member {
+                builder = builder.with_preconditions(vec![head_eq_precondition(
+                    &format!(
+                        "ak:cell:ak.component.member.state.v1:{}",
+                        arkret_wire::composite_subject(&[member.canonical_key().unwrap()]).unwrap()
+                    ),
+                    Value::Null,
+                )]);
+            }
+            events.push(sign(builder.build()));
         }
-        events.push(sign(builder.build()));
-    }
-    let submission = DirectConversationFoundingUnitSubmission {
-        unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
-        idempotency_key: arkret_wire::IdempotencyKey::new(uuid::Uuid::now_v7().to_string())
-            .unwrap(),
-        events: events
-            .into_iter()
-            .map(arkret_wire::EventInitialSubmission::online)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap(),
-        founding_authority_evidence: serde_json::from_value(evidence).unwrap(),
-        cbs_proof_bundles: Vec::new(),
+        DirectConversationFoundingUnitSubmission {
+            unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
+            idempotency_key: arkret_wire::IdempotencyKey::new(uuid::Uuid::now_v7().to_string())
+                .unwrap(),
+            events: events
+                .into_iter()
+                .map(arkret_wire::EventInitialSubmission::online)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+            cbs_proof_bundles: Vec::new(),
+        }
     };
-    let mut accepted = TestClient::post("http://server/_arkret/self/events")
+    let mut submission = make_submission();
+    let mut realm_id = arkret_wire::RealmId::from_event_id(&submission.events[0].event.event_id);
+    // Each negative case is independently signed and preserves the forward chain.
+    for mutation in ["missing_binding", "wrong_generation", "old_order"] {
+        let mut rejected = submission.clone();
+        match mutation {
+            "missing_binding" => {
+                rejected.events[2]
+                    .event
+                    .payload
+                    .remove("agent_controller_binding");
+            }
+            "wrong_generation" => {
+                let wrong_ref = serde_json::to_value(&rejected.events[0].event.event_id).unwrap();
+                rejected.events[2]
+                    .event
+                    .payload
+                    .get_mut("agent_controller_binding")
+                    .unwrap()["controller_membership_generation_ref"] = wrong_ref;
+            }
+            "old_order" => {
+                rejected.events.swap(1, 2);
+                rejected.events.swap(2, 3);
+            }
+            _ => unreachable!(),
+        }
+        for index in 1..4 {
+            rejected.events[index].event.actor_seq = index as u64;
+            rejected.events[index].event.prev_refs =
+                vec![rejected.events[index - 1].event.event_id.clone()];
+            rejected.events[index].event = sign(rejected.events[index].event.clone());
+        }
+        let mut response = TestClient::post("http://server/_arkret/self/events")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&rejected).unwrap())
+            .send(&app)
+            .await;
+        let status = response.status_code;
+        let error: Value = response.take_json().await.unwrap();
+        assert_eq!(status, Some(StatusCode::BAD_REQUEST), "{mutation}: {error}");
+        assert!(
+            state
+                .test_projections()
+                .snapshot()
+                .member(realm_id.as_str(), &peer.to_string())
+                .is_none(),
+            "rejected founding must not partially publish membership"
+        );
+    }
+    let mut legacy = serde_json::to_value(&submission).unwrap();
+    legacy["founding_authority_evidence"] = _evidence.clone();
+    assert!(serde_json::from_value::<DirectConversationFoundingUnitSubmission>(legacy).is_err());
+    let contender = make_submission();
+    let contender_realm = arkret_wire::RealmId::from_event_id(&contender.events[0].event.event_id);
+    assert_ne!(realm_id, contender_realm);
+    let left = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&submission).unwrap())
+        .send(&app);
+    let right = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&contender).unwrap())
+        .send(&app);
+    let (left, right) = tokio::join!(left, right);
+    let (mut accepted, mut rejected, rejected_realm) = if left.status_code == Some(StatusCode::OK) {
+        (left, right, contender_realm)
+    } else {
+        let rejected_realm = realm_id;
+        realm_id = contender_realm;
+        submission = contender;
+        (right, left, rejected_realm)
+    };
+    let status = accepted.status_code;
+    let body: Value = accepted.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "{body}");
+    assert!(body["receipt"].is_object(), "{body}");
+    assert_eq!(body["event_ids"].as_array().unwrap().len(), 4);
+    let rejected_status = rejected.status_code;
+    let rejected_body: Value = rejected.take_json().await.unwrap();
+    assert_eq!(
+        rejected_status,
+        Some(StatusCode::CONFLICT),
+        "{rejected_body}"
+    );
+    assert!(
+        state
+            .test_projections()
+            .snapshot()
+            .member(rejected_realm.as_str(), &peer.to_string())
+            .is_none(),
+        "the losing Realm must not publish membership"
+    );
+    let mut replay = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&submission).unwrap())
         .send(&app)
         .await;
-    let status = accepted.status_code;
-    let body: Value = accepted.take_json().await.unwrap();
-    assert_eq!(status, Some(StatusCode::OK), "{body}");
+    assert_eq!(replay.status_code, Some(StatusCode::OK));
+    let replay_body: Value = replay.take_json().await.unwrap();
+    assert_eq!(replay_body["receipt"], body["receipt"]);
+    assert_eq!(replay_body["event_ids"], body["event_ids"]);
+    let projection = state.test_projections().snapshot();
+    let binding = projection
+        .agent_membership_binding(realm_id.as_str(), &peer.to_string())
+        .expect("atomic Agent founding must bind the controller join generation");
+    assert_eq!(binding.controller_account_id, founder);
+    assert_eq!(
+        binding.controller_membership_generation_ref,
+        submission.events[1].event.event_id
+    );
+    assert!(projection.effective_agent_membership_base(realm_id.as_str(), &peer.to_string()));
+    let mut changed = projection.clone();
+    changed
+        .members
+        .get_mut(&(
+            realm_id.to_string(),
+            arkret_wire::ActorId::account(founder.clone()).to_string(),
+        ))
+        .unwrap()
+        .membership_event_ref = Some(submission.events[0].event.event_id.to_string());
+    assert!(
+        !changed.effective_agent_membership_base(realm_id.as_str(), &peer.to_string()),
+        "a different controller join generation must not revive the founding Agent membership"
+    );
+    drop(projection);
+    state
+        .hydrate()
+        .await
+        .expect("restart hydration must restore Agent PCR and membership");
+    let restarted = state.test_projections().snapshot();
+    assert!(
+        restarted.effective_agent_membership_base(realm_id.as_str(), &peer.to_string()),
+        "Agent membership must remain effective after a full restart hydration"
+    );
+    assert_eq!(
+        restarted
+            .agent_membership_binding(realm_id.as_str(), &peer.to_string())
+            .unwrap()
+            .controller_membership_generation_ref,
+        submission.events[1].event.event_id
+    );
+    drop(restarted);
     let mut resolved = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
