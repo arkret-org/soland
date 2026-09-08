@@ -13,7 +13,7 @@ use arkret_state::mls_governance_proof::{
 };
 #[cfg(test)]
 use arkret_state::state::compute_state_root;
-use arkret_state::state::{BottomMode, control_event_set_root};
+use arkret_state::state::{EventCellBottom, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cbs::LatticeOp;
 use arkret_wire::cbs::LatticeOpType;
@@ -1682,7 +1682,7 @@ async fn join_control_state_batches(
         // — plus an impossible Bottom from an inert lattice — fail closed.
         // Rejecting every Bottom here lets one ambiguous, unrelated selector
         // poison all later controller-PCR authorization and Seal material.
-        if matches!(resolved, CellState::Bottom(_)) && bottom_mode != BottomMode::Expose {
+        if matches!(resolved, CellState::Bottom(_)) && bottom_mode != EventCellBottom::Expose {
             return Err(crate::app_error!(
                 StateMismatch,
                 format!("governance cell {cell} is in Bottom state"),

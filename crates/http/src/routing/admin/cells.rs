@@ -161,11 +161,7 @@ async fn admin_get_cell(
         .resolve_cell(&realm, &cell_ref)
         .map_err(|e| crate::app_error!(NotFound, format!("cell family not registered: {e}"),))?;
     let lattice_kind = binding.lattice.kind().as_wire_str();
-    let bottom_policy = match binding.bottom_mode {
-        arkret_state::state::BottomMode::Reject => "reject",
-        arkret_state::state::BottomMode::Expose => "expose",
-        arkret_state::state::BottomMode::Inert => "inert",
-    };
+    let bottom_policy = binding.bottom_mode.as_str();
 
     let cell_state_opt = {
         let proj = state.projections().snapshot();
@@ -272,11 +268,7 @@ async fn admin_list_cells(
             }
         };
         let lattice_kind = binding.lattice.kind().as_wire_str();
-        let bottom_policy = match binding.bottom_mode {
-            arkret_state::state::BottomMode::Reject => "reject",
-            arkret_state::state::BottomMode::Expose => "expose",
-            arkret_state::state::BottomMode::Inert => "inert",
-        };
+        let bottom_policy = binding.bottom_mode.as_str();
         cells_out.push(state_response_from(
             &cell,
             cell_state.as_ref(),

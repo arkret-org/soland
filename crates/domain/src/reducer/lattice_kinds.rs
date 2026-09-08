@@ -13,7 +13,7 @@ use arkret_lattice_registry::{
     lattice_bindings_for_sdk_registry, try_build_sdk_cell_registry,
 };
 use arkret_state::lattice::LatticeKind;
-use arkret_state::state::{BottomMode, CellRegistry, MemoryCellRegistry};
+use arkret_state::state::{CellRegistry, EventCellBottom, MemoryCellRegistry};
 
 /// Closed shared-FSM family count in the canonical v1 contract.
 ///
@@ -42,7 +42,9 @@ pub fn try_build_validated_sdk_cell_registry() -> Result<MemoryCellRegistry, Con
                 contract.cell_family
             ))
         })?;
-        if binding.lattice.kind() != LatticeKind::Fsm || binding.bottom_mode != BottomMode::Reject {
+        if binding.lattice.kind() != LatticeKind::Fsm
+            || binding.bottom_mode != EventCellBottom::Reject
+        {
             return Err(ContractRegistryError::Invalid(format!(
                 "shared FSM {} resolved with {:?}/{:?}, expected fsm/reject",
                 contract.cell_family,
@@ -121,7 +123,7 @@ mod tests {
     #[test]
     fn registry_register_and_lookup_works() {
         use arkret_lattice_registry::{
-            BottomPolicy, ComponentDescriptor, Criticality, LatticeRegistry,
+            ComponentDescriptor, Criticality, EventCellBottom, LatticeRegistry,
         };
 
         struct ConsentCell;
@@ -132,8 +134,8 @@ mod tests {
             fn lattice(&self) -> LatticeKind {
                 LatticeKind::OrSet
             }
-            fn bottom_policy(&self) -> BottomPolicy {
-                BottomPolicy::Reject
+            fn bottom_policy(&self) -> EventCellBottom {
+                EventCellBottom::Reject
             }
             fn component(&self) -> ComponentDescriptor {
                 ComponentDescriptor {
@@ -149,7 +151,7 @@ mod tests {
         assert_eq!(registry.len(), 1);
         let found = registry.lookup("ak.component.consent.v1").unwrap();
         assert_eq!(found.lattice(), LatticeKind::OrSet);
-        assert_eq!(found.bottom_policy(), BottomPolicy::Reject);
+        assert_eq!(found.bottom_policy(), EventCellBottom::Reject);
         assert_eq!(found.bottom_policy().as_str(), "reject");
         assert!(registry.lookup("ak.component.unknown.v1").is_none());
     }
