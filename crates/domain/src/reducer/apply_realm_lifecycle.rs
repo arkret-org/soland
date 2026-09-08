@@ -1529,13 +1529,6 @@ impl ProjectionState {
     /// Spec `realm-and-space.md` §2.5.1:
     ///   ¶6 child Space-container placement (same Realm) → mark
     ///      `realm_destroyed_orphan` (locked read-only projection).
-    ///   ¶6 cross-Realm `parent_ref` edge pointing at a Space inside
-    ///      the destroyed Realm → mark the *referencing* container's
-    ///      `parent_ref_locked = true` (Stream-F Wave 2C). The
-    ///      referencing Space stays alive in its OWN Realm; only the
-    ///      parent edge is downgraded so membership / capability /
-    ///      history / E2EE / retention stops propagating across the
-    ///      destroy frontier.
     /// AKP-0007: `Strand.discussion_realm_ref` is a removed wire field.
     /// Intra-Realm discussion boundaries now live on a Circle
     /// (`scope_circle_id`) and never cross the Realm frontier, so no
@@ -1557,52 +1550,6 @@ impl ProjectionState {
             }
         }
 
-        // ¶6 cross-Realm parent_ref lazy-link downgrade (Stream-F
-        // Wave 2C). Spec realm-and-space.md §2.5.1 ¶6.
-        //
-        // For every Space across ALL Realms, check whether its
-        // `parent_ref` resolves to a Space whose home Realm is the
-        // destroyed one. The destroyed Realm's own children are
-        // already covered by the `orphaned` pass above; this loop
-        // catches the *cross-Realm* edges that target a Space
-        // hosted inside the destroyed Realm. Containers stay alive
-        // in their own Realms — only the navigation edge is locked.
-        //
-        // We first snapshot the parent_id lookup so we can mutate
-        // the same map without re-borrowing it.
-        let parent_home_realms: std::collections::BTreeMap<String, String> = self
-            .space_containers
-            .iter()
-            .map(|(id, c)| (id.clone(), c.realm_id.clone()))
-            .collect();
-        let mut parent_lock_count = 0_usize;
-        for container in self.space_containers.values_mut() {
-            if container.parent_ref_locked {
-                continue; // already locked by an earlier destroy frontier
-            }
-            // Only consider cross-Realm parent edges (same-Realm
-            // children of the destroyed Realm are already marked
-            // orphaned above; their parent_ref_locked status is
-            // implied by the orphaned flag).
-            if container.realm_id == destroyed_realm_id {
-                continue;
-            }
-            let Some(parent_id) = container.parent_ref.as_ref() else {
-                continue;
-            };
-            // Resolve the parent's home Realm. If the parent isn't
-            // in the projection (federated / not yet replicated),
-            // we can't downgrade — leave it for the federation
-            // backfill path to catch on next replay.
-            let Some(parent_home) = parent_home_realms.get(parent_id) else {
-                continue;
-            };
-            if parent_home == destroyed_realm_id {
-                container.parent_ref_locked = true;
-                parent_lock_count += 1;
-            }
-        }
-
         // AKP-0007: no cross-Realm discussion edges to sever — Circles
         // are intra-Realm and `ak.realm.destroy` already tombstones their
         // parent Realm; further Circle writes fall under the terminal
@@ -1611,7 +1558,6 @@ impl ProjectionState {
         tracing::info!(
             destroyed_realm_id = %destroyed_realm_id,
             orphaned_space_containers = orphaned_count,
-            cross_realm_parent_refs_locked = parent_lock_count,
             "stream-F realm.destroy cascade applied"
         );
     }

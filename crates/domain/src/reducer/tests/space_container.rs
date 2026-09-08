@@ -37,88 +37,78 @@ fn seed_realm_member(state: &mut ProjectionState, realm_id: &str, member: &str) 
     );
 }
 
-/// Stream-F (Wave 2C) — spec `realm-and-space.md` §2.5.1 ¶6.
-/// `ak.realm.destroy` on Realm A must mark cross-Realm child
-/// Spaces in Realm B (whose `parent_ref` points at a Space hosted
-/// inside Realm A) with `parent_ref_locked = true`. The child
-/// Space in Realm B stays alive (it's only the parent edge that
-/// gets downgraded to a locked / lazy link).
 #[test]
-fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
+fn space_structure_rejects_cross_realm_and_protects_archived_children() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_a = "ak:realm:ATYL-87CDhaLQem29G2JQCXbZ_8zuu7khej2MbrsGLK6";
-    let realm_b = "ak:realm:AS1N4QnbZ6JgVObAF-yTx1GWoK2XnO_vUaZ2qe0WCyQV";
-    let parent_in_a = "ak:space:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
-    let child_in_b = "ak:space:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1";
-    // Container hosted inside Realm A (the to-be-destroyed Realm).
-    state.apply(
-        &make_operation(
+    let realm = "ak:realm:ATYL-87CDhaLQem29G2JQCXbZ_8zuu7khej2MbrsGLK6";
+    let other = "ak:realm:AS1N4QnbZ6JgVObAF-yTx1GWoK2XnO_vUaZ2qe0WCyQV";
+    let parent = "ak:space:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+    let child = "ak:space:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1";
+    let create = |id: &str, realm: &str, parent: Option<&str>| {
+        make_operation(
             arkret_wire::EventKind::SpaceCreate,
-            realm_a,
-            serde_json::json!({
-                "object": {
-                    "id": parent_in_a,
-                    "realm_id": realm_a,
-                    "kind": "folder",
-                    "title": "Parent in Realm A",
-                }
-            }),
-        ),
-        &hlc,
+            realm,
+            serde_json::json!({"object": {"id":id,"realm_id":realm,"kind":"folder","title":"Space","parent_space_id":parent}}),
+        )
+    };
+    assert!(matches!(
+        state.apply(&create(parent, realm, None), &hlc),
+        ProjectionEffect::SpaceContainerLifecycle { .. }
+    ));
+    assert!(
+        matches!(state.apply(&create(child,other,Some(parent)),&hlc), ProjectionEffect::Rejected { reason } if reason == "space_realm_mismatch")
     );
-    // Container hosted inside Realm B whose parent_ref points at
-    // the Realm-A container.
+    assert!(!state.space_containers.contains_key(child));
+    assert!(matches!(
+        state.apply(&create(child, realm, Some(parent)), &hlc),
+        ProjectionEffect::SpaceContainerLifecycle { .. }
+    ));
+    let tombstone = make_operation(
+        arkret_wire::EventKind::SpaceTombstone,
+        realm,
+        serde_json::json!({"space_id":parent}),
+    );
+    for archived in [false, true] {
+        if archived {
+            state.apply(
+                &make_operation(
+                    arkret_wire::EventKind::SpaceArchive,
+                    realm,
+                    serde_json::json!({"space_id":child}),
+                ),
+                &hlc,
+            );
+        }
+        assert_eq!(
+            state.check_space_container_lifecycle_transition(&tombstone),
+            Err("space_has_live_dependents")
+        );
+        assert!(
+            matches!(state.apply(&tombstone,&hlc), ProjectionEffect::Rejected { reason } if reason == "space_has_live_dependents")
+        );
+        assert_eq!(
+            state.space_containers[parent].state,
+            SpaceContainerLifecycleState::Active
+        );
+    }
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::SpaceCreate,
-            realm_b,
-            serde_json::json!({
-                "object": {
-                    "id": child_in_b,
-                    "realm_id": realm_b,
-                    "kind": "folder",
-                    "title": "Child in Realm B",
-                    "parent_space_id": parent_in_a,
-                }
-            }),
+            arkret_wire::EventKind::SpaceTombstone,
+            realm,
+            serde_json::json!({"space_id":child}),
         ),
         &hlc,
     );
-
-    // Pre-condition: neither container is locked.
-    let child_pre = state.space_containers.get(child_in_b).unwrap();
-    assert!(!child_pre.parent_ref_locked);
-    assert!(!child_pre.orphaned);
-
-    // Destroy Realm A.
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::RealmDestroy,
-            realm_a,
-            serde_json::json!({"action": "destroy"}),
-        ),
-        &hlc,
-    );
-
-    // Post-condition: child in Realm B has parent_ref_locked=true
-    // but is NOT marked orphaned (it lives in Realm B, which is
-    // still active).
-    let child_post = state.space_containers.get(child_in_b).unwrap();
+    assert!(matches!(
+        state.apply(&tombstone, &hlc),
+        ProjectionEffect::SpaceContainerLifecycle {
+            new_state: SpaceContainerLifecycleState::Tombstoned,
+            ..
+        }
+    ));
     assert!(
-        child_post.parent_ref_locked,
-        "cross-Realm parent_ref must be locked after parent's home Realm is destroyed"
-    );
-    assert!(
-        !child_post.orphaned,
-        "child Space in Realm B is NOT orphaned — only its parent edge is downgraded"
-    );
-    // The same-Realm container in Realm A IS orphaned by the
-    // existing ¶6 same-realm cascade.
-    let parent_post = state.space_containers.get(parent_in_a).unwrap();
-    assert!(
-        parent_post.orphaned,
-        "container hosted in destroyed Realm A must be orphaned"
+        matches!(state.apply(&create(child,realm,Some(parent)),&hlc), ProjectionEffect::Rejected { reason } if reason == "space_not_active")
     );
 }
 
@@ -599,7 +589,7 @@ fn space_container_child_order_tracks_rank_updates() {
 }
 
 #[test]
-fn list_archive_and_restore_preserve_card_lifecycle_and_rank() {
+fn space_list_archive_restore_and_tombstone_protect_card_lifecycle_and_rank() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
@@ -680,6 +670,18 @@ fn list_archive_and_restore_preserve_card_lifecycle_and_rank() {
         &hlc,
     );
     assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
+    let tombstone = make_operation(
+        arkret_wire::EventKind::SpaceTombstone,
+        realm_id,
+        serde_json::json!({"space_id":list_id}),
+    );
+    assert_eq!(
+        state.check_space_container_lifecycle_transition(&tombstone),
+        Err("space_has_live_dependents")
+    );
+    assert!(
+        matches!(state.apply(&tombstone, &hlc), ProjectionEffect::Rejected { reason } if reason == "space_has_live_dependents")
+    );
     let relation = state
         .relations
         .values()
@@ -708,6 +710,40 @@ fn list_archive_and_restore_preserve_card_lifecycle_and_rank() {
         relation.fields.get("rank").and_then(Value::as_str),
         Some("r007")
     );
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::StrandArchive,
+            realm_id,
+            serde_json::json!({"target_ref":strand_id}),
+        ),
+        &hlc,
+    );
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Archived
+    );
+    assert!(
+        matches!(state.apply(&tombstone, &hlc), ProjectionEffect::Rejected { reason } if reason == "space_has_live_dependents")
+    );
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::Redaction,
+            realm_id,
+            serde_json::json!({"target_ref":strand_id,"reason":"test"}),
+        ),
+        &hlc,
+    );
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Redacted
+    );
+    assert!(matches!(
+        state.apply(&tombstone, &hlc),
+        ProjectionEffect::SpaceContainerLifecycle {
+            new_state: SpaceContainerLifecycleState::Tombstoned,
+            ..
+        }
+    ));
 }
 
 #[test]

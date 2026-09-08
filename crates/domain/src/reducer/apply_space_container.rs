@@ -1,6 +1,60 @@
 use super::*;
 
 impl ProjectionState {
+    fn validate_space_parent_chain(
+        &self,
+        child_id: &str,
+        child_realm_id: &str,
+        parent_id: Option<&str>,
+    ) -> Result<(), &'static str> {
+        use arkret_models_collaboration::objects::space::{
+            SpaceStructureNode, validate_space_parent_chain,
+        };
+        validate_space_parent_chain(child_id, child_realm_id, parent_id, |id| {
+            self.space_containers
+                .get(id)
+                .map(|space| SpaceStructureNode {
+                    realm_id: &space.realm_id,
+                    parent_space_id: space.parent_ref.as_deref(),
+                    active: space.state == SpaceContainerLifecycleState::Active,
+                })
+        })
+    }
+
+    fn check_space_live_dependents(&self, space_id: &str) -> Result<(), &'static str> {
+        let child = self.space_containers.values().any(|space| {
+            space.parent_ref.as_deref() == Some(space_id)
+                && space.state != SpaceContainerLifecycleState::Tombstoned
+        });
+        let placement = self.relations.values().any(|relation| {
+            relation.relation_kind == "contains"
+                && relation.state == "active"
+                && (relation
+                    .from_ref
+                    .as_ref()
+                    .and_then(|endpoint| endpoint.as_object_ref())
+                    == Some(space_id)
+                    || relation
+                        .fields
+                        .get("board_space_id")
+                        .and_then(Value::as_str)
+                        == Some(space_id))
+                && relation
+                    .to_ref
+                    .as_ref()
+                    .and_then(|endpoint| endpoint.as_object_ref())
+                    .is_some_and(|id| {
+                        self.strands
+                            .get(id)
+                            .is_none_or(|strand| !strand.state.is_terminal())
+                    })
+        });
+        if child || placement {
+            Err("space_has_live_dependents")
+        } else {
+            Ok(())
+        }
+    }
     /// Read-only state-machine preflight for a `ak.space.*` container lifecycle
     /// operation. Returns `Err(reason_code)` if the projection's current
     /// Space-container state forbids the transition per `common-fields.md §5.1`,
@@ -60,6 +114,9 @@ impl ProjectionState {
         if !allowed_source.contains(&space_container.state) {
             return Err(reason);
         }
+        if kind == arkret_wire::EventKind::SpaceTombstone {
+            self.check_space_live_dependents(&container_space_id)?;
+        }
         Ok(())
     }
 
@@ -81,7 +138,8 @@ impl ProjectionState {
                 reason: "space_create_missing_event_id".to_owned(),
             };
         };
-        if object.contains_key("default_scope_circle_id") {
+        if object.contains_key("default_scope_circle_id") || object.contains_key("default_realm_id")
+        {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
@@ -147,6 +205,30 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let realm_id = projection_object_realm_id(object, operation);
+        if realm_id != operation.realm_id.as_ref() {
+            return ProjectionEffect::Rejected {
+                reason: "space_realm_mismatch".to_owned(),
+            };
+        }
+        if let Err(reason) =
+            self.validate_space_parent_chain(&container_space_id, &realm_id, parent_ref.as_deref())
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        if let Some(parent) = parent_ref.as_deref()
+            && let Err(reason) = self.check_space_child_scope_policy(
+                parent,
+                object.get("scope_circle_id").and_then(Value::as_str),
+                &realm_id,
+                false,
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let created_by = object
             .get("created_by")
             .and_then(|v| v.as_str())
@@ -175,7 +257,6 @@ impl ProjectionState {
             updated_by: None,
             updated_at: None,
             orphaned: false,
-            parent_ref_locked: false,
         };
         self.space_containers
             .insert(container_space_id.clone(), projection);
@@ -215,7 +296,9 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
-            if patch.contains_key("default_scope_circle_id") {
+            if patch.contains_key("default_scope_circle_id")
+                || patch.contains_key("default_realm_id")
+            {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
@@ -269,6 +352,17 @@ impl ProjectionState {
             .get("parent_space_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        if let Some(child) = self.space_containers.get(&container_space_id)
+            && let Err(reason) = self.validate_space_parent_chain(
+                &container_space_id,
+                &child.realm_id,
+                parent_ref.as_deref(),
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         if let Some(parent_space_id) = parent_ref.as_deref() {
             let Some(space_container) = self.space_containers.get(&container_space_id) else {
                 return self.queue_pending_replay(
@@ -357,6 +451,13 @@ impl ProjectionState {
         };
 
         let updated_by = Some(operation.context.sender.to_string());
+        if target_state == SpaceContainerLifecycleState::Tombstoned
+            && let Err(reason) = self.check_space_live_dependents(&container_space_id)
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         {
             let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
                 // Unknown Space container: retain this operation until the
@@ -451,9 +552,31 @@ impl ProjectionState {
             None => return Ok(()),
         };
         match kind {
+            arkret_wire::EventKind::SpaceCreate => {
+                let Some(object) = operation.payload.get("object").and_then(Value::as_object)
+                else {
+                    return Ok(());
+                };
+                let realm_id = projection_object_realm_id(object, operation);
+                if realm_id != operation.realm_id.as_ref() {
+                    return Err("space_realm_mismatch");
+                }
+                let parent = object.get("parent_space_id").and_then(Value::as_str);
+                let child_id = event_derived_object_id(operation, "ak:space:").unwrap_or_default();
+                self.validate_space_parent_chain(&child_id, &realm_id, parent)?;
+                if let Some(parent) = parent {
+                    self.check_space_child_scope_policy(
+                        parent,
+                        object.get("scope_circle_id").and_then(Value::as_str),
+                        &realm_id,
+                        false,
+                    )?;
+                }
+                Ok(())
+            }
             arkret_wire::EventKind::StrandCreate => Ok(()),
             arkret_wire::EventKind::StrandMove | arkret_wire::EventKind::StrandReorder => {
-                let Some((_, list_space_id, _)) =
+                let Some((board_space_id, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
                 else {
                     return Ok(());
@@ -469,6 +592,12 @@ impl ProjectionState {
                 let Some(strand) = self.strands.get(strand_id) else {
                     return Ok(());
                 };
+                self.check_space_child_scope_policy(
+                    &board_space_id,
+                    strand.scope_circle_id.as_deref(),
+                    &strand.realm_id,
+                    false,
+                )?;
                 self.check_space_child_scope_policy(
                     &list_space_id,
                     strand.scope_circle_id.as_deref(),
@@ -542,11 +671,13 @@ impl ProjectionState {
         _child_has_plaintext_metadata: bool,
     ) -> Result<(), &'static str> {
         let Some(parent) = self.space_containers.get(parent_space_id) else {
-            return Ok(());
+            return Err("space_parent_unreadable");
         };
-        if parent.state != SpaceContainerLifecycleState::Active {
-            return Err("space_not_active");
-        }
+        arkret_models_collaboration::objects::space::validate_space_target(
+            child_realm_id,
+            &parent.realm_id,
+            parent.state == SpaceContainerLifecycleState::Active,
+        )?;
         let Some(policy) = parent.child_scope_policy.as_ref() else {
             return Ok(());
         };

@@ -365,6 +365,18 @@ impl ProjectionState {
         let Some(strand) = self.strands.get(&strand_id) else {
             return self.queue_pending_replay(strand_id, operation, "strand_unknown");
         };
+        if let Some((board_space_id, ..)) = position.as_ref()
+            && let Err(reason) = self.check_space_child_scope_policy(
+                board_space_id,
+                strand.scope_circle_id.as_deref(),
+                &strand.realm_id,
+                false,
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         if let Some((_, list_space_id, _)) = position.as_ref()
             && let Err(reason) = self.check_space_child_scope_policy(
                 list_space_id,

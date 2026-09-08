@@ -414,7 +414,7 @@ impl ProjectionState {
             let Some(space) = self.space_containers.get(&cursor) else {
                 break;
             };
-            if space.realm_id != realm_id || space.parent_ref_locked {
+            if space.realm_id != realm_id {
                 break;
             }
             let Some(parent_id) = space.parent_ref.as_deref() else {

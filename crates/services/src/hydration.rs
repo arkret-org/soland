@@ -919,9 +919,6 @@ pub async fn hydrate_projections_from_persistence(
                     // it via apply_realm_lifecycle cascade.
                     orphaned: false,
                     // Stream-F (Wave 2C): same story — cross-Realm
-                    // parent_ref_locked is also a reducer-only flag
-                    // rebuilt by the destroy cascade on replay.
-                    parent_ref_locked: false,
                 },
             );
         }

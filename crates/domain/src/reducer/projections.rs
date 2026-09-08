@@ -482,17 +482,6 @@ pub struct SpaceContainerProjection {
     /// `ak.strand.move` / `ak.space.parent` / `ak.space.update` may
     /// revive them. Defaults to `false`.
     pub orphaned: bool,
-    /// Stream-F (Wave 2C) — cross-Realm `parent_ref` lazy-link lock.
-    /// Set to `true` by `cascade_realm_destroy` when this container's
-    /// `parent_ref` points at a Space whose home Realm has been
-    /// destroyed. The container itself stays alive in its own home
-    /// Realm but the parent edge MUST NOT propagate membership /
-    /// capability / history / E2EE / retention from the destroyed
-    /// Realm. UI / navigation surfaces SHOULD render this as a locked
-    /// lazy link and defer to the local reparent / archive / tombstone
-    /// strand inside the policy window. Spec `realm-and-space.md`
-    /// §2.5.1 ¶6. Defaults to `false`.
-    pub parent_ref_locked: bool,
 }
 
 pub(crate) fn space_container_id_from_payload(payload: &Value) -> Option<String> {
