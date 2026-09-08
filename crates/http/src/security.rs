@@ -273,28 +273,6 @@ pub fn validate_http_url_for_egress(
     Ok(url)
 }
 
-pub fn build_egress_http_client(
-    connect_timeout: Duration,
-    request_timeout: Duration,
-) -> Result<reqwest::Client, String> {
-    egress_http_client_builder()?
-        .connect_timeout(connect_timeout)
-        .timeout(request_timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .build()
-        .map_err(|error| format!("failed to build managed egress HTTP client: {error}"))
-}
-
-pub fn build_default_egress_http_client(
-    request_timeout: Duration,
-) -> Result<reqwest::Client, String> {
-    build_egress_http_client(
-        DEFAULT_CONNECT_TIMEOUT.min(request_timeout),
-        request_timeout,
-    )
-}
-
 pub fn validate_http_url_for_egress_with_pinned_client(
     raw_url: &str,
     purpose: &str,

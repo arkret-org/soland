@@ -933,20 +933,6 @@ pub fn rhrk_archive_replica_digest(
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
 }
 
-pub fn rhrk_semantically_same(
-    left: &OrganizationRecoveryArchiveReplica,
-    right: &OrganizationRecoveryArchiveReplica,
-) -> PersistenceResult<bool> {
-    Ok(
-        left.archive.effective_scope == right.archive.effective_scope
-            && left.archive.mls_group_id == right.archive.mls_group_id
-            && left.archive.epoch == right.archive.epoch
-            && left.container_event_ref == right.container_event_ref
-            && rhrk_archive_authorization_tuple_digest(left)?
-                == rhrk_archive_authorization_tuple_digest(right)?,
-    )
-}
-
 impl PendingRhrkAcquisitionInput {
     pub fn validate(&self) -> PersistenceResult<()> {
         self.archive_replica

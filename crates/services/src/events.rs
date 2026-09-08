@@ -170,14 +170,6 @@ impl RealmDirectoryIndex {
         self.entries.iter()
     }
 
-    pub fn search_by_text(&self, query: &str) -> Vec<&RealmDirectoryEntry> {
-        let query = query.to_lowercase();
-        self.entries
-            .values()
-            .filter(|entry| realm_directory_text(entry).contains(&query))
-            .collect()
-    }
-
     pub fn search(&self, query: RealmDirectoryQuery) -> Vec<&RealmDirectoryEntry> {
         let mut scored =
             self.entries

@@ -1325,21 +1325,6 @@ async fn refresh_embedded_webvh_document_for_high_risk(
     Ok(())
 }
 
-/// High-risk variant of [`resolve_ed25519_verification_key_for_did`]: enforce
-/// freshness before resolving the public key. High-risk callers such as
-/// federation receive and recovery use this variant. Read-side callers that
-/// do not need fail-closed semantics can still call the non-`_fresh` version.
-pub async fn resolve_ed25519_verification_key_for_did_fresh(
-    state: &AppState,
-    did: &Did,
-    verification_method: &str,
-) -> Result<ResolvedVerificationKey, String> {
-    // Enforce freshness first: stale or missing evidence rejects before key
-    // resolution.
-    enforce_high_risk_did_freshness(state, did).await?;
-    resolve_ed25519_verification_key_for_did(state, did, verification_method).await
-}
-
 pub fn require_verification_method_in_document(
     document: &DidDocument,
     verification_method: &str,

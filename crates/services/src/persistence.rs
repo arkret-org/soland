@@ -355,29 +355,6 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn quarantine_service_route_fork(
-        &self,
-        evidence: soland_storage::ServiceResolutionForkEvidence,
-    ) -> crate::ServiceResult<()> {
-        self.persistence
-            .service_routes()
-            .quarantine_fork(evidence)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn service_route_is_quarantined(
-        &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .is_quarantined(service_id, service_kind)
-            .await?)
-    }
-
     pub async fn stored_service_identity(
         &self,
     ) -> crate::ServiceResult<Option<arkret_identity::service_identity::StoredDidCoreIdentity>>

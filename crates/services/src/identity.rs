@@ -2640,10 +2640,6 @@ impl DidService {
         self.resolver.as_ref()
     }
 
-    pub fn shared_resolver(&self) -> Arc<dyn DidResolverPort> {
-        self.resolver.clone()
-    }
-
     pub async fn resolve_did(&self, did: &Did) -> Result<arkret_identity::DidDocument, String> {
         if let Some(document) = self
             .documents

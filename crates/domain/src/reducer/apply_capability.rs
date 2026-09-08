@@ -739,68 +739,6 @@ impl ProjectionState {
         })
     }
 
-    /// Same active-grant predicate as [`Self::issuer_has_projected_capability`],
-    /// additionally pinned to one named `grant_id` — used when a receipt cites
-    /// the specific grant it was issued under.
-    pub fn projected_capability_grant_matches(
-        &self,
-        grant_id: &str,
-        subject: &arkret_wire::ActorId,
-        realm_id: &str,
-        action: &str,
-        resource: &str,
-        evaluation_basis: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        let Some(grant) = self.effective_engine_grant(grant_id) else {
-            return false;
-        };
-        let resource_expr = self.authz_resource_expr(realm_id, resource);
-        &grant.subject_id == subject
-            && projected_grant_covers_action(
-                &grant,
-                realm_id,
-                action,
-                &resource_expr,
-                evaluation_basis,
-            )
-            && self.grant_authority_is_live_for(&grant, action, &resource_expr, evaluation_basis)
-    }
-
-    /// Distinct subjects holding `action` **verbatim** in this Realm.
-    ///
-    /// Deliberately unexpanded. This count drives the join-review quorum
-    /// fallback, where the denominator is the set of principals a Realm
-    /// actually appointed as reviewers. Expanding it through the aggregate
-    /// would silently fold every owner and aggregate holder into "eligible
-    /// reviewers" and move the majority threshold without any governance Event
-    /// saying so.
-    pub fn projected_capability_holder_count(
-        &self,
-        realm_id: &str,
-        action: &str,
-        evaluation_basis: chrono::DateTime<chrono::Utc>,
-    ) -> usize {
-        let resource_expr = self.authz_resource_expr(realm_id, realm_id);
-        self.projected_capability_grants()
-            .filter(|grant| {
-                projected_grant_is_active_for(
-                    grant,
-                    realm_id,
-                    action,
-                    &resource_expr,
-                    evaluation_basis,
-                ) && self.grant_authority_is_live_for(
-                    grant,
-                    action,
-                    &resource_expr,
-                    evaluation_basis,
-                )
-            })
-            .map(|grant| grant.subject_id)
-            .collect::<std::collections::BTreeSet<_>>()
-            .len()
-    }
-
     /// True when `actor` currently speaks for this Realm's owner aggregate.
     ///
     /// Two sources, both revocable-by-governance and neither of them a

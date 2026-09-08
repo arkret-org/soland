@@ -418,6 +418,38 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
 
 // ── Strand position events (move / reorder) ──
 
+fn create_position_spaces(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str) {
+    let board_id = "ak:space:AWxSgbLLtif391fvK_KYoPG0O0dFZnh9BWozK_Z3AoCj";
+    for (id, kind, parent) in [
+        (board_id, "board", None),
+        (
+            "ak:space:AcYTKs4ZiqRv25YJCWQZHLEXQk6KYMtujf2hpo1tUy99",
+            "list",
+            Some(board_id),
+        ),
+    ] {
+        let effect = state.apply(
+            &make_operation(
+                arkret_wire::EventKind::SpaceCreate,
+                realm_id,
+                serde_json::json!({"object": {
+                    "id": id,
+                    "realm_id": realm_id,
+                    "kind": kind,
+                    "title": kind,
+                    "parent_space_id": parent,
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
+                }}),
+            ),
+            hlc,
+        );
+        assert!(
+            !matches!(effect, ProjectionEffect::Rejected { .. }),
+            "{effect:?}"
+        );
+    }
+}
+
 /// `ak.strand.move` / `ak.strand.reorder` touch the Strand projection's
 /// `updated_at` / `updated_by` but do NOT change state. Cell-write
 /// happens on the Move/Seal pipeline (out of scope here).
@@ -426,6 +458,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    create_position_spaces(&mut state, &hlc, realm_id);
     let strand_id = "ak:strand:AU_4I9g0iCGP2wBQxEHHsqgKsyHl7hlCZ78tlwZ4LaoG";
     let board_space_id = "ak:space:AWxSgbLLtif391fvK_KYoPG0O0dFZnh9BWozK_Z3AoCj";
 
@@ -515,6 +548,7 @@ fn strand_position_events_queue_unknown_strand() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    create_position_spaces(&mut state, &hlc, realm_id);
     let strand_id = "ak:strand:AfPOoNzailKc-Iv8HrKJc7cV-a6XBnZOJ6gkRV2XI7xm";
     let effect = state.apply(
         &make_operation(

@@ -42,11 +42,6 @@ pub fn generate_realm_state_snapshot_id() -> String {
     generate("realm_state_snapshot")
 }
 
-/// Notification id helper. Spec uses the full `ak:notification:` kind.
-pub fn generate_notification_id() -> String {
-    generate("notification")
-}
-
 pub fn generate_request_id() -> String {
     generate("request")
 }
