@@ -25,6 +25,13 @@ pub(in crate::routing) async fn validate_authorization_lease_for_event(
     event: &arkret_wire::Event,
     lease: &AuthorizationLease,
 ) -> Result<(), SubmitOneError> {
+    if !lease.covers_instant(now()) {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "authorization_lease_expired",
+            "authorization lease is not valid at admission time",
+        ));
+    }
     if let Some(session) = session
         && lease.device_id.as_str() != session.device_id
     {

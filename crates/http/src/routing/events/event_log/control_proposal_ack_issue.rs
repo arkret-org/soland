@@ -30,6 +30,24 @@ pub(super) async fn issue_control_proposal_ack(
         )
     })?;
 
+    if let Some(lease) = &request.authorization_lease {
+        super::submit::validate_authorization_lease_for_event(
+            state,
+            Some(&session),
+            &request.event,
+            lease,
+        )
+        .await
+        .map_err(|error| {
+            super::submit::submit_one_error_to_app_error(
+                "Control Proposal Ack delayed-publication lease",
+                error.status(),
+                error.code(),
+                &error.message(),
+            )
+        })?;
+    }
+
     let envelope = serde_json::to_value(&request.event).map_err(|error| {
         crate::app_error!(
             SchemaViolation,
@@ -94,10 +112,10 @@ pub(super) async fn issue_control_proposal_ack(
         })?
     {
         // The protocol replay identity is the proposal digest plus the
-        // authority set, not the complete publication-proof bytes. A
-        // durable client may refresh an expired AuthorizationLease while
-        // retrying the same signed Event; after the request has passed
-        // current admission above, return the immutable original Ack.
+        // authority set. The complete request (including explicit online or
+        // delayed mode) has already passed current admission above; an
+        // invalid delayed lease can therefore never reach this replay path.
+        // Return the immutable original Ack without extending its deadlines.
         let outcome = serde_json::from_value(record.response_body).map_err(|error| {
             crate::app_error!(
                 InternalError,

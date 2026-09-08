@@ -945,7 +945,8 @@ pub(crate) async fn post_recovery_policy(
         serde_json::from_value(lease_body).expect("authorization lease outcome");
     let receipt_request = arkret_wire::ControlProposalAckIssueRequest {
         event: event.clone(),
-        authorization_lease: lease_outcome.authorization_leases[0].clone(),
+        publication_mode: arkret_wire::ControlProposalPublicationMode::Delayed,
+        authorization_lease: Some(lease_outcome.authorization_leases[0].clone()),
         cbs_proof_bundles: Vec::new(),
     };
     let receipt_request_bytes = arkret_canonical::canonical_json_bytes(&receipt_request).unwrap();
