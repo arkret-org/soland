@@ -444,9 +444,17 @@ impl AccountDataStore for PgAccountDataStore {
                  SELECT actor, account_data_key, revision, payload, tombstone, updated_at \
                  FROM applied \
                  RETURNING position \
+             ), retention AS ( \
+                 INSERT INTO account_data_change_retention \
+                    (actor_id, latest_position, retained_through_position, updated_at) \
+                 SELECT $2, position, 0, now() FROM changed \
+                 ON CONFLICT (actor_id) DO UPDATE SET \
+                    latest_position = GREATEST(account_data_change_retention.latest_position, EXCLUDED.latest_position), \
+                    updated_at = EXCLUDED.updated_at \
+                 RETURNING latest_position \
              ) \
              SELECT applied.* FROM applied \
-             CROSS JOIN (SELECT count(*) FROM changed) AS change_count",
+             CROSS JOIN (SELECT count(*) FROM retention) AS retention_count",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.actor)
@@ -515,7 +523,11 @@ impl AccountDataStore for PgAccountDataStore {
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(
-            "SELECT COALESCE(MAX(position), 0) AS position FROM account_data_changes WHERE actor_id = $1",
+            "SELECT COALESCE(latest_position, 0) AS position \
+             FROM account_data_change_retention WHERE actor_id = $1 \
+             UNION ALL SELECT 0 WHERE NOT EXISTS ( \
+                 SELECT 1 FROM account_data_change_retention WHERE actor_id = $1 \
+             ) LIMIT 1",
         )
         .bind::<Text, _>(actor)
         .get_result::<AccountDataPositionRow>(&mut *conn)
@@ -535,8 +547,11 @@ impl AccountDataStore for PgAccountDataStore {
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
             "WITH current_position AS ( \
-                 SELECT COALESCE(MAX(position), 0) AS position \
-                 FROM account_data_changes WHERE actor_id = $1 \
+                 SELECT COALESCE(latest_position, 0) AS position \
+                 FROM account_data_change_retention WHERE actor_id = $1 \
+                 UNION ALL SELECT 0 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM account_data_change_retention WHERE actor_id = $1 \
+                 ) LIMIT 1 \
              ), live_rows AS ( \
                  SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
                  FROM account_datas WHERE actor_id = $1 AND tombstone = FALSE \
@@ -559,6 +574,69 @@ impl AccountDataStore for PgAccountDataStore {
             .filter_map(AccountDataSnapshotRow::into_record)
             .collect::<PersistenceResult<Vec<_>>>()?;
         Ok((entries, position))
+    }
+
+    async fn change_position_is_replayable(
+        &self,
+        actor: &str,
+        position: u64,
+    ) -> PersistenceResult<bool> {
+        let position = i64::try_from(position).map_err(|_| {
+            PersistenceError::Conflict(
+                "account_data change position exceeds i64 storage range".to_owned(),
+            )
+        })?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let row = sql_query(
+            "SELECT COALESCE(retained_through_position, 0) AS position \
+             FROM account_data_change_retention WHERE actor_id = $1 \
+             UNION ALL SELECT 0 WHERE NOT EXISTS ( \
+                 SELECT 1 FROM account_data_change_retention WHERE actor_id = $1 \
+             ) LIMIT 1",
+        )
+        .bind::<Text, _>(actor)
+        .get_result::<AccountDataPositionRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(position >= row.position)
+    }
+
+    async fn prune_changes_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<u64> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let row = sql_query(
+            "WITH deleted AS ( \
+                 DELETE FROM account_data_changes WHERE updated_at < $1 \
+                 RETURNING actor_id, position \
+             ), floors AS ( \
+                 SELECT actor_id, MAX(position) AS retained_through_position, COUNT(*) AS deleted_count \
+                 FROM deleted GROUP BY actor_id \
+             ), retention AS ( \
+                 INSERT INTO account_data_change_retention \
+                    (actor_id, latest_position, retained_through_position, updated_at) \
+                 SELECT actor_id, retained_through_position, retained_through_position, now() FROM floors \
+                 ON CONFLICT (actor_id) DO UPDATE SET \
+                    latest_position = GREATEST(account_data_change_retention.latest_position, EXCLUDED.latest_position), \
+                    retained_through_position = GREATEST(account_data_change_retention.retained_through_position, EXCLUDED.retained_through_position), \
+                    updated_at = EXCLUDED.updated_at \
+                 RETURNING actor_id \
+             ) \
+             SELECT COALESCE(SUM(deleted_count), 0) AS position FROM floors \
+             CROSS JOIN (SELECT COUNT(*) FROM retention) AS retention_count",
+        )
+        .bind::<Timestamptz, _>(cutoff)
+        .get_result::<AccountDataPositionRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        u64::try_from(row.position).map_err(|_| {
+            PersistenceError::Internal("negative pruned account_data change count".to_owned())
+        })
     }
 }
 

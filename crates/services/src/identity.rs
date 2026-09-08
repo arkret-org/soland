@@ -353,6 +353,12 @@ pub trait AccountDataPort: Send + Sync {
         position: u64,
     ) -> ServiceResult<Vec<AccountDataChangeState>>;
     async fn latest_change_position(&self, actor_id: &str) -> ServiceResult<u64>;
+    async fn change_position_is_replayable(
+        &self,
+        actor_id: &str,
+        position: u64,
+    ) -> ServiceResult<bool>;
+    async fn prune_changes_before(&self, cutoff: DateTime<Utc>) -> ServiceResult<u64>;
     async fn snapshot_for_actor(
         &self,
         actor_id: &str,
@@ -791,6 +797,20 @@ impl AccountDataService {
 
     pub async fn latest_change_position(&self, actor_id: &str) -> ServiceResult<u64> {
         self.account_data.latest_change_position(actor_id).await
+    }
+
+    pub async fn change_position_is_replayable(
+        &self,
+        actor_id: &str,
+        position: u64,
+    ) -> ServiceResult<bool> {
+        self.account_data
+            .change_position_is_replayable(actor_id, position)
+            .await
+    }
+
+    pub async fn prune_changes_before(&self, cutoff: DateTime<Utc>) -> ServiceResult<u64> {
+        self.account_data.prune_changes_before(cutoff).await
     }
 
     pub async fn snapshot_for_actor(

@@ -21,6 +21,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    account_data_change_retention (actor_id) {
+        actor_id -> Text,
+        latest_position -> Int8,
+        retained_through_position -> Int8,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     account_datas (id) {
         id -> Uuid,
         actor_id -> Text,
@@ -1876,6 +1885,7 @@ diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
     account_data_changes,
+    account_data_change_retention,
     account_datas,
     account_lifecycle,
     account_localparts,

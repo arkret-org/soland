@@ -261,6 +261,8 @@ async fn run() -> anyhow::Result<()> {
     // rows whose client never returned).
     let _sync_cursor_ttl_sweeper =
         soland_http::routing::spawn_sync_cursor_ttl_sweeper(state.clone());
+    let _account_data_change_retention_sweeper =
+        soland_http::routing::spawn_account_data_change_retention_sweeper(state.clone());
     tracing::info!(
         worker = "sync_cursor_ttl_sweep",
         "background worker configured"

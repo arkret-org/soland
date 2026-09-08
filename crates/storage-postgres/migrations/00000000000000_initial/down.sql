@@ -5,6 +5,7 @@ DROP FUNCTION IF EXISTS reject_state_seal_identity_mutation() CASCADE;
 DROP TABLE IF EXISTS server_settings CASCADE;
 DROP TABLE IF EXISTS event_notification_relay CASCADE;
 DROP TABLE IF EXISTS account_data_changes CASCADE;
+DROP TABLE IF EXISTS account_data_change_retention CASCADE;
 DROP TABLE IF EXISTS account_datas CASCADE;
 DROP TABLE IF EXISTS account_localparts CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;

@@ -71,6 +71,11 @@ pub(crate) const SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 10_000;
 /// [`sync_token_for_client_sync`]). A revocation record is retained for at
 /// least this long so a leaked cursor cannot outlive its revocation.
 pub(crate) const CURSOR_MAX_TTL_SECONDS: i64 = 3600;
+/// `account_data_tombstone_retention_ms` is 90 days. This dominates the
+/// one-hour cursor TTL, so Station-CAS change records cannot be collected
+/// before every valid cursor that could name them has expired.
+const ACCOUNT_DATA_CHANGE_RETENTION_DAYS: i64 = 90;
+const ACCOUNT_DATA_CHANGE_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
 
 mod snapshot;
 pub(crate) use snapshot::*;
@@ -80,6 +85,27 @@ pub(crate) mod signal;
 // `crate::routing::spawn_sync_cursor_ttl_sweeper` for `main`); the explicit
 // `pub use` overrides the `pub(crate)` glob above for this one name.
 pub use cursor::spawn_sync_cursor_ttl_sweeper;
+pub fn spawn_account_data_change_retention_sweeper(
+    state: AppState,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(ACCOUNT_DATA_CHANGE_SWEEP_INTERVAL);
+        loop {
+            ticker.tick().await;
+            let cutoff = chrono::Utc::now()
+                - chrono::Duration::days(ACCOUNT_DATA_CHANGE_RETENTION_DAYS);
+            match state.account_data().prune_changes_before(cutoff).await {
+                Ok(pruned) if pruned > 0 => {
+                    tracing::info!(pruned, "pruned retained account-data change records");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(%error, "failed to prune retained account-data change records");
+                }
+            }
+        }
+    })
+}
 pub(crate) use cursor::*;
 mod subscribe;
 pub(crate) use subscribe::*;

@@ -296,6 +296,29 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
             .await?)
     }
 
+    async fn change_position_is_replayable(
+        &self,
+        actor_id: &str,
+        position: u64,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .account_data()
+            .change_position_is_replayable(actor_id, position)
+            .await?)
+    }
+
+    async fn prune_changes_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<u64> {
+        Ok(self
+            .0
+            .account_data()
+            .prune_changes_before(cutoff)
+            .await?)
+    }
+
     async fn snapshot_for_actor(
         &self,
         actor_id: &str,

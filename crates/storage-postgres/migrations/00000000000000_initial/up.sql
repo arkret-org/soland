@@ -85,6 +85,19 @@ CREATE TABLE public.account_data_changes (
 CREATE INDEX account_data_changes_actor_position_idx
     ON public.account_data_changes (actor_id, position);
 
+CREATE INDEX account_data_changes_updated_at_idx
+    ON public.account_data_changes (updated_at);
+
+CREATE TABLE public.account_data_change_retention (
+    actor_id text PRIMARY KEY,
+    latest_position bigint NOT NULL,
+    retained_through_position bigint NOT NULL DEFAULT 0,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT account_data_change_retention_latest_positive CHECK (latest_position >= 1),
+    CONSTRAINT account_data_change_retention_floor_nonnegative CHECK (retained_through_position >= 0),
+    CONSTRAINT account_data_change_retention_floor_bounded CHECK (retained_through_position <= latest_position)
+);
+
 CREATE TABLE public.accounts (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),

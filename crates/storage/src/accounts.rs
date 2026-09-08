@@ -75,6 +75,21 @@ pub trait AccountDataStore: Send + Sync {
         actor: &str,
     ) -> PersistenceResult<(Vec<AccountDataRecord>, u64)>;
     async fn latest_change_position(&self, actor: &str) -> PersistenceResult<u64>;
+    /// Returns whether every Account Data change after `position` is still replayable.
+    ///
+    /// A false result requires an initial resync; advancing a cursor across the
+    /// retained boundary would silently omit holder-private state.
+    async fn change_position_is_replayable(
+        &self,
+        actor: &str,
+        position: u64,
+    ) -> PersistenceResult<bool>;
+    /// Removes change records older than `cutoff` while durably preserving the
+    /// per-actor replay boundary and current projection high-water mark.
+    async fn prune_changes_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<u64>;
 }
 #[doc(hidden)]
 pub fn account_with_primary_localpart_select(where_clause: &str) -> String {

@@ -753,9 +753,18 @@ async fn commit_consent_projection(
         return Err(PersistenceError::Conflict(cas.conflict_code));
     }
     sql_query(
-        "INSERT INTO account_data_changes \
-         (actor_id, account_data_key, payload, revision, tombstone, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "WITH changed AS ( \
+             INSERT INTO account_data_changes \
+                (actor_id, account_data_key, payload, revision, tombstone, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             RETURNING position \
+         ) \
+         INSERT INTO account_data_change_retention \
+            (actor_id, latest_position, retained_through_position, updated_at) \
+         SELECT $1, position, 0, now() FROM changed \
+         ON CONFLICT (actor_id) DO UPDATE SET \
+            latest_position = GREATEST(account_data_change_retention.latest_position, EXCLUDED.latest_position), \
+            updated_at = EXCLUDED.updated_at",
     )
     .bind::<Text, _>(&record.actor)
     .bind::<Text, _>(&record.account_data_key)
