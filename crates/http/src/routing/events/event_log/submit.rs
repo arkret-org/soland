@@ -1470,7 +1470,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         }
         arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
             agent_provision_ref,
-            ..
+            controller_binding_digest,
         } => {
             let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
                 serde_json::from_value(serde_json::to_value(&submission.events[1].event.payload).map_err(|error| {
@@ -1494,7 +1494,20 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 .await
                 .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?
                 .ok_or_else(|| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", "accepted Agent provision Event is unavailable"))?;
+            let provision_payload: arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload =
+                serde_json::from_value(accepted_provision.envelope.get("payload").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", error.to_string()))?;
+            let expected_evidence = arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::from_agent_provision(
+                agent_provision_ref.clone(), &provision_payload,
+            ).map_err(|error| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", error.to_string()))?;
+            let arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
+                controller_binding_digest: expected_binding_digest, ..
+            } = expected_evidence else { unreachable!("Agent provision produces controller evidence") };
             if agent.controller_principal_id != founder_id.signing_principal_id().as_str()
+                || *controller_binding_digest != expected_binding_digest
+                || provision_payload.agent_id != *agent_id.signing_principal_id()
+                || provision_payload.controller_principal_id != *founder_id.signing_principal_id()
+                || accepted_provision.actor_id != founder_id.to_string()
                 || agent.state
                     != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
                 || stored_provision_ref != Some(agent_provision_ref.as_str())

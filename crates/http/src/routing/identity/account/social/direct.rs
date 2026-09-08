@@ -337,17 +337,7 @@ pub(crate) async fn validate_direct_message_bootstrap(
                 && value.get("content_scheme").and_then(Value::as_str) == Some("mls_exporter_aead_v1"))) {
         return Err("provisional message Seal does not cover the winning exporter state");
     }
-    let contact = accepted_contact_for_pair(state, &actor, &peer, "direct_message")
-        .await
-        .map_err(|_| "current Contact lookup failed")?
-        .ok_or("Contact does not permit provisional messages")?;
-    if fresh_direct_contact_evidence(state, &contact)
-        .await
-        .map_err(|_| "Contact proof unavailable")?
-        .is_none()
-    {
-        return Err("fresh directional Contact proof is unavailable");
-    }
+    validate_current_direct_pair_authority(state, &actor, &peer).await?;
     // The other bootstrap phase permits only a binding endorsement. A durable
     // receipt for the winning peer Welcome closes provisional history sends.
     for event in events
@@ -488,12 +478,62 @@ pub(crate) async fn validate_direct_message_participant(
         return Err("message Seal does not cover the exact binding and main Strand");
     }
     validate_direct_binding_event_refs(state, &payload).await?;
-    let peer = payload
+    let create = accepted_direct_realm_create(state, &payload.realm_id).await?;
+    let founder_peer = payload
         .unordered_participant_ids
         .iter()
-        .find(|id| **id != actor)
-        .ok_or("missing peer")?;
-    let contact = accepted_contact_for_pair(state, &actor, peer, "direct_message")
+        .find(|id| **id != create.actor_id)
+        .ok_or("missing founder peer")?;
+    validate_current_direct_pair_authority(state, &create.actor_id, founder_peer).await?;
+    if direct_group_state_for_realm(state, realm_id)
+        .await
+        .map_err(|_| "MLS authority lookup failed")?
+        .is_none()
+    {
+        return Err("Direct Conversation has no unique current MLS state");
+    }
+    Ok(())
+}
+
+/// Both provisional and settled sends require current pair authority. The
+/// accepted founder fixes the controller direction even when the Agent sends.
+async fn validate_current_direct_pair_authority(
+    state: &AppState,
+    founder: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
+) -> Result<(), &'static str> {
+    if let Some(basis) = agent_direct_authorization_basis(
+        state,
+        founder.signing_principal_id().as_str(),
+        peer.signing_principal_id().as_str(),
+    )
+    .await
+    .map_err(|_| "current Agent controller authority is unavailable")?
+    {
+        for event_ref in &basis.event_refs {
+            let accepted = state
+                .event_queries()
+                .accepted_event(event_ref.as_str())
+                .await
+                .map_err(|_| "Agent authority lookup failed")?
+                .ok_or("accepted Agent authority is unavailable")?;
+            if accepted.kind == arkret_wire::EventKind::AgentProvision.as_str() {
+                let payload: arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload =
+                    serde_json::from_value(accepted.envelope.get("payload").cloned().unwrap_or(Value::Null))
+                        .map_err(|_| "accepted Agent provision is invalid")?;
+                if accepted.actor_id != founder.to_string()
+                    || payload.controller_principal_id != *founder.signing_principal_id()
+                    || payload.agent_id != *peer.signing_principal_id()
+                    || accepted.canonical_digest != event_ref.event_digest().as_str()
+                {
+                    return Err("Agent authority does not match the exact pair");
+                }
+                return Ok(());
+            }
+        }
+        return Err("accepted Agent provision is unavailable");
+    }
+    let contact = accepted_contact_for_pair(state, founder, peer, "direct_message")
         .await
         .map_err(|_| "current Contact lookup failed")?
         .ok_or("current Contact does not permit messages")?;
@@ -503,13 +543,6 @@ pub(crate) async fn validate_direct_message_participant(
         .is_none()
     {
         return Err("fresh directional Contact evidence is unavailable");
-    }
-    if direct_group_state_for_realm(state, realm_id)
-        .await
-        .map_err(|_| "MLS authority lookup failed")?
-        .is_none()
-    {
-        return Err("Direct Conversation has no unique current MLS state");
     }
     Ok(())
 }

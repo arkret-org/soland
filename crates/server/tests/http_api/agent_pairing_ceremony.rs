@@ -596,6 +596,54 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         Some(verification_method.as_str())
     );
 
+    // An owned Agent has no human Contact round. Its accepted provision must
+    // nevertheless let the controller author the first Direct Conversation.
+    let resolve_request = arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
+        peer: arkret_models_collaboration::contact_operations::ContactPeer::Agent {
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(outcome.agent_id.clone(), service_core.clone())),
+            controller_account_id: controller_authority.clone(),
+        },
+    };
+    let mut direct_response =
+        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&resolve_request).unwrap())
+            .send(&app)
+            .await;
+    let direct_status = direct_response.status_code;
+    let direct_body: Value = direct_response.take_json().await.unwrap();
+    assert_eq!(direct_status, Some(StatusCode::OK), "{direct_body}");
+    assert_eq!(direct_body["state"], "creation_required", "{direct_body}");
+    let evidence = &direct_body["next_founding_input"]["founding_authority_evidence"];
+    assert_eq!(evidence["kind"], "controller_agent", "{direct_body}");
+    let provision_ref =
+        activated_record.provision_event_refs.as_ref().unwrap()["provision_event_id"]
+            .as_str()
+            .unwrap();
+    assert_eq!(evidence["agent_provision_ref"], provision_ref);
+    let provision = state
+        .test_persistence()
+        .events()
+        .get(provision_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    let payload: arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload =
+        serde_json::from_value(provision.envelope["payload"].clone()).unwrap();
+    assert_eq!(
+        evidence["controller_binding_digest"],
+        arkret_canonical::canonical_sha256(&payload).unwrap()
+    );
+    verify_owned_agent_direct_founding(
+        &state,
+        token,
+        controller,
+        &resolve_request,
+        evidence.clone(),
+    )
+    .await;
+
     // The controller's Principal Control Realm is an ordinary, non-minimal-
     // metadata disclosure context. Add the now-active Agent as a member so
     // the authenticated controller can resolve that Agent's current signer
@@ -737,5 +785,148 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             .validate_for_request(&request, outcome.response.expires_at)
             .is_err(),
         "expired current Agent evidence must fail closed"
+    );
+}
+
+async fn verify_owned_agent_direct_founding(
+    state: &AppState,
+    token: &str,
+    controller: &str,
+    resolve_request: &arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody,
+    evidence: Value,
+) {
+    use arkret_models_collaboration::direct_conversation_ops::*;
+    use arkret_models_collaboration::objects::direct_conversation::*;
+    use soland_test_support::signed_event::{
+        CallerSignedBasis, CallerSignedEvent, head_eq_precondition, sign_fixture_event,
+    };
+    let app = app_from_state(state.clone());
+    let founder =
+        arkret_wire::AccountId::new(fixture_actor_core_id(controller), state.service_core_id());
+    let peer = resolve_request.peer.contact_actor_id();
+    let created_at = chrono::Utc::now();
+    let create_payload = direct_conversation_realm_create_payload(
+        arkret_wire::GenesisSalt::generate().unwrap(),
+        state.config().trust_domain.clone(),
+        arkret_wire::NotaryValue::single_signer(state.service_notary_signer_descriptor().unwrap()),
+        created_at,
+    )
+    .unwrap();
+    let sign = |mut event: arkret_wire::Event| {
+        event.proofs.clear();
+        sign_fixture_event(
+            event,
+            controller,
+            super::agents::CONTROLLER_DEVICE_ID,
+            super::agents::CONTROLLER_DEVICE_SIGNING_SEED,
+        )
+    };
+    let create = sign(
+        CallerSignedEvent::realm_genesis(
+            controller,
+            super::agents::CONTROLLER_DEVICE_ID,
+            serde_json::to_value(create_payload).unwrap(),
+        )
+        .with_preconditions(vec![head_eq_precondition(
+            &arkret_wire::null_subject_cell(arkret_wire::CellFamilyId::REALM_CREATE_V1),
+            Value::Null,
+        )])
+        .build(),
+    );
+    let realm_id = arkret_wire::RealmId::from_event_id(&create.event_id);
+    let peer_account = peer.as_account_id().unwrap();
+    let payloads = [
+        (
+            "ak.member.state",
+            serde_json::to_value(
+                direct_conversation_peer_membership_bootstrap(
+                    realm_id.clone(),
+                    &founder,
+                    [founder.clone(), peer_account.clone()],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            Some(peer.clone()),
+        ),
+        (
+            "ak.strand.create",
+            serde_json::to_value(direct_conversation_main_strand_create_payload(
+                realm_id.clone(),
+                arkret_wire::ActorId::account(founder.clone()),
+                created_at,
+            ))
+            .unwrap(),
+            None,
+        ),
+        (
+            "ak.member.state",
+            serde_json::to_value(direct_conversation_member_join_payload(
+                realm_id.clone(),
+                founder.clone(),
+            ))
+            .unwrap(),
+            Some(arkret_wire::ActorId::account(founder)),
+        ),
+    ];
+    let mut events = vec![create];
+    for (index, (kind, payload, member)) in payloads.into_iter().enumerate() {
+        let previous = events.last().unwrap().event_id.to_string();
+        let mut builder = CallerSignedEvent::new(
+            kind,
+            controller,
+            super::agents::CONTROLLER_DEVICE_ID,
+            realm_id.as_str(),
+            payload,
+        )
+        .with_actor_seq((index + 1) as u64)
+        .with_prev_refs(vec![&previous])
+        .with_basis(CallerSignedBasis::AnchorUnit);
+        if let Some(member) = member {
+            builder = builder.with_preconditions(vec![head_eq_precondition(
+                &format!(
+                    "ak:cell:ak.component.member.state.v1:{}",
+                    arkret_wire::composite_subject(&[member.canonical_key().unwrap()]).unwrap()
+                ),
+                Value::Null,
+            )]);
+        }
+        events.push(sign(builder.build()));
+    }
+    let submission = DirectConversationFoundingUnitSubmission {
+        unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
+        idempotency_key: arkret_wire::IdempotencyKey::new(uuid::Uuid::now_v7().to_string())
+            .unwrap(),
+        events: events
+            .into_iter()
+            .map(arkret_wire::EventInitialSubmission::online)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(),
+        founding_authority_evidence: serde_json::from_value(evidence).unwrap(),
+        cbs_proof_bundles: Vec::new(),
+    };
+    let mut accepted = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&submission).unwrap())
+        .send(&app)
+        .await;
+    let status = accepted.status_code;
+    let body: Value = accepted.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "{body}");
+    let mut resolved = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(resolve_request).unwrap())
+        .send(&app)
+        .await;
+    let outcome: DirectConversationResolveOutcome = resolved.take_json().await.unwrap();
+    assert_eq!(
+        outcome
+            .coordinates()
+            .expect("accepted founding must be openable")
+            .realm_id,
+        realm_id
     );
 }

@@ -1959,6 +1959,53 @@ async fn direct_conversation_resolve(
     }
     match founder {
         Some(founder) if founder == actor.to_string() => {
+            if let Some(basis) = agent_basis.as_ref() {
+                for event_ref in &basis.event_refs {
+                    let Some(accepted) = state
+                        .event_queries()
+                        .accepted_event(event_ref.as_str())
+                        .await
+                        .map_err(|error| {
+                            AppError::internal(format!("Agent provision lookup failed: {error}"))
+                        })?
+                    else {
+                        continue;
+                    };
+                    if accepted.kind != arkret_wire::EventKind::AgentProvision.as_str() {
+                        continue;
+                    }
+                    let payload: arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload =
+                        serde_json::from_value(accepted.envelope.get("payload").cloned().unwrap_or(Value::Null))
+                            .map_err(|error| AppError::internal(format!("accepted Agent provision payload is invalid: {error}")))?;
+                    if payload.agent_id != *peer.signing_principal_id()
+                        || payload.controller_principal_id != *actor.signing_principal_id()
+                        || accepted.actor_id != actor.to_string()
+                        || accepted.canonical_digest != event_ref.event_digest().as_str()
+                    {
+                        return Err(AppError::internal(
+                            "accepted Agent provision binding does not match the pair",
+                        ));
+                    }
+                    let evidence =
+                        DirectConversationFoundingAuthorityEvidence::from_agent_provision(
+                            event_ref.clone(),
+                            &payload,
+                        )
+                        .map_err(|error| {
+                            AppError::internal(format!(
+                                "Agent founding evidence is invalid: {error}"
+                            ))
+                        })?;
+                    return json_ok(DirectConversationResolveOutcome::CreationRequired {
+                        next_founding_input: DirectConversationFoundingInput {
+                            founding_authority_evidence: evidence,
+                        },
+                    });
+                }
+                return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                    retry_after_ms: None,
+                });
+            }
             let Some(contact) = contact.as_ref() else {
                 return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
                     retry_after_ms: None,
