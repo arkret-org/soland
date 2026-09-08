@@ -325,7 +325,11 @@ pub(crate) async fn validate_direct_message_bootstrap(
         .await
         .map_err(|_| "current group state unavailable")?
         .ok_or("current group state is not unique")?;
-    let scope = serde_json::json!({"kind":"realm", "realm_id":realm_id});
+    let scope = serde_json::to_value(arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+            .map_err(|_| "founding Realm mismatch")?,
+    })
+    .map_err(|_| "founding Realm scope invalid")?;
     if !state_at_ref.iter().any(|(cell, state)| cell.as_str().starts_with("ak:cell:ak.component.mls.epoch.v1:")
         && matches!(state, arkret_state::lattice::CellState::Value(value)
             if value.get("transition_ref").and_then(Value::as_str) == Some(current_ref.as_str())

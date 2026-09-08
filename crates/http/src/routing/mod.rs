@@ -85,7 +85,7 @@ pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, push_target_privacy_derivation_c
 // Snapshot manifest builder + small JSON/token helpers reachable from children
 // and other crate modules via `crate::routing::*`.
 pub(crate) use realm_state_snapshot::{
-    device_inventory_to_json, generate_invite_token, realm_state_snapshot_manifest_for_realm,
+    generate_invite_token, realm_state_snapshot_manifest_for_realm,
 };
 // CORS handler consumed by `crate::service`.
 pub(crate) use router_build::{cors_handler_for_origin_spec, openapi_surface_router};

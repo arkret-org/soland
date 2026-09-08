@@ -151,7 +151,9 @@ impl ProjectionState {
                 }
                 // A later stage may not re-point the session at another
                 // binding or widen the scope it was authorized under.
-                if session.binding_id != binding_id || session.effective_scope != declared_scope {
+                if session.binding_id != binding_id
+                    || session.effective_scope != payload.effective_scope
+                {
                     return rejected(arkret_wire::ReasonCode::AUDIT_RELEASE_SCOPE_MISMATCH);
                 }
             }
@@ -176,7 +178,7 @@ impl ProjectionState {
             session_id: session_id.clone(),
             realm_id: payload.realm_id.to_string(),
             binding_id,
-            effective_scope: declared_scope,
+            effective_scope: payload.effective_scope.clone(),
             stage: payload.session_state,
             approved_release_mode,
             approved_recipient_audit_actor_id,
@@ -224,7 +226,7 @@ impl ProjectionState {
         if session.binding_id != binding_id {
             return rejected(arkret_wire::ReasonCode::AUDIT_RELEASE_BINDING_MISSING);
         }
-        if session.effective_scope != declared_scope {
+        if session.effective_scope != payload.effective_scope {
             return rejected(arkret_wire::ReasonCode::AUDIT_RELEASE_SCOPE_MISMATCH);
         }
         // audited-e2ee.md §4: the release rides on an accepted notice for this

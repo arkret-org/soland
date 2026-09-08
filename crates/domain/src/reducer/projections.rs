@@ -665,9 +665,8 @@ pub struct AuditSessionProjection {
     pub session_id: String,
     pub realm_id: String,
     pub binding_id: String,
-    /// Canonical JSON of the session's `effective_scope`, compared verbatim
-    /// against the binding's own scope.
-    pub effective_scope: serde_json::Value,
+    /// Accepted scope, retained in the SDK type after binding validation.
+    pub effective_scope: arkret_wire::ScopeRef,
     pub stage: arkret_models_collaboration::events_payloads::audit::AuditSessionStage,
     pub approved_release_mode:
         Option<arkret_models_collaboration::events_payloads::audit::AuditReleaseMode>,

@@ -109,12 +109,15 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         .devices()
         .await
         .map(|devices| {
-            let mut grouped: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+            let mut grouped: BTreeMap<
+                String,
+                BTreeMap<String, soland_services::identity::DeviceIdentity>,
+            > = BTreeMap::new();
             for device in devices {
                 grouped
                     .entry(device.actor_id.clone())
                     .or_default()
-                    .insert(device.device_id.clone(), device_inventory_to_json(&device));
+                    .insert(device.device_id.clone(), device);
             }
             grouped
         })
@@ -133,7 +136,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         }
         let display_name = actor_devices
             .values()
-            .find_map(|device| device["display_name"].as_str())
+            .find_map(|device| device.display_name.as_deref())
             .unwrap_or(actor_id);
         actors.push(json!({
             "actor_id": actor_id,
