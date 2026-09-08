@@ -303,26 +303,18 @@ impl<'a> CallerSignedEvent<'a> {
             }
             CallerSignedBasis::AnchorUnit => {}
         }
-        let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+        let signer = arkret_test_kit::seeded_signer_for_seed(
             self.signing_seed,
             actor,
             verification_method.clone(),
         );
-        // Producer-signed content is complete: derive the identity once, then
-        // attach the proof the same way a real client does.
-        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        arkret_test_kit::sign_verifiable_event(
             event,
+            &signer,
             arkret_canonical::DigestSuite::Sha256,
         )
-        .expect("the fixture envelope finalizes");
-        arkret_signatures::sign_event(
-            &mut event,
-            &signer,
-            &verification_method,
-            arkret_signatures::SignEventOptions::new().with_created_at(now),
-        )
-        .expect("SDK Event signer accepts the fixture envelope");
-        event.into_event()
+        .expect("SDK Event signer accepts the fixture envelope")
+        .expect_verifiable()
     }
 
     /// Build and sign the envelope, as the JSON an HTTP fixture posts.
@@ -421,23 +413,12 @@ pub fn sign_fixture_event(
     signing_seed: [u8; 32],
 ) -> Event {
     let verification_method = fixture_verification_method(actor_id, device_id);
-    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+    let signer = arkret_test_kit::seeded_signer_for_seed(
         signing_seed,
         arkret_identifiers::Did::new(actor_id.to_owned()).expect("fixture signer DID"),
         verification_method.clone(),
     );
-    let created_at = event.created_at;
-    let mut authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
-        event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .expect("fixture Event finalizes");
-    arkret_signatures::sign_event(
-        &mut authored,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-    )
-    .expect("fixture Event signs");
-    authored.into_event()
+    arkret_test_kit::sign_verifiable_event(event, &signer, arkret_canonical::DigestSuite::Sha256)
+        .expect("fixture Event signs")
+        .expect_verifiable()
 }

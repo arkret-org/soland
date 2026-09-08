@@ -23,19 +23,6 @@ pub trait AgentParticipationStore: Send + Sync {
     /// Upsert a governance ceiling row keyed by scope_key.
     async fn put_ceiling(&self, record: Value) -> PersistenceResult<()>;
 }
-#[doc(hidden)]
-pub fn agent_participation_record_key(record: &Value) -> (Option<String>, Option<String>) {
-    (
-        record
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        record
-            .get("scope_key")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-    )
-}
 /// AKP-0008 — Agent principal persistence (provision /
 /// list / get / lifecycle). The typed persistence model keeps database column
 /// names, nullability, UUIDs, and timestamps checked at compile time. The wire

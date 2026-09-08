@@ -1,8 +1,7 @@
 use super::{
-    BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
-    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
-    EventBatchReceipt, FederationOutboxRecord, MessageRecord, PersistenceError, PersistenceResult,
-    PublicationEvidenceRecord, Value, async_trait,
+    BTreeMap, CanonicalEventRecord, DeviceInventoryRecord, DirectConversationFoundingCommitOutcome,
+    DirectConversationFoundingSlotRecord, EventBatchReceipt, FederationOutboxRecord, MessageRecord,
+    PersistenceError, PersistenceResult, PublicationEvidenceRecord, Value, async_trait,
 };
 
 /// Canonical transport-only evidence accepted with one membership
@@ -396,41 +395,6 @@ pub struct PeerEventsPageQuery {
     pub backward: bool,
     pub limit: usize,
 }
-#[doc(hidden)]
-pub fn stage_identity_anchor_events(
-    staged: &mut BTreeMap<String, CanonicalEventRecord>,
-    records: Vec<CanonicalEventRecord>,
-) -> PersistenceResult<()> {
-    for record in records {
-        crate::ids::validated_event_identity_parts_for_suite(
-            &record.event_id,
-            &record.canonical_digest,
-            &record.canonical_bytes,
-            record.digest_suite,
-        )?;
-        if let Some(existing) = staged.get(&record.event_id) {
-            if existing.canonical_bytes == record.canonical_bytes {
-                continue;
-            }
-            return Err(PersistenceError::Conflict(
-                "event_hash_collision".to_owned(),
-            ));
-        }
-        if record.kind == arkret_wire::EventKind::RealmCreate.as_str()
-            && record.realm_id.is_some()
-            && staged.values().any(|existing| {
-                existing.kind == arkret_wire::EventKind::RealmCreate.as_str()
-                    && existing.realm_id == record.realm_id
-            })
-        {
-            return Err(PersistenceError::Conflict(
-                "realm_already_exists".to_owned(),
-            ));
-        }
-        staged.insert(record.event_id.clone(), record);
-    }
-    Ok(())
-}
 /// Locate the replacement `ak.device.authorize` that belongs to one accepted
 /// re-anchor.
 ///
@@ -494,66 +458,4 @@ pub fn identity_anchor_slot_conflicts(
                     .map(|paired| paired.canonical_digest.as_str())
                     != Some(slot.authorize_digest.as_str()))
     })
-}
-#[doc(hidden)]
-pub fn receipt_covers_event(receipt: &EventBatchReceipt, event_id: &str) -> bool {
-    receipt
-        .events
-        .iter()
-        .any(|event| event.event_id.as_str() == event_id)
-}
-#[doc(hidden)]
-pub fn event_position_cmp(
-    left: &CanonicalEventRecord,
-    right: &CanonicalEventRecord,
-) -> std::cmp::Ordering {
-    left.received_at
-        .cmp(&right.received_at)
-        .then_with(|| left.event_id.cmp(&right.event_id))
-}
-#[doc(hidden)]
-pub fn peer_page_record_after_cursor(
-    record: &CanonicalEventRecord,
-    cursor: Option<&CanonicalEventRecord>,
-    backward: bool,
-) -> bool {
-    let Some(cursor) = cursor else {
-        return true;
-    };
-    let order = event_position_cmp(record, cursor);
-    if backward {
-        order.is_lt()
-    } else {
-        order.is_gt()
-    }
-}
-#[doc(hidden)]
-pub fn peer_page_record_matches(
-    record: &CanonicalEventRecord,
-    realms: &BTreeSet<&str>,
-    actors: &BTreeSet<&str>,
-    kind_filter: Option<&str>,
-) -> bool {
-    if let Some(kind) = kind_filter
-        && record.kind != kind
-    {
-        return false;
-    }
-    let realm_match = realms.is_empty()
-        || record
-            .realm_id
-            .as_deref()
-            .is_some_and(|realm_id| realms.contains(realm_id));
-    let actor_match = actors.is_empty() || actors.contains(record.actor_id.as_str());
-    realm_match && actor_match
-}
-#[doc(hidden)]
-pub fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool {
-    matches!(
-        arkret_wire::EventKind::from_wire(&record.kind),
-        arkret_wire::EventKind::MemberState
-            | arkret_wire::EventKind::CircleMemberState
-            | arkret_wire::EventKind::InviteCreate
-            | arkret_wire::EventKind::InviteAccept
-    )
 }

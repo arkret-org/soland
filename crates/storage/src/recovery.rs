@@ -1,7 +1,7 @@
 use super::{
-    BTreeMap, BackupSeriesEraseProgressRecord, PersistenceError, PersistenceResult,
-    RecoveryPolicyRecord, RecoverySessionRecord, SecurityTransactionRecord,
-    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord, async_trait,
+    BackupSeriesEraseProgressRecord, PersistenceError, PersistenceResult, RecoveryPolicyRecord,
+    RecoverySessionRecord, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    SecurityTransactionStepOutcomeRecord, async_trait,
 };
 /// Durable recovery policy store. Implementations enforce policy_id
 /// uniqueness, `(account_id, version)` uniqueness, and the per-account
@@ -323,17 +323,6 @@ pub fn validate_security_transaction_step_accept(
         ));
     }
     Ok(())
-}
-
-#[doc(hidden)]
-pub fn recovery_active_policy_locked(
-    data: &BTreeMap<String, RecoveryPolicyRecord>,
-    account_id: &arkret_wire::AccountId,
-) -> Option<RecoveryPolicyRecord> {
-    data.values()
-        .filter(|record| &record.account_id == account_id)
-        .max_by_key(|record| record.version)
-        .cloned()
 }
 
 #[cfg(test)]

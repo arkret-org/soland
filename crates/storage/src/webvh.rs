@@ -86,21 +86,3 @@ pub fn valid_new_service_registration_records(
         && document.key_log_head.as_deref() == Some(event.event_digest.as_str())
         && outcome.registration_receipt.log_head_digest == event.event_digest
 }
-#[doc(hidden)]
-pub fn document_declares_registration_key(
-    document: &Value,
-    key: &arkret_models_identity::service_identity::ServiceRegistrationKey,
-) -> bool {
-    document
-        .get("service")
-        .and_then(Value::as_array)
-        .is_some_and(|services| {
-            services.iter().any(|entry| {
-                entry.get("type").and_then(Value::as_str) == Some("ArkretService")
-                    && entry.get("serviceKind").and_then(Value::as_str)
-                        == Some(key.service_kind().as_str())
-                    && entry.get("serviceEndpoint").and_then(Value::as_str)
-                        == Some(key.public_base_url().as_str())
-            })
-        })
-}

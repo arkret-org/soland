@@ -6121,6 +6121,7 @@ dependencies = [
  "arkret-schema",
  "arkret-signatures",
  "arkret-state",
+ "arkret-test-kit",
  "arkret-wire",
  "async-trait",
  "bytes",

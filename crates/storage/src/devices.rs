@@ -123,14 +123,6 @@ pub fn fresh_device_message_ack_token() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 #[doc(hidden)]
-pub fn device_message_expires_at(message: &DeviceMessageRecord) -> chrono::DateTime<Utc> {
-    message
-        .content
-        .get("expires_at")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1))
-}
-#[doc(hidden)]
 pub fn ensure_device_message_id(message: &mut DeviceMessageRecord) {
     if let Some(content) = message.content.as_object_mut()
         && !content.contains_key("device_message_id")

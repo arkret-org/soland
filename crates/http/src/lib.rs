@@ -213,19 +213,12 @@ pub(crate) mod test_event {
         )
         .expect("fixture verification method has a DID subject");
         let signer = StructuralOnlyPayloadSigner::new(signer_did, verification_method.clone());
-        let created_at = event.created_at;
-        let mut authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        *event = arkret_test_kit::sign_structural_only_event(
             event.clone(),
+            &signer,
             arkret_canonical::DigestSuite::Sha256,
         )
-        .expect("fixture Event finalizes");
-        arkret_signatures::sign_event(
-            &mut authored,
-            &signer,
-            &verification_method,
-            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-        )
-        .expect("structural-only fixture proof attaches");
-        *event = authored.into_event();
+        .expect("structural-only fixture proof attaches")
+        .expect_structural_only();
     }
 }

@@ -22,6 +22,7 @@ arkret-policy.workspace = true
 arkret-schema.workspace = true
 arkret-signatures.workspace = true
 arkret-state.workspace = true
+arkret-test-kit.workspace = true
 arkret-wire = { workspace = true, features = ["test-support"] }
 async-trait.workspace = true
 bytes.workspace = true
