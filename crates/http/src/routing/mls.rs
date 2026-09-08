@@ -3709,10 +3709,12 @@ async fn revoke_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let session_owner_account_pk = session.account_pk.ok_or_else(|| {
-        AppError::capability_denied("KeyPackage revoke requires an account-bound session")
-    })?;
-    ensure_keypackage_owner_account_active(state, session_owner_account_pk).await?;
+    if session.account_pk.is_none() && session.agent_session.is_none() {
+        return Err(AppError::capability_denied(
+            "KeyPackage revoke requires an account- or Agent-bound session",
+        ));
+    }
+    let session_owner_account_pk = local_keypackage_owner_account_pk(state, &session).await?;
     let device_id = body.device_id.to_string();
     if device_id != session.device_id {
         return Err(AppError::capability_denied(
@@ -4312,11 +4314,13 @@ async fn verify_session_keypackage_write_signature(
                     .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
-                        AppError::param_invalid("KeyPackage signature target is missing")
+                        AppError::param_invalid(format!(
+                            "KeyPackage signature target is missing: {keypackage_ref}"
+                        ))
                     })?
             };
             if record.actor_id != session.actor
-                || record.device_id.as_deref() != Some(session.device_id.as_str())
+                || record.device_id.is_some()
                 || record.agent_key_authorize_event_id.as_deref() != Some(authorize_event_id)
             {
                 return Err(crate::app_error!(
