@@ -652,11 +652,31 @@ async fn device_generation_event_seal_context(
             "principal-control bootstrap actor_id is invalid: {error}"
         ))
     })?;
-    if !state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &actor_id.to_string())
+    let bound_pcr = if bootstrap
+        .envelope
+        .pointer("/payload/object/purpose")
+        .and_then(serde_json::Value::as_str)
+        == Some("principal_control")
     {
+        if let Some(account) = actor_id.as_account_id() {
+            state
+                .persistence()
+                .principal_resolution_by_account_id(account)
+                .await
+                .map_err(|error| {
+                    seal_admission_error(format!("principal resolution unavailable: {error}"))
+                })?
+                .is_some_and(|resolution| &resolution.pcr_realm_id == realm_id)
+        } else {
+            false
+        }
+    } else {
+        state
+            .projections()
+            .snapshot()
+            .realm_is_principal_control_for_actor(realm_id.as_str(), &actor_id.to_string())
+    };
+    if !bound_pcr {
         return Err(seal_admission_error(
             "principal-control bootstrap is stored outside the accepted actor PCR",
         ));

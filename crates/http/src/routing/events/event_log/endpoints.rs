@@ -692,16 +692,22 @@ async fn submit_event_seal(
             format!("Seal submitter DID core id is invalid: {error}"),
         )
     })?;
-    let own_pcr = state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(
-            seal.realm_id.as_str(),
-            &crate::routing::identity::session_actor::session_actor_from_credential(
-                state, &session,
-            )?
-            .to_string(),
-        );
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    // PCR registration commits the exact Account binding durably before
+    // projections catch up. Authorization must use that accepted binding.
+    let own_pcr = if let Some(account) = session_actor.as_account_id() {
+        state
+            .persistence()
+            .principal_resolution_by_account_id(account)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("principal resolution lookup failed: {error}"))
+            })?
+            .is_some_and(|resolution| resolution.pcr_realm_id == seal.realm_id)
+    } else {
+        false
+    };
     let agent = if own_pcr {
         None
     } else {
