@@ -138,6 +138,10 @@ pub struct ContactRecord {
     pub granted_to_target_scopes: Vec<String>,
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
+    /// Whether the target holder's directional `pending_incoming` head passed
+    /// the shared first-contact admission chokepoint. The source holder's
+    /// `pending_outgoing` head remains durable even when this is false.
+    pub pending_incoming_admitted: bool,
     pub request_event_ref: Option<EventId>,
     /// Station-internal directional request-slot CAS heads. These are not
     /// Contact-round continuity and never cross the wire by themselves.

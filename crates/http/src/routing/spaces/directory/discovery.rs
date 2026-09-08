@@ -84,6 +84,7 @@ mod tests {
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
                 granted_to_requester_scopes: vec!["direct_message".to_owned()],
                 status: "accepted".to_owned(),
+                pending_incoming_admitted: true,
                 request_event_ref: None,
                 request_slot_states: Vec::new(),
                 request_receipts: Vec::new(),

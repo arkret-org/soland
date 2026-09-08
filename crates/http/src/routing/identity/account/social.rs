@@ -643,6 +643,7 @@ fn directional_contact_state(
 ) -> Option<ContactState> {
     Some(match record.status.as_str() {
         "pending" if &record.requester_id == actor => ContactState::PendingOutgoing,
+        "pending" if !record.pending_incoming_admitted => return None,
         "pending" => ContactState::PendingIncoming,
         "accepted" => ContactState::Accepted,
         "rejected" => ContactState::Rejected,

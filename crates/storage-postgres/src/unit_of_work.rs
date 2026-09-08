@@ -830,13 +830,13 @@ async fn commit_contact_projection(
         sql_query(
             "UPDATE contacts SET requester_id = $1, target_id = $2, \
                 contact_round_id = $3, version = $4, granted_to_target_scopes = $5, \
-                granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
-                request_slot_states = $9, request_receipts = $10, request_mirror_receipts = $11, \
-                contact_round_evidence = $12, contact_round_evidence_history = $13, \
-                control_outcomes = $14, response_event_ref = $15, tombstone_event_ref = $16, \
-                message = $17, peer_id = $18, updated_at = $19 \
+                granted_to_requester_scopes = $6, status = $7, pending_incoming_admitted = $8, request_event_ref = $9, \
+                request_slot_states = $10, request_receipts = $11, request_mirror_receipts = $12, \
+                contact_round_evidence = $13, contact_round_evidence_history = $14, \
+                control_outcomes = $15, response_event_ref = $16, tombstone_event_ref = $17, \
+                message = $18, peer_id = $19, updated_at = $20 \
              WHERE ((requester_id = $1 AND target_id = $2) OR \
-                    (requester_id = $2 AND target_id = $1)) AND updated_at = $20",
+                    (requester_id = $2 AND target_id = $1)) AND updated_at = $21",
         )
         .bind::<Text, _>(record.requester_id.to_string())
         .bind::<Text, _>(record.target_id.to_string())
@@ -845,6 +845,7 @@ async fn commit_contact_projection(
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
+        .bind::<diesel::sql_types::Bool, _>(record.pending_incoming_admitted)
         .bind::<Nullable<Binary>, _>(request_event_ref)
         .bind::<Jsonb, _>(&request_slot_states)
         .bind::<Jsonb, _>(&request_receipts)
@@ -864,8 +865,8 @@ async fn commit_contact_projection(
     } else {
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_slot_states, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, pending_incoming_admitted, request_event_ref, request_slot_states, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) \
              ON CONFLICT (requester_id, target_id) DO NOTHING",
         )
         .bind::<Uuid, _>(uuid::Uuid::now_v7())
@@ -876,6 +877,7 @@ async fn commit_contact_projection(
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
+        .bind::<diesel::sql_types::Bool, _>(record.pending_incoming_admitted)
         .bind::<Nullable<Binary>, _>(request_event_ref)
         .bind::<Jsonb, _>(&request_slot_states)
         .bind::<Jsonb, _>(&request_receipts)

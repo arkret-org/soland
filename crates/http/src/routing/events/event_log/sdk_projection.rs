@@ -918,6 +918,7 @@ mod refs_limit_tests {
             granted_to_target_scopes: vec!["direct_message".into()],
             granted_to_requester_scopes: vec!["direct_message".into()],
             status: "accepted".into(),
+            pending_incoming_admitted: true,
             request_event_ref: Some(arkret_wire::EventId::new(record.event_id.clone()).unwrap()),
             request_slot_states: Vec::new(),
             request_receipts: Vec::new(),

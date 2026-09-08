@@ -1363,6 +1363,7 @@ CREATE TABLE public.contacts (
     granted_to_target_scopes text[] DEFAULT '{}'::text[] NOT NULL,
     granted_to_requester_scopes text[] DEFAULT '{}'::text[] NOT NULL,
     status text NOT NULL,
+    pending_incoming_admitted boolean NOT NULL,
     -- Not `event_pk` keys: a contact request/response can be authored on the
     -- peer's service, so the named Event need not exist in this deployment's
     -- log at all and a foreign key would reject the legitimate federated case.

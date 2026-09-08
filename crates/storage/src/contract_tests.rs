@@ -2615,6 +2615,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         granted_to_target_scopes: vec!["direct_conversation".to_owned()],
         granted_to_requester_scopes: Vec::new(),
         status: "pending".to_owned(),
+        pending_incoming_admitted: false,
         request_event_ref: Some(contact_event_ref.clone()),
         request_slot_states: vec![crate::ContactRequestSlotState {
             owner_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -2719,6 +2720,10 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert_eq!(
         persisted_contact.request_slot_states, contact_record.request_slot_states,
         "request-slot predecessor and accepted local sequence survive the atomic Contact commit"
+    );
+    assert_eq!(
+        persisted_contact.pending_incoming_admitted, contact_record.pending_incoming_admitted,
+        "the directional pending-incoming admission decision survives restart-equivalent reads"
     );
     assert!(
         stores

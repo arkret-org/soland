@@ -275,6 +275,7 @@ async fn validate_request_acceptance_receipt(
         ));
     }
     if record.status != "pending"
+        || !record.pending_incoming_admitted
         || record.requester_id != receipt.core.holder.contact_actor_id()
         || record.target_id != receipt.core.peer.contact_actor_id()
         || record.request_event_ref.as_ref() != Some(&receipt.core.request_event_ref)
@@ -1582,12 +1583,26 @@ async fn plan_contact_commit(
                 slot_predecessor.as_ref(),
                 request_receipt.receipt_digest.clone(),
             )?;
+            let pending_incoming_admitted = if same_service_target {
+                let target_account_id = peer.as_account_id().ok_or_else(|| {
+                    AppError::internal("same-service Contact target is not an Account")
+                })?;
+                crate::routing::invites::admit_quarantine_new_source(
+                    state,
+                    target_account_id,
+                    holder.signing_principal_id().as_str(),
+                    now(),
+                )
+                .await?
+            } else {
+                false
+            };
             // Same-service delivery is a fact about the target account's
             // current host, not about the requester_id's introduction-evidence
             // trust tier. A DID without URL components legitimately uses `explicit_address`,
             // but its local recipient still needs the exact privately
             // resolvable request Event required to author a response.
-            let verified_mirror = same_service_target
+            let verified_mirror = (same_service_target && pending_incoming_admitted)
                 .then(|| {
                     Ok::<_, AppError>(soland_storage::ContactVerifiedMirrorRecord {
                         target_holder_principal_id: contact_mirror_target_holder_key(&peer),
@@ -1614,6 +1629,7 @@ async fn plan_contact_commit(
                     granted_to_target_scopes: contact_scope_strings(granted_to_peer_scopes),
                     granted_to_requester_scopes: Vec::new(),
                     status: "pending".to_owned(),
+                    pending_incoming_admitted,
                     request_event_ref: Some(event.event_id.clone()),
                     request_slot_states,
                     request_receipts: vec![request_receipt.clone()],
@@ -2749,6 +2765,7 @@ mod device_authorization_account_tests {
                 granted_to_target_scopes: Vec::new(),
                 granted_to_requester_scopes: Vec::new(),
                 status: "pending".to_owned(),
+                pending_incoming_admitted: true,
                 request_event_ref: Some(receipt.core.request_event_ref.clone()),
                 request_slot_states: Vec::new(),
                 request_receipts: vec![receipt.clone()],
