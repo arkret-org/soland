@@ -16,8 +16,7 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_wire::events::EventKind;
 use arkret_wire::{
-    EventId, NotificationId, NotificationKind, NotificationPriority, NotificationState, RealmId,
-    StrandId,
+    EventId, NotificationKind, NotificationPriority, NotificationState, RealmId, StrandId,
 };
 use serde_json::Value;
 
@@ -189,12 +188,25 @@ async fn put_notification(
             .map(serde_json::from_value)
             .transpose()
             .map_err(|error| format!("notification preview is invalid: {error}"))?;
+        let actor_id: arkret_wire::ActorId = serde_json::from_str(recipient_id)
+            .map_err(|error| format!("notification recipient ActorId is invalid: {error}"))?;
+        let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
+        let source_event =
+            EventId::new(source_event_id.to_owned()).map_err(|error| error.to_string())?;
+        let id =
+            arkret_models_collaboration::objects::read_receipts::derive_notification_projection_id(
+                actor_id
+                    .as_account_id()
+                    .ok_or("notification recipient must be an account")?,
+                &realm,
+                &source_event,
+                &notification_kind,
+            )
+            .map_err(|error| error.to_string())?;
         let notification = Notification {
-            id: NotificationId::new(crate::ids::generate_notification_id())
-                .map_err(|error| format!("notification id is invalid: {error}"))?,
+            id: id.into(),
             schema: NotificationSchema::V1,
-            actor_id: serde_json::from_str(recipient_id)
-                .map_err(|error| format!("notification recipient ActorId is invalid: {error}"))?,
+            actor_id,
             source: NotificationSource::Event(NotificationEventSource {
                 source_event_id: EventId::new(source_event_id.to_owned())
                     .map_err(|error| format!("notification source Event is invalid: {error}"))?,

@@ -2305,12 +2305,8 @@ CREATE TABLE public.notifications (
     id uuid PRIMARY KEY,
     recipient_actor_id text NOT NULL,
     realm_id text,
-    -- Still `text`, and deliberately not yet an Event identity column: the
-    -- producers in `routing/events/notify.rs` and `reducer/apply_messages.rs`
-    -- fall back to the Operation id when the payload carries no `event_id`, so
-    -- this column holds an `ak:event:` id OR an `ak:operation:` id. It also
-    -- backs a UNIQUE dedup key, so the fallback has to be removed before the
-    -- column can become a 33-octet Event identity.
+    -- Canonical Event identity, validated by the shared SDK on write/read.
+    -- The UUID primary key is internal to this rebuildable cache.
     source_event_id text,
     controller_account_pk bigint,
     recipient_id text,
@@ -2337,7 +2333,7 @@ CREATE TABLE public.notifications (
 
 CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_actor_id, created_at DESC);
 
-CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_actor_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
+CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_actor_id, realm_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
 
 CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_pk, recipient_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_pk IS NOT NULL);
 

@@ -115,20 +115,30 @@ impl NotificationRow {
                     "recipient notification preview is invalid: {error}"
                 ))
             })?;
-        let notification = Notification {
-            id: NotificationId::new(ids::format_typed_uuid(
-                "notification",
-                &self.notification_id,
-            ))
-            .map_err(|error| {
-                PersistenceError::Internal(format!("recipient notification id is invalid: {error}"))
-            })?,
-            schema: NotificationSchema::V1,
-            actor_id: serde_json::from_str(&self.recipient_actor_id).map_err(|error| {
+        let actor_id: ActorId =
+            serde_json::from_str(&self.recipient_actor_id).map_err(|error| {
                 PersistenceError::Internal(format!(
                     "recipient notification actor_id is invalid: {error}"
                 ))
-            })?,
+            })?;
+        let id =
+            arkret_models_collaboration::objects::read_receipts::derive_notification_projection_id(
+                actor_id.as_account_id().ok_or_else(|| {
+                    PersistenceError::Internal(
+                        "notification recipient must be an account".to_owned(),
+                    )
+                })?,
+                realm_id.as_ref().ok_or_else(|| {
+                    PersistenceError::Internal("notification source Realm is missing".to_owned())
+                })?,
+                &source_event_id,
+                &notification_kind,
+            )
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        let notification = Notification {
+            id: id.into(),
+            schema: NotificationSchema::V1,
+            actor_id,
             source: NotificationSource::Event(NotificationEventSource {
                 source_event_id,
                 realm_id,
@@ -296,7 +306,7 @@ impl NotificationStore for PgNotificationStore {
               notification_kind, event_kind, source_actor_id, priority, state, preview, \
               created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-             ON CONFLICT (recipient_actor_id, source_event_id, notification_kind) \
+             ON CONFLICT (recipient_actor_id, realm_id, source_event_id, notification_kind) \
               WHERE source_event_id IS NOT NULL DO UPDATE SET \
               source_ref = EXCLUDED.source_ref, \
               strand_id = EXCLUDED.strand_id, \
@@ -309,9 +319,9 @@ impl NotificationStore for PgNotificationStore {
               projection_position = nextval('notification_projection_position_seq'), \
               updated_at = NOW()",
         )
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
-            record.notification.id.as_str(),
-        ))
+        // This UUID is only the cache row key. The public identity is derived
+        // from the complete source tuple when reading the row.
+        .bind::<sql_types::Uuid, _>(Uuid::now_v7())
         .bind::<Text, _>(record.notification.actor_id.to_string())
         .bind::<Nullable<Text>, _>(realm_id)
         .bind::<Text, _>(source.source_event_id.as_str())

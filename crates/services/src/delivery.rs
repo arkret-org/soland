@@ -790,11 +790,15 @@ mod tests {
             .store_notification(StoreNotificationCommand {
                 record: RecipientNotificationRecord {
                     notification: arkret_models_collaboration::objects::read_receipts::Notification {
-                        id: arkret_wire::NotificationId::new(
-                            "ak:notification:019fa233-5ab8-75c0-8497-376bafe172a4"
-                                .to_owned(),
-                        )
-                        .expect("notification id"),
+                        id: arkret_models_collaboration::objects::read_receipts::derive_notification_projection_id(
+                            &arkret_wire::AccountId::new(
+                                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                                arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+                            ),
+                            &arkret_wire::RealmId::new("ak:realm:AdF_8ICakbYdEH0Cnl-w5o1WFlnh5rXGWqY_-_G6yM7N").unwrap(),
+                            &arkret_wire::EventId::new("ak:event:AT33EWBTXdTx5CjY-ogbIIF2T4vh-v7jCMCQ80Fss2Rq").unwrap(),
+                            &arkret_wire::NotificationKind::Message,
+                        ).expect("notification id").into(),
                         schema: arkret_models_collaboration::objects::read_receipts::NotificationSchema::V1,
                         actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                             arkret_wire::DidCoreId::new(
@@ -813,7 +817,7 @@ mod tests {
                                         .to_owned(),
                                 )
                                 .expect("event id"),
-                                realm_id: None,
+                                realm_id: Some(arkret_wire::RealmId::new("ak:realm:AdF_8ICakbYdEH0Cnl-w5o1WFlnh5rXGWqY_-_G6yM7N").unwrap()),
                                 source_ref: None,
                                 strand_id: None,
                                 track_name: None,
