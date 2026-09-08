@@ -1,8 +1,8 @@
 use arkret_wire::DidCoreId;
 
 use super::{
-    BTreeSet, OrganizationPolicyRecord, OrganizationRecord, PersistenceResult,
-    RealmOrganizationStatementRecord, RetentionPolicyRecord, RetentionTombstoneRecord, async_trait,
+    BTreeSet, OrganizationRecord, PersistenceResult, RealmOrganizationStatementRecord,
+    RetentionPolicyRecord, RetentionTombstoneRecord, async_trait,
 };
 #[async_trait]
 pub trait HandleReleaseStore: Send + Sync {
@@ -31,15 +31,6 @@ pub trait OrganizationStore: Send + Sync {
     async fn get(&self, organization_id: &str) -> PersistenceResult<Option<OrganizationRecord>>;
     async fn put(&self, record: &OrganizationRecord) -> PersistenceResult<()>;
     async fn list(&self) -> PersistenceResult<Vec<OrganizationRecord>>;
-}
-#[async_trait]
-pub trait OrganizationPolicyStore: Send + Sync {
-    async fn get(
-        &self,
-        organization_id: &str,
-    ) -> PersistenceResult<Option<OrganizationPolicyRecord>>;
-    async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>>;
 }
 /// SOL-ORG-05 — declared `owning_organization_ids` hint links. These are NOT
 /// verified relationships and do not drive policy inheritance; see

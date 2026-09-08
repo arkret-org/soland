@@ -341,7 +341,6 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn retention_tombstones(&self) -> &dyn RetentionTombstoneStore;
     fn organizations(&self) -> &dyn OrganizationStore;
     fn organization_registrations(&self) -> &dyn OrganizationRegistrationStore;
-    fn organization_policies(&self) -> &dyn OrganizationPolicyStore;
     fn realm_organizations(&self) -> &dyn RealmOrganizationStore;
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore;
     fn audit(&self) -> &dyn AuditStore;

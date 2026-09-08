@@ -40,7 +40,6 @@ pub struct PgPersistenceStore {
     retention_tombstones: PgRetentionTombstoneStore,
     organizations: PgOrganizationStore,
     organization_registrations: PgOrganizationRegistrationStore,
-    organization_policies: PgOrganizationPolicyStore,
     realm_organizations: PgRealmOrganizationStore,
     realm_organization_statements: PgRealmOrganizationStatementStore,
     governance_dependencies: PgGovernanceDependencyStore,
@@ -127,7 +126,6 @@ impl PgPersistenceStore {
             retention_tombstones: PgRetentionTombstoneStore { pool: pool.clone() },
             organizations: PgOrganizationStore { pool: pool.clone() },
             organization_registrations: PgOrganizationRegistrationStore::new(pool.clone()),
-            organization_policies: PgOrganizationPolicyStore { pool: pool.clone() },
             realm_organizations: PgRealmOrganizationStore { pool: pool.clone() },
             realm_organization_statements: PgRealmOrganizationStatementStore { pool: pool.clone() },
             governance_dependencies: PgGovernanceDependencyStore { pool: pool.clone() },
@@ -372,10 +370,6 @@ impl FederationGovernanceStoreRegistry for PgPersistenceStore {
 
     fn organization_registrations(&self) -> &dyn OrganizationRegistrationStore {
         &self.organization_registrations
-    }
-
-    fn organization_policies(&self) -> &dyn OrganizationPolicyStore {
-        &self.organization_policies
     }
 
     fn realm_organizations(&self) -> &dyn RealmOrganizationStore {

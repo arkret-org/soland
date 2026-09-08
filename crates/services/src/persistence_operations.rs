@@ -553,27 +553,6 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         Ok(self.0.organizations().list().await?)
     }
 
-    async fn organization_policy(
-        &self,
-        organization_id: &str,
-    ) -> crate::ServiceResult<Option<crate::governance::OrganizationPolicyRecord>> {
-        Ok(self.0.organization_policies().get(organization_id).await?)
-    }
-
-    async fn store_organization_policy(
-        &self,
-        record: &crate::governance::OrganizationPolicyRecord,
-    ) -> crate::ServiceResult<()> {
-        self.0.organization_policies().put(record).await?;
-        Ok(())
-    }
-
-    async fn organization_policies(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::governance::OrganizationPolicyRecord>> {
-        Ok(self.0.organization_policies().snapshot_all().await?)
-    }
-
     async fn link_realm_organization(
         &self,
         realm_id: &str,

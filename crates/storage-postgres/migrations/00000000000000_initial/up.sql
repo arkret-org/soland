@@ -2206,16 +2206,6 @@ CREATE TABLE public.organization_registration_states (
 CREATE INDEX organization_registration_states_generation_idx
     ON public.organization_registration_states (organization_id, current_generation);
 
-CREATE TABLE public.organization_policies (
-    organization_id text PRIMARY KEY,
-    policy_id text NOT NULL,
-    payload jsonb NOT NULL,
-    version bigint NOT NULL,
-    updated_by jsonb NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT organization_policies_version_check CHECK ((version >= 0))
-);
-
 -- SOL-ORG-04 — verified `ak.realm.organization` relationship statements.
 -- Primary key `(realm_id, organization_id, relationship)` so owner /
 -- governance / sponsor / directory_certifier relationships for the same Realm

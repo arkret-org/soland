@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::Value;
 pub use soland_storage::{
-    MultisigPendingRecord, OrganizationPolicyRecord, OrganizationRecord, PolicyDocumentRecord,
-    RetentionPolicyRecord, RetentionTombstoneRecord,
+    MultisigPendingRecord, OrganizationRecord, PolicyDocumentRecord, RetentionPolicyRecord,
+    RetentionTombstoneRecord,
 };
 
 use crate::ServiceResult;
@@ -52,15 +52,6 @@ pub trait GovernanceRecordsPort: Send + Sync {
     ) -> ServiceResult<Option<OrganizationRecord>>;
     async fn store_organization(&self, record: &OrganizationRecord) -> ServiceResult<()>;
     async fn organizations(&self) -> ServiceResult<Vec<OrganizationRecord>>;
-    async fn organization_policy(
-        &self,
-        organization_id: &str,
-    ) -> ServiceResult<Option<OrganizationPolicyRecord>>;
-    async fn store_organization_policy(
-        &self,
-        record: &OrganizationPolicyRecord,
-    ) -> ServiceResult<()>;
-    async fn organization_policies(&self) -> ServiceResult<Vec<OrganizationPolicyRecord>>;
     async fn link_realm_organization(
         &self,
         realm_id: &str,
@@ -127,7 +118,6 @@ pub struct GovernanceService {
     moderation: Arc<dyn ModerationPort>,
     records: Arc<dyn GovernanceRecordsPort>,
     organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
-    organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
     realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<DidCoreId>>>>,
     organization_realms: Arc<Mutex<BTreeMap<DidCoreId, BTreeSet<String>>>>,
     retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
@@ -138,15 +128,10 @@ impl GovernanceService {
     pub async fn hydrate_projections(&self) -> ServiceResult<()> {
         let retention_tombstones = self.records.retention_tombstones().await?;
         let organizations = self.records.organizations().await?;
-        let organization_policies = self.records.organization_policies().await?;
         let realm_organizations = self.records.realm_organization_links().await?;
 
         self.replace_retention_tombstones(retention_tombstones);
-        self.replace_organization_projection(
-            organizations,
-            organization_policies,
-            realm_organizations,
-        );
+        self.replace_organization_projection(organizations, realm_organizations);
         Ok(())
     }
 
@@ -167,28 +152,6 @@ impl GovernanceService {
 
     pub async fn organizations(&self) -> ServiceResult<Vec<OrganizationRecord>> {
         self.records.organizations().await
-    }
-
-    pub async fn organization_policy(
-        &self,
-        organization_id: &str,
-    ) -> ServiceResult<Option<OrganizationPolicyRecord>> {
-        self.records.organization_policy(organization_id).await
-    }
-
-    pub async fn store_organization_policy(
-        &self,
-        record: &OrganizationPolicyRecord,
-    ) -> ServiceResult<()> {
-        self.records.store_organization_policy(record).await?;
-        self.organization_policies
-            .lock()
-            .insert(record.organization_id.clone(), record.clone());
-        Ok(())
-    }
-
-    pub async fn organization_policies(&self) -> ServiceResult<Vec<OrganizationPolicyRecord>> {
-        self.records.organization_policies().await
     }
 
     pub async fn link_realm_organization(
@@ -229,7 +192,6 @@ impl GovernanceService {
             moderation,
             records,
             organizations: Arc::new(Mutex::new(BTreeMap::new())),
-            organization_policies: Arc::new(Mutex::new(BTreeMap::new())),
             realm_organizations: Arc::new(Mutex::new(BTreeMap::new())),
             organization_realms: Arc::new(Mutex::new(BTreeMap::new())),
             retention_tombstones: Arc::new(Mutex::new(BTreeMap::new())),
@@ -255,14 +217,9 @@ impl GovernanceService {
     pub fn replace_organization_projection(
         &self,
         organizations: impl IntoIterator<Item = OrganizationRecord>,
-        policies: impl IntoIterator<Item = OrganizationPolicyRecord>,
         links: impl IntoIterator<Item = (String, BTreeSet<DidCoreId>)>,
     ) {
         *self.organizations.lock() = organizations
-            .into_iter()
-            .map(|record| (record.organization_id.clone(), record))
-            .collect();
-        *self.organization_policies.lock() = policies
             .into_iter()
             .map(|record| (record.organization_id.clone(), record))
             .collect();
@@ -286,27 +243,6 @@ impl GovernanceService {
 
     pub fn cached_organizations(&self) -> Vec<OrganizationRecord> {
         self.organizations.lock().values().cloned().collect()
-    }
-
-    pub fn cached_organization_policy(
-        &self,
-        organization_id: &str,
-    ) -> Option<OrganizationPolicyRecord> {
-        self.organization_policies
-            .lock()
-            .get(organization_id)
-            .cloned()
-    }
-
-    pub fn cached_organization_policies(
-        &self,
-        organization_ids: &[String],
-    ) -> Vec<(String, OrganizationPolicyRecord)> {
-        let policies = self.organization_policies.lock();
-        organization_ids
-            .iter()
-            .filter_map(|id| policies.get(id).cloned().map(|policy| (id.clone(), policy)))
-            .collect()
     }
 
     pub fn cached_organization_realms(&self, organization_id: &DidCoreId) -> Vec<String> {
@@ -535,21 +471,6 @@ mod tests {
             Ok(())
         }
         async fn organizations(&self) -> ServiceResult<Vec<OrganizationRecord>> {
-            Ok(Vec::new())
-        }
-        async fn organization_policy(
-            &self,
-            _organization_id: &str,
-        ) -> ServiceResult<Option<OrganizationPolicyRecord>> {
-            Ok(None)
-        }
-        async fn store_organization_policy(
-            &self,
-            _record: &OrganizationPolicyRecord,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn organization_policies(&self) -> ServiceResult<Vec<OrganizationPolicyRecord>> {
             Ok(Vec::new())
         }
         async fn link_realm_organization(

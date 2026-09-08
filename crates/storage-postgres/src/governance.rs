@@ -2,11 +2,11 @@ use diesel::sql_types::Binary;
 
 use super::{
     BTreeMap, BTreeSet, BigInt, Bool, HandleReleaseStore, Jsonb, Nullable, OptionalExtension,
-    OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RealmOrganizationStatementRecord,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RetentionPolicyRecord,
-    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore, RunQueryDsl, Text,
-    Timestamptz, Value, async_trait, ids, json_string_array, pg_conn, sql_query,
+    OrganizationRecord, OrganizationStore, PersistenceError, PersistenceResult, PgPool,
+    QueryableByName, RealmOrganizationStatementRecord, RealmOrganizationStatementStore,
+    RealmOrganizationStore, RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord,
+    RetentionTombstoneStore, RunQueryDsl, Text, Timestamptz, Value, async_trait, ids,
+    json_string_array, pg_conn, sql_query,
 };
 pub struct PgHandleReleaseStore {
     pub pool: PgPool,
@@ -368,103 +368,6 @@ impl From<OrganizationRow> for OrganizationRecord {
                         .expect("placeholder organization creator id is canonical")
                 }),
             created_at: row.created_at,
-            updated_at: row.updated_at,
-        }
-    }
-}
-pub struct PgOrganizationPolicyStore {
-    pub pool: PgPool,
-}
-#[async_trait]
-impl OrganizationPolicyStore for PgOrganizationPolicyStore {
-    async fn get(
-        &self,
-        organization_id: &str,
-    ) -> PersistenceResult<Option<OrganizationPolicyRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT organization_id, policy_id, payload, version, updated_by, updated_at \
-             FROM organization_policies WHERE organization_id = $1",
-        )
-        .bind::<Text, _>(organization_id)
-        .get_result::<OrganizationPolicyRow>(&mut *conn)
-        .await
-        .optional()
-        .map(|row| row.map(OrganizationPolicyRecord::from))
-        .map_err(PersistenceError::database)
-    }
-
-    async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let version = i64::try_from(record.version).unwrap_or(i64::MAX);
-        sql_query(
-            "INSERT INTO organization_policies \
-             (organization_id, policy_id, payload, version, updated_by, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (organization_id) DO UPDATE SET \
-               policy_id = EXCLUDED.policy_id, \
-               payload = EXCLUDED.payload, \
-               version = EXCLUDED.version, \
-               updated_by = EXCLUDED.updated_by, \
-               updated_at = EXCLUDED.updated_at",
-        )
-        .bind::<Text, _>(&record.organization_id)
-        .bind::<Text, _>(&record.policy_id)
-        .bind::<Jsonb, _>(&record.payload)
-        .bind::<BigInt, _>(version)
-        .bind::<Text, _>(record.updated_by.as_str())
-        .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT organization_id, policy_id, payload, version, updated_by, updated_at \
-             FROM organization_policies ORDER BY organization_id",
-        )
-        .load::<OrganizationPolicyRow>(&mut *conn)
-        .await
-        .map(|rows| {
-            rows.into_iter()
-                .map(OrganizationPolicyRecord::from)
-                .collect()
-        })
-        .map_err(PersistenceError::database)
-    }
-}
-#[derive(QueryableByName)]
-struct OrganizationPolicyRow {
-    #[diesel(sql_type = Text)]
-    organization_id: String,
-    #[diesel(sql_type = Text)]
-    policy_id: String,
-    #[diesel(sql_type = Jsonb)]
-    payload: Value,
-    #[diesel(sql_type = BigInt)]
-    version: i64,
-    #[diesel(sql_type = Text)]
-    updated_by: arkret_wire::DidCoreId,
-    #[diesel(sql_type = Timestamptz)]
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-impl From<OrganizationPolicyRow> for OrganizationPolicyRecord {
-    fn from(row: OrganizationPolicyRow) -> Self {
-        Self {
-            organization_id: row.organization_id,
-            policy_id: row.policy_id,
-            payload: row.payload,
-            version: u64::try_from(row.version.max(0)).unwrap_or(u64::MAX),
-            updated_by: row.updated_by,
             updated_at: row.updated_at,
         }
     }

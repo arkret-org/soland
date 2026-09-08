@@ -99,7 +99,6 @@ DROP TABLE IF EXISTS organizations CASCADE;
 DROP TABLE IF EXISTS organization_registration_states CASCADE;
 DROP TABLE IF EXISTS organization_registration_challenges CASCADE;
 DROP TABLE IF EXISTS organization_registration_outcomes CASCADE;
-DROP TABLE IF EXISTS organization_policies CASCADE;
 DROP TABLE IF EXISTS realm_organizations CASCADE;
 DROP TABLE IF EXISTS soland_schema_contract CASCADE;
 DROP TABLE IF EXISTS realm_owning_organizations CASCADE;

@@ -371,6 +371,7 @@ diesel::table! {
         granted_to_target_scopes -> Array<Text>,
         granted_to_requester_scopes -> Array<Text>,
         status -> Text,
+        pending_incoming_admitted -> Bool,
         request_event_ref -> Nullable<Bytea>,
         request_slot_states -> Jsonb,
         request_receipts -> Jsonb,
@@ -969,17 +970,6 @@ diesel::table! {
         position -> Int4,
         key -> Jsonb,
         created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    organization_policies (organization_id) {
-        organization_id -> Text,
-        policy_id -> Text,
-        payload -> Jsonb,
-        version -> Int8,
-        updated_by -> Text,
-        updated_at -> Timestamptz,
     }
 }
 
@@ -1946,7 +1936,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     multisig_pending,
     notifications,
     one_time_keys,
-    organization_policies,
     organizations,
     peer_keypackage_claims,
     policy_documents,

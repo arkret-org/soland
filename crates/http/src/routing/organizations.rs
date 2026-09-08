@@ -6,16 +6,19 @@
 
 use std::collections::BTreeSet;
 
-use arkret_models_collaboration::events_payloads::ModerationPolicyTarget;
-use arkret_wire::{ActorId, DidCoreId};
+use arkret_models_collaboration::events_payloads::{
+    ModerationPolicyTarget, OrganizationModerationPolicyDocument,
+    OrganizationModerationPolicyStatePayload,
+};
+use arkret_wire::{ActorId, CellFamilyId, CellRef, DidCoreId};
 use chrono::Utc;
 use salvo::oapi::endpoint;
-use salvo::oapi::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use soland_http::error::AppError;
-use soland_services::governance::{OrganizationPolicyRecord, OrganizationRecord};
+use soland_services::governance::OrganizationRecord;
 
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -65,63 +68,19 @@ struct OrganizationListOutcome {
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub(crate) struct OrganizationPolicyView {
-    kind: String,
-    organization_id: String,
-    policy_id: String,
-    version: u64,
-    policy: Value,
-    #[serde(default)]
-    applies_to_realms: Vec<String>,
-    updated_by: DidCoreId,
-    updated_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct OrganizationPolicyLayer {
     source: String,
     organization_id: String,
     policy_id: String,
-    version: u64,
     policy: Value,
     #[serde(default)]
     applies_to_realms: Vec<String>,
-}
-
-#[derive(Debug, salvo::oapi::ToSchema)]
-struct OrganizationModerationPolicyReplaceRequestBody(serde_json::Map<String, Value>);
-
-impl<'de> Deserialize<'de> for OrganizationModerationPolicyReplaceRequestBody {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        match Value::deserialize(deserializer)? {
-            Value::Object(object) => Ok(Self(object)),
-            _ => Err(serde::de::Error::custom(
-                "organization moderation policy must be a JSON object",
-            )),
-        }
-    }
-}
-
-impl From<OrganizationModerationPolicyReplaceRequestBody> for Value {
-    fn from(body: OrganizationModerationPolicyReplaceRequestBody) -> Self {
-        Value::Object(body.0)
-    }
 }
 
 pub(crate) fn router() -> Router {
     Router::with_path("organizations")
         .get(list_organizations)
         .post(upsert_organization)
-        .push(
-            // Single-organization reads are served by the collection route;
-            // Realm links are projected from `ak.realm.organization` Events.
-            Router::with_path("{organization_id}")
-                .push(Router::with_path("policy").get(get_organization_policy))
-                .push(Router::with_path("policy").post(upsert_organization_policy)),
-        )
 }
 
 fn ensure_organization_registry_admin(state: &AppState, actor: &str) -> Result<(), AppError> {
@@ -137,11 +96,10 @@ pub(crate) async fn refresh_organization_projection(
     state: &AppState,
 ) -> soland_services::ServiceResult<()> {
     let organizations = state.governance().organizations().await?;
-    let policies = state.governance().organization_policies().await?;
     let links = state.governance().realm_organization_links().await?;
     state
         .governance()
-        .replace_organization_projection(organizations, policies, links);
+        .replace_organization_projection(organizations, links);
 
     Ok(())
 }
@@ -231,119 +189,6 @@ async fn upsert_organization(
     json_ok(organization_record_view(state, &record))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.policy.resource.get",
-    summary = "Get an organization moderation policy",
-    tags("organizations")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.organization.policy.resource.get")
-)]
-async fn get_organization_policy(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    organization_id: PathParam<DidCoreId>,
-) -> JsonResult<OrganizationPolicyView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    refresh_organization_projection(state)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_id = organization_id.into_inner();
-    let organization_id = normalized_organization_id(organization_id.as_str())?;
-    let policy = state
-        .governance()
-        .cached_organization_policy(&organization_id)
-        .ok_or_else(|| AppError::not_found("organization policy not found"))?;
-    json_ok(organization_policy_record_view(state, &policy))
-}
-
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.policy.resource.replace",
-    summary = "Replace an organization moderation policy",
-    tags("organizations")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.organization.policy.resource.replace")
-)]
-async fn upsert_organization_policy(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    organization_id: PathParam<DidCoreId>,
-    body: JsonBody<OrganizationModerationPolicyReplaceRequestBody>,
-) -> JsonResult<OrganizationPolicyView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    ensure_organization_registry_admin(state, &session.actor)?;
-    let organization_id = normalized_organization_id(organization_id.into_inner().as_str())?;
-    let actor_id = DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::param_invalid(format!("authenticated principal_id: {error}")))?;
-    ensure_organization_placeholder(state, &organization_id, &actor_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut payload = Value::from(body.into_inner());
-    if !payload.is_object() {
-        return Err(AppError::json_invalid(
-            "organization moderation policy must be a JSON object",
-        ));
-    }
-    if payload.get("kind").and_then(Value::as_str).is_none() {
-        payload.as_object_mut().expect("object checked").insert(
-            "kind".to_owned(),
-            json!(arkret_wire::event_kind_str::ORGANIZATION_MODERATION_POLICY),
-        );
-    }
-    if payload
-        .get("organization_id")
-        .and_then(Value::as_str)
-        .is_none()
-    {
-        payload
-            .as_object_mut()
-            .expect("object checked")
-            .insert("organization_id".to_owned(), json!(organization_id.clone()));
-    }
-    let now = Utc::now();
-    let version = state
-        .governance()
-        .organization_policy(&organization_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .map(|policy| policy.version.saturating_add(1))
-        .unwrap_or(1);
-    let policy_id = payload
-        .get("policy_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            format!(
-                "ak:org-policy:{}:{version}",
-                safe_id_fragment(&organization_id)
-            )
-        });
-    let record = OrganizationPolicyRecord {
-        organization_id: organization_id.clone(),
-        policy_id,
-        payload,
-        version,
-        updated_by: DidCoreId::new(session.actor.clone()).map_err(|error| {
-            AppError::param_invalid(format!("authenticated principal_id: {error}"))
-        })?,
-        updated_at: now,
-    };
-    state
-        .governance()
-        .store_organization_policy(&record)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(organization_policy_record_view(state, &record))
-}
-
 pub(crate) async fn record_realm_organizations_from_event(
     state: &AppState,
     realm_id: &str,
@@ -426,46 +271,21 @@ pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<Di
 /// organization's moderation policy may flow into the Realm's effective policy;
 /// `owning_organization_ids` declared hints no longer qualify. Returns a stable,
 /// de-duplicated, sorted list.
-pub(crate) fn verified_moderation_organization_ids(
-    state: &AppState,
-    realm_id: &str,
-) -> Vec<DidCoreId> {
-    let now = Utc::now();
-    let proj = state.projections().snapshot();
-    let mut ids = proj.verified_organizations_with_scope(
-        realm_id,
-        arkret_models_collaboration::RealmOrganizationControlScope::ModerationPolicy,
-        now,
-    );
-    ids.sort();
-    ids.dedup();
-    ids
-}
-
 pub(crate) fn effective_policy_value_for_realm(state: &AppState, realm_id: &str) -> Value {
     // SOL-ORG-05 — only organizations with a verified, active, in-window
     // `ak.realm.organization` statement carrying the `moderation_policy`
     // control scope drive the effective moderation policy. Declared
     // `owning_organization_ids` hints no longer qualify.
-    let org_ids = verified_moderation_organization_ids(state, realm_id);
-    let directory_org_ids = org_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
-    let org_layers = state
-        .governance()
-        .cached_organization_policies(&directory_org_ids)
+    let org_layers = applicable_organization_policies(state, realm_id)
         .into_iter()
-        .map(|(org_id, policy)| {
-            let organization_id = DidCoreId::new(org_id.clone())
-                .expect("verified organization id remains a DID core id");
-            OrganizationPolicyLayer {
-                source: "organization".to_owned(),
-                organization_id: org_id.clone(),
-                policy_id: policy.policy_id.clone(),
-                version: policy.version,
-                policy: policy.payload.clone(),
-                applies_to_realms: state
-                    .governance()
-                    .cached_organization_realms(&organization_id),
-            }
+        .map(|(organization_id, policy)| OrganizationPolicyLayer {
+            source: "organization".to_owned(),
+            organization_id: organization_id.to_string(),
+            policy_id: policy.policy_id.to_string(),
+            policy: serde_json::to_value(&policy).unwrap_or(Value::Null),
+            applies_to_realms: state
+                .governance()
+                .cached_organization_realms(&organization_id),
         })
         .collect::<Vec<_>>();
 
@@ -485,16 +305,9 @@ pub(crate) async fn organization_policy_blocks_join(
         tracing::warn!(%error, "failed to refresh organization projection for join policy");
     }
     // SOL-ORG-05 — only verified moderation-scoped organizations gate joins.
-    let org_ids = verified_moderation_organization_ids(state, realm_id);
-    if org_ids.is_empty() {
-        return false;
-    }
-    org_ids.iter().any(|org_id| {
-        state
-            .governance()
-            .cached_organization_policy(org_id.as_str())
-            .is_some_and(|policy| policy_denies_join_actor(&policy.payload, actor))
-    })
+    applicable_organization_policies(state, realm_id)
+        .iter()
+        .any(|(_, policy)| policy_denies_join_actor(policy, actor))
 }
 
 pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
@@ -570,92 +383,88 @@ fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Va
     serde_json::to_value(organization_record_view(state, record)).unwrap_or(Value::Null)
 }
 
-fn organization_policy_record_view(
-    state: &AppState,
-    record: &OrganizationPolicyRecord,
-) -> OrganizationPolicyView {
-    let applies_to_realms = state
-        .governance()
-        .cached_organization(&record.organization_id)
-        .map(|organization| {
-            let organization_id = DidCoreId::new(organization.organization_id.clone())
-                .expect("stored organization id remains a DID core id");
-            state
-                .governance()
-                .cached_organization_realms(&organization_id)
-        })
-        .unwrap_or_default();
-    OrganizationPolicyView {
-        kind: arkret_wire::event_kind_str::ORGANIZATION_MODERATION_POLICY.to_owned(),
-        organization_id: record.organization_id.clone(),
-        policy_id: record.policy_id.clone(),
-        version: record.version,
-        policy: record.payload.clone(),
-        applies_to_realms,
-        updated_by: record.updated_by.clone(),
-        updated_at: arkret_canonical::format_timestamp_canonical(record.updated_at),
-    }
-}
-
 fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     // SOL-ORG-05 — effective rules are sourced only from verified
     // moderation-scoped organizations.
-    let org_ids = verified_moderation_organization_ids(state, realm_id);
     let mut rules = Vec::new();
-    for org_id in org_ids {
-        if let Some(policy) = state
-            .governance()
-            .cached_organization_policy(org_id.as_str())
-        {
-            rules.extend(policy_rules(&policy.payload));
-        }
+    for (_, policy) in applicable_organization_policies(state, realm_id) {
+        rules.extend(policy_rules(&policy));
     }
     rules
 }
 
-fn policy_rules(policy: &Value) -> Vec<Value> {
-    let mut rules = Vec::new();
-    if let Some(array) = policy.get("rules").and_then(Value::as_array) {
-        rules.extend(array.iter().cloned());
-    }
-    if let Some(array) = policy.get("targets").and_then(Value::as_array) {
-        for entry in array {
-            if let Some(object) = entry.as_object() {
-                rules.push(json!({
-                    "target": {
-                        "kind": object.get("kind").and_then(Value::as_str).unwrap_or("actor"),
-                        "actor_id": object
-                            .get("actor_id")
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    },
-                    "action": object.get("action").cloned().unwrap_or_else(|| json!("deny_join")),
-                    "reason_code": object.get("reason_code").cloned().unwrap_or(Value::Null),
-                }));
-            }
-        }
-    }
-    rules
+fn policy_rules(policy: &OrganizationModerationPolicyDocument) -> Vec<Value> {
+    policy
+        .rules
+        .iter()
+        .filter_map(|rule| serde_json::to_value(rule).ok())
+        .collect()
 }
 
-fn policy_denies_join_actor(policy: &Value, actor: &ActorId) -> bool {
-    policy_rules(policy).iter().any(|rule| {
-        let action = rule
-            .get("action")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !matches!(action, "deny_join" | "deny_restricted_join") {
-            return false;
-        }
-        target_actor_id(rule).is_some_and(|actor_id| &actor_id == actor)
+fn policy_denies_join_actor(
+    policy: &OrganizationModerationPolicyDocument,
+    actor: &ActorId,
+) -> bool {
+    use arkret_models_collaboration::events_payloads::OrganizationModerationAction;
+    policy.rules.iter().any(|rule| {
+        matches!(
+            rule.action,
+            OrganizationModerationAction::DenyJoin
+                | OrganizationModerationAction::DenyRestrictedJoin
+        ) && matches!(&rule.target, ModerationPolicyTarget::Actor { actor_id } if actor_id == actor)
     })
 }
 
-fn target_actor_id(value: &Value) -> Option<ActorId> {
-    match serde_json::from_value::<ModerationPolicyTarget>(value.get("target")?.clone()).ok()? {
-        ModerationPolicyTarget::Actor { actor_id } => Some(actor_id),
-        _ => None,
-    }
+fn applicable_organization_policies(
+    state: &AppState,
+    realm_id: &str,
+) -> Vec<(DidCoreId, OrganizationModerationPolicyDocument)> {
+    let now = Utc::now();
+    let projection = state.projections().snapshot();
+    let mut policies = projection
+        .verified_organization_relationships(realm_id, now)
+        .into_iter()
+        .filter(|relationship| relationship.covers_scope("moderation_policy"))
+        .filter_map(|relationship| {
+            let cell = CellRef::new(format!(
+                "ak:cell:{}:{}",
+                CellFamilyId::OrganizationModerationPolicyV1.as_str(),
+                relationship.organization_id.as_str()
+            ))
+            .ok()?;
+            let payload = serde_json::from_value::<OrganizationModerationPolicyStatePayload>(
+                projection.cell_value(&cell)?.clone(),
+            )
+            .ok()?;
+            if payload.organization_id != relationship.organization_id {
+                return None;
+            }
+            let explicit_realm = payload
+                .value
+                .policy_scope
+                .realm_ids
+                .as_ref()
+                .is_some_and(|ids| ids.iter().any(|id| id.as_str() == realm_id));
+            let owned_realm = relationship.relationship == "owner"
+                && payload
+                    .value
+                    .policy_scope
+                    .applies_to_owned_realms
+                    .unwrap_or(false);
+            if !explicit_realm && !owned_realm {
+                return None;
+            }
+            if payload.value.not_before.is_some_and(|start| now < start)
+                || payload.value.expires_at.is_some_and(|end| now >= end)
+            {
+                return None;
+            }
+            Some((payload.organization_id, payload.value))
+        })
+        .collect::<Vec<_>>();
+    policies.sort_by(|left, right| left.0.cmp(&right.0));
+    policies.dedup_by(|left, right| left.0 == right.0);
+    policies
 }
 
 fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
@@ -674,13 +483,6 @@ fn display_name_from_organization_id(organization_id: &str) -> String {
         .replace(['.', '-'], " ")
 }
 
-fn safe_id_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,16 +494,22 @@ mod tests {
         ))
     }
 
+    fn join_policy(target: Value, action: &str) -> OrganizationModerationPolicyDocument {
+        serde_json::from_value(json!({
+            "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
+            "policy_scope": {"applies_to_owned_realms": true},
+            "rules": [{"target": target, "action": action}]
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn organization_actor_deny_preserves_station_and_actor_kind() {
         let actor = account_at("station-a");
         let foreign = account_at("station-b");
         let service = ActorId::service(actor.signing_principal_id().clone());
         for action in ["deny_join", "deny_restricted_join"] {
-            let policy = json!({"rules": [{
-                "target": {"kind": "actor", "actor_id": actor},
-                "action": action
-            }]});
+            let policy = join_policy(json!({"kind": "actor", "actor_id": actor}), action);
             assert!(policy_denies_join_actor(&policy, &actor));
             assert!(!policy_denies_join_actor(&policy, &foreign));
             assert!(!policy_denies_join_actor(&policy, &service));
@@ -716,8 +524,14 @@ mod tests {
             json!({"kind": "service", "actor_id": actor}),
             json!({"actor_id": actor}),
         ] {
-            let policy = json!({"rules": [{"target": target, "action": "deny_join"}]});
-            assert!(!policy_denies_join_actor(&policy, &actor));
+            assert!(
+                serde_json::from_value::<OrganizationModerationPolicyDocument>(json!({
+                    "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
+                    "policy_scope": {"applies_to_owned_realms": true},
+                    "rules": [{"target": target, "action": "deny_join"}]
+                }))
+                .is_err()
+            );
         }
     }
 

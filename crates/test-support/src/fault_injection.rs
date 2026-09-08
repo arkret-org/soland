@@ -414,9 +414,6 @@ impl soland_storage::FederationGovernanceStoreRegistry for FaultInjectingStore {
     fn organization_registrations(&self) -> &dyn soland_storage::OrganizationRegistrationStore {
         self.inner.organization_registrations()
     }
-    fn organization_policies(&self) -> &dyn soland_storage::OrganizationPolicyStore {
-        self.inner.organization_policies()
-    }
     fn realm_organizations(&self) -> &dyn soland_storage::RealmOrganizationStore {
         self.inner.realm_organizations()
     }
