@@ -52,8 +52,15 @@ pub(super) async fn resolve_existing_event_stage(
     let Some(existing) = existing else {
         return Ok(None);
     };
-    if existing.canonical_bytes == parsed.canonical_bytes
-        || exact_producer_retry(&existing.canonical_bytes, submitted_event)
+    let stored_envelope_bytes = serde_json::to_vec(&existing.envelope).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.to_string(),
+        )
+    })?;
+    if existing.envelope == *envelope
+        || exact_producer_retry(&stored_envelope_bytes, submitted_event)
     {
         let stored_compensation_evidence = service
             .membership_compensation_evidence(parsed.event_id.as_str())
@@ -145,6 +152,14 @@ pub(super) async fn resolve_existing_event_stage(
         }
         apply_durable_delivery_summary(state, &mut response).await?;
         return Ok(Some(response));
+    }
+
+    if existing.canonical_bytes == parsed.canonical_bytes {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "Event retry must preserve the original producer proof and any admission proof",
+        ));
     }
 
     append_audit_log(

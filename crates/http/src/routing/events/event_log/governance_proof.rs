@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, MAX_GOVERNANCE_DEPENDENCY_SELECTORS,
-    governance_attester_evidence_selectors,
 };
 use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -13,7 +12,7 @@ use arkret_state::mls_governance_proof::{
 };
 #[cfg(test)]
 use arkret_state::state::compute_state_root;
-use arkret_state::state::{BottomMode, control_event_set_root};
+use arkret_state::state::{EventCellBottom, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cbs::LatticeOp;
 use arkret_wire::cbs::LatticeOpType;
@@ -1197,7 +1196,7 @@ async fn load_checkpoint_dependencies(
         load_source_dependencies(
             state,
             realm_id,
-            soland_storage::GovernanceDependencySource::ControlEvent(digest.clone()),
+            soland_storage::GovernanceDependencySource::Event(digest.clone()),
             &mut dependencies,
             &mut queue,
         )
@@ -1205,19 +1204,10 @@ async fn load_checkpoint_dependencies(
     }
     let mut cursor = 0;
     while cursor < queue.len() {
-        let selectors = match &queue[cursor] {
-            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                authenticated_signer_resolution_evidence,
-                ..
-            } => governance_attester_evidence_selectors(std::slice::from_ref(
-                authenticated_signer_resolution_evidence,
-            )),
-            _ => Ok(Vec::new()),
-        }
-        .map_err(|error| {
+        let selectors = queue[cursor].dependency_selectors().map_err(|error| {
             crate::app_error!(
                 FrontierUnavailable,
-                format!("governance dependency closure is invalid: {error}"),
+                format!("governance dependency closure is invalid: {error}")
             )
         })?;
         cursor += 1;
@@ -1686,7 +1676,7 @@ async fn join_control_state_batches(
         // — plus an impossible Bottom from an inert lattice — fail closed.
         // Rejecting every Bottom here lets one ambiguous, unrelated selector
         // poison all later controller-PCR authorization and Seal material.
-        if matches!(resolved, CellState::Bottom(_)) && bottom_mode != BottomMode::Expose {
+        if matches!(resolved, CellState::Bottom(_)) && bottom_mode != EventCellBottom::Expose {
             return Err(crate::app_error!(
                 StateMismatch,
                 format!("governance cell {cell} is in Bottom state"),

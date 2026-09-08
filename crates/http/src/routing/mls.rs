@@ -3733,13 +3733,12 @@ async fn revoke_keypackages(
                     "KeyPackage revoke canonical input failed: {error}"
                 ))
             })?;
-    verify_session_keypackage_write_signature(
+    verify_session_keypackage_revoke_signature(
         state,
         &session,
         &refs,
         &body.signature,
         &revoke_signing_input,
-        None,
     )
     .await?;
     let revoked_at = now().timestamp();
@@ -3765,7 +3764,10 @@ async fn revoke_keypackages(
                     )
                 }) =>
             {
-                failures.push(keypackage_ref_failure(keypackage_ref, "already_consumed"));
+                failures.push(keypackage_ref_failure(
+                    keypackage_ref,
+                    arkret_wire::ErrorCode::KEYPACKAGE_ALREADY_CONSUMED,
+                ));
             }
             Ok(Some(record)) => {
                 match state
@@ -3791,7 +3793,7 @@ async fn revoke_keypackages(
                     Ok(None) => {
                         failures.push(keypackage_ref_failure(
                             keypackage_ref,
-                            "already_consumed_or_missing",
+                            arkret_wire::ErrorCode::KEYPACKAGE_ALREADY_CONSUMED,
                         ));
                     }
                     Err(error) => {
@@ -3800,7 +3802,10 @@ async fn revoke_keypackages(
                 }
             }
             Ok(None) => {
-                failures.push(keypackage_ref_failure(keypackage_ref, "not_found"));
+                failures.push(keypackage_ref_failure(
+                    keypackage_ref,
+                    arkret_wire::ErrorCode::KEYPACKAGE_UNKNOWN,
+                ));
             }
             Err(error) => {
                 failures.push(keypackage_ref_failure(keypackage_ref, error.to_string()));
@@ -4356,6 +4361,65 @@ async fn verify_session_keypackage_write_signature(
     )
     .await?;
     Ok(cached_keypackage.cloned())
+}
+
+async fn verify_session_keypackage_revoke_signature(
+    state: &AppState,
+    session: &SessionRecord,
+    keypackage_refs: &[String],
+    signature: &KeyOperationSignature,
+    signing_input: &[u8],
+) -> Result<(), AppError> {
+    let principal = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
+    if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
+        let authorize_event_id = binding
+            .agent_key_authorize_event_id
+            .as_deref()
+            .expect("Agent trust binding always carries authorization Event");
+        verify_agent_keypackage_batch(
+            state,
+            &principal,
+            authorize_event_id,
+            signature,
+            signing_input,
+        )
+        .await
+        .map_err(AppError::param_invalid)?;
+        for keypackage_ref in keypackage_refs {
+            let Some(record) = state
+                .mls_key_packages()
+                .key_package_by_ref(keypackage_ref)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+            else {
+                // A locally-created package may race an asynchronous upload.
+                // The revoke outcome reports it as not_found (and therefore
+                // already unclaimable) instead of rejecting the whole signed
+                // batch before per-reference processing.
+                continue;
+            };
+            if record.actor_id != session.actor
+                || record.device_id.is_some()
+                || record.agent_key_authorize_event_id.as_deref() != Some(authorize_event_id)
+            {
+                return Err(crate::app_error!(
+                    FailedPrecondition,
+                    "Agent KeyPackage write binding differs from current authorization",
+                )
+                .with_reason_code("claim_generation_mismatch"));
+            }
+        }
+        return Ok(());
+    }
+    verify_device_keypackage_signature(
+        state,
+        &principal,
+        &session.device_id,
+        signature,
+        signing_input,
+    )
+    .await
 }
 
 fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, AppError> {

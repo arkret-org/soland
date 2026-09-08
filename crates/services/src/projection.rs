@@ -4201,7 +4201,10 @@ mod fsm_registry_tests {
                 binding.lattice.kind(),
                 arkret_state::lattice::LatticeKind::Fsm
             );
-            assert_eq!(binding.bottom_mode, arkret_state::state::BottomMode::Reject);
+            assert_eq!(
+                binding.bottom_mode,
+                arkret_state::state::EventCellBottom::Reject
+            );
         }
     }
 }

@@ -115,6 +115,7 @@ fn attach_fixture_service_admission(
     let producer = producer.clone();
     let evidence_digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
     let mut admission = arkret_wire::StationAdmissionProof {
+        applet_installation_digest: None,
         kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method: state
             .service_notary_signer_descriptor()

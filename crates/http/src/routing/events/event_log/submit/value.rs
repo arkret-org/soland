@@ -1561,6 +1561,7 @@ pub async fn attach_fixture_station_admission_proof(
         .await
         .map_err(|error| error.to_string())?;
     let mut admission = arkret_wire::StationAdmissionProof {
+        applet_installation_digest: None,
         kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method,
         event_digest,
@@ -1601,15 +1602,86 @@ pub(super) async fn accepted_event_envelope(
         Event,
         Value,
         Vec<u8>,
-        Option<soland_storage::GovernanceDependencyWrite>,
+        Vec<soland_storage::GovernanceDependencyWrite>,
     ),
     SubmitOneError,
 > {
     if session.token_hash.starts_with("federation:") {
-        return Ok((event, envelope, parsed.canonical_bytes.clone(), None));
+        let mut dependencies = Vec::new();
+        if event.applet_id.is_some() {
+            let admission = event
+                .proofs
+                .last()
+                .and_then(arkret_wire::EventProof::as_station_admission)
+                .ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "Applet replica admission is missing",
+                    )
+                })?;
+            let installation_digest =
+                admission
+                    .applet_installation_digest
+                    .clone()
+                    .ok_or_else(|| {
+                        SubmitOneError::new(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "Applet replica installation dependency is missing",
+                        )
+                    })?;
+            let signer_digest = admission
+                .signer_resolution_evidence_ref
+                .content_digest()
+                .map_err(|error| {
+                    SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
+                })?;
+            let source = super::applet_admission::historical_installation_origin(state, &event)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(StatusCode::CONFLICT, "dependency_missing", error)
+                })?;
+            for selector in [
+                arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest: signer_digest },
+                arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AppletInstallationAuthority { content_digest: installation_digest },
+            ] {
+                let item = super::applet_admission::resolve_admission_dependency(state, &event.realm_id, &source, selector).await
+                    .map_err(|error| SubmitOneError::new(StatusCode::CONFLICT, "dependency_missing", error))?;
+                dependencies.push(soland_storage::GovernanceDependencyWrite {
+                    realm_id: event.realm_id.clone(),
+                    source: soland_storage::GovernanceDependencySource::Event(admission.event_digest.clone()),
+                    edge_index: dependencies.len() as u64,
+                    item,
+                });
+            }
+        }
+        return Ok((
+            event,
+            envelope,
+            parsed.canonical_bytes.clone(),
+            dependencies,
+        ));
     }
     let mut event = event;
-    if event.actor_id.route_service_id().as_str() != state.service_id() {
+    let installation = super::applet_admission::current_installation_authority(state, &event)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "applet_registration_unauthorized",
+                error,
+            )
+        })?;
+    if installation.is_none()
+        && event
+            .executed_by
+            .as_ref()
+            .unwrap_or(&event.actor_id)
+            .route_service_id()
+            .as_str()
+            != state.service_id()
+    {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
@@ -1768,19 +1840,28 @@ pub(super) async fn accepted_event_envelope(
                 format!("Station signer evidence retention failed: {error}"),
             )
         })?;
-    let governance_dependency =
-        event
-            .kind
-            .is_control_plane()
-            .then(|| soland_storage::GovernanceDependencyWrite {
-                realm_id: event.realm_id.clone(),
-                source: soland_storage::GovernanceDependencySource::ControlEvent(
-                    event_digest.clone(),
-                ),
-                edge_index: 0,
-                item: dependency,
-            });
+    let mut governance_dependency: Vec<_> = (event.kind.is_control_plane()
+        || installation.is_some())
+    .then(|| soland_storage::GovernanceDependencyWrite {
+        realm_id: event.realm_id.clone(),
+        source: soland_storage::GovernanceDependencySource::Event(event_digest.clone()),
+        edge_index: 0,
+        item: dependency,
+    })
+    .into_iter()
+    .collect();
     let mut admission = arkret_wire::StationAdmissionProof {
+        applet_installation_digest: installation
+            .as_ref()
+            .map(|authority| authority.canonical_sha256_digest())
+            .transpose()
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    error.to_string(),
+                )
+            })?,
         kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method,
         event_digest,
@@ -1821,7 +1902,7 @@ pub(super) async fn accepted_event_envelope(
     })?;
     event.proofs.push(admission.into());
     event
-        .validate_station_admission_binding(parsed.digest_suite)
+        .validate_station_admission_structure(parsed.digest_suite)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1829,6 +1910,35 @@ pub(super) async fn accepted_event_envelope(
                 error.to_string(),
             )
         })?;
+    if let Some(authority) = installation {
+        arkret_policy::applet_admission::validate_applet_installation_coordinates(
+            &event, &authority,
+        )
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "applet_registration_unauthorized",
+                error.to_string(),
+            )
+        })?;
+        let content_digest = authority.canonical_sha256_digest().map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?;
+        governance_dependency.push(soland_storage::GovernanceDependencyWrite {
+            realm_id: event.realm_id.clone(),
+            source: soland_storage::GovernanceDependencySource::Event(arkret_wire::Hash::new(parsed.canonical_digest.clone())
+                .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?),
+            edge_index: governance_dependency.len() as u64,
+            item: arkret_models_collaboration::governance_dependencies::GovernanceDependency::AppletInstallationAuthority {
+                selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AppletInstallationAuthority { content_digest },
+                applet_installation_authority: Box::new(authority),
+            },
+        });
+    }
     let canonical_bytes =
         canonical::canonical_json_bytes(&event.digest_payload().map_err(|error| {
             SubmitOneError::new(
@@ -1856,7 +1966,15 @@ pub(super) fn validate_origin_submission_shape(
     if session.token_hash.starts_with("federation:") {
         return Ok(());
     }
-    if event.actor_id.route_service_id().as_str() != state.service_id() {
+    if event.applet_id.is_none()
+        && event
+            .executed_by
+            .as_ref()
+            .unwrap_or(&event.actor_id)
+            .route_service_id()
+            .as_str()
+            != state.service_id()
+    {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
@@ -2138,6 +2256,24 @@ pub(super) async fn submit_event_value_with_context(
     context: SubmitEventContext<'_>,
     mode: SubmitMode<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    // Installation preview validates administrator Events without admitting
+    // them. Only the closed installation adapter may first commit registration;
+    // verified peers may retain an already accepted registration unchanged.
+    if envelope.get("kind").and_then(Value::as_str)
+        == Some(arkret_wire::EventKind::AppletRegistration.as_str())
+        && !context.internal_admission.is_some_and(|admission| {
+            admission.is_peer_replication()
+                && envelope
+                    .as_object()
+                    .is_some_and(|object| admission.matches(session, object))
+        })
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "applet_registration_unauthorized",
+            "Applet registration is accepted only by the verified atomic installation aggregate",
+        ));
+    }
     let (commit_options, deferred_agent_membership, deferred_internal) = match mode {
         SubmitMode::Commit(options) => (Some(*options), None, None),
         SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot), None),
@@ -3487,6 +3623,7 @@ mod local_device_authorization_tests {
         producer: &arkret_wire::ProducerEventProof,
     ) -> arkret_wire::StationAdmissionProof {
         arkret_wire::StationAdmissionProof {
+            applet_installation_digest: None,
             kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
             verification_method: arkret_wire::DidUrl::new(
                 "did:webvh:QmService:local.host:webvh:service#notary-key",

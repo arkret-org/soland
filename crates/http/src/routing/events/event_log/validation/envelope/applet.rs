@@ -1,23 +1,5 @@
 use super::*;
 
-/// The registration gate every `applet_id`-carrying Event has to clear.
-async fn validate_applet_registration_is_live(
-    state: &AppState,
-    applet_id: &str,
-    realm_id: &str,
-    effective_scope: &arkret_wire::ScopeRef,
-) -> Result<(), EventValidationError> {
-    let record = load_installed_applet_record(state, applet_id, effective_scope).await?;
-    if record.portal_realm_id.as_str() != realm_id {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "applet_effective_scope_mismatch",
-            "applet_id is not installed in the Event Realm",
-        ));
-    }
-    Ok(())
-}
-
 async fn load_installed_applet_record(
     state: &AppState,
     applet_id: &str,
@@ -56,19 +38,16 @@ async fn load_installed_applet_record(
     Ok(record)
 }
 
-/// `is_delegated` is `applet-integration.md` §11's own trigger: the envelope
-/// signature is an applet / delegated agent key while `actor_id` names a
-/// different DID. Only §11's field triple (`executed_by` / `authorization_ref`
-/// / the grant behind them) is scoped that way — an applet signing as itself
-/// still has to be a live, unrevoked registration bound to this Realm, so the
-/// registration gate below runs for every Event carrying `applet_id`.
+/// Validate the exact live installation and grant for every ordinary Applet
+/// service or native-delegated write. Managed actors have a separate provision
+/// and current-authority gate, including when they use their own producer key.
 pub(super) async fn validate_applet_delegated_authorization_chain(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     kind: &str,
     actor_id: &str,
     realm_id: &str,
-    is_delegated: bool,
+    _is_delegated: bool,
 ) -> Result<(), EventValidationError> {
     let Some(applet_id) = event_string_field(object, &["applet_id"]) else {
         return Ok(());
@@ -88,17 +67,17 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
                 format!("applet Event scope_ref is invalid: {error}"),
             )
         })?;
-    if !is_delegated {
-        return validate_applet_registration_is_live(state, &applet_id, realm_id, &effective_scope)
-            .await;
-    }
-    let executed_by = object.get("executed_by").cloned().ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "applet-originated delegated Event requires executed_by",
-        )
-    })?;
+    let executed_by = object
+        .get("executed_by")
+        .or_else(|| object.get("actor_id"))
+        .cloned()
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "Applet Event requires a complete producer ActorId",
+            )
+        })?;
     let executed_by_actor =
         serde_json::from_value::<arkret_wire::ActorId>(executed_by).map_err(|error| {
             event_validation_error(
@@ -140,7 +119,14 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         ));
     }
     let actor_is_managed = applet_actor_is_managed(&record, actor_id);
-    if !actor_is_managed && !applet_actor_matches_exact_namespace(&record, actor_id) {
+    let actor_is_service = object
+        .get("actor_id")
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+        == Some(arkret_wire::ActorId::service(package.service_id.clone()));
+    if !actor_is_managed
+        && !actor_is_service
+        && !applet_actor_matches_exact_namespace(&record, actor_id)
+    {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "applet_namespace_mismatch",
@@ -181,7 +167,10 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
             "authorization_ref grant does not cover this Event resource",
         ));
     }
-    if !actor_is_managed && grant.issuer_id.signing_principal_id().as_str() != actor_id {
+    if !actor_is_managed
+        && !actor_is_service
+        && object.get("actor_id") != serde_json::to_value(&grant.issuer_id).ok().as_ref()
+    {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "authorization_ref_scope",
@@ -349,12 +338,12 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             continue;
         }
         selected_scope_live = true;
-        let grants = state.authorization().grants_for_subject(
+        let installation_grants = state.authorization().grants_for_subject(
             &arkret_wire::ActorId::service(record.package.service_id.clone()),
             record.portal_realm_id.as_str(),
         );
         if !bot_match
-            && !grants
+            && !installation_grants
                 .iter()
                 .any(|grant| grant.grant_id.as_str() == expected_authorization)
         {
@@ -364,6 +353,29 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             debug_assert_eq!(realm_id, expected_pcr_realm);
         }
         {
+            let producer: arkret_wire::ActorId = serde_json::from_value(
+                object
+                    .get("executed_by")
+                    .or_else(|| object.get("actor_id"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "schema_violation",
+                            "Applet-managed write requires a producer ActorId",
+                        )
+                    })?,
+            )
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("invalid Applet producer ActorId: {error}"),
+                )
+            })?;
+            let grants = state
+                .authorization()
+                .grants_for_subject(&producer, record.portal_realm_id.as_str());
             let event_id = event_string_field(object, &["event_id"]).unwrap_or_default();
             let resources =
                 delegated_applet_resource_candidates(state, object, realm_id, actor_id, &event_id);
@@ -380,7 +392,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             crate::authz::validate_applet_authority_binding(
                 grant,
                 record.applet_id.as_str(),
-                &arkret_wire::ActorId::service(record.package.service_id.clone()),
+                &producer,
                 record.package.registration_epoch.as_str(),
             )
             .map_err(|error| {

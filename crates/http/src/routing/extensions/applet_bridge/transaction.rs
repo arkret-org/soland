@@ -214,7 +214,9 @@ fn validate_transaction_event_binding(
         return Err("authorization_ref_missing");
     }
     let actor_id = event.actor_id.signing_principal_id().as_str();
-    if event.actor_id == install.bot_actor_id {
+    if event.actor_id == arkret_wire::ActorId::service(package.service_id.clone())
+        || event.actor_id == install.bot_actor_id
+    {
         return Ok(());
     }
     if install

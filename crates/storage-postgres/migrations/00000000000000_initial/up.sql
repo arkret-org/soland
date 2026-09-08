@@ -851,6 +851,7 @@ CREATE TABLE public.governance_dependency_objects (
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     PRIMARY KEY (realm_id, dependency_kind, object_digest),
     CONSTRAINT governance_dependency_objects_kind_check CHECK (dependency_kind IN (
+        'applet_installation_authority',
         'availability_receipt',
         'authenticated_signer_resolution_evidence',
         'minimal_metadata_mls_leaf_signer_evidence',
@@ -905,6 +906,7 @@ CREATE TABLE public.governance_dependency_edges (
     realm_id text NOT NULL,
     seal_id text,
     event_digest text,
+    event_pk bigint REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     dependency_kind text NOT NULL,
     object_digest text NOT NULL,
     edge_index bigint NOT NULL,
@@ -912,14 +914,9 @@ CREATE TABLE public.governance_dependency_edges (
     FOREIGN KEY (realm_id, dependency_kind, object_digest)
         REFERENCES public.governance_dependency_objects(realm_id, dependency_kind, object_digest)
         ON DELETE RESTRICT,
-    -- Seal-scoped dependencies are retained before the Seal is published so
-    -- no reader can observe a committed Seal whose evidence is unavailable.
-    -- A failed candidate may therefore leave an unreachable content-addressed
-    -- edge; requiring state_seals to exist here would invert that safety
-    -- ordering. Control Events already exist before their edges and retain the
-    -- source-row foreign key below.
-    FOREIGN KEY (event_digest, realm_id)
-        REFERENCES public.state_control_events(event_digest, realm_id) ON DELETE RESTRICT,
+    -- Event edges retain their canonical source, including DataEvents.
+    -- Seal evidence may be staged before its candidate Seal is published.
+    CONSTRAINT governance_dependency_edges_event_source_check CHECK ((event_digest IS NULL) = (event_pk IS NULL)),
     CONSTRAINT governance_dependency_edges_source_check CHECK (num_nonnulls(seal_id, event_digest) = 1),
     CONSTRAINT governance_dependency_edges_index_check CHECK (edge_index >= 0)
 );

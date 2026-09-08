@@ -300,6 +300,7 @@ mod tests {
             jws: "producer..signature".to_owned(),
         };
         let admission = arkret_wire::StationAdmissionProof {
+            applet_installation_digest: None,
             kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
             verification_method: arkret_wire::DidUrl::new("did:web:soland.example#service-key")
                 .unwrap(),

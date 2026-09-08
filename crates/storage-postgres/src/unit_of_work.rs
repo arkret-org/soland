@@ -32,6 +32,139 @@ struct MembershipCompensationBytesRow {
     canonical_bytes: Vec<u8>,
 }
 
+#[derive(diesel::QueryableByName)]
+struct AppletAdmissionRecordRow {
+    #[diesel(sql_type = Jsonb)]
+    record: serde_json::Value,
+}
+
+/// The identity row is the same linearization lock used by installation
+/// revocation. Retained replicas and closed install units never enter it.
+async fn ensure_applet_admission_in_transaction(
+    conn: &mut AsyncPgConnection,
+    request: &EventCommitRequest,
+) -> PersistenceResult<()> {
+    if request.replicated {
+        return Ok(());
+    }
+    let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone())
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let fail = || PersistenceError::Conflict("applet_revoked".to_owned());
+    let grant_id = if matches!(
+        event.kind,
+        arkret_wire::EventKind::CapabilityRevoke | arkret_wire::EventKind::CapabilityRelinquish
+    ) {
+        event
+            .payload
+            .get("grant_id")
+            .and_then(serde_json::Value::as_str)
+    } else if event.applet_id.is_some() {
+        event.authorization_ref.as_deref()
+    } else {
+        None
+    };
+    if let Some(grant_id) = grant_id {
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind::<Text, _>(format!("applet-grant:{grant_id}"))
+            .execute(conn)
+            .await
+            .map_err(PersistenceError::database)?;
+    }
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::CapabilityRevoke | arkret_wire::EventKind::MemberState
+    ) {
+        // A persisted revoke plan precedes all its Events. Lock the same
+        // identity as ordinary admission before the first plan Event lands;
+        // the later saga projection update is not the linearization point.
+        sql_query("SELECT identity.record FROM applet_managed_identities identity \
+            WHERE EXISTS (SELECT 1 FROM applet_installations installation \
+                WHERE installation.applet_id = identity.applet_id \
+                AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(installation.record #> '{revoke_execution,outcome,steps}', '[]'::jsonb)) step WHERE step->>'effect_ref' = $1) \
+                AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(installation.record #> '{revoke_execution,outcome,steps}', '[]'::jsonb)) step WHERE step->>'effect_kind' = 'local_applet_fence')) \
+            ORDER BY identity.applet_id, identity.target_station_id FOR UPDATE OF identity")
+            .bind::<Text, _>(event.event_id.as_str())
+            .load::<AppletAdmissionRecordRow>(conn).await.map_err(PersistenceError::database)?;
+    }
+    let Some(applet_id) = &event.applet_id else {
+        return Ok(());
+    };
+    let Some(admission) = event
+        .proofs
+        .last()
+        .and_then(arkret_wire::EventProof::as_station_admission)
+    else {
+        return Ok(());
+    };
+    let digest = admission
+        .applet_installation_digest
+        .as_ref()
+        .ok_or_else(fail)?;
+    let authority = request.governance_dependencies.iter().find_map(|write| match &write.item {
+        arkret_models_collaboration::governance_dependencies::GovernanceDependency::AppletInstallationAuthority {
+            selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AppletInstallationAuthority { content_digest },
+            applet_installation_authority,
+        } if content_digest == digest => Some(applet_installation_authority),
+        _ => None,
+    }).ok_or_else(fail)?;
+    let target = authority.registration_event.actor_id.route_service_id();
+    let identity = sql_query("SELECT record FROM applet_managed_identities WHERE applet_id = $1 AND target_station_id = $2 FOR UPDATE")
+        .bind::<Text, _>(applet_id.as_str()).bind::<Text, _>(target.as_str())
+        .get_result::<AppletAdmissionRecordRow>(conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(fail)?;
+    if identity
+        .record
+        .get("globally_fenced_at")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(fail());
+    }
+    let scope_key = soland_storage::applet_effective_scope_key(&event.scope_ref)?;
+    let install = sql_query("SELECT record FROM applet_installations WHERE applet_id = $1 AND effective_scope_key = $2 FOR UPDATE")
+        .bind::<Text, _>(applet_id.as_str()).bind::<Text, _>(&scope_key)
+        .get_result::<AppletAdmissionRecordRow>(conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(fail)?;
+    if install
+        .record
+        .get("revoked_at")
+        .is_some_and(|value| !value.is_null())
+        || !matches!(
+            install
+                .record
+                .get("status")
+                .and_then(serde_json::Value::as_str),
+            Some("installed" | "partially_installed")
+        )
+        || install
+            .record
+            .pointer("/registration_event/event_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(authority.registration_event.event_id.as_str())
+    {
+        return Err(fail());
+    }
+    if let Some(grant_id) = grant_id {
+        let revoked = sql_query("SELECT EXISTS (SELECT 1 FROM canonical_events WHERE realm_id = $1 AND kind IN ('ak.capability.revoke', 'ak.capability.relinquish') AND envelope->'payload'->>'grant_id' = $2) AS present")
+            .bind::<Text, _>(event.realm_id.as_str()).bind::<Text, _>(grant_id)
+            .get_result::<ExistsRow>(conn).await.map_err(PersistenceError::database)?.present;
+        if revoked {
+            return Err(fail());
+        }
+    }
+    if let Some(steps) = install.record.pointer("/revoke_execution/outcome/steps") {
+        let fenced = sql_query("SELECT EXISTS (SELECT 1 FROM jsonb_array_elements($1::jsonb) step \
+            JOIN canonical_events event ON event.envelope->>'event_id' = step->>'effect_ref' \
+            WHERE event.realm_id = $2 AND event.kind IN ('ak.capability.revoke', 'ak.member.state') \
+            AND EXISTS (SELECT 1 FROM jsonb_array_elements($1::jsonb) fence WHERE fence->>'effect_kind' = 'local_applet_fence')) AS present")
+            .bind::<Jsonb, _>(steps).bind::<Text, _>(event.realm_id.as_str())
+            .get_result::<ExistsRow>(conn).await.map_err(PersistenceError::database)?.present;
+        if fenced {
+            return Err(fail());
+        }
+    }
+    Ok(())
+}
+
 async fn commit_membership_compensation_evidence(
     conn: &mut AsyncPgConnection,
     event_pk: i64,
@@ -945,6 +1078,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             if let Some(selector) = request.device_revocation_gate.as_ref() {
                 crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
             }
+            ensure_applet_admission_in_transaction(conn, &request).await?;
             let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
                 PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())
             })?;
@@ -1107,22 +1241,6 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 )
                 .await
                 .map_err(PersistenceError::database)?;
-                for dependency in &request.governance_dependencies {
-                    let source_matches = matches!(
-                        &dependency.source,
-                        soland_storage::GovernanceDependencySource::ControlEvent(digest)
-                            if digest.as_str() == event_digest
-                    );
-                    if dependency.realm_id != typed_event.realm_id || !source_matches
-                    {
-                        return Err(PersistenceError::Conflict(
-                            "schema_violation: governance dependency does not bind committed Control Move"
-                                .to_owned(),
-                        )
-                        .into());
-                    }
-                    put_governance_dependency_exact_in_transaction(conn, dependency).await?;
-                }
                 if typed_event.kind == arkret_wire::EventKind::DeviceRevoke {
                     let transition = request.device_revocation_transition.as_ref().ok_or_else(|| {
                         PersistenceError::Conflict(
@@ -1155,7 +1273,6 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 }
             } else if request.control_proposal_ingress.is_some()
                 || request.device_revocation_transition.is_some()
-                || !request.governance_dependencies.is_empty()
             {
                 return Err(PersistenceError::Conflict(
                     "schema_violation: non-Control Event cannot carry Control Proposal authority"
@@ -1163,6 +1280,23 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 )
                 .into());
             }
+
+                for dependency in &request.governance_dependencies {
+                    let source_matches = matches!(
+                        &dependency.source,
+                        soland_storage::GovernanceDependencySource::Event(digest)
+                            if digest.as_str() == request.event.canonical_digest
+                    );
+                    if dependency.realm_id != typed_event.realm_id || !source_matches
+                    {
+                        return Err(PersistenceError::Conflict(
+                            "schema_violation: governance dependency does not bind committed Event"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    put_governance_dependency_exact_in_transaction(conn, dependency).await?;
+                }
 
             for projection in request.projections {
                 // The projection no longer carries its own copy of the Event

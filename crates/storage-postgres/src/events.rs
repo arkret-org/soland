@@ -854,8 +854,7 @@ async fn insert_control_event_governance_dependencies(
     })?;
     let mut inserted = 0;
     for dependency in dependencies {
-        let soland_storage::GovernanceDependencySource::ControlEvent(event_digest) =
-            &dependency.source
+        let soland_storage::GovernanceDependencySource::Event(event_digest) = &dependency.source
         else {
             return Err(PersistenceError::Conflict(
                 "schema_violation: Event batch cannot carry a Seal governance dependency"

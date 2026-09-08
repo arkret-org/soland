@@ -27,6 +27,7 @@ const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
 const AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS: usize = 256;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
+mod applet_admission;
 mod backfill;
 pub(in crate::routing) use backfill::{
     admit_frontier_backfill_event, verify_frontier_backfill_event,
@@ -491,7 +492,7 @@ enum InternalEventBinding {
 }
 
 impl InternalEventAdmission {
-    fn is_peer_replication(&self) -> bool {
+    pub(in crate::routing::events::event_log) fn is_peer_replication(&self) -> bool {
         matches!(
             self.binding,
             InternalEventBinding::PeerFederatedEvent { .. }
@@ -2434,7 +2435,7 @@ pub(in crate::routing) async fn verify_federated_event_admission(
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), String> {
     event
-        .validate_station_admission_binding(digest_suite)
+        .validate_station_admission_structure(digest_suite)
         .map_err(|error| error.to_string())?;
     let [
         arkret_wire::EventProof::Producer(producer),
@@ -2456,17 +2457,8 @@ pub(in crate::routing) async fn verify_federated_event_admission(
     let producer_key = arkret_canonical::decode_ed25519_multibase(producer_multibase)
         .map_err(|error| format!("admitted producer key is invalid: {error}"))?;
     verify_federated_producer_event_proof(event, producer, &producer_key)?;
-    let admission_bytes = admission
-        .canonical_binding_bytes()
-        .map_err(|error| error.to_string())?;
-    crate::jws_verify::verify_did_controlled_jws_async(
-        &admission_bytes,
-        &admission.jws,
-        admission.verification_method.as_str(),
-        event.actor_id.route_service_id().as_str(),
-        state,
-    )
-    .await?;
+    let origin = applet_admission::historical_installation_origin(state, event).await?;
+    applet_admission::verify_historical_station_signature(state, event, &origin).await?;
     Ok((
         producer.verification_method.clone(),
         admission.producer_signing_key_did.clone(),
@@ -2601,6 +2593,9 @@ async fn validate_federation_batch_admission(
                 .await
                 .map_err(|error| {
                     tracing::debug!(%error, event_id = %event.event_id, "federated Event admission proof rejected");
+                    if error.starts_with("dependency_missing:") {
+                        return crate::app_error!(DependencyMissing, "frozen admission authority dependency is unavailable");
+                    }
                     crate::app_error!(
                         SignatureInvalid,
                         "federated Event does not carry a valid origin Station admission proof"
@@ -3118,15 +3113,16 @@ pub(crate) async fn submit_federation_events(
         let actor = event_actor.signing_principal_id().to_string();
         let event_kind = event_string_field_from_value(&envelope, "kind");
         let event_station_id = event_actor.route_service_id().to_string();
-        if !crate::routing::federation::federation_actor_origin_acceptable(
-            state,
-            &event_actor,
-            &source_id,
-            Some(&event_station_id),
-            &binding_realm,
-            event_kind.as_deref(),
-        )
-        .await
+        if envelope.get("applet_id").is_none()
+            && !crate::routing::federation::federation_actor_origin_acceptable(
+                state,
+                &event_actor,
+                &source_id,
+                Some(&event_station_id),
+                &binding_realm,
+                event_kind.as_deref(),
+            )
+            .await
         {
             rejected.push(rejected_item(
                 id,

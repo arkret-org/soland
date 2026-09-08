@@ -8,7 +8,7 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
     pub(super) actor_key: &'a str,
     pub(super) envelope: Value,
     pub(super) accepted_canonical_bytes: &'a [u8],
-    pub(super) governance_dependency: Option<soland_storage::GovernanceDependencyWrite>,
+    pub(super) governance_dependency: Vec<soland_storage::GovernanceDependencyWrite>,
     pub(super) projected_event: Option<&'a soland_services::events::ProjectedEvent>,
     pub(super) deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
     pub(super) device_revoke_target_device_id: Option<&'a str>,

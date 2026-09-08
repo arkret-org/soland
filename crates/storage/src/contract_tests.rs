@@ -3732,7 +3732,7 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
         now,
     );
     let realm_id = record.realm_id.clone().expect("derived genesis Realm");
-    let source = GovernanceDependencySource::ControlEvent(
+    let source = GovernanceDependencySource::Event(
         Hash::new(record.canonical_digest.clone()).expect("typed Control Event digest"),
     );
     let item = minimal_history_signer_evidence(namespace);
@@ -3780,7 +3780,7 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
             vec![contract_control_proposal_ack(&rollback_record, rollback_at)],
             vec![GovernanceDependencyWrite {
                 realm_id: RealmId::new(wrong_realm_id).expect("typed wrong Realm"),
-                source: GovernanceDependencySource::ControlEvent(
+                source: GovernanceDependencySource::Event(
                     Hash::new(rollback_record.canonical_digest.clone())
                         .expect("typed rollback Event digest"),
                 ),
