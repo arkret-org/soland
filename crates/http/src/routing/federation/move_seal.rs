@@ -1161,7 +1161,7 @@ async fn try_apply_device_generation_event_seal(
         .find(|device| {
             let Some(public_key) = device
                 .payload
-                .get("device_public_key")
+                .get("device_public_key_did")
                 .and_then(serde_json::Value::as_str)
             else {
                 return false;
@@ -1178,7 +1178,7 @@ async fn try_apply_device_generation_event_seal(
         })?;
     let signer_public_key = signer
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| device_generation_fenced("B-model Event Seal signer key is missing"))?;
     if signer.revoked_at.is_some()
@@ -1822,7 +1822,7 @@ pub(crate) async fn apply_agent_event_seal(
     }
     let public_key = device
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| device_generation_fenced("controller device signing key is missing"))?;
     verify_device_seal_signature(seal, public_key, digest_suites.seal_digest_suite)?;

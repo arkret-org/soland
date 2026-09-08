@@ -107,7 +107,7 @@ mod tests {
             device_id: device.to_string(),
             display_name: None,
             verification_state: "verified".to_owned(),
-            payload: json!({"device_public_key": public, "device_authorize_event_id": authorize}),
+            payload: json!({"device_public_key_did": public, "device_authorize_event_id": authorize}),
             created_at: at,
             updated_at: at,
             revoked_at: None,

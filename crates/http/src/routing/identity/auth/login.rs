@@ -290,7 +290,7 @@ mod tests {
             verification_state: "verified".to_owned(),
             payload: json!({
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                "device_public_key": "z6Mkexample",
+                "device_public_key_did": "z6Mkexample",
                 "authorized_generation_ref": 1
             }),
             created_at,
@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(
             refreshed
                 .payload
-                .get("device_public_key")
+                .get("device_public_key_did")
                 .and_then(serde_json::Value::as_str),
             Some("z6Mkexample")
         );
@@ -389,7 +389,7 @@ mod tests {
             verification_state: "verified".to_owned(),
             payload: json!({
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000004",
-                "device_public_key": "z6Mkcorrupted"
+                "device_public_key_did": "z6Mkcorrupted"
             }),
             created_at,
             updated_at: created_at,
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(
             refreshed
                 .payload
-                .get("device_public_key")
+                .get("device_public_key_did")
                 .and_then(serde_json::Value::as_str),
             Some("z6Mkcorrupted")
         );

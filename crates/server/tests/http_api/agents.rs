@@ -579,7 +579,7 @@ pub(crate) async fn seed_active_controller_device_generation(
                 "last_seen_at": now,
                 "authorized_generation_ref": generation_ref,
                 "device_authorize_event_id": authorize_event_id,
-                "device_public_key": format!(
+                "device_public_key_did": format!(
                     "did:key:{}",
                     test_ed25519_multibase_public(&signing_key)
                 )

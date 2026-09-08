@@ -63,7 +63,7 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
     }
     let device_public_key = record
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(Value::as_str)
         .ok_or_else(key_backup_untrusted_signature)?;
     if !key_backup_verification_method_matches_device_key(
@@ -252,7 +252,7 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
         }
         let device_public_key = record
             .payload
-            .get("device_public_key")
+            .get("device_public_key_did")
             .and_then(Value::as_str)
             .ok_or_else(|| {
                 AppError::capability_denied(

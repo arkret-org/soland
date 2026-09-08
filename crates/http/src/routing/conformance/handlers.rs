@@ -686,7 +686,7 @@ pub async fn device_signing_key_did(
     let now = chrono::Utc::now();
     let payload = json!({
         "device_id": body.device_id,
-        "device_public_key": body.public_key_multibase,
+        "device_public_key_did": format!("did:key:{}", body.public_key_multibase),
         "verification": "verified",
         "last_seen_at": now,
     });

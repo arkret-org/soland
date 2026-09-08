@@ -1962,8 +1962,11 @@ mod consent_proof_tests {
         let signing_key = arkret_signatures::development_signing_key(
             request.signature.verification_method.as_str(),
         );
-        let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            signing_key.verifying_key().as_bytes(),
+        let device_public_key = format!(
+            "did:key:{}",
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                signing_key.verifying_key().as_bytes()
+            ),
         );
         let mut authorize = arkret_wire::test_support::raw_event_at(
             EventKind::DeviceAuthorize.as_str(),
@@ -2044,7 +2047,7 @@ mod consent_proof_tests {
                     verification_state: "verified".to_owned(),
                     payload: json!({
                         "device_id": device_id,
-                        "device_public_key": device_public_key,
+                        "device_public_key_did": device_public_key,
                         "device_authorize_event_id": authorize.event_id,
                         "authorized_generation_ref": 1
                     }),

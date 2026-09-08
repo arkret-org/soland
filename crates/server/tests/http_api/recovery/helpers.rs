@@ -577,7 +577,7 @@ pub(crate) async fn seed_bearer_session_with_device_public_key(
         token,
         actor,
         "unverified",
-        serde_json::json!({ "device_public_key": device_public_key }),
+        serde_json::json!({ "device_public_key_did": device_public_key }),
     )
     .await;
 }

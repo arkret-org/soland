@@ -331,7 +331,7 @@ pub(crate) async fn verify_agent_pcr_ack(
     }
     let public_key = device
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "controller device signing key is missing".to_owned())?;
     let multibase = public_key

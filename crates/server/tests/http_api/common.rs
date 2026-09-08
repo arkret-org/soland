@@ -1789,7 +1789,7 @@ pub(crate) async fn project_test_authorized_device(
         arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         serde_json::json!({
             "device_id": device_id,
-            "device_public_key_did": test_ed25519_multibase_public(signing_key),
+            "device_public_key_did": format!("did:key:{}", test_ed25519_multibase_public(signing_key)),
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": actor_core,
@@ -1890,8 +1890,8 @@ pub(crate) async fn project_test_authorized_device(
         .await
         .expect("persist fixture authorized device generation");
     assert_eq!(
-        projected_device.payload["device_public_key"],
-        test_ed25519_multibase_public(signing_key),
+        projected_device.payload["device_public_key_did"],
+        format!("did:key:{}", test_ed25519_multibase_public(signing_key)),
         "projected authorized device must retain its signing key"
     );
     event_id

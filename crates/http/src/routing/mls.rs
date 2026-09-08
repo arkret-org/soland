@@ -4152,7 +4152,7 @@ async fn validate_device_keypackage_leaf(
     }
     let device_public_key = device
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -4206,7 +4206,7 @@ async fn verify_device_keypackage_signature(
     }
     let device_public_key = device
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -5257,7 +5257,7 @@ mod trust_binding_tests {
             display_name: None,
             verification_state: "verified".to_owned(),
             payload: serde_json::json!({
-                "device_public_key": arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes()),
+                "device_public_key_did": format!("did:key:{}", arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())),
                 "device_authorize_event_id": device_authorize_event_id
             }),
             created_at: now(), updated_at: now(), revoked_at: None,

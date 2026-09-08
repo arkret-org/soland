@@ -461,7 +461,7 @@ async fn verify_principal_signing_delete(
         ));
     }
     let signing_key = payload
-        .device_public_key
+        .device_public_key_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -528,7 +528,7 @@ async fn verify_device_quorum_delete(
         }
         let device_public_key = record
             .payload
-            .get("device_public_key")
+            .get("device_public_key_did")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {

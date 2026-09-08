@@ -19,14 +19,11 @@ pub(crate) fn device_quorum_method_matches(
     device_public_key: &str,
     verification_method: &str,
 ) -> bool {
-    let did_key = device_public_key
-        .strip_prefix("did:key:")
-        .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
-    let fragment = did_key
-        .strip_prefix("did:key:")
-        .unwrap_or(device_public_key);
+    let Some(fragment) = device_public_key.strip_prefix("did:key:") else {
+        return false;
+    };
     verification_method == format!("{principal_id}#{device_id}")
-        || verification_method == format!("{did_key}#{fragment}")
+        || verification_method == format!("{device_public_key}#{fragment}")
 }
 
 pub(crate) fn policy_mentions_identifier(
@@ -170,7 +167,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             }
             let device_public_key = record
                 .payload
-                .get("device_public_key")
+                .get("device_public_key_did")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -387,7 +384,7 @@ pub(crate) fn device_authorization_is_effective_at(
 #[derive(Debug, Default, serde::Deserialize)]
 pub(crate) struct ProjectedDevicePayload {
     #[serde(default)]
-    pub device_public_key: Option<String>,
+    pub device_public_key_did: Option<String>,
     #[serde(default)]
     pub hpke_key: Option<String>,
     #[serde(default)]
@@ -450,18 +447,12 @@ pub(crate) async fn try_resolve_device_signing_directory_facet(
         });
     }
     let signing_key_did = payload
-        .device_public_key
+        .device_public_key_did
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| value.starts_with("did:key:"))
         .filter(|value| decode_ed25519_key(value, "multibase").is_ok())
-        .map(|value| {
-            if value.starts_with("did:key:") {
-                value.to_owned()
-            } else {
-                format!("did:key:{value}")
-            }
-        });
+        .map(ToOwned::to_owned);
     let hpke_key = payload
         .hpke_key
         .as_deref()
@@ -671,7 +662,7 @@ mod tests {
         state.identities().save_device_if_absent(soland_services::identity::DeviceIdentity {
             actor_id: principal.to_string(), device_id: device.to_string(), display_name: None,
             verification_state: "verified".into(),
-            payload: json!({"device_public_key": public, "device_authorize_event_id": authorize}),
+            payload: json!({"device_public_key_did": public, "device_authorize_event_id": authorize}),
             created_at: now, updated_at: now, revoked_at: None,
         }).await.unwrap();
         assert!(
@@ -790,7 +781,7 @@ mod tests {
     fn device_quorum_method_requires_a_concrete_verification_method() {
         let principal = "did:webvh:z6mkfixture:alice.example";
         let device = "ak:device:primary";
-        let key = "z6MkQuorum";
+        let key = "did:key:z6MkQuorum";
 
         assert!(device_quorum_method_matches(
             principal,
@@ -802,13 +793,14 @@ mod tests {
             principal,
             device,
             key,
-            &format!("did:key:{key}#{key}"),
+            &format!("{key}#z6MkQuorum"),
         ));
+        assert!(!device_quorum_method_matches(principal, device, key, key,));
         assert!(!device_quorum_method_matches(
             principal,
             device,
-            key,
-            &format!("did:key:{key}"),
+            "z6MkQuorum",
+            &format!("{principal}#{device}"),
         ));
     }
 }

@@ -213,6 +213,27 @@ async fn prepare_ghost_event(
     if let Some(operation) = operation.as_mut() {
         stamp_projection_operation_received_at(operation, received_at);
     }
+    // Installation administrator Moves are ordinary local-origin Control
+    // Events. Persist their Station admission proof before notary evaluation.
+    // The service-authored managed identity unit retains its distinct closed
+    // aggregate proof contract; the hosting Station cannot sign as its origin.
+    let (typed, envelope, accepted_canonical_bytes, governance_dependency) = if matches!(
+        typed.kind,
+        arkret_wire::EventKind::AppletRegistration | arkret_wire::EventKind::CapabilityGrant
+    ) {
+        accepted_event_envelope(
+            state,
+            session,
+            envelope,
+            typed,
+            &parsed,
+            Some(admission),
+            received_at,
+        )
+        .await?
+    } else {
+        (typed, envelope, parsed.canonical_bytes.clone(), None)
+    };
     let is_applet_managed_pcr_genesis = parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
         && typed
             .payload
@@ -347,7 +368,7 @@ async fn prepare_ghost_event(
     let command = soland_services::events::CommitAcceptedEventCommand {
         replicated: false,
         membership_compensation_evidence: None,
-        governance_dependencies: Vec::new(),
+        governance_dependencies: governance_dependency.into_iter().collect(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
@@ -360,7 +381,7 @@ async fn prepare_ghost_event(
             schema_id: parsed.schema_id,
             digest_suite: parsed.digest_suite,
             canonical_digest: parsed.canonical_digest,
-            canonical_bytes: parsed.canonical_bytes,
+            canonical_bytes: accepted_canonical_bytes,
             envelope,
             received_at,
         },

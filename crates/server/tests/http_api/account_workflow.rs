@@ -960,7 +960,7 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body
             verification_state: "verified".to_owned(),
             payload: serde_json::json!({
                 "device_id": device_id,
-                "device_public_key": "did:key:z6MkAuthorizedPcrDeviceKey",
+                "device_public_key_did": "did:key:z6MkAuthorizedPcrDeviceKey",
                 "authorized_generation_ref": "1-QmPcrInception",
                 "device_authorize_projected": true,
             }),
@@ -998,7 +998,7 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body
     assert_eq!(
         preserved
             .payload
-            .get("device_public_key")
+            .get("device_public_key_did")
             .and_then(Value::as_str),
         Some("did:key:z6MkAuthorizedPcrDeviceKey")
     );
@@ -1055,7 +1055,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
             verification_state: "verified".to_owned(),
             payload: serde_json::json!({
                 "device_id": device_id,
-                "device_public_key": "z6MkAuthorizedDeviceKey",
+                "device_public_key_did": "z6MkAuthorizedDeviceKey",
                 "authorized_generation_ref": generation_ref,
                 "device_authorize_projected": true,
             }),
@@ -1094,7 +1094,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
         generation_ref
     );
     assert_eq!(
-        preserved.payload["device_public_key"],
+        preserved.payload["device_public_key_did"],
         "z6MkAuthorizedDeviceKey"
     );
 }

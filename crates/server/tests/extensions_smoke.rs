@@ -1284,6 +1284,28 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         .filter(|event| accepted_event_refs.contains(&event.event_id))
         .collect::<Vec<_>>();
     assert_eq!(install_events.len(), accepted_event_refs.len());
+    for record in install_events.iter().filter(|record| {
+        matches!(
+            record.kind.as_str(),
+            "ak.applet.registration" | "ak.capability.grant"
+        )
+    }) {
+        let accepted: Event = serde_json::from_value(record.envelope.clone()).unwrap();
+        assert!(
+            matches!(
+                accepted.proofs.as_slice(),
+                [
+                    arkret_wire::EventProof::Producer(_),
+                    arkret_wire::EventProof::StationAdmission(_),
+                ]
+            ),
+            "every stored administrator install Move must carry its Station admission proof"
+        );
+        accepted
+            .validate_station_admission_binding(record.digest_suite)
+            .unwrap();
+    }
+
     assert!(install_events.iter().any(|event| {
         event.kind == arkret_wire::EventKind::AppletRegistration.as_str()
             && event.envelope["payload"]["applet_id"] == json!(applet_id)

@@ -1097,7 +1097,7 @@ async fn device_authorize_projects_public_key_into_devices_table_body() {
     let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
     let device_key = SigningKey::from_bytes(&[202u8; 32]);
-    let multibase = test_ed25519_multibase_public(&device_key);
+    let multibase = format!("did:key:{}", test_ed25519_multibase_public(&device_key));
 
     // Exercise accepted device authorization projection directly.
     let control_realm = soland_test_support::fixture_principal_control_realm(alice);
@@ -1135,7 +1135,7 @@ async fn device_authorize_projects_public_key_into_devices_table_body() {
         .unwrap()
         .expect("device.authorize projection persisted the device");
     assert_eq!(
-        device.payload["device_public_key"].as_str(),
+        device.payload["device_public_key_did"].as_str(),
         Some(multibase.as_str())
     );
     assert_eq!(
@@ -1187,7 +1187,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding_body() 
         alice_core.clone(),
         serde_json::json!({
             "device_id": alice_device,
-            "device_public_key": test_ed25519_multibase_public(&device_key),
+            "device_public_key_did": format!("did:key:{}", test_ed25519_multibase_public(&device_key)),
             "hpke_key": "z6LSTestPhase1HpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice_core,

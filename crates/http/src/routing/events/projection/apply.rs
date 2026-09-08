@@ -497,7 +497,7 @@ async fn project_accepted_operations_inner(
             materialize_moderation_report(state, operation).await;
         }
         // Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
-        // `payload.device_public_key` into the devices table so the
+        // `payload.device_public_key_did` into the devices table so the
         // `keys/query` signing-key directory resolves devices that were
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
@@ -942,7 +942,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     }
     if let Some(map) = device_payload.as_object_mut() {
         map.insert(
-            "device_public_key".to_owned(),
+            "device_public_key_did".to_owned(),
             Value::String(device_public_key.to_owned()),
         );
         map.entry("device_id".to_owned())
@@ -1125,7 +1125,7 @@ mod tests {
             .await
             .unwrap()
             .expect("local device projected");
-        assert_eq!(local.payload["device_public_key"], key);
+        assert_eq!(local.payload["device_public_key_did"], key);
         let foreign = arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
         for actor in [
             arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), foreign)),

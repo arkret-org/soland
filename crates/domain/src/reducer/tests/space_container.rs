@@ -168,7 +168,7 @@ fn space_container_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::SpaceArchive,
             realm_id,
-            serde_json::json!({ "space_id": container_space_id, "sender": "ak:did_core:web:alice.example" }),
+            serde_json::json!({ "space_id": container_space_id }),
         ),
         &hlc,
     );
@@ -189,7 +189,7 @@ fn space_container_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::SpaceRestore,
             realm_id,
-            serde_json::json!({ "space_id": container_space_id, "sender": "ak:did_core:web:alice.example" }),
+            serde_json::json!({ "space_id": container_space_id }),
         ),
         &hlc,
     );
@@ -210,7 +210,7 @@ fn space_container_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::SpaceTombstone,
             realm_id,
-            serde_json::json!({ "space_id": container_space_id, "sender": "ak:did_core:web:alice.example" }),
+            serde_json::json!({ "space_id": container_space_id }),
         ),
         &hlc,
     );
@@ -599,7 +599,7 @@ fn space_container_child_order_tracks_rank_updates() {
 }
 
 #[test]
-fn list_archive_cascades_card_and_restore_preserves_rank() {
+fn list_archive_and_restore_preserve_card_lifecycle_and_rank() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
@@ -675,36 +675,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         &make_operation(
             arkret_wire::EventKind::SpaceArchive,
             realm_id,
-            serde_json::json!({ "space_id": list_id, "sender": "ak:did_core:web:alice.example" }),
-        ),
-        &hlc,
-    );
-    assert_eq!(
-        state.strands[strand_id].state,
-        ObjectLifecycleState::Archived
-    );
-    let relation = state
-        .relations
-        .values()
-        .find(|relation| relation.to_object_ref() == Some(strand_id))
-        .expect("strand position relation");
-    assert_eq!(
-        relation.fields.get("rank").and_then(Value::as_str),
-        Some("r007")
-    );
-    assert_eq!(
-        relation
-            .fields
-            .get("cascade_archived_by")
-            .and_then(Value::as_str),
-        Some(list_id)
-    );
-
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::SpaceRestore,
-            realm_id,
-            serde_json::json!({ "space_id": list_id, "sender": "ak:did_core:web:alice.example" }),
+            serde_json::json!({ "space_id": list_id }),
         ),
         &hlc,
     );
@@ -718,11 +689,29 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         relation.fields.get("rank").and_then(Value::as_str),
         Some("r007")
     );
-    assert!(!relation.fields.contains_key("cascade_archived_by"));
+
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::SpaceRestore,
+            realm_id,
+            serde_json::json!({ "space_id": list_id }),
+        ),
+        &hlc,
+    );
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
+    let relation = state
+        .relations
+        .values()
+        .find(|relation| relation.to_object_ref() == Some(strand_id))
+        .expect("strand position relation");
+    assert_eq!(
+        relation.fields.get("rank").and_then(Value::as_str),
+        Some("r007")
+    );
 }
 
 #[test]
-fn board_archive_cascades_child_lists_and_cards() {
+fn board_archive_and_restore_preserve_child_lists_and_cards() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
@@ -799,7 +788,7 @@ fn board_archive_cascades_child_lists_and_cards() {
         &make_operation(
             arkret_wire::EventKind::SpaceArchive,
             realm_id,
-            serde_json::json!({ "space_id": board_id, "sender": "ak:did_core:web:alice.example" }),
+            serde_json::json!({ "space_id": board_id }),
         ),
         &hlc,
     );
@@ -809,26 +798,40 @@ fn board_archive_cascades_child_lists_and_cards() {
     );
     assert_eq!(
         state.space_containers[list_id].state,
+        SpaceContainerLifecycleState::Active
+    );
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
+
+    // Restoring a parent must not restore independently archived children.
+    for (kind, payload) in [
+        (
+            arkret_wire::EventKind::SpaceArchive,
+            serde_json::json!({"space_id": list_id}),
+        ),
+        (
+            arkret_wire::EventKind::StrandArchive,
+            serde_json::json!({"target_ref": strand_id}),
+        ),
+    ] {
+        state.apply(&make_operation(kind, realm_id, payload), &hlc);
+    }
+
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::SpaceRestore,
+            realm_id,
+            serde_json::json!({ "space_id": board_id }),
+        ),
+        &hlc,
+    );
+    assert_eq!(
+        state.space_containers[list_id].state,
         SpaceContainerLifecycleState::Archived
     );
     assert_eq!(
         state.strands[strand_id].state,
         ObjectLifecycleState::Archived
     );
-
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::SpaceRestore,
-            realm_id,
-            serde_json::json!({ "space_id": board_id, "sender": "ak:did_core:web:alice.example" }),
-        ),
-        &hlc,
-    );
-    assert_eq!(
-        state.space_containers[list_id].state,
-        SpaceContainerLifecycleState::Active
-    );
-    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
     let relation = state
         .relations
         .values()

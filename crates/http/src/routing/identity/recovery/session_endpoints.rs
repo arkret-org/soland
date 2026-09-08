@@ -1019,7 +1019,7 @@ pub(super) async fn verify_did_root_proof(
         ));
     }
     let signing_key = payload
-        .device_public_key
+        .device_public_key_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())

@@ -490,7 +490,7 @@ async fn principal_authorized_device_binding_with_account_authority_async(
     >(device.payload)
     .map_err(|error| fail(format!("principal device evidence is invalid: {error}")))?;
     let signing_key = payload
-        .device_public_key
+        .device_public_key_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -845,7 +845,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
             ))
         })?;
         let signing_key = device_payload
-            .device_public_key
+            .device_public_key_did
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())

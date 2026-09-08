@@ -464,7 +464,7 @@ async fn keys_query(
                 _ => BTreeMap::new(),
             };
             // Signing-key directory facet from the authoritative devices-table
-            // `payload.device_public_key`: returns the verify key only for a
+            // `payload.device_public_key_did`: returns the verify key only for a
             // verified, non-revoked device. Shared with the recovery receipt
             // predicate via `resolve_device_signing_directory_facet`.
             let facet =
@@ -569,7 +569,7 @@ fn verify_keys_upload_device_signature(
     }
     let device_public_key = record
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

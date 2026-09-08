@@ -158,7 +158,7 @@ pub(super) async fn resolve_session_device_key_for_genesis_policy(
     }
     let material = device
         .payload
-        .get("device_public_key")
+        .get("device_public_key_did")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(not_bound)?;
@@ -266,7 +266,7 @@ pub(super) async fn verify_recovery_auth_signature(
         ));
     }
     let material = projected
-        .device_public_key
+        .device_public_key_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
