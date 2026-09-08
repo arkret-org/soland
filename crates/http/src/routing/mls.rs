@@ -4314,9 +4314,7 @@ async fn verify_session_keypackage_write_signature(
                     .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
-                        AppError::param_invalid(format!(
-                            "KeyPackage signature target is missing: {keypackage_ref}"
-                        ))
+                        AppError::param_invalid("KeyPackage signature target is missing")
                     })?
             };
             if record.actor_id != session.actor
