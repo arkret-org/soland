@@ -230,6 +230,10 @@ pub trait EventStore: Send + Sync {
         event_id: &str,
     ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
     /// Accepted membership-compensation transport evidence for one Event.
+    async fn mls_frontier_leaves(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>>;
     async fn membership_compensation_evidence(
         &self,
         event_id: &str,

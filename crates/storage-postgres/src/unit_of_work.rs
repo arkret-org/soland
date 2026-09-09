@@ -165,6 +165,48 @@ async fn ensure_applet_admission_in_transaction(
     Ok(())
 }
 
+async fn commit_mls_frontier_input(
+    conn: &mut AsyncPgConnection,
+    event_pk: i64,
+    request: &EventCommitRequest,
+    event_already_existed: bool,
+) -> PersistenceResult<()> {
+    let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone())
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    arkret_wire::event_submission::validate_mls_submission_leaves(
+        &event,
+        request.mls_frontier_leaves.as_deref(),
+    )
+    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let Some(leaves) = &request.mls_frontier_leaves else {
+        return Ok(());
+    };
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(leaves)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if event_already_existed {
+        let stored =
+            sql_query("SELECT canonical_bytes FROM mls_frontier_inputs WHERE event_pk = $1")
+                .bind::<BigInt, _>(event_pk)
+                .get_result::<MembershipCompensationBytesRow>(conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?;
+        if stored.is_none_or(|stored| stored.canonical_bytes != canonical_bytes) {
+            return Err(PersistenceError::Conflict(
+                "accepted MLS transition input is missing or changed".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
+    sql_query("INSERT INTO mls_frontier_inputs (event_pk, canonical_bytes) VALUES ($1, $2)")
+        .bind::<BigInt, _>(event_pk)
+        .bind::<Binary, _>(canonical_bytes)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
 async fn commit_membership_compensation_evidence(
     conn: &mut AsyncPgConnection,
     event_pk: i64,
@@ -595,12 +637,14 @@ async fn preflight_event_batch(
                 ) {
                     return Ok(Some(CommitTransactionOutcome::Collision));
                 }
+                commit_mls_frontier_input(conn, stored.pk, item, true).await?;
                 commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
                 continue;
             }
             if stored.state == "quarantined" {
                 return Ok(Some(CommitTransactionOutcome::Collision));
             }
+            commit_mls_frontier_input(conn, stored.pk, item, true).await?;
             commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
             continue;
         }
@@ -1136,6 +1180,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             .map_err(PersistenceError::database)?
             .pk;
             event_inserted = true;
+            commit_mls_frontier_input(conn, event_pk, &request, false).await?;
             commit_membership_compensation_evidence(conn, event_pk, &request, false).await?;
 
             let typed_event = serde_json::from_value::<arkret_wire::Event>(

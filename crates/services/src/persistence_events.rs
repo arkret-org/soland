@@ -87,6 +87,7 @@ fn persistence_event_commit_request(
     command: crate::events::CommitAcceptedEventCommand,
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
+        mls_frontier_leaves: command.mls_frontier_leaves,
         replicated: command.replicated,
         event: command.event,
         membership_compensation_evidence: command.membership_compensation_evidence,
@@ -148,6 +149,13 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     ) -> crate::ServiceResult<()> {
         self.0.events().put(record).await?;
         Ok(())
+    }
+    async fn mls_frontier_leaves(
+        &self,
+        event_id: &str,
+    ) -> crate::ServiceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>>
+    {
+        Ok(self.0.events().mls_frontier_leaves(event_id).await?)
     }
     async fn membership_compensation_evidence(
         &self,

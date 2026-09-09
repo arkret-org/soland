@@ -225,6 +225,22 @@ impl RealmDirectoryService {
         self.index.lock().get(realm_id).cloned()
     }
 
+    /// Clone only selected entries. Account-wide discovery remains a separate
+    /// operation; explicit Realm filters never clone or sort the global index.
+    pub fn entries_for_sync(
+        &self,
+        selected: Option<&BTreeSet<RealmId>>,
+    ) -> Vec<RealmDirectoryEntry> {
+        let index = self.index.lock();
+        match selected {
+            Some(ids) => ids.iter().filter_map(|id| index.get(id).cloned()).collect(),
+            None => index
+                .entries_iter()
+                .map(|(_, entry)| entry.clone())
+                .collect(),
+        }
+    }
+
     pub fn upsert(&self, entry: RealmDirectoryEntry) {
         self.index.lock().upsert(entry);
     }
@@ -761,6 +777,7 @@ use crate::federation::FederationDeliveryRecord;
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
+    pub mls_frontier_leaves: Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>,
     /// Origin admission was verified; historical sibling union is permitted.
     pub replicated: bool,
     pub event: AcceptedEvent,
@@ -882,6 +899,10 @@ pub trait EventReadPort: Send + Sync {
         deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
+    async fn mls_frontier_leaves(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>>;
     async fn membership_compensation_evidence(
         &self,
         event_id: &str,
@@ -1254,6 +1275,12 @@ impl EventQueryService {
     }
     pub async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {
         self.events.canonical_event(event_id).await
+    }
+    pub async fn mls_frontier_leaves(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>> {
+        self.events.mls_frontier_leaves(event_id).await
     }
     pub async fn membership_compensation_evidence(
         &self,
@@ -2409,6 +2436,7 @@ mod tests {
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
+                mls_frontier_leaves: None,
                 replicated: false,
                 membership_compensation_evidence: None,
                 governance_dependencies: Vec::new(),

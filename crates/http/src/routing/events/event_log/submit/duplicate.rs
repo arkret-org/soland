@@ -3,6 +3,8 @@ use super::*;
 /// Inputs needed to classify an event-id collision before any new canonical
 /// write is attempted.
 pub(super) struct ExistingEventStage<'a> {
+    pub(super) mls_frontier_leaves:
+        Option<&'a [arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
     pub(super) session: &'a SessionRecord,
     pub(super) envelope: &'a Value,
     pub(super) parsed: &'a ValidatedEventEnvelope,
@@ -30,6 +32,7 @@ pub(super) async fn resolve_existing_event_stage(
         envelope,
         parsed,
         submitted_event,
+        mls_frontier_leaves,
         membership_compensation_evidence,
         has_control_event,
         ackless_self_principal_ingress,
@@ -62,6 +65,23 @@ pub(super) async fn resolve_existing_event_stage(
     if existing.envelope == *envelope
         || exact_producer_retry(&stored_envelope_bytes, submitted_event)
     {
+        let retained_leaves = service
+            .mls_frontier_leaves(parsed.event_id.as_str())
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    error.to_string(),
+                )
+            })?;
+        if retained_leaves.as_deref() != mls_frontier_leaves {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "schema_violation",
+                "the same MLS Event was replayed with different public leaf input",
+            ));
+        }
         let stored_compensation_evidence = service
             .membership_compensation_evidence(parsed.event_id.as_str())
             .await

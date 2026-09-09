@@ -630,7 +630,6 @@ fn roster_body(audience: &str) -> SyncRequestBody {
                 extra,
             },
         ),
-        subscriptions: None,
     }
 }
 

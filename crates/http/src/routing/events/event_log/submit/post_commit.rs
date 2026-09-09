@@ -432,6 +432,10 @@ async fn federation_submissions(
     membership_compensation_evidence: Option<
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
+    pending_mls_input: Option<(
+        &arkret_wire::EventId,
+        &[arkret_wire::mls_transition::MlsSecurityFrontierLeaf],
+    )>,
 ) -> Result<Vec<arkret_wire::EventFederationSubmission>, String> {
     let digest_suites = accepted_event_digest_suites(events)?;
     let mut digests = Vec::with_capacity(events.len());
@@ -549,6 +553,14 @@ async fn federation_submissions(
             None
         };
         submissions.push(arkret_wire::EventFederationSubmission {
+            mls_frontier_leaves: match pending_mls_input {
+                Some((event_id, leaves)) if *event_id == event.event_id => Some(leaves.to_vec()),
+                _ => state
+                    .event_queries()
+                    .mls_frontier_leaves(event.event_id.as_str())
+                    .await
+                    .map_err(|error| error.to_string())?,
+            },
             event: event.clone(),
             authorization_lease: record.map(|record| record.authorization_lease.clone()),
             ingress_receipts: record
@@ -649,7 +661,7 @@ pub(super) async fn peer_event_batch_fanout_records(
             })?;
     // The Realm genesis path stores its ingress receipts before it gets here
     // (`mint_and_store_ingress_receipt`), so the store is the only source.
-    let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
+    let submissions = federation_submissions(state, &events, None, &[], &[], None, None).await?;
     let digest_suites = accepted_event_digest_suites(&events)?;
     let binding_payload = json!({
         "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_V1_SERVICE_BINDING_V1,
@@ -782,6 +794,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         pending_control_proposal_acks,
         &[],
         None,
+        None,
     )
     .await?;
     let submissions: [arkret_wire::EventFederationSubmission; 4] = submissions
@@ -867,6 +880,7 @@ pub(super) async fn peer_event_fanout_records(
     membership_compensation_evidence: Option<
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
+    mls_frontier_leaves: Option<&[arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     let mut peers = dynamic_peer_event_targets(state, parsed).await?;
     // A standalone member join is evaluated before its projection becomes
@@ -976,6 +990,7 @@ pub(super) async fn peer_event_fanout_records(
             &[],
             pending_evidence,
             membership_compensation_evidence,
+            mls_frontier_leaves.map(|leaves| (&event.event_id, leaves)),
         )
         .await?;
         let digest_suites = accepted_event_digest_suites(&peer_events)?;
@@ -1219,7 +1234,7 @@ async fn realm_bootstrap_fanout_record(
     let idempotency_key = format!("ak:outbox:realm-bootstrap:{}", sha256_hex(&hasher_input));
     // This prerequisite is a *stored* Realm genesis unit, so its evidence is
     // already durable — nothing pending to fold in.
-    let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
+    let submissions = federation_submissions(state, &events, None, &[], &[], None, None).await?;
     let digest_suites = accepted_event_digest_suites(&events)?;
     let body = EventsSubmitFederationBatchRequestBody {
         service_binding_ref,

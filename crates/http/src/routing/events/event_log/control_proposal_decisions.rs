@@ -45,19 +45,18 @@ async fn require_visible_proposal(
     realm_id: &RealmId,
     proposal_digest: &Hash,
 ) -> Result<(), AppError> {
-    let records = state
+    let event_id = arkret_wire::EventId::from_event_digest(proposal_digest)
+        .map_err(|error| AppError::param_invalid(format!("invalid proposal digest: {error}")))?;
+    let record = state
         .event_queries()
-        .canonical_events()
+        .canonical_event(event_id.as_str())
         .await
-        .map_err(|error| {
-            AppError::internal(format!("proposal visibility lookup failed: {error}"))
-        })?;
-    let Some(record) = records.into_iter().find(|record| {
-        record.canonical_digest == proposal_digest.as_str()
-            && record.realm_id.as_deref() == Some(realm_id.as_str())
-    }) else {
-        return Err(proposal_not_found());
-    };
+        .map_err(|error| AppError::internal(format!("proposal visibility lookup failed: {error}")))?
+        .filter(|record| {
+            record.canonical_digest == proposal_digest.as_str()
+                && record.realm_id.as_deref() == Some(realm_id.as_str())
+        })
+        .ok_or_else(proposal_not_found)?;
     if !event_visible_to_session(state, &record, session).await {
         return Err(proposal_not_found());
     }
@@ -148,15 +147,9 @@ fn read_outcome(
             "ak.device.revoke durable snapshot omits its canonical Ack",
         ));
     }
-    let accepted_seal_id = match snapshot.covering_seals.as_slice() {
-        [] => None,
-        [seal_id] => Some(seal_id.clone()),
-        _ => {
-            return Err(AppError::internal(
-                "control proposal decision read cannot represent multiple direct covering Seals",
-            ));
-        }
-    };
+    // The store excludes quarantined coverage. A proposal may be covered by
+    // concurrent open-set branches; this bounded observation is not a frontier.
+    let accepted_seal_id = snapshot.covering_seals.iter().min().cloned();
     if accepted_seal_id.is_some() && terminal_reject.is_some() {
         return Err(AppError::internal(
             "control proposal snapshot has conflicting terminal states",
@@ -350,4 +343,71 @@ pub(super) async fn read_control_proposal_decision(
     require_visible_proposal(state, &session, &request.realm_id, &request.proposal_digest).await?;
     let snapshot = load_snapshot(state, &request.realm_id, &request.proposal_digest).await?;
     json_ok(read_outcome(&request, snapshot, now())?)
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_wire::SealId;
+
+    use super::*;
+
+    #[test]
+    fn accepted_proposal_result_supports_concurrent_covering_seals() {
+        let realm_id =
+            RealmId::new("ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI").unwrap();
+        let event = arkret_test_kit::raw_event(
+            "ak.device.authorize",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            "ak:did_core:web:alice.example".parse().unwrap(),
+            "ak:did_core:web:station.example".parse().unwrap(),
+            1,
+            arkret_wire::Hlc::new("01970e589d22-0000-a13f9c2e").unwrap(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let request = ControlProposalDecisionReadRequestBody {
+            realm_id,
+            proposal_digest: event.event_id.event_digest(),
+        };
+        let first = SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap();
+        let second = SealId::new(format!("ak:seal:sha256:{}", "2".repeat(64))).unwrap();
+        // These snapshots start after admission and quarantine filtering.
+        // Verify the result state as coverage appears and is removed.
+        for (coverage, expected) in [
+            (vec![], None),
+            (vec![second.clone()], Some(second.clone())),
+            (vec![second.clone(), first.clone()], Some(first)),
+            (vec![second.clone()], Some(second)),
+        ] {
+            let snapshot = ControlProposalSnapshot {
+                event: event.clone(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                control_proposal_ack: None,
+                ingress_class:
+                    arkret_state::state::store::ControlProposalIngressClass::AcklessSelfPrincipal(
+                        arkret_state::state::store::AcklessSelfPrincipalIngress {
+                            device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
+                            device_authorize_event_id: event.event_id.to_string(),
+                            device_generation_ref: 1,
+                            seal_basis_digest: format!("sha256:{}", "3".repeat(64)),
+                        },
+                    ),
+                decisions: vec![],
+                covering_seals: coverage,
+                decision_overdue: false,
+            };
+            let outcome = read_outcome(&request, snapshot, chrono::Utc::now()).unwrap();
+            assert_eq!(
+                outcome.proposal_state,
+                if expected.is_some() {
+                    ControlProposalState::Sealed
+                } else {
+                    ControlProposalState::Pending
+                }
+            );
+            assert_eq!(outcome.accepted_seal_id, expected);
+        }
+    }
 }

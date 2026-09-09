@@ -212,6 +212,7 @@ async fn mimi_room_update_body(
     move_event_to_actor_realm_frontier(state, token, MIMI_SOURCE_SERVICE_DID, realm_id, &mut event)
         .await;
     let submission = arkret_wire::EventInitialSubmission {
+        mls_frontier_leaves: None,
         event: serde_json::from_value(event).unwrap(),
         authorization_lease: None,
         cbs_proof_bundles: Vec::new(),

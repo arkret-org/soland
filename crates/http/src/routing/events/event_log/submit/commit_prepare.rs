@@ -3,6 +3,8 @@ use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIng
 use super::*;
 
 pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
+    pub(super) mls_frontier_leaves:
+        Option<&'a [arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
     pub(super) state: &'a AppState,
     pub(super) parsed: &'a ValidatedEventEnvelope,
     pub(super) actor_key: &'a str,
@@ -49,6 +51,7 @@ pub(super) async fn prepare_accepted_event_command(
         control_proposal_ack,
         local_device_revocation_gate,
         validated_agent_approval,
+        mls_frontier_leaves,
         membership_compensation_evidence,
         internal_admission,
         consent_admission,
@@ -127,6 +130,7 @@ pub(super) async fn prepare_accepted_event_command(
         })
         .transpose()?;
     let command = soland_services::events::CommitAcceptedEventCommand {
+        mls_frontier_leaves: mls_frontier_leaves.map(<[_]>::to_vec),
         replicated: internal_admission.is_some_and(InternalEventAdmission::is_peer_replication),
         membership_compensation_evidence,
         governance_dependencies: governance_dependency.into_iter().collect(),

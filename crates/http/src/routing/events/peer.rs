@@ -118,7 +118,18 @@ async fn retained_federation_submission(
             AppError::internal(format!("membership compensation evidence lookup: {error}"))
         })?
         .map(|record| record.evidence);
+    let mls_frontier_leaves = state
+        .event_queries()
+        .mls_frontier_leaves(event.event_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    arkret_wire::event_submission::validate_mls_submission_leaves(
+        &event,
+        mls_frontier_leaves.as_deref(),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(arkret_wire::EventFederationSubmission {
+        mls_frontier_leaves,
         event,
         authorization_lease: publication
             .as_ref()

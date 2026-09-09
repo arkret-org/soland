@@ -189,6 +189,7 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
                 .ackless_self_principal_admission_evidence
                 .as_ref(),
             federation_source_id: Some(source_id),
+            mls_frontier_leaves: submission.mls_frontier_leaves.as_deref(),
             membership_compensation_evidence: submission.membership_compensation_evidence.as_ref(),
             ..SubmitEventContext::empty()
         },

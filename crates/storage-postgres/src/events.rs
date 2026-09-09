@@ -1104,6 +1104,44 @@ impl EventStore for PgEventStore {
             .collect()
     }
 
+    async fn mls_frontier_leaves(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>> {
+        #[derive(diesel::QueryableByName)]
+        struct InputRow {
+            #[diesel(sql_type = Binary)]
+            canonical_bytes: Vec<u8>,
+        }
+        let id = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation("invalid MLS input Event id".to_owned())
+        })?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query("SELECT input.canonical_bytes FROM mls_frontier_inputs input JOIN accepted_events event ON event.pk = input.event_pk WHERE event.id = $1")
+            .bind::<Binary, _>(id.to_vec()).get_result::<InputRow>(&mut *conn).await.optional()
+            .map_err(PersistenceError::database)?;
+        row.map(|row| {
+            let leaves: Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf> =
+                serde_json::from_slice(&row.canonical_bytes).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "invalid durable MLS frontier inputs: {error}"
+                    ))
+                })?;
+            arkret_wire::mls_transition::validate_mls_frontier_leaves(&leaves)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            if arkret_canonical::canonical_json_bytes(&leaves)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?
+                != row.canonical_bytes
+            {
+                return Err(PersistenceError::Internal(
+                    "durable MLS input bytes are not canonical".to_owned(),
+                ));
+            }
+            Ok(leaves)
+        })
+        .transpose()
+    }
+
     async fn membership_compensation_evidence(
         &self,
         event_id: &str,

@@ -1027,7 +1027,6 @@ async fn events_query_impl(
                     after: None,
                     catchup: Some(true),
                     filter: None,
-                    subscriptions: None,
                 },
                 &SyncCursor::default(),
             )

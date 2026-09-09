@@ -1792,6 +1792,7 @@ mod reporter_event_binding_tests {
                 },
             },
             report_event: EventInitialSubmission {
+                mls_frontier_leaves: None,
                 event,
                 authorization_lease: None,
                 cbs_proof_bundles: Vec::new(),

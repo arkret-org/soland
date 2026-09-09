@@ -4,7 +4,11 @@ use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, MAX_GOVERNANCE_DEPENDENCY_SELECTORS,
 };
-use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
+use arkret_models_crypto::{
+    MlsEpochHead, MlsGovernanceBindingPayload, MlsGovernanceFrontierOutcome,
+    MlsGovernanceFrontierRequest, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
+    ProposedMlsGroupGenesisBinding,
+};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{
@@ -16,7 +20,7 @@ use arkret_state::state::{EventCellBottom, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cbs::LatticeOp;
 use arkret_wire::cbs::LatticeOpType;
-use arkret_wire::{ContentScheme, DurabilityPolicy, Event, NotarySig, ScopeRef as GovernanceScope};
+use arkret_wire::{Event, NotarySig, ScopeRef as GovernanceScope};
 use salvo::oapi::extract::JsonBody;
 
 use super::*;
@@ -30,8 +34,8 @@ pub(super) async fn mls_governance_proof(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<MlsGovernanceProofRequestBody>,
-) -> JsonResult<MlsGovernanceProofBundle> {
+    body: JsonBody<MlsGovernanceFrontierRequest>,
+) -> JsonResult<MlsGovernanceFrontierOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
@@ -69,7 +73,181 @@ pub(super) async fn mls_governance_proof(
         return Err(AppError::not_found("realm not found"));
     }
 
-    json_ok(materialize_governance_frontier(state, &request).await?)
+    json_ok(materialize_self_governance_frontier(state, &request).await?)
+}
+
+async fn materialize_self_governance_frontier(
+    state: &AppState,
+    request: &MlsGovernanceFrontierRequest,
+) -> Result<MlsGovernanceFrontierOutcome, AppError> {
+    let realm_id = request
+        .effective_scope
+        .realm_id_opt()
+        .ok_or_else(|| AppError::param_invalid("MLS frontier requires a Realm"))?;
+    let accepted = state
+        .projections()
+        .effective_state_at(&request.seal_basis.leaves, realm_id)
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    let live_digest_suite = state
+        .projections()
+        .predecessor_digest_suite(realm_id, &request.seal_basis.leaves)
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    let genesis = group_genesis_binding(
+        &accepted,
+        &request.effective_scope,
+        &request.mls_group_id,
+        request.proposed_group_genesis_binding.as_ref(),
+        request.previous_epoch,
+        request.next_epoch,
+    )?;
+    let digest =
+        arkret_state::mls_governance_proof::mls_security_frontier_digest_from_accepted_state(
+            &request.effective_scope,
+            &accepted,
+            &genesis,
+            &request.local_mls_leaves,
+        )
+        .map_err(map_governance_frontier_error)?;
+    let epoch_cell = arkret_state::mls_cells::mls_epoch_cell_id(
+        &request.effective_scope,
+        request.mls_group_id.as_str(),
+    )
+    .map_err(map_governance_frontier_error)?;
+    let epoch_head = match accepted.get(&epoch_cell) {
+        None => None,
+        Some(CellState::Value(value)) => Some(
+            serde_json::from_value::<MlsEpochHead>(value.clone())
+                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?,
+        ),
+        Some(_) => {
+            return Err(crate::app_error!(
+                FrontierUnavailable,
+                "MLS epoch has no winning accepted value"
+            ));
+        }
+    };
+    let governance_binding = match &request.effective_scope {
+        GovernanceScope::Realm { realm_id } => MlsGovernanceBindingPayload::realm(
+            realm_id.clone(),
+            request.mls_group_id.clone(),
+            request.previous_epoch,
+            request.next_epoch,
+            digest,
+            genesis.content_scheme,
+            genesis.durability_policy,
+            arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+            arkret_wire::CORE_REDUCER_PROFILE,
+        ),
+        GovernanceScope::Circle {
+            realm_id,
+            circle_id,
+        } => MlsGovernanceBindingPayload::circle(
+            realm_id.clone(),
+            circle_id.clone(),
+            request.mls_group_id.clone(),
+            request.previous_epoch,
+            request.next_epoch,
+            digest,
+            genesis.content_scheme,
+            genesis.durability_policy,
+            arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+            arkret_wire::CORE_REDUCER_PROFILE,
+        ),
+        _ => {
+            return Err(AppError::param_invalid(
+                "MLS frontier scope is not Realm or Circle",
+            ));
+        }
+    }
+    .map_err(map_governance_frontier_error)?;
+    let outcome = MlsGovernanceFrontierOutcome {
+        query_digest: request
+            .query_digest()
+            .map_err(map_governance_frontier_error)?,
+        seal_basis: request.seal_basis.clone(),
+        live_digest_suite,
+        governance_binding,
+        epoch_head,
+    };
+    outcome
+        .validate_for_request(request)
+        .map_err(map_governance_frontier_error)?;
+    Ok(outcome)
+}
+
+pub(super) async fn validate_transition_leaf_input(
+    state: &AppState,
+    event: &Event,
+    leaves: Option<&[arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
+) -> Result<(), AppError> {
+    arkret_wire::event_submission::validate_mls_submission_leaves(event, leaves)
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let Some(leaves) = leaves else {
+        return Ok(());
+    };
+    let binding: MlsGovernanceBindingPayload = serde_json::from_value(
+        event
+            .payload
+            .get("governance_binding")
+            .cloned()
+            .ok_or_else(|| AppError::param_invalid("MLS transition binding is missing"))?,
+    )
+    .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let basis = event
+        .seal_basis
+        .as_ref()
+        .ok_or_else(|| AppError::param_invalid("MLS transition requires an exact Seal basis"))?;
+    if binding.effective_scope() != &event.scope_ref {
+        return Err(AppError::param_invalid(
+            "MLS input scope does not bind the Event",
+        ));
+    }
+    let accepted = state
+        .projections()
+        .effective_state_at(&basis.leaves, &event.realm_id)
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    let group_id = arkret_wire::Base64UrlString::new(binding.mls_group_id().to_owned())
+        .map_err(AppError::param_invalid)?;
+    let proposal = (event.kind == arkret_wire::EventKind::MlsGenesis).then(|| {
+        ProposedMlsGroupGenesisBinding {
+            content_scheme: binding.content_scheme(),
+            durability_policy: binding.durability_policy(),
+        }
+    });
+    let genesis = group_genesis_binding(
+        &accepted,
+        binding.effective_scope(),
+        &group_id,
+        proposal.as_ref(),
+        binding.previous_epoch(),
+        binding.next_epoch(),
+    )?;
+    if genesis.content_scheme != binding.content_scheme()
+        || genesis.durability_policy != binding.durability_policy()
+    {
+        return Err(crate::app_error!(
+            StateMismatch,
+            "MLS transition changes the accepted Genesis key schedule"
+        ));
+    }
+    let digest =
+        arkret_state::mls_governance_proof::mls_security_frontier_digest_from_accepted_state(
+            binding.effective_scope(),
+            &accepted,
+            &genesis,
+            leaves,
+        )
+        .map_err(map_governance_frontier_error)?;
+    if &digest != binding.security_frontier_digest() {
+        return Err(crate::app_error!(
+            StateMismatch,
+            "MLS public leaf input does not reproduce the signed security frontier"
+        ));
+    }
+    Ok(())
 }
 
 fn scope_visible_to_session(
@@ -973,7 +1151,19 @@ pub(in crate::routing) async fn materialize_governance_frontier(
     // the outcome against its own RFC 9420 current or pending group state.
     let leaves = request.local_mls_leaves.clone();
     let checkpoint = load_governance_checkpoint(state, request).await?;
-    let group_genesis_binding = group_genesis_binding(state, request)?;
+    let accepted = state
+        .projections()
+        .effective_state_at(&request.proof_target_basis.leaves, &checkpoint.realm_id)
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    let group_genesis_binding = group_genesis_binding(
+        &accepted,
+        &request.effective_scope,
+        &request.mls_group_id,
+        request.proposed_group_genesis_binding.as_ref(),
+        request.previous_epoch,
+        request.next_epoch,
+    )?;
     arkret::materialize_mls_governance_frontier(
         request,
         &checkpoint,
@@ -1305,84 +1495,61 @@ fn insert_checkpoint_dependency(
 }
 
 fn group_genesis_binding(
-    state: &AppState,
-    request: &MlsGovernanceProofRequestBody,
+    accepted: &BTreeMap<CellRef, CellState>,
+    effective_scope: &GovernanceScope,
+    mls_group_id: &arkret_wire::Base64UrlString,
+    proposal: Option<&ProposedMlsGroupGenesisBinding>,
+    previous_epoch: u64,
+    next_epoch: u64,
 ) -> Result<MlsGroupGenesisBinding, AppError> {
-    let projection = state.projections().snapshot();
-    let accepted = projection.mls_commit_epochs.values().find(|epoch| {
-        epoch.group_id == request.mls_group_id.as_str()
-            && serde_json::from_value::<GovernanceScope>(epoch.effective_scope.clone())
-                .is_ok_and(|scope| scope == request.effective_scope)
-    });
-    let binding = match accepted {
-        Some(epoch) => {
-            if request.proposed_group_genesis_binding.is_some() {
+    let key_schedule_cell =
+        arkret_state::mls_cells::key_schedule_cell_id(effective_scope, mls_group_id.as_str())
+            .map_err(map_governance_frontier_error)?;
+    match accepted.get(&key_schedule_cell) {
+        Some(CellState::Value(value)) => {
+            if proposal.is_some() {
                 return Err(crate::app_error!(
                     MlsGenesisBindingProposalMismatch,
-                    "accepted MLS Genesis exists; retry 0 -> 0 without a proposal",
+                    "accepted MLS Genesis exists at the requested basis; omit the proposal"
                 ));
             }
-            let content_scheme = serde_json::from_value::<ContentScheme>(
-                epoch
-                    .governance_binding
-                    .get("content_scheme")
-                    .cloned()
-                    .ok_or_else(|| {
-                        crate::app_error!(
-                            FrontierUnavailable,
-                            "accepted MLS Genesis omits content_scheme",
-                        )
-                    })?,
-            )
-            .map_err(|_| {
-                crate::app_error!(
-                    FrontierUnavailable,
-                    "accepted MLS Genesis content_scheme is not registered",
-                )
-            })?;
-            let durability_policy = epoch
-                .governance_binding
-                .get("durability_policy")
-                .filter(|value| !value.is_null())
-                .cloned()
-                .map(serde_json::from_value::<DurabilityPolicy>)
-                .transpose()
-                .map_err(|_| {
-                    crate::app_error!(
-                        FrontierUnavailable,
-                        "accepted MLS Genesis durability_policy is not registered",
-                    )
-                })?;
-            MlsGroupGenesisBinding {
-                content_scheme,
-                durability_policy,
-            }
-        }
-        None => {
-            if request.previous_epoch != 0 || request.next_epoch != 0 {
+            let binding: MlsGovernanceBindingPayload = serde_json::from_value(value.clone())
+                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+            if binding.effective_scope() != effective_scope
+                || binding.mls_group_id() != mls_group_id.as_str()
+            {
                 return Err(crate::app_error!(
                     FrontierUnavailable,
-                    "MLS governance successor has no accepted Genesis binding",
+                    "accepted MLS key schedule scope mismatch"
                 ));
             }
-            let proposal = request
-                .proposed_group_genesis_binding
-                .as_ref()
-                .ok_or_else(|| {
-                    crate::app_error!(
-                        MlsGenesisBindingProposalRequired,
-                        "pre-Genesis 0 -> 0 query requires proposed_group_genesis_binding",
-                    )
-                })?;
-            MlsGroupGenesisBinding::from_proposal(proposal).map_err(|error| {
-                crate::app_error!(MlsGenesisBindingProposalMismatch, error.to_string(),)
-            })?
+            let genesis = MlsGroupGenesisBinding {
+                content_scheme: binding.content_scheme(),
+                durability_policy: binding.durability_policy(),
+            };
+            genesis.validate().map_err(map_governance_frontier_error)?;
+            Ok(genesis)
         }
-    };
-    binding
-        .validate()
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    Ok(binding)
+        Some(_) => Err(crate::app_error!(
+            FrontierUnavailable,
+            "MLS key schedule has no accepted winner"
+        )),
+        None if previous_epoch == 0 && next_epoch == 0 => {
+            let proposal = proposal.ok_or_else(|| {
+                crate::app_error!(
+                    MlsGenesisBindingProposalRequired,
+                    "pre-Genesis query requires proposed_group_genesis_binding"
+                )
+            })?;
+            MlsGroupGenesisBinding::from_proposal(proposal).map_err(|error| {
+                crate::app_error!(MlsGenesisBindingProposalMismatch, error.to_string())
+            })
+        }
+        None => Err(crate::app_error!(
+            FrontierUnavailable,
+            "MLS successor has no accepted Genesis"
+        )),
+    }
 }
 
 fn map_governance_frontier_error(error: arkret_wire::WireError) -> AppError {
@@ -1998,6 +2165,52 @@ fn proof_state_error(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn genesis_binding_uses_exact_accepted_key_schedule() {
+        let realm_id =
+            RealmId::new("ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI").unwrap();
+        let scope = GovernanceScope::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let group =
+            arkret_wire::Base64UrlString::new(scope.canonical_mls_group_id().unwrap()).unwrap();
+        let proposal = ProposedMlsGroupGenesisBinding {
+            content_scheme: arkret_wire::ContentScheme::MlsRfc9420,
+            durability_policy: None,
+        };
+        let mut accepted = BTreeMap::new();
+        assert!(group_genesis_binding(&accepted, &scope, &group, None, 0, 0).is_err());
+        assert!(group_genesis_binding(&accepted, &scope, &group, Some(&proposal), 0, 0).is_ok());
+        assert!(group_genesis_binding(&accepted, &scope, &group, None, 1, 2).is_err());
+        let binding = MlsGovernanceBindingPayload::realm(
+            realm_id,
+            group.clone(),
+            0,
+            0,
+            Hash::new("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .unwrap(),
+            arkret_wire::ContentScheme::MlsExporterAeadV1,
+            Some(arkret_wire::DurabilityPolicy::None),
+            arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+            arkret_wire::CORE_REDUCER_PROFILE,
+        )
+        .unwrap();
+        accepted.insert(
+            arkret_state::mls_cells::key_schedule_cell_id(&scope, group.as_str()).unwrap(),
+            CellState::Value(serde_json::to_value(binding).unwrap()),
+        );
+        let current = group_genesis_binding(&accepted, &scope, &group, None, 1, 2).unwrap();
+        assert_eq!(
+            current.content_scheme,
+            arkret_wire::ContentScheme::MlsExporterAeadV1
+        );
+        assert_eq!(
+            current.durability_policy,
+            Some(arkret_wire::DurabilityPolicy::None)
+        );
+        assert!(group_genesis_binding(&accepted, &scope, &group, Some(&proposal), 0, 0).is_err());
+    }
 
     #[test]
     fn event_signer_device_projects_did_method_controller_to_actor_core() {

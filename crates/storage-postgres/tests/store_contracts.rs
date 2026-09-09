@@ -698,6 +698,7 @@ fn franking_event_request(
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     soland_storage::EventCommitRequest {
+        mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
@@ -724,6 +725,143 @@ fn franking_event_request(
         idempotency: None,
         outbox: Vec::new(),
     }
+}
+
+#[tokio::test]
+async fn postgres_mls_frontier_input_commits_atomically_and_survives_adapter_restart() {
+    use diesel::sql_types::{Binary, Text};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{EventCommitUnitOfWork, EventStore};
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("mls-frontier-input:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:mls-input.example").unwrap();
+    let actor = arkret_wire::DidCoreId::new("ak:did_core:web:mls-author.example").unwrap();
+    // Storage owns atomic evidence retention. HTTP admission separately verifies
+    // this input against the signed binding and the exact accepted basis.
+    let mut request = franking_event_request(
+        &realm_id,
+        actor,
+        &station,
+        107,
+        arkret_wire::EventKind::MlsGenesis.as_str(),
+        serde_json::json!({}),
+        now,
+    );
+    let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone()).unwrap();
+    let leaves = vec![arkret_wire::mls_transition::MlsSecurityFrontierLeaf {
+        leaf_index: 0,
+        actor_id: event.actor_id.clone(),
+        credential_ref: arkret_wire::NonEmptyString::new("device-a").unwrap(),
+    }];
+    request.mls_frontier_leaves = Some(leaves.clone());
+    let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+    let mut ack = arkret_wire::ControlProposalAuthorityAck {
+        realm_id: realm_id.clone(),
+        proposal_digest: arkret_wire::Hash::new(request.event.canonical_digest.clone()).unwrap(),
+        received_at: now,
+        decision_due_at: now + policy.decision_window,
+        absolute_due_at: now + policy.absolute_horizon,
+        authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "aa".repeat(32))).unwrap(),
+        signature: arkret_wire::PayloadSignature {
+            verification_method: arkret_wire::DidUrl::new("did:web:mls-input.example#authority")
+                .unwrap(),
+            payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "00".repeat(32))).unwrap(),
+            created_at: now,
+            jws: "e30..c2ln".to_owned(),
+        },
+    };
+    ack.signature.payload_digest = ack.authority_ack_digest().unwrap();
+    request.control_proposal_ingress = Some(
+        arkret_state::state::store::ControlProposalIngress::AckRequired(
+            arkret_wire::ControlProposalAck::from_authority_acks(vec![ack], policy).unwrap(),
+        ),
+    );
+    let event_id = request.event.event_id.clone();
+    let store = PgEventStore { pool: pool.clone() };
+    let mut missing = request.clone();
+    missing.mls_frontier_leaves = None;
+    assert!(
+        PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(missing)
+            .await
+            .is_err()
+    );
+    assert!(!store.contains(&event_id).await.unwrap());
+    assert!(
+        store
+            .mls_frontier_leaves(&event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Fail after inserting both canonical Event and leaf input: all rows roll back.
+    let mut no_ingress = request.clone();
+    no_ingress.control_proposal_ingress = None;
+    assert!(
+        PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(no_ingress)
+            .await
+            .is_err()
+    );
+    assert!(!store.contains(&event_id).await.unwrap());
+    assert!(
+        store
+            .mls_frontier_leaves(&event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(request.clone())
+        .await
+        .unwrap();
+    let restarted = PgEventStore { pool: pool.clone() };
+    assert_eq!(
+        restarted.mls_frontier_leaves(&event_id).await.unwrap(),
+        Some(leaves.clone())
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(request.clone())
+        .await
+        .unwrap();
+    let mut conflicting = request;
+    conflicting.mls_frontier_leaves.as_mut().unwrap()[0].credential_ref =
+        arkret_wire::NonEmptyString::new("device-b").unwrap();
+    assert!(
+        PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(conflicting)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        restarted.mls_frontier_leaves(&event_id).await.unwrap(),
+        Some(leaves)
+    );
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE canonical_events SET state = $1 WHERE id = $2")
+        .bind::<Text, _>("quarantined")
+        .bind::<Binary, _>(
+            soland_storage::ids::parse_event_id(&event_id)
+                .unwrap()
+                .to_vec(),
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    assert!(
+        restarted
+            .mls_frontier_leaves(&event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -2625,6 +2763,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(EventCommitRequest {
+            mls_frontier_leaves: None,
             replicated: false,
             governance_dependencies: Vec::new(),
             membership_compensation_evidence: None,
@@ -3168,6 +3307,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         .commit_event_batch(EventBatchCommitRequest {
             events: vec![
                 EventCommitRequest {
+                    mls_frontier_leaves: None,
                     replicated: false,
                     governance_dependencies: Vec::new(),
                     membership_compensation_evidence: None,
@@ -3183,6 +3323,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     outbox: Vec::new(),
                 },
                 EventCommitRequest {
+                    mls_frontier_leaves: None,
                     replicated: false,
                     governance_dependencies: Vec::new(),
                     membership_compensation_evidence: None,
@@ -3575,6 +3716,7 @@ mod control_move_ingress_negatives {
             ingress: Option<arkret_state::state::store::ControlProposalIngress>,
         ) -> EventCommitRequest {
             EventCommitRequest {
+                mls_frontier_leaves: None,
                 replicated: false,
                 governance_dependencies: Vec::new(),
                 membership_compensation_evidence: None,

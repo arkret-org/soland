@@ -579,6 +579,12 @@ CREATE TABLE public.canonical_events (
     CONSTRAINT canonical_events_identity_key UNIQUE (digest_suite, digest)
 );
 
+-- Exact public leaf intent atomically retained with MLS Event admission.
+CREATE TABLE public.mls_frontier_inputs (
+    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    canonical_bytes bytea NOT NULL
+);
+
 -- Transport-only membership compensation evidence accepted with one Event.
 -- The FK supplies Event identity without copying it into the evidence body;
 -- canonical_bytes are retained independently because this carrier is outside

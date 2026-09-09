@@ -1919,6 +1919,26 @@ impl ProjectionService {
         self.state.lock().clone()
     }
 
+    /// Read the indexed membership range without cloning unrelated Realm
+    /// state, message history, or the rest of the account projection.
+    pub fn realm_membership_states(
+        &self,
+        realm_id: &str,
+    ) -> BTreeMap<arkret_wire::ActorId, String> {
+        self.state
+            .lock()
+            .members
+            .range((realm_id.to_owned(), String::new())..)
+            .take_while(|((candidate, _), _)| candidate == realm_id)
+            .filter_map(|((_, actor_id), membership)| {
+                Some((
+                    serde_json::from_str(actor_id).ok()?,
+                    membership.state.clone(),
+                ))
+            })
+            .collect()
+    }
+
     pub fn invite_claim_proof_context(
         &self,
         operation: &arkret_event_draft::ProjectedEventOperation,

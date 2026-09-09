@@ -14,7 +14,7 @@ pub(crate) async fn build_sync_snapshot(
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — `members[]` is
-    // the per-Realm roster v2 projection from
+    // the per-Realm roster projection from
     // `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
     // row carries `{actor_id, membership, subject_id?, identity_event_ids?,
     // member_display_state_digest?, identity_events?, handle_claim_digests?,
@@ -24,25 +24,14 @@ pub(crate) async fn build_sync_snapshot(
     // `ak.member.identity.update` event log; servers that lack the events for
     // the client SHOULD inline them via `identity_events[]` (gated on
     // `subject_id` disclosure).
-    let candidate_realms: Vec<RealmDirectoryEntry> = {
-        let realms = state.realm_directory().snapshot();
-        realms
-            .search(Default::default())
-            .into_iter()
-            .cloned()
-            .collect()
-    };
     let requested_realms = body
         .filter
         .as_ref()
-        .map(|filter| {
-            filter
-                .realm_ids
-                .iter()
-                .map(|realm_id| realm_id.as_str())
-                .collect::<BTreeSet<_>>()
-        })
+        .map(|filter| filter.realm_ids.iter().cloned().collect::<BTreeSet<_>>())
         .filter(|realms| !realms.is_empty());
+    let candidate_realms = state
+        .realm_directory()
+        .entries_for_sync(requested_realms.as_ref());
     let mut visible_realms: Vec<(
         String,
         String,
@@ -53,12 +42,6 @@ pub(crate) async fn build_sync_snapshot(
         _,
     )> = Vec::new();
     for realm_entry in &candidate_realms {
-        if requested_realms
-            .as_ref()
-            .is_some_and(|realms| !realms.contains(realm_entry.realm_id.as_str()))
-        {
-            continue;
-        }
         // Account aggregate membership is narrower than public discovery.
         // Only the exact session ActorId may receive this Realm's delta.
         if !is_realm_deleted(state, realm_entry.realm_id.as_str()).await
@@ -814,23 +797,9 @@ fn roster_membership_states_for_realm(
     state: &AppState,
     realm_entry: &crate::state::RealmDirectoryEntry,
 ) -> BTreeMap<arkret_wire::ActorId, String> {
-    let projected_states = {
-        let projection = state.projections().snapshot();
-        projection
-            .members
-            .iter()
-            .filter_map(|((realm_id, actor_id), membership)| {
-                if realm_id == realm_entry.realm_id.as_str() {
-                    Some((
-                        serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?,
-                        membership.state.clone(),
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect::<BTreeMap<_, _>>()
-    };
+    let projected_states = state
+        .projections()
+        .realm_membership_states(realm_entry.realm_id.as_str());
     projected_states
         .iter()
         .filter(|(_, membership)| roster_membership_is_visible(membership))

@@ -32,6 +32,7 @@ DROP TABLE IF EXISTS publication_evidence CASCADE;
 DROP TABLE IF EXISTS signal_relay CASCADE;
 DROP TABLE IF EXISTS signal_relay_position CASCADE;
 DROP TABLE IF EXISTS signal_relay_watermark CASCADE;
+DROP TABLE IF EXISTS mls_frontier_inputs CASCADE;
 DROP TABLE IF EXISTS membership_compensation_evidence CASCADE;
 DROP TABLE IF EXISTS canonical_events CASCADE;
 DROP TABLE IF EXISTS canonical_realms CASCADE;

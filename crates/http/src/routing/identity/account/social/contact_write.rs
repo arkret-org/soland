@@ -1376,6 +1376,7 @@ async fn commit(
         state,
         session,
         arkret_wire::EventInitialSubmission {
+            mls_frontier_leaves: None,
             event: body.signed_event.clone(),
             authorization_lease: None,
             cbs_proof_bundles: Vec::new(),

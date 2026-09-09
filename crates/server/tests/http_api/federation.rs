@@ -1713,6 +1713,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         }
     });
     arkret_wire::EventFederationSubmission {
+        mls_frontier_leaves: None,
         event,
         authorization_lease: Some(lease),
         ingress_receipts: vec![receipt],

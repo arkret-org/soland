@@ -1238,6 +1238,7 @@ async fn submit_initial_event_batch_outcome_inner(
     let mut leases = Vec::with_capacity(submissions.len());
     let mut control_proposal_acks = Vec::with_capacity(submissions.len());
     let mut compensation_evidence = Vec::with_capacity(submissions.len());
+    let mut frontier_inputs = Vec::with_capacity(submissions.len());
     for submission in &submissions {
         typed_events.push(submission.event.clone());
         envelopes.push(typed_event_to_canonical_value(submission.event.clone())?);
@@ -1263,12 +1264,14 @@ async fn submit_initial_event_batch_outcome_inner(
                 .await?;
         }
         let arkret_wire::EventInitialSubmission {
+            mls_frontier_leaves,
             event: _,
             authorization_lease,
             cbs_proof_bundles: _,
             control_proposal_ack,
             membership_compensation_evidence,
         } = submission;
+        frontier_inputs.push(mls_frontier_leaves);
         leases.push(authorization_lease);
         control_proposal_acks.push(control_proposal_ack);
         compensation_evidence.push(membership_compensation_evidence);
@@ -1307,6 +1310,7 @@ async fn submit_initial_event_batch_outcome_inner(
         Some(&leases),
         Some(&control_proposal_acks),
         Some(&compensation_evidence),
+        &frontier_inputs,
     )
     .await
 }
@@ -1733,7 +1737,15 @@ async fn submit_event_batch_outcome_with_leases(
     membership_compensation_evidence: Option<
         &[Option<arkret_wire::MembershipCompensationSubmissionEvidence>],
     >,
+    mls_frontier_inputs: &[Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>],
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    if mls_frontier_inputs.len() != envelopes.len() {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "MLS input cardinality mismatch",
+        ));
+    }
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -1858,6 +1870,7 @@ async fn submit_event_batch_outcome_with_leases(
                 control_proposal_ack: control_proposal_acks
                     .and_then(|acks| acks.get(index))
                     .and_then(Option::as_ref),
+                mls_frontier_leaves: mls_frontier_inputs.get(index).and_then(Option::as_deref),
                 membership_compensation_evidence: membership_compensation_evidence
                     .and_then(|evidence| evidence.get(index))
                     .and_then(Option::as_ref),

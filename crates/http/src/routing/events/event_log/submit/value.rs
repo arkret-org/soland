@@ -20,6 +20,8 @@ pub(super) struct PreparedAgentMembershipEvent {
 /// admission context; it travels inside [`SubmitMode::Commit`] so a
 /// prepare-only admission cannot silently carry commit effects.
 pub(super) struct SubmitEventContext<'a> {
+    pub(super) mls_frontier_leaves:
+        Option<&'a [arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
     pub(super) realm_bootstrap_contexts: &'a [RealmBootstrapBatchContext],
     /// The pre-derived Operations of the whole submit batch this Event
     /// belongs to (`sdk_projection::projection_operation_from_envelope`).
@@ -42,6 +44,7 @@ impl SubmitEventContext<'_> {
     /// admission substitution, no publication evidence.
     pub(super) fn empty() -> Self {
         Self {
+            mls_frontier_leaves: None,
             realm_bootstrap_contexts: &[],
             batch_operations: &[],
             internal_admission: None,
@@ -616,6 +619,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
             .await?;
     }
     let arkret_wire::EventInitialSubmission {
+        mls_frontier_leaves,
         event,
         authorization_lease,
         cbs_proof_bundles: _,
@@ -662,6 +666,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
             realm_bootstrap_contexts: &bootstrap_contexts,
             authorization_lease: authorization_lease.as_ref(),
             control_proposal_ack: control_proposal_ack.as_ref(),
+            mls_frontier_leaves: mls_frontier_leaves.as_deref(),
             membership_compensation_evidence: membership_compensation_evidence.as_ref(),
             ..SubmitEventContext::empty()
         },
@@ -743,6 +748,7 @@ pub(super) async fn prepare_agent_membership_initial_event(
             .await?;
     }
     let arkret_wire::EventInitialSubmission {
+        mls_frontier_leaves: _,
         event,
         authorization_lease,
         cbs_proof_bundles: _,
@@ -2555,6 +2561,7 @@ pub(super) async fn submit_event_value_with_context(
             envelope: &envelope,
             parsed: &parsed,
             submitted_event: &submitted_event,
+            mls_frontier_leaves: context.mls_frontier_leaves,
             membership_compensation_evidence: context.membership_compensation_evidence,
             has_control_event: control_event_for_proposal.is_some(),
             ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
@@ -2568,6 +2575,16 @@ pub(super) async fn submit_event_value_with_context(
     {
         return Ok(response);
     }
+    super::super::governance_proof::validate_transition_leaf_input(
+        state,
+        &submitted_event,
+        context.mls_frontier_leaves,
+    )
+    .await
+    .map_err(|error| SubmitOneError::Rejected {
+        error: Box::new(error),
+        details: None,
+    })?;
     let scoped_actor_records = admit_event_sequence(EventSequenceAdmissionContext {
         state,
         session,
@@ -2710,6 +2727,7 @@ pub(super) async fn submit_event_value_with_context(
             // (`mint_and_store_ingress_receipt`), so nothing is pending.
             &[],
             context.membership_compensation_evidence,
+            context.mls_frontier_leaves,
         )
         .await
         .map_err(|error| {
@@ -2815,6 +2833,7 @@ pub(super) async fn submit_event_value_with_context(
         control_proposal_ack: control_proposal_ack.as_ref(),
         local_device_revocation_gate,
         validated_agent_approval,
+        mls_frontier_leaves: context.mls_frontier_leaves,
         membership_compensation_evidence: context.membership_compensation_evidence,
         internal_admission: context.internal_admission,
         consent_admission: consent_admission.as_ref(),

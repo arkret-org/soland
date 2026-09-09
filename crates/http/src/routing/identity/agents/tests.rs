@@ -129,6 +129,7 @@ fn initial_submission(
     };
     let issued_at = event.created_at;
     arkret_wire::EventInitialSubmission {
+        mls_frontier_leaves: None,
         authorization_lease: Some(AuthorizationLease {
             authorization_lease_id: AuthorizationLeaseId::new(
                 "ak:authorization_lease:01904100-0000-7000-8000-aaaaaaaaaaaa",

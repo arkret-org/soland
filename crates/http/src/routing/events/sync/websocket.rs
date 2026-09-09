@@ -1406,7 +1406,6 @@ async fn run_account_channel(
             .map(|cursor| cursor.as_str().to_owned()),
         catchup: parameters.catchup,
         filter: parameters.filter.map(websocket_account_filter),
-        subscriptions: None,
     };
     let filter_value = sync_filter_value(body.filter.as_ref());
     let mut notifications = state.subscribe_event_notifications();

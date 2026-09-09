@@ -51,35 +51,33 @@ pub(crate) async fn load_realm_seal_frontier(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<arkret_models_collaboration::event_sync::RealmSealFrontierView, AppError> {
-    let head = crate::notary::ensure_realm_seal_head(state, realm_id)
+    // The durable accepted Seal store is written by the admission/commit path.
+    // Discovery reuses that result; it does not replay all canonical Events or
+    // collapse an open-set antichain to an arbitrarily selected single head.
+    let leaves = state
+        .projections()
+        .realm_seal_leaves(realm_id)
         .await
-        .map_err(|error| AppError::internal(format!("seal head unavailable: {error}")))?;
-    let stats = state
-        .event_queries()
-        .realm_event_stats(realm_id.as_str())
+        .map_err(|error| AppError::internal(format!("accepted frontier unavailable: {error}")))?;
+    if leaves.is_empty() {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "Realm has no accepted Seal"
+        ));
+    }
+    let seal_basis = arkret_wire::SealBasis { leaves };
+    seal_basis
+        .validate_protocol_bounds()
+        .map_err(|error| AppError::internal(format!("invalid accepted frontier: {error}")))?;
+    let live_digest_suite = state
+        .projections()
+        .predecessor_digest_suite(realm_id, &seal_basis.leaves)
         .await
         .map_err(|error| {
             AppError::internal(format!(
-                "canonical Realm Event preflight unavailable: {error}"
+                "accepted frontier digest suite unavailable: {error}"
             ))
         })?;
-    if stats.count == 0 {
-        return Err(AppError::not_found(
-            "realm has no accepted Seal on this deployment",
-        ));
-    }
-    let seal =
-        match crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
-            state, realm_id,
-        )
-        .await
-        {
-            Ok(view) => view.accepted_seal,
-            Err(error) if error.code == ErrorCode::FrontierUnavailable && head.is_some() => {
-                head.expect("checked existing Realm Seal head")
-            }
-            Err(error) => return Err(error),
-        };
     let governance_policy = crate::control_proposal::control_proposal_policy(state, realm_id, &[])
         .await
         .map_err(|error| {
@@ -92,9 +90,8 @@ pub(crate) async fn load_realm_seal_frontier(
     Ok(
         arkret_models_collaboration::event_sync::RealmSealFrontierView::new(
             realm_id.clone(),
-            arkret_wire::SealBasis {
-                leaves: vec![seal.id],
-            },
+            seal_basis,
+            live_digest_suite,
             governance_health,
             observation_coordinate,
         ),
@@ -1600,11 +1597,21 @@ async fn seals_frontier(
                 })?;
         let observation_coordinate =
             realm_seal_frontier_observation_coordinate(state, &realm_id).await?;
+        let live_digest_suite = state
+            .projections()
+            .predecessor_digest_suite(&realm_id, std::slice::from_ref(&seal.id))
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "Agent accepted frontier digest suite unavailable: {error}"
+                ))
+            })?;
         let frontier = RealmSealFrontierView::new(
             realm_id,
             arkret_wire::SealBasis {
                 leaves: vec![seal.id.clone()],
             },
+            live_digest_suite,
             frontier_control_governance_health(state, &seal.realm_id, governance_policy).await?,
             observation_coordinate,
         );

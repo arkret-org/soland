@@ -90,6 +90,7 @@ pub struct AccountDataCasCommit {
 
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
+    pub mls_frontier_leaves: Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>,
     /// Origin admission was verified; historical sibling union is permitted.
     pub replicated: bool,
     pub event: CanonicalEventRecord,

@@ -1356,6 +1356,30 @@ async fn provision_agent_sdk_commit_attempt_inner(
     assert!(settled.event_digests.is_empty());
     assert!(!settled.has_more);
 
+    let decision_request = arkret_wire::ControlProposalDecisionReadRequestBody {
+        realm_id: controller_realm_id.clone(),
+        proposal_digest: controller_seal.delta[0].clone(),
+    };
+    let mut decision_response =
+        TestClient::post("http://server/_arkret/self/control-proposal-decisions/query")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&decision_request).unwrap())
+            .send(&app)
+            .await;
+    assert_eq!(decision_response.status_code, Some(StatusCode::OK));
+    let decision: arkret_wire::ControlProposalDecisionReadOutcome =
+        decision_response.take_json().await.unwrap();
+    decision.validate_for_request(&decision_request).unwrap();
+    assert_eq!(
+        decision.proposal_state,
+        arkret_wire::ControlProposalState::Sealed
+    );
+    assert_eq!(
+        decision.accepted_seal_id.as_ref(),
+        Some(&controller_seal.id)
+    );
+
     let genesis_authority = arkret_bootstrap::AgentPcrGenesisAuthority::from_delegated_create(
         &pcr_genesis,
         &genesis_projector,
@@ -1883,6 +1907,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
             slug: "unallocated-agent".to_owned(),
             requested_scope,
             provision_event: Box::new(arkret_wire::EventInitialSubmission {
+                mls_frontier_leaves: None,
                 event: provision_event,
                 authorization_lease: None,
                 cbs_proof_bundles: Vec::new(),

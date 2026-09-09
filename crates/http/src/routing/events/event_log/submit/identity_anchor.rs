@@ -918,6 +918,7 @@ async fn identity_anchor_fanout_records(
                 control_proposal_ack,
                 publication_evidence,
                 None,
+                None,
             )
             .await
             .map_err(|error| {

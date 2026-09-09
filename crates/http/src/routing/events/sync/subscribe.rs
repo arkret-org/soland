@@ -557,7 +557,6 @@ fn account_subscribe_query(req: &mut Request) -> Result<SyncRequestBody, String>
         after: query_param(req, "after"),
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
         filter,
-        subscriptions: None,
     })
 }
 
