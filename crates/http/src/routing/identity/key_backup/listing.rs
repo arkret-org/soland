@@ -77,6 +77,10 @@ async fn list(
 ) -> JsonResult<KeysBackupsList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    crate::routing::events::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST_V1,
+    )?;
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let account = actor
@@ -239,7 +243,7 @@ async fn active_pointers(
         ))
         .map_err(unavailable)?;
         match accepted.get(&cell) {
-            None => Ok(BackupActiveSeriesPointer::Absent),
+            None => Ok(BackupActiveSeriesPointer::Absent {}),
             Some(CellState::Bottom(_)) => Err(unavailable("backup pointer is conflicted")),
             Some(CellState::Value(value)) => {
                 let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =

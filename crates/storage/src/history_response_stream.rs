@@ -115,9 +115,6 @@ impl HistoryRequestWrite {
             || self.request.requester_sender_domain != self.request_receipt.requester_sender_domain
             || self.request.requester_authorization_incarnation
                 != self.request_receipt.requester_authorization_incarnation
-            || self.request.trusted_history_base_basis
-                != self.request_receipt.trusted_history_base_basis
-            || self.request.trusted_current_basis != self.request_receipt.trusted_current_basis
             || self.request.expires_at != self.request_receipt.expires_at
         {
             return Err(PersistenceError::SchemaViolation(
@@ -183,8 +180,6 @@ impl HistoryRequestWrite {
                 }
                 let HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
                     effective_scope,
-                    trusted_history_base_basis,
-                    trusted_current_basis,
                     request_digest,
                     requested_ranges,
                     authorization_incarnation,
@@ -197,8 +192,6 @@ impl HistoryRequestWrite {
                     ));
                 };
                 if effective_scope != &self.request.effective_scope
-                    || trusted_history_base_basis != &self.request.trusted_history_base_basis
-                    || trusted_current_basis != &self.request.trusted_current_basis
                     || request_digest != &self.request_digest
                     || requested_ranges != &self.request.requested_ranges
                     || authorization_incarnation

@@ -606,7 +606,9 @@ mod tests {
     fn list_metadata_redacts_ciphertext_and_kdf_material() {
         let mut body = key_backup_body("secret_storage", passphrase_encryption());
         body["contents"][0]["item_kind"] = json!("private_account_state");
-        let metadata = serde_json::to_value(serde_json::from_value::<KeyBackup>(body).unwrap().summary()).unwrap();
+        let metadata =
+            serde_json::to_value(serde_json::from_value::<KeyBackup>(body).unwrap().summary())
+                .unwrap();
 
         assert!(metadata.get("ciphertext").is_none());
         assert!(metadata.pointer("/encryption/key_commitment").is_none());

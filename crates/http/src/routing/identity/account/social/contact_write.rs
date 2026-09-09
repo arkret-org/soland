@@ -1488,8 +1488,8 @@ async fn plan_contact_commit(
                         let terminal =
                             existing.contact_round_evidence.clone().ok_or_else(|| {
                                 crate::app_error!(
-                                    FailedPrecondition,
-                                    "terminal Contact round evidence is unavailable",
+                                    ContinuityEvidenceUnavailable,
+                                    "Contact continuity evidence is unavailable",
                                 )
                             })?;
                         if previous_terminal_contact_round_id.as_ref()
@@ -2517,6 +2517,21 @@ fn contact_revision_after(
     preferred.max(expected_updated_at + chrono::Duration::microseconds(1))
 }
 
+fn terminal_contact_predecessor(
+    status: &str,
+    round: Option<&Hash>,
+) -> Result<Option<Hash>, AppError> {
+    if status != "tombstoned" {
+        return Ok(None);
+    }
+    round.cloned().map(Some).ok_or_else(|| {
+        crate::app_error!(
+            ContinuityEvidenceUnavailable,
+            "Contact continuity evidence is unavailable"
+        )
+    })
+}
+
 pub(super) async fn request(
     state: &AppState,
     session: &SessionRecord,
@@ -2530,11 +2545,13 @@ pub(super) async fn request(
                 .contact_any(&session_actor_id, &body.peer.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
-            let local_predecessor = prior.as_ref().and_then(|record| {
-                (record.status == "tombstoned")
-                    .then(|| record.contact_round_id.clone())
-                    .flatten()
-            });
+            let local_predecessor = prior
+                .as_ref()
+                .map(|record| {
+                    terminal_contact_predecessor(&record.status, record.contact_round_id.as_ref())
+                })
+                .transpose()?
+                .flatten();
             let previous_terminal_contact_round_id = if let Some(evidence) =
                 &body.continuity_evidence
             {
@@ -2887,6 +2904,7 @@ mod device_authorization_account_tests {
     use super::{
         accept_request_slot_transition, contact_delivery_address, contact_mirror_target_holder_key,
         device_authorization_matches_contact_account, next_request_slot_coordinates,
+        terminal_contact_predecessor,
     };
 
     fn account(principal: &str, station: &str) -> ActorId {
@@ -3260,5 +3278,23 @@ mod device_authorization_account_tests {
             assert_eq!(states[0].accepted_sequence, original[0].accepted_sequence);
             assert_eq!(states[0].head_digest, original[0].head_digest);
         }
+    }
+    #[test]
+    fn missing_terminal_round_cannot_prepare_a_fresh_contact_root() {
+        let previous = hash('a');
+        assert_eq!(
+            terminal_contact_predecessor("tombstoned", Some(&previous)).unwrap(),
+            Some(previous)
+        );
+        let error = terminal_contact_predecessor("tombstoned", None).unwrap_err();
+        assert_eq!(
+            error.code,
+            arkret_wire::ErrorCode::ContinuityEvidenceUnavailable
+        );
+        assert!(
+            terminal_contact_predecessor("rejected", None)
+                .unwrap()
+                .is_none()
+        );
     }
 }

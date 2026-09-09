@@ -807,7 +807,6 @@ async fn create_history_key_request(
     }
     verify_history_request_proof(state, &request).await?;
     validate_history_requester_endpoint_authorization(state, &request).await?;
-    let target_basis = validate_history_request_bases(state, realm_id, &request).await?;
     let request_digest = request
         .request_digest()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -824,6 +823,7 @@ async fn create_history_key_request(
     if request.expires_at <= accepted_at {
         return Err(AppError::param_invalid("history request is expired"));
     }
+    let target_basis = select_history_request_target(state, realm_id).await?;
     let (retention, pins, objects) =
         build_member_history_retention(state, &request, request_digest.clone(), &target_basis)
             .await?;
@@ -895,8 +895,6 @@ async fn create_history_key_request(
                 requester_authorization_incarnation: request
                     .requester_authorization_incarnation
                     .clone(),
-                trusted_history_base_basis: request.trusted_history_base_basis.clone(),
-                trusted_current_basis: request.trusted_current_basis.clone(),
                 release_id: release_id.clone(),
                 release_service_binding_ref: release_service_binding_ref.clone(),
                 release_service_resolution_ref: projection.resolution_event_ref.clone(),
@@ -1635,11 +1633,17 @@ async fn verify_history_source_proof(
                         .await
                     }
                     arkret::HistorySourceProofExternalVerificationRequest::MinimalMetadata {
-                        ..
-                    } => Err(arkret_wire::WireError::Protocol(
-                        "minimal-metadata history source verification requires receiver-local MLS state"
-                            .to_owned(),
-                    )),
+                        signer_evidence, ..
+                    } => {
+                        // This verifies the source signature under the carried key only.
+                        // The receiver must still authenticate the encrypted IdentityLink
+                        // and exact active LeafNode in its local MLS state. Admission
+                        // separately checks the relay binding and pins the evidence.
+                        let bytes = arkret_wire::base64url::base64url_decode(
+                            signer_evidence.response_signing_public_key_b64u.as_str().as_bytes(),
+                        )?;
+                        Ok(arkret_signatures::proof::PublicKeyMaterial::Ed25519Raw { bytes })
+                    }
                 }
             })
         },
@@ -2175,67 +2179,26 @@ async fn validate_history_source_relay_binding(
     Ok(())
 }
 
-async fn validate_history_request_bases(
+async fn select_history_request_target(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
-    request: &HistoryKeyRequest,
 ) -> Result<arkret_wire::SealBasis, AppError> {
-    let mut current = state
+    let mut leaves = state
         .projections()
         .realm_seal_leaves(realm_id)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    current.sort();
-    let target_closure = state
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    leaves.sort();
+    let basis = arkret_wire::SealBasis { leaves };
+    basis
+        .validate_protocol_bounds()
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    state
         .projections()
-        .seal_closure(&current)
+        .effective_state_at(&basis.leaves, realm_id)
         .await
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if request
-        .trusted_current_basis
-        .leaves
-        .iter()
-        .any(|leaf| !target_closure.contains(leaf))
-    {
-        return Err(AppError::conflict(
-            "history request trusted basis is not dominated by the complete current frontier",
-        ));
-    }
-    if request
-        .trusted_history_base_basis
-        .leaves
-        .iter()
-        .any(|leaf| !target_closure.contains(leaf))
-    {
-        return Err(AppError::param_invalid(
-            "history request bootstrap basis is not dominated by current basis",
-        ));
-    }
-    let mut closure_seals = Vec::with_capacity(target_closure.len());
-    for seal_id in &target_closure {
-        closure_seals.push(
-            state
-                .projections()
-                .seal_by_id(seal_id)
-                .await
-                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
-                .ok_or_else(|| {
-                    crate::app_error!(FrontierUnavailable, "history bootstrap Seal is unavailable",)
-                })?,
-        );
-    }
-    let mut bootstrap_leaves = closure_seals
-        .into_iter()
-        .filter(|seal| seal.predecessor_refs.is_empty())
-        .map(|seal| seal.id)
-        .collect::<Vec<_>>();
-    bootstrap_leaves.sort();
-    if bootstrap_leaves != request.trusted_history_base_basis.leaves {
-        return Err(AppError::param_invalid(
-            "history request trusted base is not the complete predecessor-free bootstrap cut",
-        ));
-    }
-    Ok(arkret_wire::SealBasis { leaves: current })
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    Ok(basis)
 }
 
 async fn build_member_history_retention(
@@ -2261,31 +2224,8 @@ async fn build_member_history_retention(
         .seal_closure(&target_basis.leaves)
         .await
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    let mut before_base = std::collections::BTreeSet::new();
-    for base_leaf in &request.trusted_history_base_basis.leaves {
-        let seal = state
-            .projections()
-            .seal_by_id(base_leaf)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| AppError::param_invalid("history bootstrap Seal is unavailable"))?;
-        if seal.realm_id != *realm_id {
-            return Err(AppError::param_invalid(
-                "history bootstrap Seal belongs to another Realm",
-            ));
-        }
-        before_base.extend(
-            state
-                .projections()
-                .seal_closure(&seal.predecessor_refs)
-                .await
-                .map_err(|error| AppError::param_invalid(error.to_string()))?,
-        );
-    }
-    let cut = target_closure
-        .difference(&before_base)
-        .cloned()
-        .collect::<Vec<_>>();
+    let cut = target_closure.into_iter().collect::<Vec<_>>();
+    let mut bootstrap_leaves = Vec::new();
     if cut.len() > 4_096 {
         return Err(crate::app_error!(
             LimitExceeded,
@@ -2305,6 +2245,9 @@ async fn build_member_history_retention(
             return Err(AppError::internal(
                 "retained Seal cut crosses the Realm boundary",
             ));
+        }
+        if seal.predecessor_refs.is_empty() {
+            bootstrap_leaves.push(seal.id.clone());
         }
         let seal_digest = arkret_wire::Hash::new(
             arkret_canonical::canonical_sha256(&seal)
@@ -2362,6 +2305,13 @@ async fn build_member_history_retention(
             )?;
         }
     }
+    bootstrap_leaves.sort();
+    let trusted_history_base_basis = arkret_wire::SealBasis {
+        leaves: bootstrap_leaves,
+    };
+    trusted_history_base_basis
+        .validate_protocol_bounds()
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let intent = HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
         kind: HistoryGovernanceTraversalIntentKind::Value,
         effective_scope: request.effective_scope.clone(),
@@ -2369,8 +2319,8 @@ async fn build_member_history_retention(
             .effective_scope
             .canonical_mls_group_id()
             .map_err(|error| AppError::internal(error.to_string()))?,
-        trusted_history_base_basis: request.trusted_history_base_basis.clone(),
-        trusted_current_basis: request.trusted_current_basis.clone(),
+        trusted_history_base_basis,
+        trusted_current_basis: target_basis.clone(),
         target_basis,
         request_digest,
         requested_ranges: request.requested_ranges.clone(),
@@ -3654,12 +3604,15 @@ async fn validate_manifest_current_gate(
             .circle(circle_id.as_str())
             .map(|circle| circle.history_access.clone()),
     };
-    let HistoryGovernanceTraversalIntent::MemberHistoryDelivery { target_basis, .. } =
-        &request_record
-            .write
-            .request_receipt
-            .history_traversal_retention
-            .traversal_intent
+    let HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
+        target_basis,
+        trusted_history_base_basis,
+        ..
+    } = &request_record
+        .write
+        .request_receipt
+        .history_traversal_retention
+        .traversal_intent
     else {
         return Err(AppError::internal(
             "history request receipt has non-member traversal intent",
@@ -3670,8 +3623,7 @@ async fn validate_manifest_current_gate(
         .seal_closure(&target_basis.leaves)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    if request
-        .trusted_history_base_basis
+    if trusted_history_base_basis
         .leaves
         .iter()
         .any(|leaf| !target_closure.contains(leaf))
@@ -3838,7 +3790,7 @@ async fn list_history_key_requests(
     json_ok(outcome)
 }
 
-async fn history_scope_has_current_member(
+pub(crate) async fn history_scope_has_current_member(
     state: &AppState,
     scope: &HistoryEffectiveScope,
     actor: &arkret_wire::ActorId,
