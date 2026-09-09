@@ -1496,6 +1496,7 @@ diesel::table! {
         ingress_class -> Jsonb,
         proposal_decisions -> Jsonb,
         inserted_at -> Timestamptz,
+        is_pending -> Bool,
     }
 }
 

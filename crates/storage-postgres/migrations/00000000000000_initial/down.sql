@@ -57,6 +57,8 @@ DROP TABLE IF EXISTS state_seal_quarantine CASCADE;
 DROP TABLE IF EXISTS state_control_seal_repair_cursor CASCADE;
 DROP TABLE IF EXISTS state_control_seal_schedule CASCADE;
 DROP TABLE IF EXISTS state_control_events CASCADE;
+DROP FUNCTION IF EXISTS update_control_event_pending();
+DROP FUNCTION IF EXISTS complete_control_event_pending();
 DROP TABLE IF EXISTS state_seals CASCADE;
 DROP TABLE IF EXISTS state_seal_signing_leases CASCADE;
 DROP TABLE IF EXISTS state_cell_ops CASCADE;

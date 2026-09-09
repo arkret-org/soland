@@ -220,9 +220,7 @@ pub(crate) async fn complete_attempt(
             "SELECT EXISTS( \
                SELECT 1 FROM state_control_events c \
                WHERE c.realm_id = $1 \
-                 AND NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
-                                 WHERE b.event_digest = c.event_digest) \
-                 AND NOT (c.proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+                 AND c.is_pending \
              ) AS present",
         )
         .bind::<Text, _>(claim.realm_id.as_str())
@@ -275,9 +273,7 @@ async fn pending_repair_page(
     sql_query(
         "WITH pending_realms AS ( \
              SELECT DISTINCT c.realm_id FROM state_control_events c \
-             WHERE NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
-                               WHERE b.event_digest = c.event_digest) \
-               AND NOT (c.proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+             WHERE c.is_pending \
                AND ($1::text IS NULL OR c.realm_id > $1) \
              ORDER BY c.realm_id LIMIT $2 \
          ) \
@@ -379,9 +375,7 @@ pub(crate) async fn repair(
                WHERE schedule.claim_holder IS NULL \
                  AND NOT EXISTS ( \
                    SELECT 1 FROM state_control_events c WHERE c.realm_id = schedule.realm_id \
-                     AND NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
-                                     WHERE b.event_digest = c.event_digest) \
-                     AND NOT (c.proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+                     AND c.is_pending \
                  ) \
                ORDER BY schedule.realm_id LIMIT $1 FOR UPDATE SKIP LOCKED \
              ) \
@@ -417,11 +411,7 @@ pub(crate) async fn stats(
          WHERE EXISTS ( \
            SELECT 1 FROM state_control_events event \
            WHERE event.realm_id = schedule.realm_id \
-             AND NOT EXISTS ( \
-               SELECT 1 FROM state_seal_control_events binding \
-               WHERE binding.event_digest = event.event_digest \
-             ) \
-             AND NOT (event.proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+             AND event.is_pending \
          )",
     )
     .bind::<BigInt, _>(now_ms)

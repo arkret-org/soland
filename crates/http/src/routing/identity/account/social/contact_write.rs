@@ -2070,6 +2070,92 @@ fn imported_contact_continuity_history(
             crate::app_error!(ContinuityInvalid, "portable Contact continuity is invalid",)
         })?;
     }
+    for bundle in std::iter::once(evidence.checkpoint.core.root_basis.as_ref())
+        .chain(evidence.uncompressed_tail_entries.iter())
+    {
+        arkret_models_collaboration::contact_operations::validate_contact_evidence_directions(
+            bundle,
+        )
+        .map_err(|_| {
+            crate::app_error!(
+                ContinuityInvalid,
+                "Contact continuity evidence directions are invalid"
+            )
+        })?;
+        for receipt in &bundle.request_receipts {
+            validate_request_receipt_cryptography(state, receipt, "continuity.request_receipt")
+                .map_err(|_| {
+                    crate::app_error!(
+                        ContinuityInvalid,
+                        "Contact continuity request signature is invalid"
+                    )
+                })?;
+        }
+        if let Some(receipt) = &bundle.normal_response_receipt {
+            validate_request_receipt_cryptography(
+                state,
+                &receipt.request_receipt,
+                "continuity.response.request_receipt",
+            )
+            .map_err(|_| {
+                crate::app_error!(
+                    ContinuityInvalid,
+                    "Contact continuity response request signature is invalid"
+                )
+            })?;
+            verify_contact_service_signature_bytes(
+                state,
+                receipt.issuer_id.as_str(),
+                &receipt.signature,
+                &receipt.canonical_signing_bytes().map_err(|_| {
+                    crate::app_error!(ContinuityInvalid, "invalid Contact response transcript")
+                })?,
+                "continuity.response_receipt",
+            )
+            .map_err(|_| {
+                crate::app_error!(
+                    ContinuityInvalid,
+                    "Contact continuity response signature is invalid"
+                )
+            })?;
+        }
+        for proof in &bundle.current_proofs {
+            verify_contact_service_signature_bytes(
+                state,
+                proof.issuer_id.as_str(),
+                &proof.signature,
+                &proof.canonical_signing_bytes().map_err(|_| {
+                    crate::app_error!(ContinuityInvalid, "invalid Contact proof transcript")
+                })?,
+                "continuity.current_proof",
+            )
+            .map_err(|_| {
+                crate::app_error!(
+                    ContinuityInvalid,
+                    "Contact continuity proof signature is invalid"
+                )
+            })?;
+        }
+        if let Some(attestations) = &bundle.glare_concurrency_attestations {
+            for attestation in attestations {
+                verify_contact_service_signature_bytes(
+                    state,
+                    attestation.issuer_id.as_str(),
+                    &attestation.signature,
+                    &attestation.canonical_signing_bytes().map_err(|_| {
+                        crate::app_error!(ContinuityInvalid, "invalid Contact glare transcript")
+                    })?,
+                    "continuity.glare_attestation",
+                )
+                .map_err(|_| {
+                    crate::app_error!(
+                        ContinuityInvalid,
+                        "Contact continuity glare signature is invalid"
+                    )
+                })?;
+            }
+        }
+    }
     let mut tail = evidence.uncompressed_tail_entries.clone();
     if previous_terminal_contact_round_id != Some(&tail[0].contact_round_id) {
         return Err(crate::app_error!(
@@ -2443,22 +2529,79 @@ pub(super) async fn request(
                 .contact_any(&session_actor_id, &body.peer.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
-            let local_terminal_basis = prior.as_ref().and_then(|record| {
+            let local_predecessor = prior.as_ref().and_then(|record| {
                 (record.status == "tombstoned")
-                    .then_some(record.contact_round_id.as_ref().map(|value| value.as_str()))
+                    .then(|| record.contact_round_id.clone())
                     .flatten()
             });
-            if local_terminal_basis
-                != body
-                    .previous_terminal_contact_round_id
-                    .as_ref()
-                    .map(Hash::as_str)
+            let previous_terminal_contact_round_id = if let Some(evidence) =
+                &body.continuity_evidence
             {
-                return Err(AppError::conflict(
-                    "recontact request does not link the immediate local terminal Contact round",
+                let predecessor = evidence
+                    .uncompressed_tail_entries
+                    .first()
+                    .map(|entry| entry.contact_round_id.clone())
+                    .ok_or_else(|| {
+                        crate::app_error!(
+                            ContinuityEvidenceUnavailable,
+                            "Contact continuity tail is unavailable"
+                        )
+                    })?;
+                imported_contact_continuity_history(state, evidence, Some(&predecessor))?;
+                let expected_pair = [session_actor_id.clone(), body.peer.contact_actor_id()];
+                let checkpoint_pair = evidence
+                    .checkpoint
+                    .core
+                    .participants
+                    .each_ref()
+                    .map(|account| arkret_wire::ActorId::account(account.clone()));
+                if expected_pair
+                    .iter()
+                    .any(|actor| !checkpoint_pair.contains(actor))
+                    || expected_pair[0] == expected_pair[1]
+                    || (prior.is_some() && local_predecessor.as_ref() != Some(&predecessor))
+                {
+                    return Err(crate::app_error!(
+                        ContinuityInvalid,
+                        "Contact continuity belongs to another pair or predecessor"
+                    ));
+                }
+                if let Some(local) = prior.as_ref().and_then(
+                    crate::routing::identity::contact_federation::committed_continuity_evidence,
+                ) {
+                    let imported = &evidence.checkpoint;
+                    let committed = &local.checkpoint;
+                    if imported.core.participants != committed.core.participants
+                        || imported.core.root_basis != committed.core.root_basis
+                        || imported.core.sequence < committed.core.sequence
+                        || (imported.core.sequence == committed.core.sequence
+                            && imported.checkpoint_digest != committed.checkpoint_digest)
+                    {
+                        return Err(crate::app_error!(
+                            ContinuityInvalid,
+                            "imported Contact continuity rolls back or forks committed evidence"
+                        ));
+                    }
+                    if imported.core.sequence > committed.core.sequence
+                        && (Some(imported.core.sequence) != committed.core.sequence.checked_add(1)
+                            || imported.core.previous_checkpoint_digest.as_ref()
+                                != Some(&committed.checkpoint_digest))
+                    {
+                        return Err(crate::app_error!(
+                            ContinuityEvidenceUnavailable,
+                            "intermediate Contact continuity checkpoint is unavailable"
+                        ));
+                    }
+                }
+                Some(predecessor)
+            } else {
+                local_predecessor
+            };
+            let continuity_evidence = body.continuity_evidence.or_else(|| {
+                prior.as_ref().and_then(
+                    crate::routing::identity::contact_federation::committed_continuity_evidence,
                 )
-                .with_wire_code("contact_lineage_conflict"));
-            }
+            });
             let introduction_evidence_digest = contact_hash(
                 "ak.contact.introduction-evidence.v1",
                 &body.introduction_evidence,
@@ -2467,7 +2610,7 @@ pub(super) async fn request(
                 peer: body.peer.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
                 introduction_evidence_digest,
-                previous_terminal_contact_round_id: body.previous_terminal_contact_round_id.clone(),
+                previous_terminal_contact_round_id: previous_terminal_contact_round_id.clone(),
                 message: normalize_contact_message(body.message.as_deref())?,
             };
             prepare::<arkret_wire::event_spec::ContactRequested>(
@@ -2478,8 +2621,8 @@ pub(super) async fn request(
                 ContactReservationBranch::Request {
                     peer: body.peer,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
-                    previous_terminal_contact_round_id: body.previous_terminal_contact_round_id,
-                    continuity_evidence: body.continuity_evidence,
+                    previous_terminal_contact_round_id,
+                    continuity_evidence,
                     introduction_evidence: Box::new(body.introduction_evidence),
                 },
                 payload,
@@ -2525,6 +2668,35 @@ fn validate_normal_response_slot(
     Ok(())
 }
 
+fn retained_incoming_receipt(
+    record: &ContactRecord,
+    holder: &ContactPeer,
+    peer: &ContactPeer,
+    request_event_ref: &EventId,
+) -> Result<RequestAcceptanceReceipt, AppError> {
+    if !record.pending_incoming_admitted
+        || record.status != "pending"
+        || record.target_id != holder.contact_actor_id()
+        || record.requester_id != peer.contact_actor_id()
+        || record.request_event_ref.as_ref() != Some(request_event_ref)
+        || record.request_receipts.len() != 1
+    {
+        return Err(AppError::conflict(
+            "Contact proposal is not currently respondable",
+        ));
+    }
+    let receipt = &record.request_receipts[0];
+    if receipt.core.request_event_ref != *request_event_ref
+        || receipt.core.holder != *peer
+        || receipt.core.peer != *holder
+    {
+        return Err(AppError::conflict(
+            "Contact proposal does not match retained evidence",
+        ));
+    }
+    Ok(receipt.clone())
+}
+
 pub(super) async fn respond(
     state: &AppState,
     session: &SessionRecord,
@@ -2533,25 +2705,25 @@ pub(super) async fn respond(
     match body {
         ContactAcceptRequestBody::Prepare(body) => {
             let holder = holder_peer(state, session).await?;
-            let peer = body.request_receipt.core.holder.clone();
+            let peer = body.peer.clone();
             let record = state
                 .contacts()
                 .contact_any(&peer.contact_actor_id(), &holder.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
-            validate_request_acceptance_receipt(state, &record, &holder, &body.request_receipt)
-                .await?;
-            validate_normal_response_slot(&record, &holder, &body.request_receipt)?;
-            let (_, contact_round_id) = normal_basis(&body.request_receipt)?;
+            let request_receipt =
+                retained_incoming_receipt(&record, &holder, &peer, &body.request_event_ref)?;
+            validate_request_acceptance_receipt(state, &record, &holder, &request_receipt).await?;
+            validate_normal_response_slot(&record, &holder, &request_receipt)?;
+            let (_, contact_round_id) = normal_basis(&request_receipt)?;
             let payload = ContactAcceptedPayload {
                 peer: peer.clone(),
                 contact_round_id: contact_round_id.clone(),
                 version: 1,
-                request_event_ref: body.request_receipt.core.request_event_ref.clone(),
-                request_acceptance_receipt_digest: canonical_contact_digest(&body.request_receipt)?,
-                previous_terminal_contact_round_id: body
-                    .request_receipt
+                request_event_ref: request_receipt.core.request_event_ref.clone(),
+                request_acceptance_receipt_digest: canonical_contact_digest(&request_receipt)?,
+                previous_terminal_contact_round_id: request_receipt
                     .core
                     .previous_terminal_contact_round_id
                     .clone(),
@@ -2563,7 +2735,7 @@ pub(super) async fn respond(
                 body.operation_id,
                 body.idempotency_key,
                 ContactReservationBranch::Response {
-                    request_receipt: body.request_receipt,
+                    request_receipt,
                     peer,
                     contact_round_id,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
@@ -2584,19 +2756,20 @@ pub(super) async fn reject(
     match body {
         ContactRejectRequestBody::Prepare(body) => {
             let holder = holder_peer(state, session).await?;
-            let peer = body.request_receipt.core.holder.clone();
+            let peer = body.peer.clone();
             let record = state
                 .contacts()
                 .contact_any(&peer.contact_actor_id(), &holder.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
-            validate_request_acceptance_receipt(state, &record, &holder, &body.request_receipt)
-                .await?;
+            let request_receipt =
+                retained_incoming_receipt(&record, &holder, &peer, &body.request_event_ref)?;
+            validate_request_acceptance_receipt(state, &record, &holder, &request_receipt).await?;
             let payload = ContactRejectedPayload {
                 peer: peer.clone(),
-                request_event_ref: body.request_receipt.core.request_event_ref.clone(),
-                request_acceptance_receipt_digest: canonical_contact_digest(&body.request_receipt)?,
+                request_event_ref: request_receipt.core.request_event_ref.clone(),
+                request_acceptance_receipt_digest: canonical_contact_digest(&request_receipt)?,
                 reason: None,
             };
             prepare::<arkret_wire::event_spec::ContactRejected>(
@@ -2605,7 +2778,7 @@ pub(super) async fn reject(
                 body.operation_id,
                 body.idempotency_key,
                 ContactReservationBranch::Reject {
-                    request_receipt: body.request_receipt,
+                    request_receipt,
                     peer,
                 },
                 payload,
@@ -2730,7 +2903,9 @@ mod device_authorization_account_tests {
     fn normal_response_requires_the_exact_unconsumed_incoming_receipt() {
         use soland_services::identity::ContactRecord;
 
-        use super::{RequestAcceptanceReceipt, validate_normal_response_slot};
+        use super::{
+            RequestAcceptanceReceipt, retained_incoming_receipt, validate_normal_response_slot,
+        };
 
         for peer_station in [
             "ak:did_core:web:station.example",
@@ -2782,6 +2957,36 @@ mod device_authorization_account_tests {
                 updated_at: receipt.core.accepted_at,
             };
             let responder = &receipt.core.peer;
+            assert_eq!(
+                retained_incoming_receipt(
+                    &record,
+                    responder,
+                    &receipt.core.holder,
+                    &receipt.core.request_event_ref
+                )
+                .unwrap(),
+                receipt
+            );
+            assert!(
+                retained_incoming_receipt(
+                    &record,
+                    &receipt.core.holder,
+                    responder,
+                    &receipt.core.request_event_ref
+                )
+                .is_err()
+            );
+            let mut unadmitted = record.clone();
+            unadmitted.pending_incoming_admitted = false;
+            assert!(
+                retained_incoming_receipt(
+                    &unadmitted,
+                    responder,
+                    &receipt.core.holder,
+                    &receipt.core.request_event_ref
+                )
+                .is_err()
+            );
             validate_normal_response_slot(&record, responder, &receipt).unwrap();
             assert!(
                 validate_normal_response_slot(&record, &receipt.core.holder, &receipt).is_err()
@@ -2794,7 +2999,25 @@ mod device_authorization_account_tests {
             )
             .unwrap();
             let mut glare = record.clone();
+            assert!(
+                retained_incoming_receipt(
+                    &record,
+                    responder,
+                    &receipt.core.holder,
+                    &reverse.core.request_event_ref
+                )
+                .is_err()
+            );
             glare.request_receipts.push(reverse);
+            assert!(
+                retained_incoming_receipt(
+                    &glare,
+                    responder,
+                    &receipt.core.holder,
+                    &receipt.core.request_event_ref
+                )
+                .is_err()
+            );
             assert!(validate_normal_response_slot(&glare, responder, &receipt).is_err());
 
             let mut changed = record.clone();
@@ -2807,6 +3030,15 @@ mod device_authorization_account_tests {
             for status in ["accepted", "rejected", "tombstoned"] {
                 let mut consumed = record.clone();
                 consumed.status = status.to_owned();
+                assert!(
+                    retained_incoming_receipt(
+                        &consumed,
+                        responder,
+                        &receipt.core.holder,
+                        &receipt.core.request_event_ref
+                    )
+                    .is_err()
+                );
                 assert!(validate_normal_response_slot(&consumed, responder, &receipt).is_err());
             }
         }

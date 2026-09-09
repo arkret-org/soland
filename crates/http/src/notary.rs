@@ -710,257 +710,18 @@ impl NotaryWorker {
         // a fresh Seal. The window is per touched cell family, and v1 has no
         // producer effects array, so the writes come from the registry
         // projection.
-        let verifier = select_jws_verifier(state);
-        let replay_default = state.config().jws_replay_window_seconds;
-        let replay_overrides = &state.config().jws_replay_window_per_family;
-        let ordered = arkret_state::state::deterministic_order(pending);
-        let predecessor_closure = state
-            .projections()
-            .seal_closure(&leaves)
-            .await
-            .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
-        if leaves.is_empty() {
-            let anchor_events = ordered
-                .iter()
-                .map(|(_, event)| event.clone())
-                .collect::<Vec<_>>();
-            arkret_policy::realm_bootstrap::validate_accepted_realm_seal_genesis_unit(
-                &anchor_events,
+        let (accepted, rejected) = self
+            .validate_candidate_moves(
+                state,
+                realm_id,
+                pending,
+                &leaves,
+                &pre_state,
+                &pre_cas_heads,
+                event_digest_suite,
+                false,
             )
-            .map_err(|error| NotaryError::Construction(error.to_string()))?;
-        }
-        let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
-        let mut rejected: Vec<RejectedControlMove> = Vec::new();
-        let mut staged_anchor_state = pre_state.clone();
-        let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
-        let mut ordinary_batch = arkret_wire::control_seal_batch::ControlSealBatch::default();
-        let mut basis_heads_cache = BTreeMap::new();
-        for (digest, event) in ordered {
-            let move_digest_suite =
-                if leaves.is_empty() && event.kind == arkret_wire::EventKind::RealmCreate {
-                    arkret_canonical::DigestSuite::Sha256
-                } else {
-                    event_digest_suite
-                };
-            let ack = state
-                .projections()
-                .control_proposal_ack(&digest)
-                .await?
-                .ok_or_else(|| {
-                    NotaryError::Store(format!(
-                        "locally signed Control Move {digest} has no immutable Control Proposal Ack"
-                    ))
-                })?;
-            if ack.proposal_digest != digest || ack.realm_id != *realm_id {
-                return Err(NotaryError::Store(format!(
-                    "Control Proposal Ack for Control Move {digest} has inconsistent binding"
-                )));
-            }
-            ack.validate_protocol_bounds().map_err(|error| {
-                NotaryError::Store(format!(
-                    "Control Proposal Ack for Control Move {digest} is invalid: {error}"
-                ))
-            })?;
-            let Some(hlc) = event.hlc.clone() else {
-                rejected.push((
-                    digest,
-                    event.event_id.to_string(),
-                    event.kind.as_str().to_owned(),
-                    event.preconditions.clone(),
-                    ControlMoveRejection::new(
-                        ControlProposalRejectReason::SchemaViolation,
-                        "Control Move carries no hlc",
-                    ),
-                ));
-                continue;
-            };
-            let writes = match state
-                .projections()
-                .project_accepted_cell_writes_with_digest_suite(&event, move_digest_suite)
-            {
-                Ok(writes) => writes,
-                Err(reason) => {
-                    rejected.push((
-                        digest,
-                        event.event_id.to_string(),
-                        event.kind.as_str().to_owned(),
-                        event.preconditions.clone(),
-                        ControlMoveRejection::new(
-                            ControlProposalRejectReason::SchemaViolation,
-                            format!("reducer_projection_failed: {reason}"),
-                        ),
-                    ));
-                    continue;
-                }
-            };
-            // A closed anchor unit has already passed its dedicated admission
-            // transaction and may need to be sealed after restart or delayed
-            // coordinator recovery. Applying the ordinary Move replay window
-            // here would make an accepted Realm permanently unsealable.
-            if !leaves.is_empty()
-                && let Err(reject) = crate::jws_verify::verify_replay_window_for_projection(
-                    &hlc,
-                    &writes,
-                    replay_default,
-                    replay_overrides,
-                )
-            {
-                // The Move's own HLC is outside the accepted freshness window:
-                // the envelope is invalid, not the pre-state it reads.
-                rejected.push((
-                    digest,
-                    event.event_id.to_string(),
-                    event.kind.as_str().to_owned(),
-                    event.preconditions.clone(),
-                    ControlMoveRejection::new(
-                        ControlProposalRejectReason::SchemaViolation,
-                        format!("replay_window: {reject}"),
-                    ),
-                ));
-                continue;
-            }
-            let context = if leaves.is_empty() {
-                arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
-            } else {
-                arkret_wire::event_envelope::EventSubmitContext::Standard
-            };
-            match state
-                .projections()
-                .verify_accepted_control_move_in_context_with_digest_suite(
-                    &event,
-                    realm_id,
-                    if leaves.is_empty() {
-                        &staged_anchor_state
-                    } else {
-                        &pre_state
-                    },
-                    move_digest_suite,
-                    verifier,
-                    context,
-                ) {
-                Ok(effects) => {
-                    if let Some(basis) = event.seal_basis.as_ref() {
-                        let key = basis.leaves.clone();
-                        if !basis_heads_cache.contains_key(&key) {
-                            let heads =
-                                self.read_effective_cas_heads(state, realm_id, &key).await?;
-                            basis_heads_cache.insert(key.clone(), heads);
-                        }
-                        let basis_heads = &basis_heads_cache[&key];
-                        let mut stale_cell = None;
-                        for effect in &effects {
-                            let binding = state
-                                .projections()
-                                .cell_registry()
-                                .resolve(realm_id, &effect.cell_id)?;
-                            if arkret_state::is_causal_register(binding.lattice.kind()) {
-                                let observed = basis_heads
-                                    .get(&effect.cell_id)
-                                    .into_iter()
-                                    .flatten()
-                                    .map(|head| head.move_id.as_str())
-                                    .collect::<BTreeSet<_>>();
-                                let current = pre_cas_heads
-                                    .get(&effect.cell_id)
-                                    .into_iter()
-                                    .flatten()
-                                    .map(|head| head.move_id.as_str())
-                                    .collect::<BTreeSet<_>>();
-                                if observed != current {
-                                    stale_cell = Some(effect.cell_id.clone());
-                                    break;
-                                }
-                            }
-                        }
-                        if let Some(cell) = stale_cell {
-                            rejected.push((
-                                digest,
-                                event.event_id.to_string(),
-                                event.kind.as_str().to_owned(),
-                                event.preconditions.clone(),
-                                ControlMoveRejection::new(
-                                    ControlProposalRejectReason::CasConflict,
-                                    format!("signed basis has stale complete heads for {cell}"),
-                                ),
-                            ));
-                            continue;
-                        }
-                    }
-                    if let Err(reject) = state
-                        .projections()
-                        .verify_recovery_witness_with_digest_suite(
-                            &event,
-                            &effects,
-                            realm_id,
-                            &pre_state,
-                            &predecessor_closure,
-                            move_digest_suite,
-                        )
-                        .await
-                    {
-                        rejected.push((
-                            digest,
-                            event.event_id.to_string(),
-                            event.kind.as_str().to_owned(),
-                            event.preconditions.clone(),
-                            ControlMoveRejection::from_verifier(&reject)?,
-                        ));
-                        continue;
-                    }
-                    if leaves.is_empty() {
-                        for effect in &effects {
-                            let cell_ops =
-                                staged_anchor_ops.entry(effect.cell_id.clone()).or_default();
-                            cell_ops.push(IssuedOp {
-                                issuer_id: event.actor_id.clone(),
-                                op: SealedOp::from_projection(digest.clone(), effect),
-                            });
-                            let binding = state
-                                .projections()
-                                .resolve_cell(realm_id, &effect.cell_id)
-                                .map_err(|error| {
-                                    NotaryError::Store(format!(
-                                        "resolve staged bootstrap cell {}: {error}",
-                                        effect.cell_id
-                                    ))
-                                })?;
-                            staged_anchor_state.insert(
-                                effect.cell_id.clone(),
-                                join_cell(binding.lattice.as_ref(), &effect.cell_id, cell_ops),
-                            );
-                        }
-                    }
-                    if !leaves.is_empty()
-                        && ordinary_batch
-                            .try_insert(
-                                &event.kind,
-                                effects.iter().map(|effect| effect.cell_id.as_str()),
-                            )
-                            .is_err()
-                    {
-                        // Keep the immutable request pending. The successor pass
-                        // revalidates its own basis and returns a terminal result
-                        // if another accepted write has made it stale.
-                        continue;
-                    }
-                    accepted.push(AcceptedControlMove {
-                        event_digest: digest,
-                        event: event.clone(),
-                        actor_id: event.actor_id.clone(),
-                        effects,
-                    });
-                }
-                Err(reject) => {
-                    rejected.push((
-                        digest,
-                        event.event_id.to_string(),
-                        event.kind.as_str().to_owned(),
-                        event.preconditions.clone(),
-                        ControlMoveRejection::from_verifier(&reject)?,
-                    ));
-                }
-            }
-        }
+            .await?;
         self.record_control_move_rejections(state, realm_id, &rejected, proposal_policy)
             .await?;
         if accepted.is_empty() {
@@ -1205,6 +966,379 @@ impl NotaryWorker {
                 .collect(),
             post_state_root: predicted_state_root,
         }))
+    }
+
+    async fn validate_candidate_moves(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        pending: Vec<(Hash, Event)>,
+        leaves: &[SealId],
+        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_cas_heads: &arkret_state::CasHeadsByCell,
+        event_digest_suite: arkret_canonical::DigestSuite,
+        allow_self_principal_ingress: bool,
+    ) -> Result<(Vec<AcceptedControlMove>, Vec<RejectedControlMove>), NotaryError> {
+        let verifier = select_jws_verifier(state);
+        let replay_default = state.config().jws_replay_window_seconds;
+        let replay_overrides = &state.config().jws_replay_window_per_family;
+        let ordered = arkret_state::state::deterministic_order(pending);
+        let predecessor_closure = state
+            .projections()
+            .seal_closure(&leaves)
+            .await
+            .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
+        if leaves.is_empty() {
+            let anchor_events = ordered
+                .iter()
+                .map(|(_, event)| event.clone())
+                .collect::<Vec<_>>();
+            arkret_policy::realm_bootstrap::validate_accepted_realm_seal_genesis_unit(
+                &anchor_events,
+            )
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+        }
+        let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
+        let mut rejected: Vec<RejectedControlMove> = Vec::new();
+        let mut staged_anchor_state = (*pre_state).clone();
+        let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
+        let mut ordinary_batch = arkret_wire::control_seal_batch::ControlSealBatch::default();
+        let mut basis_heads_cache = BTreeMap::new();
+        for (digest, event) in ordered {
+            let move_digest_suite =
+                if leaves.is_empty() && event.kind == arkret_wire::EventKind::RealmCreate {
+                    arkret_canonical::DigestSuite::Sha256
+                } else {
+                    event_digest_suite
+                };
+            let ack = state.projections().control_proposal_ack(&digest).await?;
+            if let Some(ack) = ack {
+                if ack.proposal_digest != digest || ack.realm_id != *realm_id {
+                    return Err(NotaryError::Store(format!(
+                        "Control Proposal Ack for Control Move {digest} has inconsistent binding"
+                    )));
+                }
+                ack.validate_protocol_bounds().map_err(|error| {
+                    NotaryError::Store(format!(
+                        "Control Proposal Ack for Control Move {digest} is invalid: {error}"
+                    ))
+                })?;
+            } else if allow_self_principal_ingress {
+                crate::routing::events::event_log::validate_pcr_prepare_ackless_ingress(
+                    state, &event, &digest,
+                )
+                .await
+                .map_err(NotaryError::Store)?;
+            } else {
+                return Err(NotaryError::Store(format!(
+                    "locally signed Control Move {digest} has no immutable Control Proposal Ack"
+                )));
+            }
+            let Some(hlc) = event.hlc.clone() else {
+                rejected.push((
+                    digest,
+                    event.event_id.to_string(),
+                    event.kind.as_str().to_owned(),
+                    event.preconditions.clone(),
+                    ControlMoveRejection::new(
+                        ControlProposalRejectReason::SchemaViolation,
+                        "Control Move carries no hlc",
+                    ),
+                ));
+                continue;
+            };
+            let writes = match state
+                .projections()
+                .project_accepted_cell_writes_with_digest_suite(&event, move_digest_suite)
+            {
+                Ok(writes) => writes,
+                Err(reason) => {
+                    rejected.push((
+                        digest,
+                        event.event_id.to_string(),
+                        event.kind.as_str().to_owned(),
+                        event.preconditions.clone(),
+                        ControlMoveRejection::new(
+                            ControlProposalRejectReason::SchemaViolation,
+                            format!("reducer_projection_failed: {reason}"),
+                        ),
+                    ));
+                    continue;
+                }
+            };
+            // A closed anchor unit has already passed its dedicated admission
+            // transaction and may need to be sealed after restart or delayed
+            // coordinator recovery. Applying the ordinary Move replay window
+            // here would make an accepted Realm permanently unsealable.
+            if !leaves.is_empty()
+                && let Err(reject) = crate::jws_verify::verify_replay_window_for_projection(
+                    &hlc,
+                    &writes,
+                    replay_default,
+                    replay_overrides,
+                )
+            {
+                // The Move's own HLC is outside the accepted freshness window:
+                // the envelope is invalid, not the pre-state it reads.
+                rejected.push((
+                    digest,
+                    event.event_id.to_string(),
+                    event.kind.as_str().to_owned(),
+                    event.preconditions.clone(),
+                    ControlMoveRejection::new(
+                        ControlProposalRejectReason::SchemaViolation,
+                        format!("replay_window: {reject}"),
+                    ),
+                ));
+                continue;
+            }
+            let context = if leaves.is_empty() {
+                arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+            } else {
+                arkret_wire::event_envelope::EventSubmitContext::Standard
+            };
+            match state
+                .projections()
+                .verify_accepted_control_move_in_context_with_digest_suite(
+                    &event,
+                    realm_id,
+                    if leaves.is_empty() {
+                        &staged_anchor_state
+                    } else {
+                        &pre_state
+                    },
+                    move_digest_suite,
+                    verifier,
+                    context,
+                ) {
+                Ok(effects) => {
+                    if let Some(basis) = event.seal_basis.as_ref() {
+                        let key = basis.leaves.clone();
+                        if !basis_heads_cache.contains_key(&key) {
+                            let heads =
+                                self.read_effective_cas_heads(state, realm_id, &key).await?;
+                            basis_heads_cache.insert(key.clone(), heads);
+                        }
+                        let basis_heads = &basis_heads_cache[&key];
+                        let mut stale_cell = None;
+                        for effect in &effects {
+                            let binding = state
+                                .projections()
+                                .cell_registry()
+                                .resolve(realm_id, &effect.cell_id)?;
+                            if arkret_state::is_causal_register(binding.lattice.kind()) {
+                                let observed = basis_heads
+                                    .get(&effect.cell_id)
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|head| head.move_id.as_str())
+                                    .collect::<BTreeSet<_>>();
+                                let current = pre_cas_heads
+                                    .get(&effect.cell_id)
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|head| head.move_id.as_str())
+                                    .collect::<BTreeSet<_>>();
+                                if observed != current {
+                                    stale_cell = Some(effect.cell_id.clone());
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(cell) = stale_cell {
+                            rejected.push((
+                                digest,
+                                event.event_id.to_string(),
+                                event.kind.as_str().to_owned(),
+                                event.preconditions.clone(),
+                                ControlMoveRejection::new(
+                                    ControlProposalRejectReason::CasConflict,
+                                    format!("signed basis has stale complete heads for {cell}"),
+                                ),
+                            ));
+                            continue;
+                        }
+                    }
+                    if let Err(reject) = state
+                        .projections()
+                        .verify_recovery_witness_with_digest_suite(
+                            &event,
+                            &effects,
+                            realm_id,
+                            &pre_state,
+                            &predecessor_closure,
+                            move_digest_suite,
+                        )
+                        .await
+                    {
+                        rejected.push((
+                            digest,
+                            event.event_id.to_string(),
+                            event.kind.as_str().to_owned(),
+                            event.preconditions.clone(),
+                            ControlMoveRejection::from_verifier(&reject)?,
+                        ));
+                        continue;
+                    }
+                    if leaves.is_empty() {
+                        for effect in &effects {
+                            let cell_ops =
+                                staged_anchor_ops.entry(effect.cell_id.clone()).or_default();
+                            cell_ops.push(IssuedOp {
+                                issuer_id: event.actor_id.clone(),
+                                op: SealedOp::from_projection(digest.clone(), effect),
+                            });
+                            let binding = state
+                                .projections()
+                                .resolve_cell(realm_id, &effect.cell_id)
+                                .map_err(|error| {
+                                    NotaryError::Store(format!(
+                                        "resolve staged bootstrap cell {}: {error}",
+                                        effect.cell_id
+                                    ))
+                                })?;
+                            staged_anchor_state.insert(
+                                effect.cell_id.clone(),
+                                join_cell(binding.lattice.as_ref(), &effect.cell_id, cell_ops),
+                            );
+                        }
+                    }
+                    if !leaves.is_empty()
+                        && ordinary_batch
+                            .try_insert(
+                                &event.kind,
+                                effects.iter().map(|effect| effect.cell_id.as_str()),
+                            )
+                            .is_err()
+                    {
+                        // Keep the immutable request pending. The successor pass
+                        // revalidates its own basis and returns a terminal result
+                        // if another accepted write has made it stale.
+                        continue;
+                    }
+                    accepted.push(AcceptedControlMove {
+                        event_digest: digest,
+                        event: event.clone(),
+                        actor_id: event.actor_id.clone(),
+                        effects,
+                    });
+                }
+                Err(reject) => {
+                    rejected.push((
+                        digest,
+                        event.event_id.to_string(),
+                        event.kind.as_str().to_owned(),
+                        event.preconditions.clone(),
+                        ControlMoveRejection::from_verifier(&reject)?,
+                    ));
+                }
+            }
+        }
+        Ok((accepted, rejected))
+    }
+
+    /// Prepare only the caller's exact delta using the normal notary preflight.
+    /// This does not sign, apply, or publish a Seal.
+    pub(crate) async fn prepare_pcr_seal_body(
+        &self,
+        state: &AppState,
+        request: &arkret_models_collaboration::governance_dependencies::SealPrepareRequest,
+        events: Vec<(Hash, Event)>,
+        sealed_at: chrono::DateTime<chrono::Utc>,
+        availability_receipt_digests: Vec<Hash>,
+    ) -> Result<arkret_wire::UnsignedSeal, NotaryError> {
+        let realm_id = &request.realm_id;
+        let leaves = &request.predecessor_refs;
+        let pre_state = self.read_effective_state(state, realm_id, leaves).await?;
+        let pre_cas_heads = self
+            .read_effective_cas_heads(state, realm_id, leaves)
+            .await?;
+        let suites = state
+            .projections()
+            .seal_digest_suites_for_delta(realm_id, leaves, &request.event_digests)
+            .await
+            .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
+        if suites.event_digest_suite != arkret_canonical::DigestSuite::Sha256
+            || suites.seal_digest_suite != arkret_canonical::DigestSuite::Sha256
+            || events
+                .iter()
+                .any(|(_, event)| event.kind == arkret_wire::EventKind::RealmDigestSuiteTransition)
+        {
+            return Err(NotaryError::Construction(
+                "PCR preparation forbids digest transitions".to_owned(),
+            ));
+        }
+        let (accepted, rejected) = self
+            .validate_candidate_moves(
+                state,
+                realm_id,
+                events,
+                leaves,
+                &pre_state,
+                &pre_cas_heads,
+                suites.event_digest_suite,
+                true,
+            )
+            .await?;
+        let accepted_digests = accepted
+            .iter()
+            .map(|entry| entry.event_digest.clone())
+            .collect::<BTreeSet<_>>();
+        if !rejected.is_empty()
+            || accepted_digests != request.event_digests.iter().cloned().collect()
+        {
+            return Err(NotaryError::Construction(format!(
+                "PCR signing intent contains a rejected or incompatible Control Move: {rejected:?}"
+            )));
+        }
+        let prior = state
+            .projections()
+            .predecessor_covered_events(leaves)
+            .await
+            .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
+        let state_root = self
+            .predict_post_state_root(
+                state,
+                realm_id,
+                &prior.iter().cloned().collect::<Vec<_>>(),
+                &accepted,
+                suites.seal_digest_suite,
+            )
+            .await?;
+        let mut covered = prior;
+        covered.extend(accepted_digests);
+        let control_event_set_root = control_event_set_root(&covered, suites.seal_digest_suite)
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+        let completeness_root = self
+            .completeness_root_for_covered(state, &covered, suites.seal_digest_suite)
+            .await?;
+        for leaf in leaves {
+            let predecessor = state.projections().seal_by_id(leaf).await?.ok_or_else(|| {
+                NotaryError::Construction("PCR predecessor is unavailable".to_owned())
+            })?;
+            if predecessor.sealed_at > sealed_at {
+                return Err(NotaryError::Construction(
+                    "PCR preparation time precedes its basis".to_owned(),
+                ));
+            }
+        }
+        Ok(arkret_wire::UnsignedSeal {
+            realm_id: realm_id.clone(),
+            predecessor_refs: leaves.clone(),
+            delta: request.event_digests.clone(),
+            control_event_set_root,
+            state_root,
+            completeness_root,
+            notary_seq: self.next_notary_seq(state, leaves).await?,
+            data_view_root: None,
+            data_event_set_root: None,
+            availability_receipt_digests,
+            covered_event_digests: Vec::new(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            sealed_at,
+            hlc: request.hlc.clone(),
+        })
     }
 
     async fn completeness_root_for_covered(

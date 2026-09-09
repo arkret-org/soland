@@ -678,19 +678,19 @@ pub(super) async fn seed_agent_grant_session(
         })
         .collect::<std::collections::BTreeSet<_>>();
     let availability_request =
-        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueRequest {
+        arkret_models_collaboration::governance_dependencies::SealPrepareRequest {
             realm_id: agent_pcr_realm.clone(),
             predecessor_refs: vec![genesis_seal.id.clone()],
             event_digests: target.difference(&predecessor_covered).cloned().collect(),
+            hlc: arkret_wire::Hlc::new(format!("{timestamp_hex}-0009-a13f9c2e")).unwrap(),
         };
     let app = app_from_state(state.clone());
-    let mut availability_response =
-        TestClient::post("http://server/_arkret/self/seals/availability-receipts")
-            .add_header("authorization", format!("Bearer {controller_token}"), true)
-            .add_header("content-type", "application/json", true)
-            .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
-            .send(&app)
-            .await;
+    let mut availability_response = TestClient::post("http://server/_arkret/self/seals/prepare")
+        .add_header("authorization", format!("Bearer {controller_token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
+        .send(&app)
+        .await;
     let availability_status = availability_response.status_code;
     let availability_body = availability_response.take_string().await.unwrap();
     assert_eq!(
@@ -699,18 +699,12 @@ pub(super) async fn seed_agent_grant_session(
         "availability receipt issuance failed: {availability_body}"
     );
     let availability = serde_json::from_str::<
-        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueOutcome,
+        arkret_models_collaboration::governance_dependencies::SealPrepareOutcome,
     >(&availability_body)
     .unwrap();
-    let successor_seal = arkret_bootstrap::build_agent_pcr_event_seal(
-        &pcr_events,
-        Some(&genesis_seal),
-        Some(&availability),
-        arkret_wire::Hlc::new(format!("{timestamp_hex}-0009-a13f9c2e")).unwrap(),
-        &controller_signer,
-        &super::agents::genesis_projector,
-    )
-    .expect("successor Agent PCR Seal builds");
+    let successor_seal = availability
+        .sign(&availability_request, &controller_signer)
+        .expect("successor Agent PCR Seal builds");
     let mut seal_response = TestClient::post("http://server/_arkret/self/seals")
         .add_header("authorization", format!("Bearer {controller_token}"), true)
         .add_header("content-type", "application/json", true)

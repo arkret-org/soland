@@ -1348,9 +1348,7 @@ impl ControlEventStore for PgControlEventStore {
                 "SELECT digest_suite, event_json, control_proposal_ack, proposal_decisions, ingress_class \
                  FROM state_control_events c \
                  WHERE realm_id = $1 \
-                   AND NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
-                                   WHERE b.event_digest = c.event_digest) \
-                   AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+                   AND c.is_pending \
                  ORDER BY control_proposal_ack->>'absolute_due_at' ASC NULLS FIRST, event_digest ASC LIMIT $2",
             )
             .bind::<Text, _>(&realm_id)
@@ -1460,9 +1458,7 @@ impl ControlEventStore for PgControlEventStore {
                 "SELECT event_json AS value \
                  FROM state_control_events c \
                  WHERE realm_id = $1 \
-                   AND NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
-                                   WHERE b.event_digest = c.event_digest) \
-                   AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+                   AND c.is_pending \
                    AND ( \
                      $2 IS NULL OR \
                      (c.inserted_at, c.event_digest) > ( \

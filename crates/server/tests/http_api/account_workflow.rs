@@ -346,7 +346,6 @@ async fn create_contact_request(
         granted_to_peer_scopes: vec![ContactScope::DirectMessage],
         introduction_evidence:
             arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SameStation,
-        previous_terminal_contact_round_id: None,
         continuity_evidence: None,
         message: None,
     });
@@ -409,7 +408,8 @@ async fn accept_contact_request(
         phase: ContactPreparePhase::Prepare,
         operation_id: operation_id.clone(),
         idempotency_key: idempotency_key.clone(),
-        request_receipt: receipt,
+        peer: receipt.core.holder.clone(),
+        request_event_ref: receipt.core.request_event_ref,
         action: ContactAcceptAction::Accept,
         granted_to_peer_scopes: vec![ContactScope::DirectMessage],
     });
@@ -1223,7 +1223,8 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
                     phase: arkret_models_collaboration::contact_operations::ContactPreparePhase::Prepare,
                     operation_id: contact_operation_id(),
                     idempotency_key: contact_idempotency_key(),
-                    request_receipt,
+                    peer: request_receipt.core.holder.clone(),
+                    request_event_ref: request_receipt.core.request_event_ref,
                     action: arkret_models_collaboration::contact_operations::ContactRejectAction::Reject,
                 },
             ),

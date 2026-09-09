@@ -66,7 +66,80 @@ async fn self_query(
         .map_err(|error| {
             AppError::internal(format!("authority returned invalid evidence: {error}"))
         })?;
+    if target != state.service_core_id() {
+        validate_remote_device_projections(state, &outcome).await?;
+    }
     json_ok(outcome)
+}
+
+async fn validate_remote_device_projections(
+    state: &AppState,
+    outcome: &CurrentSignerEvidenceQueryOutcome,
+) -> Result<(), AppError> {
+    for item in &outcome.response.evidences {
+        let CurrentSignerEvidenceItem::AccountDevice {
+            account_id,
+            device_id,
+            device_projection_attestation: attestation,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        let unavailable = || AppError::not_found("current signer evidence is unavailable");
+        if &attestation.attestation.account_id != account_id
+            || &attestation.attestation.device_id != device_id
+        {
+            return Err(unavailable());
+        }
+        let method = &attestation.proof.verification_method;
+        let did =
+            arkret_identity::verification_method_did(method.as_str()).map_err(|_| unavailable())?;
+        if arkret_wire::project_did_to_core_id(&did).map_err(|_| unavailable())?
+            != account_id.station_id
+        {
+            return Err(unavailable());
+        }
+        let current = state
+            .dids()
+            .resolve_current_service_did(&did)
+            .await
+            .map_err(|_| unavailable())?;
+        verify_current_device_projection(attestation, &current.document, chrono::Utc::now())
+            .map_err(|_| unavailable())?;
+    }
+    Ok(())
+}
+
+fn verify_current_device_projection(
+    attestation: &arkret_models_crypto::DeviceProjectionAttestation,
+    document: &arkret_identity::DidDocument,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    let method = &attestation.proof.verification_method;
+    let did = arkret_identity::verification_method_did(method.as_str())
+        .map_err(|error| error.to_string())?;
+    if document.id != did
+        || arkret_wire::project_did_to_core_id(&did).map_err(|error| error.to_string())?
+            != attestation.attestation.account_id.station_id
+    {
+        return Err("device projection issuer mismatch".to_owned());
+    }
+    arkret_identity::validate_verification_method_relationship(
+        document,
+        method,
+        &did,
+        arkret_identity::DidVerificationRelationship::AssertionMethod,
+    )
+    .map_err(|error| error.to_string())?;
+    let key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(document, method.as_str())
+        .map_err(|error| error.to_string())?;
+    arkret_signatures::device_projection::verify_device_projection_attestation(
+        attestation,
+        &key,
+        now,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[salvo::oapi::endpoint(
@@ -333,4 +406,81 @@ async fn proxy_peer_query(
     }
     serde_json::from_slice(&bytes)
         .map_err(|_| AppError::not_found("current signer evidence is unavailable"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn current_device_projection_requires_origin_assertion_key_and_valid_signature() {
+        let station_did = arkret_wire::Did::new("did:web:projection-station.example").unwrap();
+        let method = arkret_wire::DidUrl::new(format!("{station_did}#assertion")).unwrap();
+        let account = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:projection-principal.example").unwrap(),
+            arkret_wire::project_did_to_core_id(&station_did).unwrap(),
+        );
+        let device =
+            arkret_wire::DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap();
+        let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[43u8; 32]);
+        let public_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+            signing_key.verifying_key().as_bytes(),
+        );
+        let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
+            arkret_models_crypto::DeviceProjectionAttestationCore {
+                account_id: account.clone(),
+                device_id: device.clone(),
+                device_signing_key_did: arkret_wire::DidKey::new(format!("did:key:{public_key}"))
+                    .unwrap(),
+                hpke_key: arkret_wire::NonEmptyString::new("hpke-test").unwrap(),
+                device_authorize_event_id: arkret_wire::EventId::new(
+                    "ak:event:AfAnsJqSlM9bHVI7P1QBMOEW3p5P1PNQu7BBMpiSnD_e",
+                )
+                .unwrap(),
+                authorized_generation_ref: 7,
+                device_status: arkret_models_crypto::DeviceStatus::Active,
+                attested_at: now,
+                expires_at: now + chrono::Duration::minutes(5),
+            },
+            method.clone(),
+            &signing_key,
+        )
+        .unwrap();
+        let mut document: arkret_identity::DidDocument =
+            serde_json::from_value(serde_json::json!({
+                "id": station_did,
+                "verificationMethod": [{
+                    "id": method,
+                    "controller": station_did,
+                    "type": "Multikey",
+                    "publicKeyMultibase": public_key
+                }]
+            }))
+            .unwrap();
+        assert!(super::verify_current_device_projection(&attestation, &document, now).is_err());
+        document.raw_properties.insert(
+            "assertionMethod".to_owned(),
+            serde_json::json!(["#another-key"]),
+        );
+        assert!(super::verify_current_device_projection(&attestation, &document, now).is_err());
+        document.raw_properties.insert(
+            "assertionMethod".to_owned(),
+            serde_json::json!(["#assertion"]),
+        );
+        assert!(super::verify_current_device_projection(&attestation, &document, now).is_ok());
+        assert!(
+            super::verify_current_device_projection(
+                &attestation,
+                &document,
+                now + chrono::Duration::minutes(5)
+            )
+            .is_err()
+        );
+        let mut tampered = attestation.clone();
+        tampered.attestation.authorized_generation_ref += 1;
+        assert!(super::verify_current_device_projection(&tampered, &document, now).is_err());
+        let mut foreign = attestation;
+        foreign.attestation.account_id.station_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap();
+        assert!(super::verify_current_device_projection(&foreign, &document, now).is_err());
+    }
 }

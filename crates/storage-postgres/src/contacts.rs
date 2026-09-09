@@ -108,26 +108,6 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         row.map(TryInto::try_into).transpose()
     }
 
-    async fn get_by_digest(
-        &self,
-        target_holder_principal_id: &str,
-        request_digest: &str,
-    ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let row = sql_query(format!(
-            "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_principal_id = $1 AND request_digest = $2 LIMIT 1"
-        ))
-        .bind::<Text, _>(target_holder_principal_id)
-        .bind::<Text, _>(request_digest)
-        .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        row.map(TryInto::try_into).transpose()
-    }
-
     async fn put_verified(&self, record: &ContactVerifiedMirrorRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await

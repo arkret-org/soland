@@ -26,12 +26,6 @@ pub trait ContactVerifiedMirrorStore: Send + Sync {
         target_holder_principal_id: &str,
         request_event_id: &str,
     ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>>;
-    async fn get_by_digest(
-        &self,
-        target_holder_principal_id: &str,
-        request_digest: &str,
-    ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>>;
-
     /// CAS-insert one verified mirror. An exact replay is success; the same
     /// holder/Event key with different bytes, digest, receipt, or issuer is a
     /// conflict and MUST NOT overwrite the original evidence.

@@ -1133,10 +1133,11 @@ async fn provision_agent_sdk_commit_attempt_inner(
         })
         .collect::<std::collections::BTreeSet<_>>();
     let availability_request =
-        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueRequest {
+        arkret_models_collaboration::governance_dependencies::SealPrepareRequest {
             realm_id: controller_realm_id.clone(),
             predecessor_refs: vec![predecessor.id.clone()],
             event_digests: target.difference(&predecessor_covered).cloned().collect(),
+            hlc: arkret_wire::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         };
     // Registration durably binds the exact AccountId to this PCR before the
     // rebuildable owner projection catches up. Availability preparation and
@@ -1152,13 +1153,12 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .owner
         .take();
     assert!(projected_owner.is_some());
-    let mut availability_response =
-        TestClient::post("http://server/_arkret/self/seals/availability-receipts")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .add_header("content-type", "application/json", true)
-            .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
-            .send(&app)
-            .await;
+    let mut availability_response = TestClient::post("http://server/_arkret/self/seals/prepare")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
+        .send(&app)
+        .await;
     let availability_status = availability_response.status_code;
     let availability_body = availability_response.take_string().await.unwrap();
     assert_eq!(
@@ -1167,46 +1167,32 @@ async fn provision_agent_sdk_commit_attempt_inner(
         "availability receipt issuance failed: {availability_body}"
     );
     let availability = serde_json::from_str::<
-        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueOutcome,
+        arkret_models_collaboration::governance_dependencies::SealPrepareOutcome,
     >(&availability_body)
     .unwrap();
-    for dependency in &availability.governance_dependencies {
-        if let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AvailabilityReceipt {
-            availability_receipt,
-            ..
-        } = dependency
-        {
-            assert!(
-                availability_receipt.retention_expires_at
-                    >= availability.sealed_at + chrono::Duration::hours(24),
-                "canonical-hash preparation must remain usable for the DIDempotency window: sealed_at={}, expires_at={}",
-                availability.sealed_at,
-                availability_receipt.retention_expires_at,
-            );
-        }
-    }
-    let mut availability_replay =
-        TestClient::post("http://server/_arkret/self/seals/availability-receipts")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .add_header("content-type", "application/json", true)
-            .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
-            .send(&app)
-            .await;
+    availability
+        .validate_for_request(&availability_request)
+        .unwrap();
+    assert!(availability.seal_body.covered_event_digests.is_empty());
+    assert!(
+        serde_json::to_value(&availability)
+            .unwrap()
+            .get("governance_dependencies")
+            .is_none()
+    );
+    let mut availability_replay = TestClient::post("http://server/_arkret/self/seals/prepare")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
+        .send(&app)
+        .await;
     assert_eq!(availability_replay.status_code, Some(StatusCode::OK));
     assert_eq!(
         availability_replay.take_string().await.unwrap(),
         availability_body,
         "canonical-hash retry must return the exact first availability preparation"
     );
-    let controller_seal = arkret_bootstrap::build_self_principal_event_seal(
-        &controller_events,
-        &predecessor,
-        &availability,
-        arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
-        &signer,
-        &genesis_projector,
-    )
-    .unwrap();
+    let controller_seal = availability.sign(&availability_request, &signer).unwrap();
     let mut receiptless_controller_seal = controller_seal.clone();
     receiptless_controller_seal
         .availability_receipt_digests
@@ -1232,11 +1218,59 @@ async fn provision_agent_sdk_commit_attempt_inner(
         )
         .await
         .unwrap();
+    let mut retained_dependencies = Vec::new();
+    for digest in &availability.seal_body.availability_receipt_digests {
+        use arkret_models_collaboration::governance_dependencies::{
+            GovernanceDependency, GovernanceDependencySelector,
+        };
+        let dependency = state
+            .test_persistence()
+            .governance_dependencies()
+            .get(
+                &controller_realm_id,
+                &GovernanceDependencySelector::AvailabilityReceipt {
+                    content_digest: digest.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .expect("prepared receipt is durable on the Station");
+        let GovernanceDependency::AvailabilityReceipt {
+            availability_receipt,
+            ..
+        } = &dependency
+        else {
+            panic!("receipt selector returned the wrong dependency kind");
+        };
+        assert!(
+            availability_receipt.retention_expires_at
+                >= availability.seal_body.sealed_at + chrono::Duration::hours(24)
+        );
+        let signer_evidence = state
+            .test_persistence()
+            .governance_dependencies()
+            .get(
+                &controller_realm_id,
+                &GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                    content_digest: availability_receipt
+                        .holder_signer_evidence_ref
+                        .content_digest()
+                        .unwrap(),
+                },
+            )
+            .await
+            .unwrap()
+            .expect("prepared holder authority evidence is durable on the Station");
+        retained_dependencies.push(dependency);
+        if !retained_dependencies.contains(&signer_evidence) {
+            retained_dependencies.push(signer_evidence);
+        }
+    }
     let receiptless_error = arkret::verify_seal_availability_dependencies_default(
         &receiptless_controller_seal,
         &receiptless_events,
         &receiptless_replay_context,
-        &availability.governance_dependencies,
+        &retained_dependencies,
     )
     .expect_err("PCR successor without committed receipts must fail closed");
     assert!(
@@ -1338,10 +1372,8 @@ async fn provision_agent_sdk_commit_attempt_inner(
         serde_json::json!([accepted_genesis.event_id]),
         "{genesis_response_body}"
     );
-    let genesis_seal = arkret_bootstrap::build_agent_pcr_event_seal(
+    let genesis_seal = arkret_bootstrap::build_agent_pcr_bootstrap_seal(
         std::slice::from_ref(&accepted_genesis),
-        None,
-        None,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0003-a13f9c2e")).unwrap(),
         &signer,
         &genesis_projector,

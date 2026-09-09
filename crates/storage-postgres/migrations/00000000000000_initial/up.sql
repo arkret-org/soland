@@ -687,10 +687,33 @@ CREATE TABLE public.state_control_events (
     ingress_class jsonb NOT NULL,
     proposal_decisions jsonb DEFAULT '[]'::jsonb NOT NULL,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
+    is_pending boolean DEFAULT true NOT NULL,
     UNIQUE (event_digest, realm_id)
 );
 
 CREATE INDEX state_control_events_realm_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest);
+CREATE INDEX state_control_events_pending_order_idx
+    ON public.state_control_events (realm_id, inserted_at, event_digest) WHERE is_pending;
+CREATE INDEX state_control_events_pending_due_idx
+    ON public.state_control_events (realm_id, (control_proposal_ack->>'absolute_due_at') ASC NULLS FIRST, event_digest)
+    WHERE is_pending;
+
+-- Terminal decisions and accepted coverage remove work in the same transaction
+-- as their authoritative fact. Historical bytes remain available independently.
+CREATE FUNCTION public.update_control_event_pending() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' AND NOT OLD.is_pending THEN
+        NEW.is_pending := false;
+    END IF;
+    IF NEW.proposal_decisions @> '[{"kind":"signed_reject"}]'::jsonb THEN
+        NEW.is_pending := false;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER state_control_event_pending_decision
+    BEFORE INSERT OR UPDATE ON public.state_control_events
+    FOR EACH ROW EXECUTE FUNCTION public.update_control_event_pending();
 
 -- Rebuildable per-Realm scheduling metadata. Pending Control Events remain
 -- authoritative; this table only provides fair, fenced attempt ownership.
@@ -850,6 +873,17 @@ CREATE TABLE public.state_seal_control_events (
 
 CREATE INDEX state_seal_control_events_event_idx
     ON public.state_seal_control_events USING btree (event_digest, sealed_at, seal_id);
+
+CREATE FUNCTION public.complete_control_event_pending() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE public.state_control_events SET is_pending = false
+        WHERE event_digest = NEW.event_digest AND is_pending;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER state_control_event_pending_coverage
+    AFTER INSERT ON public.state_seal_control_events
+    FOR EACH ROW EXECUTE FUNCTION public.complete_control_event_pending();
 
 CREATE TRIGGER state_seal_control_events_immutable
     BEFORE UPDATE ON public.state_seal_control_events
@@ -1413,8 +1447,6 @@ CREATE TABLE public.contact_verified_mirrors (
     PRIMARY KEY (target_holder_principal_id, request_event_id)
 );
 
-CREATE UNIQUE INDEX contact_verified_mirrors_holder_digest_key
-    ON public.contact_verified_mirrors USING btree (target_holder_principal_id, request_digest);
 
 CREATE INDEX contact_verified_mirrors_verified_at_idx
     ON public.contact_verified_mirrors USING btree (verified_at);

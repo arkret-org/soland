@@ -63,7 +63,6 @@ use super::now;
 use crate::state::AppState;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
-const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 
 pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("contacts").post(peer_contacts_submit))
@@ -3244,50 +3243,6 @@ fn validate_contact_introduction_evidence_digest(
     Ok(())
 }
 
-async fn should_stub_incoming_contact_message(
-    state: &AppState,
-    requester_id: &arkret_wire::ActorId,
-    target: &arkret_wire::ActorId,
-    _scope: &str,
-) -> Result<bool, AppError> {
-    let contacts = state
-        .contacts()
-        .contacts_for_actor(target)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let accepted_contact = contacts.iter().any(|record| {
-        record.status == "accepted"
-            && ((&record.requester_id == requester_id && &record.target_id == target)
-                || (&record.requester_id == target && &record.target_id == requester_id))
-    });
-    Ok(!accepted_contact)
-}
-
-async fn append_stubbed_contact_message_audit(
-    state: &AppState,
-    target: &str,
-    requester_id: &str,
-    scope: &str,
-    message: &str,
-    contact_event_id: &str,
-) {
-    super::append_audit_log(
-        state,
-        Some(target),
-        "peer.contacts.message_stubbed",
-        json!({
-            "requester_id": requester_id,
-            "target": target,
-            "scope": scope,
-            "contact_event_id": contact_event_id,
-            "message_chars": message.chars().count(),
-            "message_digest": canonical::sha256_digest(message.as_bytes()),
-        }),
-        "accepted",
-    )
-    .await;
-}
-
 /// Project a delivered contact fact into the local `subject_id`'s contact
 /// projection. Returns the receive status (`accepted` / `duplicate`).
 async fn project_delivered_contact_fact(
@@ -3303,8 +3258,6 @@ async fn project_delivered_contact_fact(
     carrier_current_proof: Option<&ContactCurrentProof>,
     source_id: Option<&str>,
 ) -> Result<&'static str, AppError> {
-    let issuer = issuer_id.signing_principal_id().as_str();
-    let subject_id = subject_actor_id.signing_principal_id().as_str();
     let contact_event_ref =
         arkret_wire::EventId::new(contact_event_id.to_owned()).map_err(|error| {
             super::super::events::peer::schema_violation(format!(
@@ -3320,10 +3273,6 @@ async fn project_delivered_contact_fact(
             ))
         })?;
     let projected_scopes = granted_scopes(payload);
-    let scope = projected_scopes
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "direct_message".to_owned());
     let contacts = state.contacts();
     match fact_kind {
         arkret_wire::event_kind_str::CONTACT_REQUESTED => {
@@ -3352,18 +3301,9 @@ async fn project_delivered_contact_fact(
             }
             // requester_id = issuer, target = subject_id (this holder). Form a
             // pending_incoming row on the target side.
-            let raw_message = payload
-                .get("message")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            let stub_message = raw_message.is_some()
-                && should_stub_incoming_contact_message(state, issuer_id, subject_actor_id, &scope)
-                    .await?;
-            let message = if stub_message {
-                Some(CONTACT_MESSAGE_STUB.to_owned())
-            } else {
-                raw_message.clone()
-            };
+            // This holder-private Contact projection carries the verified original
+            // message; timeline, push and non-Contact projections never read it.
+            let message = request.message.clone();
             if let Some(mut existing) = contacts
                 .contact_any(issuer_id, subject_actor_id)
                 .await
@@ -3596,17 +3536,6 @@ async fn project_delivered_contact_fact(
                 .save_contact(contact)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
-            if stub_message {
-                append_stubbed_contact_message_audit(
-                    state,
-                    subject_id,
-                    issuer,
-                    &scope,
-                    raw_message.as_deref().unwrap_or_default(),
-                    contact_event_id,
-                )
-                .await;
-            }
             Ok("accepted")
         }
         arkret_wire::event_kind_str::CONTACT_ACCEPTED => {

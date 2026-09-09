@@ -257,9 +257,8 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("events/resolve").query(resolve_events))
         .push(Router::with_path("events/frontier").query(events_frontier))
         .push(Router::with_path("seals/frontier").query(seals_frontier))
-        .push(
-            Router::with_path("seals/availability-receipts").post(issue_seal_availability_receipts),
-        )
+        .push(Router::with_path("seals/pending-control").query(pcr_pending_control))
+        .push(Router::with_path("seals/prepare").post(prepare_pcr_seal))
         .push(Router::with_path("seals").post(submit_event_seal))
         .push(
             Router::with_path("seals/mls-governance-proof")
@@ -268,15 +267,111 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("events/{event_id}").get(get_event))
 }
 
+async fn require_pcr_controller(
+    state: &AppState,
+    actor: &arkret_wire::ActorId,
+    realm_id: &RealmId,
+) -> Result<(), AppError> {
+    let own_pcr = durable_account_owns_pcr(state, actor, realm_id).await?;
+    let agent = if own_pcr {
+        None
+    } else if let Some(account_id) = actor.as_account_id() {
+        crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
+            state,
+            account_id,
+            realm_id.as_str(),
+        )
+        .await?
+    } else {
+        None
+    };
+    if !own_pcr && agent.is_none() {
+        return Err(crate::app_error!(
+            PolicyViolation,
+            "availability preparation is limited to the caller's own or delegated Agent principal-control Realm",
+        ));
+    }
+
+    Ok(())
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.pending_control", tags("events"))]
+async fn pcr_pending_control(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest>,
+) -> JsonResult<arkret_models_collaboration::governance_dependencies::PcrPendingControlOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    super::super::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_SEALS_READ_PENDING_CONTROL_V1,
+    )?;
+    let request = body.into_inner();
+    request
+        .validate()
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    require_pcr_controller(state, &actor, &request.realm_id).await?;
+    let mut before = state
+        .projections()
+        .realm_seal_leaves(&request.realm_id)
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    before.sort();
+    if before != request.predecessor_refs {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "pending PCR query requires the exact current basis"
+        ));
+    }
+    let mut pending = state
+        .projections()
+        .pending_control_events_for_notary(&request.realm_id, None, request.limit as usize + 1)
+        .await
+        .map_err(|error| AppError::internal(format!("pending PCR read: {error}")))?;
+    let has_more = pending.len() > request.limit as usize;
+    pending.truncate(request.limit as usize);
+    let mut event_digests = pending
+        .into_iter()
+        .map(|event| event.event_id.event_digest())
+        .collect::<Vec<_>>();
+    event_digests.sort();
+    let mut after = state
+        .projections()
+        .realm_seal_leaves(&request.realm_id)
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    after.sort();
+    if after != before {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "PCR basis advanced during pending discovery"
+        ));
+    }
+    let outcome = arkret_models_collaboration::governance_dependencies::PcrPendingControlOutcome {
+        realm_id: request.realm_id.clone(),
+        predecessor_refs: before,
+        event_digests,
+        has_more,
+    };
+    outcome
+        .validate_for_request(&request)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(outcome)
+}
+
 const AVAILABILITY_RESERVATION_STATUS: i32 = 102;
 const AVAILABILITY_RESERVATION_LEASE_SECONDS: i64 = 30;
 const AVAILABILITY_RESERVATION_WAIT_ATTEMPTS: usize = 600;
 
-fn availability_idempotency_outcome(
+fn seal_prepare_idempotency_outcome(
     record: soland_storage::IdempotencyRecord,
-    request: &SealAvailabilityReceiptIssueRequest,
+    request: &SealPrepareRequest,
     request_hash: &str,
-) -> Result<Option<SealAvailabilityReceiptIssueOutcome>, AppError> {
+) -> Result<Option<SealPrepareOutcome>, AppError> {
     if record.request_hash != request_hash {
         return Err(AppError::internal(
             "availability idempotency record binding mismatch",
@@ -291,12 +386,11 @@ fn availability_idempotency_outcome(
         ));
     }
     let cached =
-        serde_json::from_value::<SealAvailabilityReceiptIssueOutcome>(record.response_body)
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "availability idempotency outcome is invalid: {error}"
-                ))
-            })?;
+        serde_json::from_value::<SealPrepareOutcome>(record.response_body).map_err(|error| {
+            AppError::internal(format!(
+                "availability idempotency outcome is invalid: {error}"
+            ))
+        })?;
     cached.validate_for_request(request).map_err(|error| {
         AppError::internal(format!(
             "availability idempotency outcome binding is invalid: {error}"
@@ -305,19 +399,19 @@ fn availability_idempotency_outcome(
     Ok(Some(cached))
 }
 
-async fn wait_for_availability_idempotency_outcome(
+async fn wait_for_seal_prepare_idempotency_outcome(
     state: &AppState,
     authenticated_actor: &arkret_wire::ActorId,
     idempotency_key: &str,
-    request: &SealAvailabilityReceiptIssueRequest,
+    request: &SealPrepareRequest,
     request_hash: &str,
-) -> Result<SealAvailabilityReceiptIssueOutcome, AppError> {
+) -> Result<SealPrepareOutcome, AppError> {
     for _ in 0..AVAILABILITY_RESERVATION_WAIT_ATTEMPTS {
         let record = state
             .persistence()
             .scoped_idempotency_record(
                 authenticated_actor,
-                "ak.self.seals.command.issue_availability_receipts",
+                "ak.self.seals.command.prepare",
                 idempotency_key,
             )
             .await
@@ -330,7 +424,7 @@ async fn wait_for_availability_idempotency_outcome(
                     "availability preparation reservation expired before completion",
                 )
             })?;
-        if let Some(outcome) = availability_idempotency_outcome(record, request, request_hash)? {
+        if let Some(outcome) = seal_prepare_idempotency_outcome(record, request, request_hash)? {
             return Ok(outcome);
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -341,25 +435,19 @@ async fn wait_for_availability_idempotency_outcome(
     ))
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.seals.command.issue_availability_receipts",
-    tags("events")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "ak.self.seals.command.issue_availability_receipts.v1")
-)]
-async fn issue_seal_availability_receipts(
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.prepare", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.command.prepare.v1"))]
+async fn prepare_pcr_seal(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SealAvailabilityReceiptIssueRequest>,
-) -> JsonResult<SealAvailabilityReceiptIssueOutcome> {
+    body: JsonBody<SealPrepareRequest>,
+) -> JsonResult<SealPrepareOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_SEALS_COMMAND_ISSUE_AVAILABILITY_RECEIPTS_V1,
+        arkret_wire::ServiceOperationId::SELF_SEALS_COMMAND_PREPARE_V1,
     )?;
     let request = body.into_inner();
     request
@@ -373,25 +461,7 @@ async fn issue_seal_availability_receipts(
     })?;
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
-    let own_pcr = durable_account_owns_pcr(state, &session_actor, &request.realm_id).await?;
-    let agent = if own_pcr {
-        None
-    } else if let Some(account_id) = session_actor.as_account_id() {
-        crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
-            state,
-            account_id,
-            request.realm_id.as_str(),
-        )
-        .await?
-    } else {
-        None
-    };
-    if !own_pcr && agent.is_none() {
-        return Err(crate::app_error!(
-            PolicyViolation,
-            "availability preparation is limited to the caller's own or delegated Agent principal-control Realm",
-        ));
-    }
+    require_pcr_controller(state, &session_actor, &request.realm_id).await?;
 
     let request_hash = canonical::canonical_sha256(&request).map_err(|error| {
         crate::app_error!(
@@ -399,8 +469,7 @@ async fn issue_seal_availability_receipts(
             format!("availability request is not canonical-hashable: {error}"),
         )
     })?;
-    let idempotency_key =
-        format!("ak.self.seals.command.issue_availability_receipts.v1:{request_hash}");
+    let idempotency_key = format!("ak.self.seals.command.prepare.v1:{request_hash}");
     let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         session_core_id.clone(),
         state.service_core_id(),
@@ -421,7 +490,7 @@ async fn issue_seal_availability_receipts(
         .persistence()
         .scoped_idempotency_record(
             &authenticated_actor,
-            "ak.self.seals.command.issue_availability_receipts",
+            "ak.self.seals.command.prepare",
             &idempotency_key,
         )
         .await
@@ -429,11 +498,11 @@ async fn issue_seal_availability_receipts(
             AppError::internal(format!("availability idempotency lookup failed: {error}"))
         })?
     {
-        if let Some(cached) = availability_idempotency_outcome(record, &request, &request_hash)? {
+        if let Some(cached) = seal_prepare_idempotency_outcome(record, &request, &request_hash)? {
             return json_ok(cached);
         }
         return json_ok(
-            wait_for_availability_idempotency_outcome(
+            wait_for_seal_prepare_idempotency_outcome(
                 state,
                 &authenticated_actor,
                 &idempotency_key,
@@ -499,7 +568,7 @@ async fn issue_seal_availability_receipts(
             .ok_or_else(|| AppError::internal("availability reservation time is invalid"))?;
     let reservation = soland_storage::IdempotencyRecord {
         authenticated_actor: authenticated_actor.clone(),
-        operation_id: "ak.self.seals.command.issue_availability_receipts".to_owned(),
+        operation_id: "ak.self.seals.command.prepare".to_owned(),
         idempotency_key: idempotency_key.clone(),
         request_hash: request_hash.clone(),
         response_status: AVAILABILITY_RESERVATION_STATUS,
@@ -521,7 +590,7 @@ async fn issue_seal_availability_receipts(
         .persistence()
         .scoped_idempotency_record(
             &authenticated_actor,
-            "ak.self.seals.command.issue_availability_receipts",
+            "ak.self.seals.command.prepare",
             &idempotency_key,
         )
         .await
@@ -529,12 +598,12 @@ async fn issue_seal_availability_receipts(
         .ok_or_else(|| AppError::internal("availability reservation did not persist"))?;
     if landed_reservation != reservation {
         if let Some(cached) =
-            availability_idempotency_outcome(landed_reservation, &request, &request_hash)?
+            seal_prepare_idempotency_outcome(landed_reservation, &request, &request_hash)?
         {
             return json_ok(cached);
         }
         return json_ok(
-            wait_for_availability_idempotency_outcome(
+            wait_for_seal_prepare_idempotency_outcome(
                 state,
                 &authenticated_actor,
                 &idempotency_key,
@@ -590,21 +659,7 @@ async fn issue_seal_availability_receipts(
         })
         .collect::<Vec<_>>();
     availability_receipt_digests.sort();
-    let outcome = SealAvailabilityReceiptIssueOutcome {
-        realm_id: request.realm_id.clone(),
-        predecessor_refs: request.predecessor_refs.clone(),
-        event_digests: request.event_digests.clone(),
-        sealed_at,
-        availability_receipt_digests,
-        governance_dependencies: dependencies,
-    };
-    outcome.validate_for_request(&request).map_err(|error| {
-        AppError::internal(format!(
-            "constructed availability outcome is invalid: {error}"
-        ))
-    })?;
-    let expires_at = outcome
-        .governance_dependencies
+    let expires_at = dependencies
         .iter()
         .filter_map(|dependency| match dependency {
             GovernanceDependency::AvailabilityReceipt {
@@ -615,9 +670,26 @@ async fn issue_seal_availability_receipts(
         })
         .min()
         .unwrap_or(sealed_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS));
+    let outcome = SealPrepareOutcome {
+        seal_body: worker
+            .prepare_pcr_seal_body(
+                state,
+                &request,
+                events,
+                sealed_at,
+                availability_receipt_digests,
+            )
+            .await
+            .map_err(|error| crate::app_error!(StateMismatch, error.to_string()))?,
+    };
+    outcome.validate_for_request(&request).map_err(|error| {
+        AppError::internal(format!(
+            "constructed PCR Seal preparation is invalid: {error}"
+        ))
+    })?;
     let completed = soland_storage::IdempotencyRecord {
         authenticated_actor: authenticated_actor.clone(),
-        operation_id: "ak.self.seals.command.issue_availability_receipts".to_owned(),
+        operation_id: "ak.self.seals.command.prepare".to_owned(),
         idempotency_key: idempotency_key.clone(),
         request_hash: request_hash.clone(),
         response_status: StatusCode::OK.as_u16() as i32,
@@ -636,7 +708,7 @@ async fn issue_seal_availability_receipts(
         })?;
     if !completed_by_owner {
         return json_ok(
-            wait_for_availability_idempotency_outcome(
+            wait_for_seal_prepare_idempotency_outcome(
                 state,
                 &authenticated_actor,
                 &idempotency_key,
@@ -650,7 +722,7 @@ async fn issue_seal_availability_receipts(
         .persistence()
         .scoped_idempotency_record(
             &authenticated_actor,
-            "ak.self.seals.command.issue_availability_receipts",
+            "ak.self.seals.command.prepare",
             &idempotency_key,
         )
         .await
@@ -659,7 +731,7 @@ async fn issue_seal_availability_receipts(
         })?
         .ok_or_else(|| AppError::internal("availability idempotency outcome did not persist"))?;
     let landed =
-        availability_idempotency_outcome(landed, &request, &request_hash)?.ok_or_else(|| {
+        seal_prepare_idempotency_outcome(landed, &request, &request_hash)?.ok_or_else(|| {
             AppError::internal("availability reservation remained pending after completion")
         })?;
     json_ok(landed)
@@ -1312,70 +1384,6 @@ async fn caller_can_read_delivery_target_service(
     false
 }
 
-async fn verified_contact_mirror_event(
-    state: &AppState,
-    session: &SessionRecord,
-    mirror: soland_storage::ContactVerifiedMirrorRecord,
-) -> Result<Option<(Event, Hash)>, AppError> {
-    let event: Event = serde_json::from_slice(&mirror.canonical_event_bytes)
-        .map_err(|error| AppError::internal(format!("Contact mirror Event decode: {error}")))?;
-    let request_digest = Hash::new(mirror.request_digest.clone())
-        .map_err(|error| AppError::internal(format!("Contact mirror digest invalid: {error}")))?;
-    let digest_suite = request_digest
-        .digest_suite()
-        .map_err(|error| AppError::internal(format!("Contact mirror digest suite: {error}")))?;
-    if canonical::canonical_json_bytes(&event).map_err(|error| {
-        AppError::internal(format!("Contact mirror Event canonicalize: {error}"))
-    })? != mirror.canonical_event_bytes
-        || event.kind != arkret_wire::EventKind::ContactRequested
-        || event.event_id.as_str() != mirror.request_event_id
-        || event
-            .event_digest_with_digest_suite(digest_suite)
-            .map_err(|error| AppError::internal(format!("Contact mirror Event digest: {error}")))?
-            != mirror.request_digest
-        || mirror.target_holder_principal_id != session.actor
-    {
-        return Ok(None);
-    }
-    let payload = serde_json::from_value::<ContactRequestedPayload>(
-        serde_json::to_value(&event.payload).map_err(|error| {
-            AppError::internal(format!("Contact mirror payload encode: {error}"))
-        })?,
-    )
-    .map_err(|error| AppError::internal(format!("Contact mirror payload decode: {error}")))?;
-    let session_actor_id =
-        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
-    if payload.peer.contact_actor_id() != session_actor_id {
-        return Ok(None);
-    }
-    let Ok(Some(contact)) = state
-        .contacts()
-        .contact_any(&event.actor_id, &session_actor_id)
-        .await
-    else {
-        return Ok(None);
-    };
-    if !matches!(contact.status.as_str(), "pending" | "accepted")
-        || contact.requester_id != event.actor_id
-        || contact.target_id != session_actor_id
-        || contact.request_event_ref.as_ref() != Some(&event.event_id)
-        || contact.peer_host_id.as_ref().map(|id| id.as_str()) != Some(mirror.issuer_id.as_str())
-    {
-        return Ok(None);
-    }
-    let receipt_matches = contact.request_receipts.iter().any(|receipt| {
-        receipt.core.holder.contact_actor_id() == event.actor_id
-            && receipt.core.peer.contact_actor_id() == session_actor_id
-            && receipt.core.request_event_ref == event.event_id
-            && receipt.core.request_digest().as_str() == mirror.request_digest
-            && receipt == &mirror.source_receipt
-    });
-    if !receipt_matches {
-        return Ok(None);
-    }
-    Ok(Some((event, request_digest)))
-}
-
 #[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve.v1"))]
 async fn resolve_events(
@@ -1466,19 +1474,6 @@ async fn resolve_events(
     let include_payload = body.include_payload.unwrap_or(true);
     for event_id in &body.event_ids {
         let event_id_string = event_id.to_string();
-        if let Some(mirror) = state
-            .persistence()
-            .contact_verified_mirror(&session.actor, &event_id_string)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("events resolve Contact mirror: {error}"))
-            })?
-            && let Some((event, _digest)) =
-                verified_contact_mirror_event(state, &session, mirror).await?
-        {
-            found.push(event);
-            continue;
-        }
         match service
             .canonical_event(&event_id_string)
             .await
@@ -1501,24 +1496,6 @@ async fn resolve_events(
             .await
             .map_err(|error| AppError::internal(format!("events resolve: {error}")))?;
         for digest in &body.event_digests {
-            if let Some(mirror) = state
-                .persistence()
-                .contact_verified_mirror_by_digest(&session.actor, digest.as_str())
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("events resolve Contact mirror: {error}"))
-                })?
-                && let Some((event, _canonical_digest)) =
-                    verified_contact_mirror_event(state, &session, mirror).await?
-            {
-                if !found
-                    .iter()
-                    .any(|found_event| found_event.event_id == event.event_id)
-                {
-                    found.push(event);
-                }
-                continue;
-            }
             let Some(record) = records
                 .iter()
                 .find(|record| record.canonical_digest == digest.as_str())

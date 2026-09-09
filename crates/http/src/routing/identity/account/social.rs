@@ -364,7 +364,16 @@ pub(crate) async fn list_contacts(
         .contacts_for_actor(&actor_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let contacts = contact_list_rows(state, &actor_id, records).await?;
+    let include_continuity = match req.query::<String>("include_continuity").as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(_) => {
+            return Err(AppError::param_invalid(
+                "include_continuity must be true or false",
+            ));
+        }
+    };
+    let contacts = contact_list_rows(state, &actor_id, records, include_continuity).await?;
     json_ok(ContactList {
         contacts,
         has_more: false,
@@ -379,6 +388,7 @@ async fn contact_list_rows(
     state: &AppState,
     actor: &arkret_wire::ActorId,
     records: Vec<ContactRecord>,
+    include_continuity: bool,
 ) -> Result<Vec<ContactListRow>, AppError> {
     let mut rows: BTreeMap<String, ContactListRow> = BTreeMap::new();
     let mut selected = BTreeMap::<String, (ContactState, chrono::DateTime<chrono::Utc>)>::new();
@@ -419,22 +429,20 @@ async fn contact_list_rows(
                 })?,
             }
         };
-        let request_receipt = if row_state == ContactState::PendingIncoming {
+        let request_message = if row_state == ContactState::PendingIncoming {
             let request_event_ref = record.request_event_ref.as_ref().ok_or_else(|| {
                 AppError::internal("pending incoming Contact has no request Event reference")
             })?;
-            Some(
-                record
-                    .request_receipts
-                    .iter()
-                    .find(|receipt| receipt.core.request_event_ref == *request_event_ref)
-                    .cloned()
-                    .ok_or_else(|| {
-                        AppError::internal(
-                            "pending incoming Contact has no matching signed request receipt",
-                        )
-                    })?,
-            )
+            if !record
+                .request_receipts
+                .iter()
+                .any(|receipt| receipt.core.request_event_ref == *request_event_ref)
+            {
+                return Err(AppError::internal(
+                    "pending incoming Contact has no verified request receipt",
+                ));
+            }
+            record.message.clone()
         } else {
             None
         };
@@ -468,7 +476,7 @@ async fn contact_list_rows(
             peer: peer_model,
             state: row_state,
             request_event_ref: optional_contact_event_ref(&record.request_event_ref),
-            request_receipt,
+            request_message,
             response_event_ref: optional_contact_event_ref(&record.response_event_ref),
             tombstone_event_ref: optional_contact_event_ref(&record.tombstone_event_ref),
             next_prepare_input,
@@ -490,19 +498,11 @@ async fn contact_list_rows(
             .collect(),
             bidirectional_scopes: Vec::new(),
             effective_scopes: None,
-            peer_host_id: record.peer_host_id.clone(),
-            peer_host_resolution: record
-                .peer_service_resolution
-                .clone()
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|error| {
-                    AppError::internal(format!(
-                        "stored Contact peer service resolution is invalid: {error}"
-                    ))
-                })?,
-            continuity_evidence:
-                crate::routing::identity::contact_federation::committed_continuity_evidence(&record),
+            continuity_evidence: if include_continuity {
+                crate::routing::identity::contact_federation::committed_continuity_evidence(&record)
+            } else {
+                None
+            },
             direct_conversation: None,
             contact_agent_projections: Vec::new(),
         };

@@ -31,10 +31,8 @@ use arkret_models_collaboration::event_sync::{
     EventsSubmitFederationBatchRequestBody, FederationServiceBindingRef, RealmActorFrontierView,
     RealmSealFrontierView, SealFrontierState,
 };
-use arkret_models_collaboration::events_payloads::contact::ContactRequestedPayload;
 use arkret_models_collaboration::governance_dependencies::{
-    GovernanceDependency, GovernanceDependencySelector, SealAvailabilityReceiptIssueOutcome,
-    SealAvailabilityReceiptIssueRequest,
+    GovernanceDependency, GovernanceDependencySelector, SealPrepareOutcome, SealPrepareRequest,
 };
 use arkret_models_collaboration::http_bodies::{
     EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventDeliveryTargetState,
@@ -128,6 +126,47 @@ use realm_index::{
 };
 
 mod submit;
+
+/// Reuse the durable, closed Ack-less admission classification for external PCR signing.
+pub(crate) async fn validate_pcr_prepare_ackless_ingress(
+    state: &AppState,
+    event: &Event,
+    digest: &Hash,
+) -> Result<(), String> {
+    let snapshot = state
+        .projections()
+        .control_proposal_snapshot(digest)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "PCR preparation has no durable Control Move admission".to_owned())?;
+    // Event proofs may gain a Station admission signature after the reducer
+    // row is stored. Compare the signed content address, not that proof list.
+    let recorded_digest = snapshot
+        .event
+        .event_digest_with_digest_suite(snapshot.digest_suite)
+        .map_err(|error| error.to_string())?;
+    let requested_digest = event
+        .event_digest_with_digest_suite(snapshot.digest_suite)
+        .map_err(|error| error.to_string())?;
+    if snapshot.event.event_id != event.event_id
+        || recorded_digest != digest.as_str()
+        || requested_digest != digest.as_str()
+        || snapshot.control_proposal_ack.is_some()
+    {
+        return Err("PCR preparation admission does not bind the exact Event".to_owned());
+    }
+    let arkret_state::state::store::ControlProposalIngressClass::AcklessSelfPrincipal(class) =
+        snapshot.ingress_class
+    else {
+        return Err("PCR preparation cannot omit an Ack-required admission".to_owned());
+    };
+    if let Some(reason) =
+        submit::replay_ackless_self_principal_ingress(state, event, &class).await?
+    {
+        return Err(reason.to_owned());
+    }
+    Ok(())
+}
 pub(crate) use endpoints::load_realm_actor_frontier;
 pub(crate) use submit::accepted_event_digest_suites;
 #[cfg(feature = "test-support")]
