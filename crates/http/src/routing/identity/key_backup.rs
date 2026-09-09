@@ -25,11 +25,13 @@ use crate::wire::{
 
 mod delete;
 mod handlers;
+mod listing;
 mod unlock;
 mod validation;
 
 use delete::*;
 use handlers::*;
+use listing::*;
 use unlock::*;
 use validation::*;
 
@@ -58,8 +60,6 @@ pub(super) fn protocol_router() -> Router {
 pub(crate) fn admin_router() -> Router {
     Router::with_path("key-backups").get(list_key_backups_admin)
 }
-
-const KEY_BACKUP_CLASSES: &[&str] = &["secret_storage", "mls_history"];
 
 fn local_backup_actor(
     state: &AppState,
@@ -606,7 +606,7 @@ mod tests {
     fn list_metadata_redacts_ciphertext_and_kdf_material() {
         let mut body = key_backup_body("secret_storage", passphrase_encryption());
         body["contents"][0]["item_kind"] = json!("private_account_state");
-        let metadata = serde_json::to_value(key_backup_summary_for_list(body).unwrap()).unwrap();
+        let metadata = serde_json::to_value(serde_json::from_value::<KeyBackup>(body).unwrap().summary()).unwrap();
 
         assert!(metadata.get("ciphertext").is_none());
         assert!(metadata.pointer("/encryption/key_commitment").is_none());

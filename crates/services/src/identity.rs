@@ -1775,12 +1775,15 @@ impl AgentParticipationService {
 /// Re-exported so the HTTP layer can name a delete challenge without depending
 /// on `soland-storage` directly (it is a dev-dependency there): the service
 /// facade is the only boundary the routing code crosses.
-pub use soland_storage::KeyBackupDeleteChallengeRecord;
+pub use soland_storage::{
+    KeyBackupDeleteChallengeRecord, KeyBackupListPage, KeyBackupListPosition, KeyBackupListQuery,
+};
 
 #[async_trait]
 pub trait KeyBackupPort: Send + Sync {
     async fn backup(&self, backup_id: &str) -> ServiceResult<Option<Value>>;
     async fn backups_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>>;
+    async fn list_page(&self, query: &KeyBackupListQuery) -> ServiceResult<KeyBackupListPage>;
     async fn store_backup(&self, backup_id: String, payload: Value) -> ServiceResult<()>;
     async fn delete_backup(&self, backup_id: &str) -> ServiceResult<bool>;
     async fn issue_delete_challenge(
@@ -1945,6 +1948,10 @@ impl KeyBackupService {
 
     pub async fn backup(&self, backup_id: &str) -> ServiceResult<Option<Value>> {
         self.backups.backup(backup_id).await
+    }
+
+    pub async fn list_page(&self, query: &KeyBackupListQuery) -> ServiceResult<KeyBackupListPage> {
+        self.backups.list_page(query).await
     }
 
     pub async fn backups_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>> {

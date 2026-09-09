@@ -156,17 +156,6 @@ pub(super) fn key_backup_idempotent_retry(
     Ok(true)
 }
 
-pub(super) fn key_backup_summary_for_list(
-    backup: Value,
-) -> Result<arkret_models_crypto::KeyBackupSummary, AppError> {
-    let backup = serde_json::from_value::<KeyBackup>(backup)
-        .map_err(|error| AppError::internal(format!("stored key backup is invalid: {error}")))?;
-    backup
-        .validate()
-        .map_err(|error| AppError::internal(format!("stored key backup is invalid: {error}")))?;
-    Ok(backup.summary())
-}
-
 pub(super) async fn owned_key_backup_snapshot(
     state: &AppState,
     actor_id: &str,
@@ -362,97 +351,6 @@ async fn persist_key_backup_idempotency(
     if let Err(error) = state.jobs().store_idempotency_record(record).await {
         tracing::warn!(%error, idempotency_key, "key-backup idempotency outcome persist failed");
     }
-}
-
-#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.read.list", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.read.list.v1"))]
-pub(crate) async fn list_key_backups(
-    aa: AuthArgs,
-    cursor: QueryParam<String, false>,
-    series_id: QueryParam<String, false>,
-    backup_kind: QueryParam<String, false>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<KeysBackupsList> {
-    list_key_backups_impl(aa, cursor, series_id, backup_kind, depot, req).await
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.key_backups.query.list",
-    tags("admin")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.admin.key_backups.query.list")
-)]
-pub(crate) async fn list_key_backups_admin(
-    aa: AuthArgs,
-    cursor: QueryParam<String, false>,
-    series_id: QueryParam<String, false>,
-    backup_kind: QueryParam<String, false>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<KeysBackupsList> {
-    list_key_backups_impl(aa, cursor, series_id, backup_kind, depot, req).await
-}
-
-async fn list_key_backups_impl(
-    aa: AuthArgs,
-    cursor: QueryParam<String, false>,
-    series_id: QueryParam<String, false>,
-    backup_kind: QueryParam<String, false>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<KeysBackupsList> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let series_filter = series_id.into_inner();
-    let backup_class_filter = backup_kind.into_inner();
-    if let Some(class) = backup_class_filter.as_deref()
-        && !KEY_BACKUP_CLASSES.contains(&class)
-    {
-        return Err(AppError::param_invalid(format!(
-            "unsupported backup_kind `{class}`"
-        )));
-    }
-    let mut backups: Vec<Value> = state
-        .key_backups()
-        .backups_for_actor(&local_backup_actor(state, &session.actor)?.to_string())
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, actor = %session.actor, "failed to list encrypted key backups");
-            AppError::internal("failed to read encrypted key backups")
-        })?
-        .into_iter()
-        .filter(|backup| match series_filter.as_deref() {
-            Some(series) => backup.get("series_id").and_then(Value::as_str) == Some(series),
-            None => true,
-        })
-        .filter(|backup| match backup_class_filter.as_deref() {
-            Some(class) => backup.get("backup_kind").and_then(Value::as_str) == Some(class),
-            None => true,
-        })
-        .collect();
-    // Sort by series_seq ascending so the chain replay order is stable
-    // when callers request `?series_id=`.
-    backups.sort_by_key(|backup| {
-        backup
-            .get("series_seq")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    });
-    let backups = backups
-        .into_iter()
-        .map(key_backup_summary_for_list)
-        .collect::<Result<Vec<_>, _>>()?;
-    // The store returns the full owned set in one page, so the list is never
-    // truncated: `has_more` is false and no continuation cursor is emitted.
-    let _ = cursor.into_inner();
-    json_ok(KeysBackupsList {
-        backups,
-        has_more: false,
-        next_cursor: None,
-    })
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.command.unlock", tags("identity"))]

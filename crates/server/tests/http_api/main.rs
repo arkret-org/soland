@@ -16,6 +16,7 @@ mod agent_pairing_ceremony;
 mod agents;
 mod auth;
 mod blob_resumable;
+mod backup_listing;
 mod calendar_rsvp;
 mod cors_config;
 mod deactivation_push_fanout;

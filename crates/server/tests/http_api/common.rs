@@ -288,7 +288,11 @@ async fn issue_authorization_leases(
         "standard initial submissions require non-empty sealed Events"
     );
     let lease_request = arkret_wire::AuthorizationLeaseIssueRequestBody {
-        events: events.to_vec(),
+        submissions: events
+            .iter()
+            .cloned()
+            .map(arkret_wire::EventInitialSubmission::online)
+            .collect(),
         intents: Vec::new(),
     };
     let lease_request_body = arkret_canonical::canonical_json_bytes(&lease_request)

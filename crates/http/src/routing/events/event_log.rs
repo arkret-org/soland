@@ -109,6 +109,7 @@ pub use admission::{
 
 pub(crate) mod endpoints;
 pub(crate) mod governance_proof;
+mod mls_accepted_artifact;
 pub(in crate::routing::events) use endpoints::router;
 
 mod inception;

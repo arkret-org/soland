@@ -778,6 +778,7 @@ diesel::table! {
         backup_kind -> Nullable<Text>,
         backup_version -> Nullable<Text>,
         payload -> Jsonb,
+        metadata -> Jsonb,
         last_accessed_at -> Nullable<Timestamptz>,
         account_id -> Nullable<Text>,
         scheme -> Nullable<Text>,

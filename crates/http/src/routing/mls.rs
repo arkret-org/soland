@@ -1887,7 +1887,7 @@ fn welcome_requester_matches_receipt(
         && actor.route_service_id() == source_station
 }
 
-async fn validate_local_welcome_recipient_authorization(
+pub(crate) async fn validate_local_welcome_recipient_authorization(
     state: &AppState,
     welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
     realm_id: &str,

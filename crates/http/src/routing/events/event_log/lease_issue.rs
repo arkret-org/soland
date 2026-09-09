@@ -34,6 +34,9 @@ pub(super) async fn issue_authorization_leases(
         arkret_wire::ServiceOperationId::SELF_AUTHORIZATION_LEASES_COMMAND_ISSUE_V1,
     )?;
     let request = body.into_inner();
+    request
+        .validate_structural()
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
     let idempotency_key = req
         .headers()
         .get("idempotency-key")
@@ -88,15 +91,15 @@ pub(super) async fn issue_authorization_leases(
         }
         None => {}
     }
-    let target_count = request.events.len() + request.intents.len();
+    let target_count = request.submissions.len() + request.intents.len();
     if target_count == 0
         || target_count > MAX_EVENT_SUBMIT_BATCH
-        || (!request.events.is_empty() && !request.intents.is_empty())
+        || (!request.submissions.is_empty() && !request.intents.is_empty())
     {
         return Err(crate::app_error!(
             SchemaViolation,
             format!(
-                "authorization lease issuance requires exactly one non-empty events or intents array with at most {MAX_EVENT_SUBMIT_BATCH} entries"
+                "authorization lease issuance requires exactly one non-empty submissions or intents array with at most {MAX_EVENT_SUBMIT_BATCH} entries"
             ),
         ));
     }
@@ -104,7 +107,7 @@ pub(super) async fn issue_authorization_leases(
     let issued_at = now();
     let expires_at = issued_at + chrono::Duration::minutes(LEASE_TTL_MINUTES);
     let leases = if request.intents.is_empty() {
-        issue_event_leases(state, &session, &request.events, issued_at, expires_at).await?
+        issue_event_leases(state, &session, &request.submissions, issued_at, expires_at).await?
     } else {
         issue_intent_leases(state, &session, &request.intents, issued_at, expires_at).await?
     };
@@ -143,11 +146,15 @@ pub(super) async fn issue_authorization_leases(
 async fn issue_event_leases(
     state: &AppState,
     session: &SessionRecord,
-    events: &[Event],
+    submissions: &[arkret_wire::EventInitialSubmission],
     issued_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AuthorizationLease>, AppError> {
-    let context = anchor_context(events)?;
+    let events = submissions
+        .iter()
+        .map(|submission| submission.event.clone())
+        .collect::<Vec<_>>();
+    let context = anchor_context(&events)?;
     if context
         .as_ref()
         .is_some_and(|anchor| anchor.self_principal_pcr_bootstrap)
@@ -164,7 +171,7 @@ async fn issue_event_leases(
     let mut projected_operations = Vec::with_capacity(events.len());
     let mut projected_cell_writes = Vec::with_capacity(events.len());
     let mut envelopes = Vec::with_capacity(events.len());
-    for event in events {
+    for (event, submission) in events.iter().zip(submissions) {
         let envelope = serde_json::to_value(event).map_err(|error| {
             crate::app_error!(
                 SchemaViolation,
@@ -181,6 +188,44 @@ async fn issue_event_leases(
         )
         .await
         .map_err(event_validation_app_error)?;
+        submission
+            .validate_structural_in_context(
+                if context.is_some() {
+                    arkret_wire::EventSubmitContext::AnchorUnit
+                } else {
+                    arkret_wire::EventSubmitContext::Standard
+                },
+                parsed.digest_suite,
+            )
+            .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+        super::submit::validate_initial_publication_session_context(session, submission).map_err(
+            |error| {
+                super::submit::submit_one_error_to_app_error(
+                    "lease preflight",
+                    error.status(),
+                    error.code(),
+                    &error.message(),
+                )
+            },
+        )?;
+        super::governance_proof::validate_transition_leaf_input(
+            state,
+            event,
+            submission.mls_frontier_leaves.as_deref(),
+        )
+        .await?;
+        if let Some(evidence) = &submission.membership_compensation_evidence {
+            super::submit::validate_membership_compensation_live_state(state, event, evidence)
+                .await
+                .map_err(|error| {
+                    super::submit::submit_one_error_to_app_error(
+                        "lease preflight",
+                        error.status(),
+                        error.code(),
+                        &error.message(),
+                    )
+                })?;
+        }
         let operation = projection_operation_from_event(&parsed, &envelope).ok_or_else(|| {
             crate::app_error!(
                 SchemaViolation,
@@ -326,7 +371,7 @@ async fn issue_event_leases(
     }
     let anchor_basis = context.map(|value| value.basis);
     let mut leases = Vec::with_capacity(events.len());
-    for event in events {
+    for event in &events {
         let basis_ref = match &anchor_basis {
             Some(basis) => LeaseBasisRef::AnchorUnit(AnchorUnitLeaseBasisRef {
                 anchor_unit: basis.clone(),

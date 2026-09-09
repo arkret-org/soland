@@ -1941,9 +1941,10 @@ CREATE TABLE public.key_backups (
     id uuid PRIMARY KEY,
     actor_id text,
     device_id text,
-    backup_kind text,
+    backup_kind text GENERATED ALWAYS AS ((payload ->> 'backup_kind')) STORED,
     backup_version text,
     payload jsonb NOT NULL,
+    metadata jsonb NOT NULL,
     last_accessed_at timestamp with time zone,
     account_pk bigint,
     scheme text,
@@ -1969,6 +1970,32 @@ CREATE TABLE public.key_backups (
 -- because Postgres treats NULL as distinct in a UNIQUE index.
 ALTER TABLE ONLY public.key_backups
     ADD CONSTRAINT key_backups_series_seq_key UNIQUE (series_actor_id, series_id, series_seq);
+
+-- Metadata pages use keyset reads and an actor-local mutation revision.
+CREATE INDEX key_backups_ordered_page_idx ON public.key_backups
+    (actor_id, backup_kind COLLATE "C", series_id COLLATE "C", series_seq, id);
+CREATE INDEX key_backups_series_page_idx ON public.key_backups
+    (actor_id, series_id COLLATE "C", backup_kind COLLATE "C", series_seq, id);
+CREATE TABLE public.key_backup_list_revisions (
+    actor_id text PRIMARY KEY,
+    revision bigint NOT NULL CHECK (revision > 0)
+);
+CREATE FUNCTION public.advance_key_backup_list_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' OR (TG_OP = 'UPDATE' AND OLD.actor_id IS DISTINCT FROM NEW.actor_id) THEN
+        INSERT INTO public.key_backup_list_revisions(actor_id, revision) VALUES (OLD.actor_id, 1)
+        ON CONFLICT(actor_id) DO UPDATE SET revision = key_backup_list_revisions.revision + 1;
+    END IF;
+    IF TG_OP <> 'DELETE' THEN
+        INSERT INTO public.key_backup_list_revisions(actor_id, revision) VALUES (NEW.actor_id, 1)
+        ON CONFLICT(actor_id) DO UPDATE SET revision = key_backup_list_revisions.revision + 1;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE TRIGGER key_backup_list_revision_changed
+AFTER INSERT OR DELETE OR UPDATE OF payload, actor_id ON public.key_backups
+FOR EACH ROW EXECUTE FUNCTION public.advance_key_backup_list_revision();
 
 CREATE INDEX key_backups_account_idx ON public.key_backups USING btree (account_pk);
 

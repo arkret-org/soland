@@ -1006,6 +1006,13 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
         Ok(self.0.key_backups().list_for_actor(actor_id).await?)
     }
 
+    async fn list_page(
+        &self,
+        query: &soland_storage::KeyBackupListQuery,
+    ) -> crate::ServiceResult<soland_storage::KeyBackupListPage> {
+        Ok(self.0.key_backups().list_page(query).await?)
+    }
+
     async fn store_backup(
         &self,
         backup_id: String,

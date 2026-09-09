@@ -67,6 +67,9 @@ pub struct PgKeyBackupStore {
 #[async_trait]
 impl KeyBackupStore for PgKeyBackupStore {
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
+        let typed: arkret_models_crypto::KeyBackup =
+            serde_json::from_value(payload.clone()).map_err(PersistenceError::database)?;
+        let metadata = serde_json::to_value(typed.summary()).map_err(PersistenceError::database)?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -105,15 +108,15 @@ impl KeyBackupStore for PgKeyBackupStore {
             });
         sql_query(
             "INSERT INTO key_backups \
-             (id, actor_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
+             (id, actor_id, device_id, scheme, version, key_material_encrypted, payload, metadata, created_at, last_accessed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NULL) \
              ON CONFLICT (id) DO UPDATE SET \
                 actor_id = EXCLUDED.actor_id, \
                 device_id = EXCLUDED.device_id, \
                 scheme = EXCLUDED.scheme, \
                 version = EXCLUDED.version, \
                 key_material_encrypted = EXCLUDED.key_material_encrypted, \
-                payload = EXCLUDED.payload",
+                payload = EXCLUDED.payload, metadata = EXCLUDED.metadata",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
         .bind::<Text, _>(&actor_id)
@@ -122,6 +125,7 @@ impl KeyBackupStore for PgKeyBackupStore {
         .bind::<Integer, _>(version)
         .bind::<Nullable<Binary>, _>(key_material.as_deref())
         .bind::<Jsonb, _>(&payload)
+        .bind::<Jsonb, _>(&metadata)
         .execute(&mut *conn).await
         .map(|_| ())
         .map_err(map_key_backup_put_error)
@@ -184,6 +188,65 @@ impl KeyBackupStore for PgKeyBackupStore {
         .await
         .map(|rows| rows.into_iter().map(|r| r.payload).collect())
         .map_err(PersistenceError::database)
+    }
+
+    async fn list_page(
+        &self,
+        query: &soland_storage::KeyBackupListQuery,
+    ) -> PersistenceResult<soland_storage::KeyBackupListPage> {
+        #[derive(QueryableByName)]
+        struct PageRow {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            revision: i64,
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            byte_limited: bool,
+            #[diesel(sql_type = Jsonb)]
+            payloads: Value,
+        }
+        if !(1..=201).contains(&query.limit) {
+            return Err(PersistenceError::database(
+                "backup storage page limit must be 1..201",
+            ));
+        }
+        let actor = serde_json::from_str::<arkret_wire::ActorId>(&query.actor_id)
+            .map_err(|_| PersistenceError::database("invalid backup page actor"))?
+            .to_string();
+        let after = query.after.as_ref();
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let row = sql_query(r#"
+            WITH candidates AS MATERIALIZED (
+                SELECT metadata, backup_kind, series_id, series_seq, id FROM key_backups
+                WHERE actor_id=$1 AND ($2::text IS NULL OR backup_kind=$2) AND ($3::text IS NULL OR series_id=$3)
+                AND ($4::text IS NULL OR (backup_kind COLLATE "C",series_id COLLATE "C",series_seq,id) >
+                     ($4::text COLLATE "C",$5::text COLLATE "C",$6::bigint,$7::uuid))
+                ORDER BY backup_kind COLLATE "C",series_id COLLATE "C",series_seq,id LIMIT $8
+            ), sized AS MATERIALIZED (
+                SELECT *, SUM(octet_length(metadata::text)+1) OVER (
+                    ORDER BY backup_kind COLLATE "C",series_id COLLATE "C",series_seq,id
+                    ROWS UNBOUNDED PRECEDING) AS running_bytes FROM candidates
+            )
+            SELECT COALESCE((SELECT revision FROM key_backup_list_revisions WHERE actor_id=$1),0)::bigint AS revision,
+                EXISTS(SELECT 1 FROM sized WHERE running_bytes > 900000) AS byte_limited,
+                COALESCE((SELECT jsonb_agg(metadata ORDER BY backup_kind COLLATE "C",series_id COLLATE "C",series_seq,id)
+                    FROM sized WHERE running_bytes <= 900000), '[]'::jsonb) AS payloads
+        "#)
+        .bind::<Text,_>(actor)
+        .bind::<Nullable<Text>,_>(query.backup_kind.as_deref())
+        .bind::<Nullable<Text>,_>(query.series_id.as_deref())
+        .bind::<Nullable<Text>,_>(after.map(|p| p.backup_kind.as_str()))
+        .bind::<Text,_>(after.map_or("", |p| p.series_id.as_str()))
+        .bind::<diesel::sql_types::BigInt,_>(after.map_or(0, |p| p.series_seq))
+        .bind::<Text,_>(after.map_or("00000000-0000-0000-0000-000000000000", |p| p.backup_id.trim_start_matches("ak:backup:")))
+        .bind::<diesel::sql_types::BigInt,_>(i64::from(query.limit))
+        .get_result::<PageRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        let payloads = serde_json::from_value(row.payloads).map_err(PersistenceError::database)?;
+        Ok(soland_storage::KeyBackupListPage {
+            revision: row.revision,
+            byte_limited: row.byte_limited,
+            payloads,
+        })
     }
 
     async fn issue_delete_challenge(

@@ -250,7 +250,7 @@ pub(super) async fn validate_transition_leaf_input(
     Ok(())
 }
 
-fn scope_visible_to_session(
+pub(super) fn scope_visible_to_session(
     state: &AppState,
     scope: &GovernanceScope,
     session: &SessionRecord,

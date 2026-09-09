@@ -1,3 +1,29 @@
+/// Storage key for an ordered backup metadata page; never exposed in cursor wire bytes.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyBackupListPosition {
+    pub backup_kind: String,
+    pub series_id: String,
+    pub series_seq: i64,
+    pub backup_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct KeyBackupListQuery {
+    pub actor_id: String,
+    pub backup_kind: Option<String>,
+    pub series_id: Option<String>,
+    pub after: Option<KeyBackupListPosition>,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct KeyBackupListPage {
+    pub revision: i64,
+    pub byte_limited: bool,
+    pub payloads: Vec<serde_json::Value>,
+}
+
 use super::{PersistenceResult, Utc, Value, async_trait};
 
 /// A server-issued key-backup delete challenge
@@ -33,6 +59,7 @@ pub trait KeyBackupStore: Send + Sync {
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
     async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<Value>>;
+    async fn list_page(&self, query: &KeyBackupListQuery) -> PersistenceResult<KeyBackupListPage>;
 
     /// Issue `record`, or return the still-valid challenge already issued for
     /// the same `(account_id, backup_id, request_id)`.

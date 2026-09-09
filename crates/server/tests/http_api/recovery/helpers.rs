@@ -920,7 +920,7 @@ pub(crate) async fn post_recovery_policy(
     let event = event.into_event();
 
     let lease_request = arkret_wire::AuthorizationLeaseIssueRequestBody {
-        events: vec![event.clone()],
+        submissions: vec![arkret_wire::EventInitialSubmission::online(event.clone())],
         intents: Vec::new(),
     };
     let lease_request_bytes = arkret_canonical::canonical_json_bytes(&lease_request).unwrap();
@@ -943,6 +943,27 @@ pub(crate) async fn post_recovery_policy(
     }
     let lease_outcome: arkret_wire::AuthorizationLeaseIssueOutcome =
         serde_json::from_value(lease_body).expect("authorization lease outcome");
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .get(event.event_id.as_str())
+            .await
+            .unwrap()
+            .is_none(),
+        "lease preflight must not admit the signed Event"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .mls_frontier_leaves(event.event_id.as_str())
+            .await
+            .unwrap()
+            .is_none(),
+        "lease preflight must not durably accept MLS inputs"
+    );
+
     let receipt_request = arkret_wire::ControlProposalAckIssueRequest {
         event: event.clone(),
         publication_mode: arkret_wire::ControlProposalPublicationMode::Delayed,

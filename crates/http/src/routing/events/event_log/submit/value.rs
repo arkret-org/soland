@@ -2091,7 +2091,7 @@ async fn verify_membership_compensation_signature<T: serde::Serialize>(
     })
 }
 
-pub(super) async fn validate_membership_compensation_live_state(
+pub(in crate::routing::events::event_log) async fn validate_membership_compensation_live_state(
     state: &AppState,
     event: &Event,
     evidence: &arkret_wire::MembershipCompensationSubmissionEvidence,

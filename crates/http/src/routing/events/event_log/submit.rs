@@ -3924,6 +3924,7 @@ use projection_preflight::*;
 #[cfg(feature = "test-support")]
 pub use value::attach_fixture_station_admission_proof;
 pub(in crate::routing::events::event_log) use value::replay_ackless_self_principal_ingress;
+pub(super) use value::validate_membership_compensation_live_state;
 use value::*;
 pub(in crate::routing) use value::{
     DevicePairingAdmission, prepare_service_franking_proof_event_value,

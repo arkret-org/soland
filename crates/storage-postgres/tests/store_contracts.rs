@@ -593,12 +593,7 @@ async fn postgres_key_backup_identity_and_series_round_trip() {
     let mut records = Vec::new();
     for actor_id in [&actor_a, &actor_b] {
         let backup_id = format!("ak:backup:{}", uuid::Uuid::now_v7());
-        let payload = serde_json::json!({
-            "backup_id": backup_id,
-            "actor_id": actor_id,
-            "series_id": series_id,
-            "series_seq": 1,
-        });
+        let payload = backup_page_envelope(&backup_id, actor_id, &series_id, 0);
         PgKeyBackupStore { pool: pool.clone() }
             .put(backup_id.clone(), payload.clone())
             .await
@@ -634,6 +629,90 @@ async fn postgres_key_backup_identity_and_series_round_trip() {
         reopened.get(&records[0].0).await.unwrap().as_ref(),
         Some(&records[0].1)
     );
+}
+
+fn backup_page_envelope(
+    id: &str,
+    actor: &arkret_wire::ActorId,
+    series: &str,
+    seq: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "backup_id":id, "actor_id":actor, "backup_kind":"secret_storage", "backup_version":"kb_1",
+        "created_at":"2026-09-09T00:00:00.000Z", "series_id":series, "series_seq":seq,
+        "encryption":{"recipient_method":"secret_storage_key", "recipient_key_ref":"backup-key", "aead":{"name":"xchacha20_poly1305", "nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
+        "domain_separation":{"subdomain":"arkret.secret_storage.v1"},
+        "contents":[{"item_kind":"recovery_key_share", "secret_id":"share"}],
+        "ciphertext":"AAAA", "ciphertext_digest":"sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c"
+    })
+}
+
+#[tokio::test]
+async fn postgres_key_backup_pages_are_ordered_bounded_and_revisioned() {
+    use soland_storage::{KeyBackupListPosition, KeyBackupListQuery, KeyBackupStore};
+    use soland_storage_postgres::PgKeyBackupStore;
+    let pool = test_pool().await;
+    let _guard = DB_GUARD.lock().await;
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(format!(
+            "ak:did_core:web:page-{}.example",
+            uuid::Uuid::now_v7().simple()
+        ))
+        .unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+    ));
+    let series = format!("ak:backup_series:{}", uuid::Uuid::now_v7());
+    let store = PgKeyBackupStore { pool: pool.clone() };
+    let mut ids = Vec::new();
+    for seq in 0..5 {
+        let id = format!("ak:backup:{}", uuid::Uuid::now_v7());
+        let mut body = backup_page_envelope(&id, &actor, &series, seq);
+        body["ciphertext"] = "A".repeat(100_000).into();
+        store.put(id.clone(), body).await.unwrap();
+        ids.push(id);
+    }
+    let mut query = KeyBackupListQuery {
+        actor_id: actor.to_string(),
+        backup_kind: Some("secret_storage".into()),
+        series_id: Some(series.clone()),
+        after: None,
+        limit: 2,
+    };
+    let first = store.list_page(&query).await.unwrap();
+    assert_eq!(first.revision, 5);
+    assert_eq!(first.payloads.len(), 2);
+    assert!(!first.byte_limited);
+    assert_eq!(first.payloads[0]["series_seq"], 0);
+    assert_eq!(first.payloads[1]["series_seq"], 1);
+    assert!(
+        first
+            .payloads
+            .iter()
+            .all(|row| row.get("ciphertext").is_none())
+    );
+    query.after = Some(KeyBackupListPosition {
+        backup_kind: "secret_storage".into(),
+        series_id: series,
+        series_seq: 1,
+        backup_id: ids[1].clone(),
+    });
+    let reopened = PgKeyBackupStore { pool: pool.clone() };
+    reopened.get(&ids[0]).await.unwrap();
+    let second = reopened.list_page(&query).await.unwrap();
+    assert_eq!(second.revision, first.revision);
+    assert_eq!(second.payloads[0]["series_seq"], 2);
+    assert_eq!(second.payloads[1]["series_seq"], 3);
+    reopened.delete(&ids[4]).await.unwrap();
+    assert_eq!(reopened.list_page(&query).await.unwrap().revision, 6);
+    let mut replacement = reopened.get(&ids[3]).await.unwrap().unwrap();
+    replacement["contents"][0]["secret_id"] = "s".repeat(910_000).into();
+    reopened.put(ids[3].clone(), replacement).await.unwrap();
+    let bounded = reopened.list_page(&query).await.unwrap();
+    assert_eq!(bounded.revision, 7);
+    assert!(bounded.byte_limited);
+    assert_eq!(bounded.payloads.len(), 1);
+    query.limit = 202;
+    assert!(reopened.list_page(&query).await.is_err());
 }
 
 /// These contracts share one database and several of them exercise

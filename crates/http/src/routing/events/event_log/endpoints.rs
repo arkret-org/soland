@@ -261,6 +261,10 @@ pub(in crate::routing::events) fn router() -> Router {
             Router::with_path("seals/mls-governance-proof")
                 .post(super::governance_proof::mls_governance_proof),
         )
+        .push(
+            Router::with_path("seals/mls-accepted-artifact")
+                .post(super::mls_accepted_artifact::read),
+        )
         .push(Router::with_path("events/{event_id}").get(get_event))
 }
 
