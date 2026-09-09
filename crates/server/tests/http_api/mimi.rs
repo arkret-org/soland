@@ -1145,7 +1145,10 @@ async fn mimi_provider_facade_contracts_work_body() {
     )
     .send(&service)
     .await;
-    assert_eq!(key_material_response.status_code, Some(StatusCode::BAD_REQUEST));
+    assert_eq!(
+        key_material_response.status_code,
+        Some(StatusCode::BAD_REQUEST)
+    );
     let key_material: Value = key_material_response.take_json().await.unwrap();
     assert_eq!(problem_code(&key_material), "claim_failed");
 

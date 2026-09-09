@@ -860,9 +860,9 @@ async fn validate_event_envelope_with_ingress(
     // capability grant, so that closed authority tuple substitutes only for
     // the ordinary data-event capability lookup; every other validation and
     // reducer step remains shared with native Event submission.
-    if !internal_admission.is_some_and(|admission| {
-        admission.authorizes_mimi_facade_write(session, object)
-    }) {
+    if !internal_admission
+        .is_some_and(|admission| admission.authorizes_mimi_facade_write(session, object))
+    {
         validate_data_event_capability_refs(
             state,
             actor_id.as_str(),

@@ -266,10 +266,7 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
     })?;
     let mut dependencies = Vec::new();
     let mut digests = std::collections::BTreeSet::new();
-    for evidence in [
-        local_service_evidence,
-        account_authority_evidence,
-    ] {
+    for evidence in [local_service_evidence, account_authority_evidence] {
         let digest = evidence
             .canonical_sha256_digest()
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
@@ -286,6 +283,15 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
             );
             reason
         })?;
+    #[cfg(feature = "test-support")]
+    if let Some(path) = std::env::var_os("ARKRET_AGENT_CONTEXT_CANDIDATE_PATH") {
+        let candidate = serde_json::json!({"root": &root, "dependencies": &dependencies});
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&candidate).expect("test candidate JSON"),
+        )
+        .expect("test candidate output");
+    }
     let context_key = (root.signer_id().clone(), root.verification_method().clone());
     let previous = state
         .agent_evidence_cache
@@ -342,7 +348,6 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
             contexts.pop_first();
         }
         contexts.insert(context_key, verified);
-
     }
     Ok((root, dependencies))
 }
@@ -1074,7 +1079,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         &historical_root,
         &[
             authority_evidence,
-                account_authority_evidence,
+            account_authority_evidence,
             receiver_evidence,
         ],
     )
@@ -1441,6 +1446,24 @@ async fn produce_current_agent_signer_evidence(
     }
     seal_lineage.sort_by_key(|seal| seal.notary_seq);
 
+    let mut delegated_signers = std::collections::BTreeMap::new();
+    for seal in &seal_lineage {
+        let signer = state
+            .persistence()
+            .governance_dependency_store()
+            .agent_seal_signer(&seal.id)
+            .await
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        if let Some(signer) = signer {
+            if let Some(previous) =
+                delegated_signers.insert(signer.verification_method.clone(), signer.clone())
+                && previous != signer
+            {
+                return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+            }
+        }
+    }
+
     let service_id =
         arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
@@ -1451,10 +1474,10 @@ async fn produce_current_agent_signer_evidence(
     let core = AgentAuthorityState {
         authority_id: service_id.clone(),
         principal_control_realm_id: realm_id,
-        frontier_seal_id: frontier.id.clone(),
-        frontier_state_root: frontier.state_root.clone(),
         pcr_genesis_event,
         key_authorization_event: authorize_event,
+        frontier_seal_id: frontier.id.clone(),
+        frontier_state_root: frontier.state_root.clone(),
         signing_key_binding: runtime.signing_key_binding.clone(),
         authorization: AgentAuthorizationEvidence {
             status: AgentAuthorizationStatus::Active,
@@ -1513,6 +1536,7 @@ async fn produce_current_agent_signer_evidence(
             inclusion_proof: lifecycle_proof.inclusion_proof,
         },
         seal_lineages: seal_lineage,
+        accepted_delegated_notary_signers: delegated_signers.into_values().collect(),
     };
     let state_digest = canonical_digest(&core)?;
     let mut expires_at = now + chrono::Duration::seconds(300);

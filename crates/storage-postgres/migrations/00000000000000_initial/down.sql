@@ -45,6 +45,7 @@ DROP TABLE IF EXISTS history_traversal_pins CASCADE;
 DROP TABLE IF EXISTS history_traversal_retained_objects CASCADE;
 DROP TABLE IF EXISTS history_traversal_retentions CASCADE;
 DROP TABLE IF EXISTS governance_dependency_edges CASCADE;
+DROP TABLE IF EXISTS agent_accepted_seal_signers CASCADE;
 DROP TABLE IF EXISTS governance_unscoped_signer_evidence CASCADE;
 DROP TABLE IF EXISTS governance_dependency_objects CASCADE;
 DROP TABLE IF EXISTS state_seal_control_events CASCADE;

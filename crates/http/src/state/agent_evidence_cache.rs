@@ -3,10 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_models_identity::{
-    AgentAuthorityStateLease,
-    ControllerAccountGateAttestation,
-};
+use arkret_models_identity::{AgentAuthorityStateLease, ControllerAccountGateAttestation};
 use arkret_wire::{DidCoreId, DidUrl, Hash};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;

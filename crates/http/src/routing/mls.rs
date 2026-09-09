@@ -57,8 +57,7 @@ use soland_domain::reducer::mls::KeyPackageTrustBinding;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
-    ClaimMlsKeyPackageCommand, ClaimMlsKeyPackageTarget,
-    MlsKeyPackageState as MlsKeyPackageRow,
+    ClaimMlsKeyPackageCommand, ClaimMlsKeyPackageTarget, MlsKeyPackageState as MlsKeyPackageRow,
     PeerKeyPackageClaimCommand as PeerKeyPackageClaimAttempt,
     PeerKeyPackageClaimLedgerState as PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult,
@@ -4863,7 +4862,9 @@ pub(crate) async fn claim_mimi_keypackage(
                 agent_key_authorize_event_id: binding.agent_key_authorize_event_id.as_deref(),
                 device_revocation_gate: device_revocation_gate.as_ref(),
                 claimed_at: now_secs,
-                claim_expires_at_unix_ms: Some((now() + chrono::Duration::minutes(10)).timestamp_millis()),
+                claim_expires_at_unix_ms: Some(
+                    (now() + chrono::Duration::minutes(10)).timestamp_millis(),
+                ),
             })
             .await
             .map_err(|error| AppError::internal(format!("MIMI KeyPackage claim: {error}")))?;

@@ -449,7 +449,8 @@ pub(super) async fn admit_mimi_room_binding_event(
     }
     // Reject all cross-bound request/Event identities before domain-state validation.
     validate_mimi_room_binding_payload(binding)?;
-    if let Some(current) = current_mimi_room_binding_for_uri(state, expected_room_uri.as_str()).await?
+    if let Some(current) =
+        current_mimi_room_binding_for_uri(state, expected_room_uri.as_str()).await?
     {
         let current_status = mimi_room_binding_security_payload(&current.binding)
             .get("status")

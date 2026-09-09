@@ -1204,6 +1204,28 @@ impl ProjectionService {
         .await
     }
 
+    /// Derive exact membership from accepted reducer stores at the frozen
+    /// traversal basis, sharing the SDK's Realm/Circle activation rules.
+    pub async fn membership_at_verified_basis(
+        &self,
+        scope: &arkret_wire::HistoryEffectiveScope,
+        actor: &arkret_wire::ActorId,
+        basis: &arkret_wire::SealBasis,
+    ) -> arkret_wire::Result<arkret_state::history_authorization::VerifiedMembership> {
+        arkret_state::history_authorization::membership_at_verified_basis(
+            scope,
+            actor,
+            basis,
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+            &arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
+                self.control_event_store(),
+            ),
+        )
+        .await
+    }
+
     /// The Seals visible from `leaves`: the leaves themselves plus their whole
     /// predecessor closure.
     ///

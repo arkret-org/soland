@@ -1,6 +1,6 @@
 //! Replay-derived governance-history state.
 
-use arkret_state::direct_traversal::{HistoryJoinEpochSubject, derive_history_join_epoch};
+use arkret_state::direct_traversal::history_join_epoch_from_verified_membership;
 
 use super::*;
 
@@ -18,8 +18,11 @@ pub(super) async fn replay_derived_history_join_epoch(
                 "history join epoch requires the local retained cut",
             )
         })?;
-    let HistoryGovernanceTraversalIntent::MemberHistoryDelivery { mls_group_id, .. } =
-        &traversal.retention.traversal_intent
+    let HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
+        target_basis,
+        mls_group_id,
+        ..
+    } = &traversal.retention.traversal_intent
     else {
         return Err(crate::app_error!(
             FrontierUnavailable,
@@ -27,6 +30,32 @@ pub(super) async fn replay_derived_history_join_epoch(
         ));
     };
     let request = &request_record.write.request;
+    if request
+        .effective_scope
+        .canonical_mls_group_id()
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
+        != *mls_group_id
+    {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "retained history group differs from its scope"
+        ));
+    }
+    let membership = state
+        .projections()
+        .membership_at_verified_basis(
+            &request.effective_scope,
+            &request.requester_actor_id,
+            target_basis,
+        )
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    if membership.incarnation() != &request.requester_authorization_incarnation {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "retained history membership differs from its request"
+        ));
+    }
     let mut retained_events = Vec::new();
     for pin in &traversal.pins {
         let soland_storage::HistoryTraversalPin::ControlEvent { event_digest, .. } = pin else {
@@ -46,14 +75,12 @@ pub(super) async fn replay_derived_history_join_epoch(
                 })?,
         );
     }
-    derive_history_join_epoch(
-        &retained_events,
-        &HistoryJoinEpochSubject {
-            mls_group_id: arkret_wire::MlsGroupId::new(mls_group_id.clone())
-                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?,
-            requester_actor_id: request.requester_actor_id.clone(),
-            authorization_incarnation: request.requester_authorization_incarnation.clone(),
-        },
-    )
-    .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))
+    history_join_epoch_from_verified_membership(&retained_events, &membership)
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
+        .ok_or_else(|| {
+            crate::app_error!(
+                FrontierUnavailable,
+                "history membership is ready; MLS lineage is pending"
+            )
+        })
 }

@@ -85,15 +85,13 @@ pub(crate) mod signal;
 // `crate::routing::spawn_sync_cursor_ttl_sweeper` for `main`); the explicit
 // `pub use` overrides the `pub(crate)` glob above for this one name.
 pub use cursor::spawn_sync_cursor_ttl_sweeper;
-pub fn spawn_account_data_change_retention_sweeper(
-    state: AppState,
-) -> tokio::task::JoinHandle<()> {
+pub fn spawn_account_data_change_retention_sweeper(state: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(ACCOUNT_DATA_CHANGE_SWEEP_INTERVAL);
         loop {
             ticker.tick().await;
-            let cutoff = chrono::Utc::now()
-                - chrono::Duration::days(ACCOUNT_DATA_CHANGE_RETENTION_DAYS);
+            let cutoff =
+                chrono::Utc::now() - chrono::Duration::days(ACCOUNT_DATA_CHANGE_RETENTION_DAYS);
             match state.account_data().prune_changes_before(cutoff).await {
                 Ok(pruned) if pruned > 0 => {
                     tracing::info!(pruned, "pruned retained account-data change records");

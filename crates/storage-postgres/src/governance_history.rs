@@ -346,12 +346,76 @@ async fn load_dependency(
     .transpose()
 }
 
+#[derive(QueryableByName)]
+struct AgentSealSignerRow {
+    #[diesel(sql_type = Jsonb)]
+    signer: Value,
+}
+
 pub struct PgGovernanceDependencyStore {
     pub pool: PgPool,
 }
 
 #[async_trait]
 impl GovernanceDependencyStore for PgGovernanceDependencyStore {
+    async fn put_agent_seal_signer_exact(
+        &self,
+        seal_id: &SealId,
+        signer: &arkret_wire::NotarySignerDescriptor,
+    ) -> PersistenceResult<ExactWriteOutcome> {
+        signer
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let value = serde_json::to_value(signer)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let inserted = sql_query(
+            "INSERT INTO agent_accepted_seal_signers (seal_id, signer) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind::<Text, _>(seal_id.as_str())
+        .bind::<Jsonb, _>(&value)
+        .execute(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if inserted == 1 {
+            return Ok(ExactWriteOutcome::Inserted);
+        }
+        let stored = sql_query("SELECT signer FROM agent_accepted_seal_signers WHERE seal_id=$1")
+            .bind::<Text, _>(seal_id.as_str())
+            .get_result::<AgentSealSignerRow>(&mut conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        if stored.signer != value {
+            return Err(PersistenceError::Conflict(
+                "accepted Agent Seal signer differs".to_owned(),
+            ));
+        }
+        Ok(ExactWriteOutcome::ExactReplay)
+    }
+
+    async fn agent_seal_signer(
+        &self,
+        seal_id: &SealId,
+    ) -> PersistenceResult<Option<arkret_wire::NotarySignerDescriptor>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("SELECT signer FROM agent_accepted_seal_signers WHERE seal_id=$1")
+            .bind::<Text, _>(seal_id.as_str())
+            .get_result::<AgentSealSignerRow>(&mut conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .map(|row| {
+                let signer: arkret_wire::NotarySignerDescriptor =
+                    serde_json::from_value(row.signer)
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+                signer
+                    .validate()
+                    .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+                Ok(signer)
+            })
+            .transpose()
+    }
+
     async fn put_unscoped_signer_evidence_exact(
         &self,
         item: GovernanceDependency,

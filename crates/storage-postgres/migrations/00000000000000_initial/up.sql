@@ -876,6 +876,13 @@ CREATE TABLE public.governance_dependency_objects (
 COMMENT ON COLUMN public.governance_dependency_objects.object_digest IS
     'Legacy column name: exact selector value; collision_variant_record stores collision_variant_record_id, not a digest';
 
+-- Keys verified during delegated Agent PCR Seal admission, retained before the
+-- frontier commit. A retained row is usable only with its exact accepted Seal.
+CREATE TABLE public.agent_accepted_seal_signers (
+    seal_id text PRIMARY KEY,
+    signer jsonb NOT NULL
+);
+
 CREATE TABLE public.governance_unscoped_signer_evidence (
     dependency_kind text NOT NULL,
     object_digest text NOT NULL,

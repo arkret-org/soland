@@ -312,6 +312,18 @@ pub fn governance_dependency_selector_storage_parts(
 
 #[async_trait]
 pub trait GovernanceDependencyStore: Send + Sync {
+    /// Retain the key already verified while admitting this exact delegated Seal.
+    async fn put_agent_seal_signer_exact(
+        &self,
+        seal_id: &SealId,
+        signer: &arkret_wire::NotarySignerDescriptor,
+    ) -> PersistenceResult<ExactWriteOutcome>;
+
+    async fn agent_seal_signer(
+        &self,
+        seal_id: &SealId,
+    ) -> PersistenceResult<Option<arkret_wire::NotarySignerDescriptor>>;
+
     async fn put_unscoped_signer_evidence_exact(
         &self,
         item: GovernanceDependency,

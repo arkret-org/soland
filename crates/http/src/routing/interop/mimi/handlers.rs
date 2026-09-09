@@ -66,9 +66,10 @@ pub(super) async fn mimi_key_material(
     )
     .await?
     .ok_or_else(|| crate::app_error!(ClaimFailed, "KeyPackage claim failed"))?;
-    let claimed_device = claimed.device_id.as_deref().ok_or_else(|| {
-        AppError::internal("claimed MIMI KeyPackage does not carry a device_id")
-    })?;
+    let claimed_device = claimed
+        .device_id
+        .as_deref()
+        .ok_or_else(|| AppError::internal("claimed MIMI KeyPackage does not carry a device_id"))?;
     let keypackage = MimiKeyPackage {
         device_id: arkret_wire::DeviceId::new(claimed_device.to_owned())
             .map_err(|error| AppError::internal(format!("claimed device_id: {error}")))?,
@@ -76,9 +77,9 @@ pub(super) async fn mimi_key_material(
             arkret_wire::NonEmptyString::new(claimed.keypackage_ref.clone())
                 .map_err(|error| AppError::internal(format!("claimed KeyPackage ref: {error}")))?,
         ),
-        mls_keypackage: arkret_wire::Base64UrlString::new(
-            arkret_canonical::base64url_encode(&claimed.key_package_bytes),
-        )
+        mls_keypackage: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            &claimed.key_package_bytes,
+        ))
         .map_err(|error| AppError::internal(format!("claimed KeyPackage bytes: {error}")))?,
     };
     let _receipt = mimi_receipt(

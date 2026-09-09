@@ -191,8 +191,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     };
     if body.after.is_some() {
         let actor = match crate::routing::identity::session_actor::session_actor_from_credential(
-            &state,
-            &session,
+            &state, &session,
         ) {
             Ok(actor) => actor.to_string(),
             Err(error) => {

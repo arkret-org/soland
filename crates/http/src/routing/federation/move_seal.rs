@@ -1847,6 +1847,20 @@ pub(crate) async fn apply_agent_event_seal(
         .ok_or_else(|| device_generation_fenced("controller device signing key is missing"))?;
     verify_device_seal_signature(seal, public_key, digest_suites.seal_digest_suite)?;
 
+    let frozen_key = arkret_canonical::decode_ed25519_multibase(
+        public_key
+            .strip_prefix("did:key:")
+            .ok_or_else(|| device_generation_fenced("controller device key is not did:key"))?,
+    )
+    .map_err(|error| device_generation_fenced(error.to_string()))?;
+    let mut accepted_signer = soland_services::identity::ed25519_notary_signer_descriptor(
+        material.controller_actor_id.signing_principal_id().clone(),
+        signature.verification_method.clone(),
+        &frozen_key,
+    )
+    .map_err(|error| seal_admission_error(error.to_string()))?;
+    accepted_signer.actor_id = material.controller_actor_id.clone();
+
     let delta = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
     let new_ops = material
         .event_ops
@@ -1862,6 +1876,14 @@ pub(crate) async fn apply_agent_event_seal(
         .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
+    // Keep the exact verified key before committing the frontier. An orphaned
+    // retention row cannot authorize anything without its accepted Seal.
+    state
+        .persistence()
+        .governance_dependency_store()
+        .put_agent_seal_signer_exact(&seal.id, &accepted_signer)
+        .await
+        .map_err(|error| AppError::internal(format!("retain Agent Seal signer: {error}")))?;
     match state
         .projections()
         .commit_event_seal_if_frontier(
