@@ -106,50 +106,121 @@ fn history_response_source_record_digest(
         .map_err(|error| AppError::param_invalid(error.to_string()))
 }
 
+async fn current_history_basis(
+    state: &AppState,
+    scope: &HistoryEffectiveScope,
+) -> Result<arkret_wire::SealBasis, AppError> {
+    let mut leaves = state
+        .projections()
+        .realm_seal_leaves(scope.realm_id())
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    leaves.sort();
+    let basis = arkret_wire::SealBasis { leaves };
+    basis
+        .validate_protocol_bounds()
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    Ok(basis)
+}
+
+async fn history_membership_at_basis(
+    state: &AppState,
+    scope: &HistoryEffectiveScope,
+    actor: &arkret_wire::ActorId,
+    basis: &arkret_wire::SealBasis,
+) -> Result<arkret_state::history_authorization::VerifiedMembership, AppError> {
+    if !history_scope_has_current_member(state, scope, actor).await {
+        return Err(AppError::capability_denied(
+            "history member is not current in the effective scope",
+        ));
+    }
+    state
+        .projections()
+        .membership_at_verified_basis(scope, actor, basis)
+        .await
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))
+}
+
 async fn current_membership_evidence(
     state: &AppState,
-    realm_id: &arkret_wire::RealmId,
+    scope: &HistoryEffectiveScope,
     member_id: &arkret_wire::ActorId,
-) -> Result<(arkret_wire::EventId, arkret_wire::Hash), AppError> {
-    let member_key = member_id.to_string();
-    let membership_ref = {
-        let snapshot = state.projections().snapshot();
-        let member = snapshot
-            .member(realm_id.as_str(), &member_key)
-            .filter(|member| member.state == "join")
-            .ok_or_else(|| AppError::capability_denied("history member is not current"))?;
-        arkret_wire::EventId::new(member.membership_event_ref.clone().ok_or_else(|| {
-            AppError::capability_denied("history member membership ref is missing")
-        })?)
-        .map_err(|error| AppError::internal(error.to_string()))?
+) -> Result<
+    (
+        arkret_state::history_authorization::VerifiedMembership,
+        arkret_wire::EventId,
+        arkret_wire::Hash,
+    ),
+    AppError,
+> {
+    use arkret_models_collaboration::history_key::AuthorizationIncarnation;
+    let basis = current_history_basis(state, scope).await?;
+    let membership = history_membership_at_basis(state, scope, member_id, &basis).await?;
+    let membership_ref = match membership.incarnation() {
+        AuthorizationIncarnation::Realm {
+            realm_membership_incarnation_ref,
+        }
+        | AuthorizationIncarnation::Circle {
+            realm_membership_incarnation_ref,
+            ..
+        } => realm_membership_incarnation_ref.clone(),
     };
     let event = state
         .event_queries()
         .canonical_event(membership_ref.as_str())
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| AppError::capability_denied("history membership Event is unavailable"))?;
-    let payload = event
-        .envelope
-        .get("payload")
-        .cloned()
-        .ok_or_else(|| AppError::capability_denied("history membership Event omits payload"))?;
-    let payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
-        serde_json::from_value(payload).map_err(|_| {
-            AppError::capability_denied("history membership Event payload is invalid")
+        .ok_or_else(|| {
+            crate::app_error!(
+                FrontierUnavailable,
+                "history membership Event is unavailable"
+            )
         })?;
-    if event.realm_id.as_deref() != Some(realm_id.as_str())
-        || payload.member_id != *member_id
-        || payload.membership
-            != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
-    {
-        return Err(AppError::capability_denied(
-            "history membership Event does not match the current member",
-        ));
-    }
     let membership_digest = arkret_wire::Hash::new(event.canonical_digest)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok((membership_ref, membership_digest))
+    if event.realm_id.as_deref() != Some(scope.realm_id().as_str())
+        || membership_digest != membership_ref.event_digest()
+    {
+        return Err(AppError::capability_denied(
+            "history membership Event identity differs from the accepted reducer head",
+        ));
+    }
+    Ok((membership, membership_ref, membership_digest))
+}
+
+async fn validate_history_member_incarnations_at_basis(
+    state: &AppState,
+    request: &HistoryKeyRequest,
+    source_relay: &SourceRelayAttestation,
+    basis: &arkret_wire::SealBasis,
+) -> Result<(), AppError> {
+    let requester = history_membership_at_basis(
+        state,
+        &request.effective_scope,
+        &request.requester_actor_id,
+        basis,
+    )
+    .await?;
+    if requester.incarnation() != &request.requester_authorization_incarnation {
+        return Err(AppError::capability_denied(
+            "history requester authorization incarnation changed",
+        ));
+    }
+    if source_relay.source_kind == SourceKind::Member {
+        let source = history_membership_at_basis(
+            state,
+            &request.effective_scope,
+            &source_relay.source_actor_id,
+            basis,
+        )
+        .await?;
+        if Some(source.incarnation()) != source_relay.source_authorization_incarnation.as_ref() {
+            return Err(AppError::capability_denied(
+                "history source authorization incarnation changed",
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn has_ordinary_governance_read_access(
@@ -922,31 +993,16 @@ async fn enqueue_member_history_request_replicas(
             {
                 continue;
             }
-            let Some(membership_ref) = member.membership_event_ref.as_deref() else {
-                continue;
-            };
             targets
                 .entry(member_id.route_service_id().clone())
-                .or_insert_with(|| (member_id, membership_ref.to_owned()));
+                .or_insert(member_id);
         }
         targets
     };
-    for (destination_id, (member_id, membership_ref)) in targets {
-        let membership_ref = arkret_wire::EventId::new(membership_ref)
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        let membership = state
-            .event_queries()
-            .canonical_event(membership_ref.as_str())
-            .await
-            .map_err(map_service_error)?
-            .ok_or_else(|| {
-                crate::app_error!(
-                    DependencyMissing,
-                    "history request destination membership is unavailable",
-                )
-            })?;
-        let membership_digest = arkret_wire::Hash::new(membership.canonical_digest)
-            .map_err(|error| AppError::internal(error.to_string()))?;
+    for (destination_id, member_id) in targets {
+        let (_, membership_ref, membership_digest) =
+            current_membership_evidence(state, &record.write.request.effective_scope, &member_id)
+                .await?;
         let replicated_at = record.write.stored_at;
         let replica = HistoryKeyRequestReplica::build_signed_proof(
             history_service_verification_method(state)?,
@@ -1049,10 +1105,6 @@ async fn validate_local_history_release_binding(
     state: &AppState,
     request: &HistoryKeyRequest,
 ) -> Result<(arkret_wire::DidCoreId, arkret_wire::EventId), AppError> {
-    let realm_id = match &request.effective_scope {
-        HistoryEffectiveScope::Realm { realm_id }
-        | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
-    };
     let local_service_id =
         arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1061,8 +1113,14 @@ async fn validate_local_history_release_binding(
             "history requester_id is not routed by this Station",
         ));
     }
-    let (membership_ref, _) =
-        current_membership_evidence(state, realm_id, &request.requester_actor_id).await?;
+    let (membership, membership_ref, _) =
+        current_membership_evidence(state, &request.effective_scope, &request.requester_actor_id)
+            .await?;
+    if membership.incarnation() != &request.requester_authorization_incarnation {
+        return Err(AppError::capability_denied(
+            "history requester authorization incarnation changed",
+        ));
+    }
     Ok((local_service_id, membership_ref))
 }
 
@@ -1695,49 +1753,10 @@ async fn build_local_history_source_relay(
             .map_err(|error| AppError::internal(error.to_string()))?;
         return Ok(attestation);
     }
-    let (membership_ref, membership_digest, source_authorization_incarnation) =
-        {
-            let source_member_key = response.source_actor_id.to_string();
-            let snapshot = state.projections().snapshot();
-            let member = snapshot
-                .member(realm_id.as_str(), &source_member_key)
-                .filter(|member| member.state == "join")
-                .ok_or_else(|| AppError::capability_denied("history source is not active"))?;
-            let membership_event_ref =
-                arkret_wire::EventId::new(member.membership_event_ref.clone().ok_or_else(
-                    || AppError::capability_denied("source membership ref is missing"),
-                )?)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            let authorization_incarnation = match &response.effective_scope {
-                HistoryEffectiveScope::Realm { .. } => {
-                    arkret_models_collaboration::history_key::AuthorizationIncarnation::Realm {
-                        realm_membership_incarnation_ref: membership_event_ref.clone(),
-                    }
-                }
-                HistoryEffectiveScope::Circle { circle_id, .. } => {
-                    let circle_membership_incarnation_ref = arkret_wire::EventId::new(
-                        snapshot
-                            .circle_member_join_refs
-                            .get(&(circle_id.as_str().to_owned(), source_member_key.clone()))
-                            .cloned()
-                            .ok_or_else(|| {
-                                AppError::capability_denied(
-                                    "source Circle membership incarnation is unavailable",
-                                )
-                            })?,
-                    )
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                    arkret_models_collaboration::history_key::AuthorizationIncarnation::Circle {
-                        realm_membership_incarnation_ref: membership_event_ref.clone(),
-                        circle_membership_incarnation_ref,
-                    }
-                }
-            };
-            drop(snapshot);
-            let (membership_ref, membership_digest) =
-                current_membership_evidence(state, realm_id, &response.source_actor_id).await?;
-            (membership_ref, membership_digest, authorization_incarnation)
-        };
+    let (membership, membership_ref, membership_digest) =
+        current_membership_evidence(state, &response.effective_scope, &response.source_actor_id)
+            .await?;
+    let source_authorization_incarnation = membership.incarnation().clone();
     let local_service_id =
         arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -2136,10 +2155,6 @@ async fn validate_history_source_relay_binding(
     else {
         return Ok(());
     };
-    let realm_id = match &attestation.effective_scope {
-        HistoryEffectiveScope::Realm { realm_id }
-        | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
-    };
     if member_id != &attestation.source_actor_id
         || member_id.route_service_id() != &attestation.source_id
     {
@@ -2147,9 +2162,12 @@ async fn validate_history_source_relay_binding(
             "history relay service is not the member routing Station",
         ));
     }
-    let (current_ref, current_digest) =
-        current_membership_evidence(state, realm_id, member_id).await?;
-    if &current_ref != membership_ref || &current_digest != membership_digest {
+    let (membership, current_ref, current_digest) =
+        current_membership_evidence(state, &attestation.effective_scope, member_id).await?;
+    if &current_ref != membership_ref
+        || &current_digest != membership_digest
+        || Some(membership.incarnation()) != attestation.source_authorization_incarnation.as_ref()
+    {
         return Err(AppError::capability_denied(
             "history source relay membership evidence is stale",
         ));
@@ -3118,6 +3136,8 @@ async fn build_history_release_attestation(
     seal_basis
         .validate_protocol_bounds()
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
+    validate_history_member_incarnations_at_basis(state, request, source_relay, &seal_basis)
+        .await?;
     let mut authority_sequence = 0_u64;
     for leaf in &current_leaves {
         let seal = state
@@ -3624,140 +3644,16 @@ async fn validate_manifest_current_gate(
             "history manifest source relay binding mismatch",
         ));
     }
-    let realm_id = match &request.effective_scope {
-        HistoryEffectiveScope::Realm { realm_id }
-        | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
+    let basis = current_history_basis(state, &request.effective_scope).await?;
+    validate_history_member_incarnations_at_basis(state, request, source_relay, &basis).await?;
+    let circle_history_access = match &request.effective_scope {
+        HistoryEffectiveScope::Realm { .. } => None,
+        HistoryEffectiveScope::Circle { circle_id, .. } => state
+            .projections()
+            .snapshot()
+            .circle(circle_id.as_str())
+            .map(|circle| circle.history_access.clone()),
     };
-    let requester_member_key = request.requester_actor_id.to_string();
-    let source_member_key = response.source_actor_id.to_string();
-    let (
-        member,
-        circle_membership,
-        circle_membership_ref,
-        circle_history_access,
-        source_is_current,
-        source_realm_membership_ref,
-        source_circle_membership_ref,
-    ) = {
-        let snapshot = state.projections().snapshot();
-        let member = snapshot
-            .member(realm_id.as_str(), &requester_member_key)
-            .filter(|member| member.state == "join")
-            .cloned()
-            .ok_or_else(|| {
-                AppError::capability_denied("history requester_id is no longer active")
-            })?;
-        let (circle_membership, circle_membership_ref, circle_history_access) =
-            match &request.effective_scope {
-                HistoryEffectiveScope::Realm { .. } => (None, None, None),
-                HistoryEffectiveScope::Circle { circle_id, .. } => (
-                    snapshot
-                        .circle_membership(circle_id.as_str(), &requester_member_key)
-                        .filter(|membership| membership.state == "active")
-                        .cloned(),
-                    snapshot
-                        .circle_member_join_refs
-                        .get(&(circle_id.as_str().to_owned(), requester_member_key.clone()))
-                        .cloned(),
-                    snapshot
-                        .circle(circle_id.as_str())
-                        .map(|circle| circle.history_access.clone()),
-                ),
-            };
-        let source_member = snapshot
-            .member(realm_id.as_str(), &source_member_key)
-            .filter(|member| member.state == "join");
-        let source_is_current = source_member.is_some();
-        let source_realm_membership_ref =
-            source_member.and_then(|member| member.membership_event_ref.clone());
-        let source_circle_membership_ref = match &request.effective_scope {
-            HistoryEffectiveScope::Realm { .. } => None,
-            HistoryEffectiveScope::Circle { circle_id, .. } => snapshot
-                .circle_member_join_refs
-                .get(&(circle_id.as_str().to_owned(), source_member_key.clone()))
-                .cloned(),
-        };
-        (
-            member,
-            circle_membership,
-            circle_membership_ref,
-            circle_history_access,
-            source_is_current,
-            source_realm_membership_ref,
-            source_circle_membership_ref,
-        )
-    };
-    match &request.requester_authorization_incarnation {
-        arkret_models_collaboration::history_key::AuthorizationIncarnation::Realm {
-            realm_membership_incarnation_ref,
-        } if member.membership_event_ref.as_deref()
-            == Some(realm_membership_incarnation_ref.as_str()) => {}
-        arkret_models_collaboration::history_key::AuthorizationIncarnation::Circle {
-            realm_membership_incarnation_ref,
-            circle_membership_incarnation_ref,
-        } => {
-            if member.membership_event_ref.as_deref()
-                != Some(realm_membership_incarnation_ref.as_str())
-            {
-                return Err(AppError::capability_denied(
-                    "history requester_id Realm incarnation changed",
-                ));
-            }
-            let HistoryEffectiveScope::Circle { .. } = &request.effective_scope else {
-                return Err(AppError::internal(
-                    "Circle authorization incarnation has Realm scope",
-                ));
-            };
-            circle_membership.as_ref().ok_or_else(|| {
-                AppError::capability_denied("history requester_id Circle membership is inactive")
-            })?;
-            if circle_membership_ref.as_deref() != Some(circle_membership_incarnation_ref.as_str())
-            {
-                return Err(AppError::capability_denied(
-                    "history requester_id Circle incarnation changed",
-                ));
-            }
-        }
-        _ => {
-            return Err(AppError::capability_denied(
-                "history requester_id authorization incarnation changed",
-            ));
-        }
-    }
-    if !source_is_current {
-        return Err(AppError::capability_denied(
-            "history response source is not a current member",
-        ));
-    }
-    let source_incarnation_matches = match &source_relay.source_authorization_incarnation {
-        Some(arkret_models_collaboration::history_key::AuthorizationIncarnation::Realm {
-            realm_membership_incarnation_ref,
-        }) => {
-            matches!(
-                &request.effective_scope,
-                HistoryEffectiveScope::Realm { .. }
-            ) && source_realm_membership_ref.as_deref()
-                == Some(realm_membership_incarnation_ref.as_str())
-        }
-        Some(arkret_models_collaboration::history_key::AuthorizationIncarnation::Circle {
-            realm_membership_incarnation_ref,
-            circle_membership_incarnation_ref,
-        }) => {
-            matches!(
-                &request.effective_scope,
-                HistoryEffectiveScope::Circle { .. }
-            ) && source_realm_membership_ref.as_deref()
-                == Some(realm_membership_incarnation_ref.as_str())
-                && source_circle_membership_ref.as_deref()
-                    == Some(circle_membership_incarnation_ref.as_str())
-        }
-        None => false,
-    };
-    if source_relay.source_kind == SourceKind::Member && !source_incarnation_matches {
-        return Err(AppError::capability_denied(
-            "history source authorization incarnation changed",
-        ));
-    }
     let HistoryGovernanceTraversalIntent::MemberHistoryDelivery { target_basis, .. } =
         &request_record
             .write
@@ -4182,17 +4078,14 @@ async fn validate_history_request_replica_destination(
             membership_ref,
             membership_digest,
         } => {
-            let realm_id = match &replica.request.effective_scope {
-                HistoryEffectiveScope::Realm { realm_id }
-                | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
-            };
             if member_id.route_service_id() != local_service_id {
                 return Err(AppError::capability_denied(
                     "history request member is not routed by the local Station",
                 ));
             }
-            let (current_ref, current_digest) =
-                current_membership_evidence(state, realm_id, member_id).await?;
+            let (_, current_ref, current_digest) =
+                current_membership_evidence(state, &replica.request.effective_scope, member_id)
+                    .await?;
             let member_key = member_id.to_string();
             if &current_ref != membership_ref
                 || &current_digest != membership_digest
