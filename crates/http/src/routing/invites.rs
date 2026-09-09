@@ -16,6 +16,7 @@ use arkret_models_collaboration::governance::invite_addressing::{
     SelfInviteDispatchRequestBody,
 };
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
+use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvitePresentRequestBody;
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
@@ -74,7 +75,57 @@ pub(crate) fn peer_router() -> Router {
 }
 
 pub(crate) fn open_router() -> Router {
-    Router::new().push(Router::with_path("invite-locators/resolve").post(resolve_invite_locator))
+    Router::new()
+        .push(Router::with_path("invite-locators/resolve").post(resolve_invite_locator))
+        .push(
+            Router::with_path("third-party-invites/present")
+                .post(present_third_party_invite_token),
+        )
+        // A token placed after the registered endpoint is URL-sourced even
+        // though it does not match the operation path. Reject it with the
+        // operation-specific reason instead of the generic router 404.
+        .push(
+            Router::with_path("third-party-invites/present/<**token_path>")
+                .post(reject_third_party_invite_token_in_path),
+        )
+}
+
+fn third_party_invite_token_in_url() -> AppError {
+    AppError::param_invalid("invite_token must be sent in the JSON body")
+        .with_wire_code("third_party_invite_token_in_query")
+}
+
+fn third_party_invite_not_found() -> AppError {
+    AppError::not_found("third-party invite not found")
+}
+
+#[endpoint(
+    operation_id = "ak.open.third_party_invite.command.present_token",
+    summary = "Present a third-party invite token",
+    tags("invites")
+)]
+async fn present_third_party_invite_token(req: &mut Request) -> JsonResult<serde_json::Value> {
+    if req.uri().query().is_some() {
+        return Err(third_party_invite_token_in_url());
+    }
+    let body = req
+        .parse_json::<ThirdPartyInvitePresentRequestBody>()
+        .await
+        .map_err(|_| third_party_invite_not_found())?;
+    body.validate_minimal()
+        .map_err(|_| third_party_invite_not_found())?;
+
+    // The accepted Invite Event intentionally carries only the public
+    // commitment and verification key. Until the spec registers a private
+    // issuance/provisioning carrier, this Station cannot possess the token
+    // salt and matching temporary signing key without inventing wire. Keep
+    // every body-path failure opaque and do not advertise the handoff bundle.
+    Err(third_party_invite_not_found())
+}
+
+#[handler]
+async fn reject_third_party_invite_token_in_path() -> JsonResult<serde_json::Value> {
+    Err(third_party_invite_token_in_url())
 }
 
 pub(crate) fn self_router() -> Router {
@@ -2416,6 +2467,7 @@ fn invite_locator_not_found() -> AppError {
 
 #[cfg(test)]
 mod invite_locator_security_tests {
+    use salvo::test::{ResponseExt, TestClient};
     use soland_services::identity::{AccountProfileState, DeviceIdentity, SaveDeviceCommand};
 
     use super::*;
@@ -2426,6 +2478,20 @@ mod invite_locator_security_tests {
     const PRODUCTION_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-0000000000e2";
     const PRODUCTION_REALM: &str = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
     const PRODUCTION_INVITE_EVENT: &str = "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2";
+
+    #[tokio::test]
+    async fn third_party_invite_token_in_query_or_path_is_rejected_before_body() {
+        let service = Service::new(open_router());
+        for url in [
+            "http://server/third-party-invites/present?invite_token=secret",
+            "http://server/third-party-invites/present/secret",
+        ] {
+            let mut response = TestClient::post(url).send(&service).await;
+            assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
+            let body = response.take_string().await.unwrap();
+            assert!(body.contains("third_party_invite_token_in_query"), "{body}");
+        }
+    }
 
     #[tokio::test]
     async fn locator_trust_requires_the_account_bound_recipient_signature() {
