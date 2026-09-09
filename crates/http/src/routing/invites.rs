@@ -85,14 +85,14 @@ pub(crate) fn open_router() -> Router {
         // though it does not match the operation path. Reject it with the
         // operation-specific reason instead of the generic router 404.
         .push(
-            Router::with_path("third-party-invites/present/<**token_path>")
+            Router::with_path("third-party-invites/present/{**token_path}")
                 .post(reject_third_party_invite_token_in_path),
         )
 }
 
 fn third_party_invite_token_in_url() -> AppError {
     AppError::param_invalid("invite_token must be sent in the JSON body")
-        .with_wire_code("third_party_invite_token_in_query")
+        .with_reason_code("third_party_invite_token_in_query")
 }
 
 fn third_party_invite_not_found() -> AppError {
@@ -2481,13 +2481,13 @@ mod invite_locator_security_tests {
 
     #[tokio::test]
     async fn third_party_invite_token_in_query_or_path_is_rejected_before_body() {
-        let service = Service::new(open_router());
+        let service = Service::new(Router::with_path("_arkret/open").push(open_router()));
         for url in [
-            "http://server/third-party-invites/present?invite_token=secret",
-            "http://server/third-party-invites/present/secret",
+            "http://server/_arkret/open/third-party-invites/present?invite_token=secret",
+            "http://server/_arkret/open/third-party-invites/present/secret",
         ] {
             let mut response = TestClient::post(url).send(&service).await;
-            assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
+            assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST), "{url}");
             let body = response.take_string().await.unwrap();
             assert!(body.contains("third_party_invite_token_in_query"), "{body}");
         }
