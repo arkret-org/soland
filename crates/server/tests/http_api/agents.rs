@@ -1153,6 +1153,27 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .owner
         .take();
     assert!(projected_owner.is_some());
+    let pending_request =
+        arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest {
+            realm_id: controller_realm_id.clone(),
+            predecessor_refs: availability_request.predecessor_refs.clone(),
+            limit: 1024,
+        };
+    let mut pending_response =
+        TestClient::query("http://server/_arkret/self/seals/pending-control")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&pending_request).unwrap())
+            .send(&app)
+            .await;
+    let pending_status = pending_response.status_code;
+    let pending_body = pending_response.take_string().await.unwrap();
+    assert_eq!(pending_status, Some(StatusCode::OK), "{pending_body}");
+    let pending: arkret_models_collaboration::governance_dependencies::PcrPendingControlOutcome =
+        serde_json::from_str(&pending_body).unwrap();
+    pending.validate_for_request(&pending_request).unwrap();
+    assert_eq!(pending.event_digests, availability_request.event_digests);
+    assert!(!pending.has_more);
     let mut availability_response = TestClient::post("http://server/_arkret/self/seals/prepare")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
@@ -1164,7 +1185,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     assert_eq!(
         availability_status,
         Some(StatusCode::OK),
-        "availability receipt issuance failed: {availability_body}"
+        "PCR Seal preparation failed: {availability_body}"
     );
     let availability = serde_json::from_str::<
         arkret_models_collaboration::governance_dependencies::SealPrepareOutcome,
@@ -1316,6 +1337,24 @@ async fn provision_agent_sdk_commit_attempt_inner(
         Some(StatusCode::OK),
         "{controller_seal_response_body}; controller Events: {controller_event_inventory:?}"
     );
+    let settled_request =
+        arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest {
+            predecessor_refs: vec![controller_seal.id.clone()],
+            ..pending_request
+        };
+    let mut settled_response =
+        TestClient::query("http://server/_arkret/self/seals/pending-control")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&settled_request).unwrap())
+            .send(&app)
+            .await;
+    assert_eq!(settled_response.status_code, Some(StatusCode::OK));
+    let settled: arkret_models_collaboration::governance_dependencies::PcrPendingControlOutcome =
+        settled_response.take_json().await.unwrap();
+    settled.validate_for_request(&settled_request).unwrap();
+    assert!(settled.event_digests.is_empty());
+    assert!(!settled.has_more);
 
     let genesis_authority = arkret_bootstrap::AgentPcrGenesisAuthority::from_delegated_create(
         &pcr_genesis,

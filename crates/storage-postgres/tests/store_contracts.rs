@@ -1651,6 +1651,15 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         .unwrap();
     let genesis_dependency =
         seal_dependency_contract_availability(&genesis_event, "genesis-success");
+    assert_eq!(
+        stores
+            .control_event_store
+            .list_pending_for_notary(&realm_id, None, 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let genesis_object_digest = seal_dependency_contract_digest(&genesis_dependency);
     let genesis_covered = [genesis_digest.clone()]
         .into_iter()
@@ -1717,6 +1726,15 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     let restarted = soland_storage_postgres::build_state_resolution_stores(
         Some(pool.clone()),
         stores.cell_registry.clone(),
+    );
+    assert!(
+        restarted
+            .control_event_store
+            .list_pending_for_notary(&realm_id, None, 1)
+            .await
+            .unwrap()
+            .is_empty(),
+        "accepted coverage must remove pending work durably"
     );
     assert_eq!(
         restarted
@@ -1876,6 +1894,16 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             .unwrap_err();
         let counts = seal_dependency_atomic_counts(&pool, &seal.id, &object_digest).await;
         assert_eq!(counts.seals, 0, "{failure} failure leaked a Seal");
+        assert!(
+            stores
+                .control_event_store
+                .list_pending_for_notary(&realm_id, None, 1024)
+                .await
+                .unwrap()
+                .iter()
+                .any(|pending| pending.event_id == event.event_id),
+            "{failure} rollback lost pending work"
+        );
         assert_eq!(counts.cell_ops, 0, "{failure} failure leaked cell ops");
         assert_eq!(
             counts.sealed_markers, 0,

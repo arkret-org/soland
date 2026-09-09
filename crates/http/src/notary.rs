@@ -1097,6 +1097,13 @@ impl NotaryWorker {
             } else {
                 arkret_wire::event_envelope::EventSubmitContext::Standard
             };
+            let proof_result = if allow_self_principal_ingress {
+                crate::routing::events::event_log::governance_proof::verify_retained_control_event_proofs(
+                    state, &event, &digest, move_digest_suite,
+                ).await
+            } else {
+                verifier(&event)
+            };
             match state
                 .projections()
                 .verify_accepted_control_move_in_context_with_digest_suite(
@@ -1108,7 +1115,14 @@ impl NotaryWorker {
                         &pre_state
                     },
                     move_digest_suite,
-                    verifier,
+                    |candidate| {
+                        if candidate != &event {
+                            return Err(
+                                "preflight proof result belongs to another Event".to_owned()
+                            );
+                        }
+                        proof_result.clone()
+                    },
                     context,
                 ) {
                 Ok(effects) => {

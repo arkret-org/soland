@@ -1228,6 +1228,30 @@ async fn load_checkpoint_dependencies(
     Ok(dependencies.into_values().collect())
 }
 
+pub(crate) async fn verify_retained_control_event_proofs(
+    state: &AppState,
+    event: &Event,
+    digest: &Hash,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<(), String> {
+    let dependencies = load_checkpoint_dependencies(
+        state,
+        &event.realm_id,
+        &BTreeMap::new(),
+        &BTreeMap::from([(digest.clone(), event.clone())]),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    arkret::verify_retained_governance_event_proofs(
+        event,
+        digest_suite,
+        &dependencies,
+        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
 async fn load_source_dependencies(
     state: &AppState,
     realm_id: &RealmId,

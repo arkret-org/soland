@@ -300,7 +300,6 @@ async fn pcr_pending_control(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest>,
 ) -> JsonResult<arkret_models_collaboration::governance_dependencies::PcrPendingControlOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -308,7 +307,8 @@ async fn pcr_pending_control(
         &session,
         arkret_wire::ServiceOperationId::SELF_SEALS_READ_PENDING_CONTROL_V1,
     )?;
-    let request = body.into_inner();
+    let request = req.parse_json::<arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest>()
+        .await.map_err(|error| AppError::json_invalid(format!("invalid pending PCR request: {error}")))?;
     request
         .validate()
         .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;

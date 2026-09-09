@@ -1019,7 +1019,9 @@ async fn try_apply_device_generation_event_seal(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    if declared.len() != seal.covered_event_digests.len() || declared != target {
+    if !seal.covered_event_digests.is_empty()
+        && (declared.len() != seal.covered_event_digests.len() || declared != target)
+    {
         return Err(seal_admission_error(
             "B-model Event Seal covered_event_digests must equal predecessor coverage plus delta",
         ));
@@ -1554,11 +1556,8 @@ pub(crate) async fn apply_agent_event_seal(
         .map_err(|error| seal_admission_error(format!("Agent PCR Seal structure: {error}")))?;
     crate::jws_verify::verify_replay_window(&seal.hlc, state.config().jws_replay_window_seconds)
         .map_err(|error| seal_admission_error(format!("Agent PCR Seal replay_window: {error}")))?;
-    // `Seal.kind` is an in-memory classification and is intentionally absent
-    // from the v1 wire schema / signed canonical body. This admission path
-    // proves compaction semantics below by requiring exact cumulative coverage,
-    // roots, state, and delta, then normalizes the accepted local value so
-    // runtime DAG consumers can classify it without trusting an unsigned field.
+    // Ordinary successors derive coverage from the accepted basis and delta.
+    // Only an explicit compaction coverage set needs the additional equality check.
     let accepted_seal = seal.clone();
     let seal = &accepted_seal;
     if seal.realm_id.as_str() != agent_record.principal_control_realm_id {
@@ -1619,6 +1618,14 @@ pub(crate) async fn apply_agent_event_seal(
         .await
         .map_err(app_error_from_seal_reject)?;
 
+    if seal.delta.is_empty() || seal.delta.iter().any(|digest| current.contains(digest)) {
+        return Err(seal_admission_error(
+            "Agent PCR Seal delta must contain new Control Events",
+        ));
+    }
+    let mut selected_coverage = current.clone();
+    selected_coverage.extend(seal.delta.iter().cloned());
+
     let records = state
         .event_queries()
         .realm_events_newest_first(seal.realm_id.as_str())
@@ -1632,6 +1639,11 @@ pub(crate) async fn apply_agent_event_seal(
     let mut events = Vec::with_capacity(records.len());
     let mut event_digest_suites = BTreeMap::new();
     for record in records {
+        let stored_digest = Hash::new(record.canonical_digest.clone())
+            .map_err(|error| seal_admission_error(format!("stored Agent PCR digest: {error}")))?;
+        if !selected_coverage.contains(&stored_digest) {
+            continue;
+        }
         let event = serde_json::from_value::<Event>(record.envelope).map_err(|error| {
             seal_admission_error(format!(
                 "stored Agent PCR Event {} is invalid: {error}",
@@ -1701,15 +1713,15 @@ pub(crate) async fn apply_agent_event_seal(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    if !current.is_subset(&target) {
+    if target != selected_coverage {
         return Err(seal_admission_error(
-            "Agent PCR accepted coverage is not a subset of canonical history",
+            "Agent PCR Seal basis and delta do not resolve to the exact canonical Control Events",
         ));
     }
     let expected_delta = target.difference(&current).cloned().collect::<Vec<_>>();
     if expected_delta.is_empty() || seal.delta != expected_delta {
         return Err(seal_admission_error(
-            "Agent PCR Seal delta must equal all newly accepted canonical Events",
+            "Agent PCR Seal delta must equal its newly selected canonical Events",
         ));
     }
     let declared = seal
@@ -1717,7 +1729,9 @@ pub(crate) async fn apply_agent_event_seal(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    if declared.len() != seal.covered_event_digests.len() || declared != target {
+    if !seal.covered_event_digests.is_empty()
+        && (declared.len() != seal.covered_event_digests.len() || declared != target)
+    {
         return Err(seal_admission_error(
             "Agent PCR Seal coverage differs from canonical Event history",
         ));
