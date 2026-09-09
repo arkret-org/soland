@@ -1264,9 +1264,9 @@ async fn signal_envelope_structural_contract_is_enforced_body() {
         Some(StatusCode::BAD_REQUEST)
     );
 
-    // §1 — `proof.created_at` MUST equal the outer `sent_at` verbatim.
+    // Section 1: changing signed sent_at without re-signing must fail.
     let mut skewed = envelope(arkret_wire::SignalClass::Session, 30);
-    skewed.proof.created_at = skewed.sent_at + chrono::Duration::seconds(1);
+    skewed.sent_at += chrono::Duration::seconds(1);
     let skewed_response = post_signal(state.clone(), &token, &skewed).await;
     assert_eq!(skewed_response.status_code, Some(StatusCode::BAD_REQUEST));
 

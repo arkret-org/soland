@@ -8,9 +8,7 @@ use arkret_models_collaboration::{
     CurrentSignerEvidenceQueryOutcome, CurrentSignerEvidenceQueryRequestBody,
     CurrentSignerEvidenceResponseCore, CurrentSignerEvidenceSelector,
 };
-use arkret_models_identity::agent_signer_evidence::{
-    AgentSignerEvidenceQueryFailureReason, AgentSignerEvidenceQuerySelector,
-};
+use arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector;
 use arkret_wire::DidCoreId;
 use chrono::Utc;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -107,7 +105,7 @@ async fn peer_query(
     body.validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if body.recipient_account_id.station_id != source {
-        return json_ok(opaque_empty_outcome(state, &body, source).await?);
+        return json_ok(opaque_empty_outcome(state, &body).await?);
     }
     json_ok(issue_authority_outcome(state, &body, source).await?)
 }
@@ -118,6 +116,9 @@ async fn issue_authority_outcome(
     verifier_id: DidCoreId,
 ) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
     let visible = disclosure_context_is_current(state, request, &verifier_id).await;
+    if !visible {
+        tracing::warn!(realm_id = %request.realm_id, "current signer evidence disclosure gate rejected request");
+    }
     let mut evidence = Vec::new();
     if visible {
         for selector in &request.queries {
@@ -126,21 +127,19 @@ async fn issue_authority_outcome(
             }
         }
     }
-    signed_outcome(state, request, verifier_id, evidence)
+    signed_outcome(state, request, evidence)
 }
 
 async fn opaque_empty_outcome(
     state: &AppState,
     request: &CurrentSignerEvidenceQueryRequestBody,
-    verifier_id: DidCoreId,
 ) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
-    signed_outcome(state, request, verifier_id, Vec::new())
+    signed_outcome(state, request, Vec::new())
 }
 
 fn signed_outcome(
     state: &AppState,
     request: &CurrentSignerEvidenceQueryRequestBody,
-    verifier_id: DidCoreId,
     mut evidences: Vec<CurrentSignerEvidenceItem>,
 ) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
     let issued_at = now();
@@ -161,7 +160,6 @@ fn signed_outcome(
         request_digest: request.request_digest.clone(),
         recipient_account_id: request.recipient_account_id.clone(),
         challenge: request.challenge.clone(),
-        verifier_id,
         issuer_id: state.service_core_id(),
         issued_at,
         expires_at,
@@ -309,12 +307,13 @@ async fn issue_selector(
                     authenticated_signer_evidence: root,
                     dependencies,
                 })),
-                Err(
-                    AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
-                    | AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceStale
-                    | AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive
-                    | AgentSignerEvidenceQueryFailureReason::AgentAuthorizationConflicted,
-                ) => Ok(None),
+                Err(reason) => {
+                    tracing::warn!(
+                        ?reason,
+                        "current Agent Signal evidence unavailable at authority"
+                    );
+                    Ok(None)
+                }
             }
         }
     }

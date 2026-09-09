@@ -199,7 +199,7 @@ async fn admit_signal(
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
     // (1) + (4, partly) — `scope_ref.realm_id == realm_id`, the E2EE profile
-    // constants, the AAD binding, `proof.created_at == sent_at`, the envelope
+    // constants, the AAD binding, the signed outer `sent_at`, the envelope
     // digest and the per-class TTL ceilings.
     envelope.validate_structural().map_err(structural_error)?;
     if envelope.expires_at <= chrono::Utc::now() {
@@ -582,24 +582,11 @@ async fn verify_signal_agent_proof(
         ));
     }
 
-    let public_key_value: serde_json::Value = serde_json::from_str(
-        session
-            .session_public_key
-            .as_deref()
-            .ok_or_else(|| signal_proof_invalid("Agent session public key is unavailable"))?,
-    )
-    .map_err(|_| signal_proof_invalid("Agent session public key is invalid"))?;
     verify_signal_agent_current_authority(
         state,
         envelope,
         actor,
-        Some((
-            agent_key_authorization_ref,
-            verification_method,
-            arkret_signatures::PublicKeyMaterial::Jwk {
-                value: public_key_value,
-            },
-        )),
+        Some((agent_key_authorization_ref, verification_method)),
     )
     .await
 }
@@ -608,11 +595,7 @@ async fn verify_signal_agent_current_authority(
     state: &AppState,
     envelope: &SignalEnvelope,
     actor: &arkret_wire::ActorId,
-    session_binding: Option<(
-        &arkret_wire::EventId,
-        &arkret_wire::DidUrl,
-        arkret_signatures::PublicKeyMaterial,
-    )>,
+    session_binding: Option<(&arkret_wire::EventId, &arkret_wire::DidUrl)>,
 ) -> Result<(), AppError> {
     let agent_id = actor.signing_principal_id();
     let agent_record = crate::routing::identity::agent_pcr::agent_record_for_actor(state, actor)
@@ -654,7 +637,7 @@ async fn verify_signal_agent_current_authority(
             "Signal Agent proof method differs from the active runtime binding",
         ));
     }
-    if let Some((agent_key_authorization_ref, verification_method, _)) = &session_binding
+    if let Some((agent_key_authorization_ref, verification_method)) = &session_binding
         && (runtime.authorized_event_ref != **agent_key_authorization_ref
             || runtime.verification_method != **verification_method)
     {
@@ -703,24 +686,13 @@ async fn verify_signal_agent_current_authority(
         }
     }
 
-    let public_key = match session_binding {
-        Some((_, _, public_key)) => public_key,
-        None => arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-            bytes: arkret_canonical::base64url_decode(
-                runtime.signing_key_binding.public_key.key.as_str(),
-            )
-            .map_err(|_| signal_proof_invalid("Agent runtime public key is invalid"))?,
-        },
-    };
-    if public_key
-        .raw_ed25519_digest()
-        .map_err(|_| signal_proof_invalid("Agent session public key is invalid"))?
-        != runtime.public_key_digest
-    {
-        return Err(signal_proof_invalid(
-            "Agent session public key differs from the active runtime binding",
-        ));
-    }
+    // The authenticated grant binds the runtime authorization, while its
+    // session public key authenticates HTTP DPoP only. Signal producers sign
+    // with the independently accepted Agent runtime key (signal.md section 1).
+    let public_key = agent_runtime_signal_public_key(
+        &runtime.signing_key_binding.public_key,
+        &runtime.public_key_digest,
+    )?;
     arkret_signatures::verify_ed25519_signal_proof(envelope, &public_key).map_err(|error| {
         tracing::warn!(
             %error,
@@ -729,6 +701,26 @@ async fn verify_signal_agent_current_authority(
         );
         signal_proof_invalid("signal Agent proof verification failed")
     })
+}
+
+fn agent_runtime_signal_public_key(
+    key: &arkret_models_identity::agent_signer_evidence::AgentSigningPublicKey,
+    expected_digest: &arkret_wire::Hash,
+) -> Result<arkret_signatures::PublicKeyMaterial, AppError> {
+    let public_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: arkret_canonical::base64url_decode(key.key.as_str())
+            .map_err(|_| signal_proof_invalid("Agent runtime public key is invalid"))?,
+    };
+    if public_key
+        .raw_ed25519_digest()
+        .map_err(|_| signal_proof_invalid("Agent runtime public key is invalid"))?
+        != *expected_digest
+    {
+        return Err(signal_proof_invalid(
+            "Agent runtime public key differs from its accepted binding",
+        ));
+    }
+    Ok(public_key)
 }
 
 fn require_local_signal_device_account(
@@ -1188,6 +1180,32 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn agent_signal_key_comes_from_runtime_authorization_independently_of_session_key() {
+        use arkret_signatures::PublicKeyMaterial;
+        let runtime_bytes = [0x73; 32];
+        let session_bytes = [0x74; 32];
+        let runtime_digest = PublicKeyMaterial::Ed25519Raw {
+            bytes: runtime_bytes.to_vec(),
+        }
+        .raw_ed25519_digest()
+        .unwrap();
+        let session_digest = PublicKeyMaterial::Ed25519Raw {
+            bytes: session_bytes.to_vec(),
+        }
+        .raw_ed25519_digest()
+        .unwrap();
+        assert_ne!(runtime_digest, session_digest);
+        let runtime_key = serde_json::from_value(serde_json::json!({
+            "kty": "OKP", "algorithm": "Ed25519",
+            "key": arkret_canonical::base64url_encode(runtime_bytes),
+        }))
+        .unwrap();
+        let selected = agent_runtime_signal_public_key(&runtime_key, &runtime_digest).unwrap();
+        assert_eq!(selected.raw_ed25519_digest().unwrap(), runtime_digest);
+        assert!(agent_runtime_signal_public_key(&runtime_key, &session_digest).is_err());
+    }
 
     #[test]
     fn signal_device_directory_never_substitutes_a_same_principal_local_account() {

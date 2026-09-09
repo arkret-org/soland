@@ -2700,7 +2700,6 @@ pub(crate) fn signed_signal_envelope(
             verification_method: verification_method.clone(),
             envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
-            created_at: sent_at,
             domain: None,
             audience: None,
             jws: String::new(),

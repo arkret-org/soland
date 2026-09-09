@@ -3137,19 +3137,17 @@ async fn verify_keypackage_consumer_signature(
                     "Agent consume authority is not current",
                 ));
             }
-            let key = crate::jws_verify::resolve_ed25519_pubkey_async(
+            verify_agent_keypackage_batch(
                 state,
-                recipient_agent_verification_method.as_str(),
+                recipient_agent_id,
+                agent_key_authorize_event_id.as_str(),
+                signature,
+                signing_input,
             )
             .await
-            .map_err(|_| AppError::capability_denied("Agent consume key is unavailable"))?;
-            if !crate::routing::identity::device_signing::ed25519_verify(
-                &key,
-                signing_input,
-                signature.sig.as_str(),
-            ) {
-                return Err(AppError::param_invalid("endpoint_signature_invalid"));
-            }
+            .map_err(|error| {
+                AppError::capability_denied(format!("Agent consume signature rejected: {error}"))
+            })?;
             Ok(cached_keypackage.cloned())
         }
         arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
@@ -5793,6 +5791,55 @@ mod trust_binding_tests {
         )
         .await
         .unwrap();
+        // Consume receipts use the same accepted runtime key as upload; that
+        // private runtime method need not appear in the public DID document.
+        let session = SessionRecord {
+            token_hash: "agent-consume-test".to_owned(),
+            account_pk: Some(soland_storage::AccountPk(1)),
+            actor: principal_core.to_string(),
+            device_id: "unrelated-session-device".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: now() + chrono::Duration::minutes(5),
+            created_at: now(),
+            revoked_at: None,
+        };
+        let recipient = arkret_models_crypto::RecipientMlsDurableSigner::Agent {
+            recipient_agent_id: principal_core.clone(),
+            recipient_agent_verification_method: arkret_wire::DidUrl::new(verification_method)
+                .unwrap(),
+            agent_key_authorize_event_id: arkret_wire::EventId::new(authorize_event_id).unwrap(),
+        };
+        verify_keypackage_consumer_signature(
+            &state,
+            &session,
+            &principal_core,
+            &recipient,
+            None,
+            &[],
+            &upload.endpoint_signature,
+            &signing_input,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            verify_keypackage_consumer_signature(
+                &state,
+                &session,
+                &principal_core,
+                &recipient,
+                None,
+                &[],
+                &upload.endpoint_signature,
+                b"tampered",
+                None
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[test]

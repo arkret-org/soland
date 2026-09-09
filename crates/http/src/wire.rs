@@ -667,6 +667,7 @@ pub fn describe(
         takedown_contact: None,
         rate_limits: None,
         supported_features: vec![
+            "ak.feature.agent_runtime_approval_notifications.v1".to_owned(),
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
             arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
             "ak.feature.history_key_recovery.v1".to_owned(),
@@ -952,6 +953,12 @@ mod tests {
                 .as_array()
                 .expect("features array")
                 .contains(&json!("ak.feature.history_key_recovery.v1"))
+        );
+        assert!(
+            value["supported_features"]
+                .as_array()
+                .expect("features array")
+                .contains(&json!("ak.feature.agent_runtime_approval_notifications.v1"))
         );
         let description: arkret_models_discovery::ServiceDescribe =
             serde_json::from_value(value.clone()).expect("description round-trips");

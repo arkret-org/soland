@@ -87,8 +87,21 @@ pub(crate) async fn current_agent_signer_evidence(
     state: &AppState,
     selector: &AgentSignerEvidenceQuerySelector,
 ) -> Result<CurrentAgentSignerEvidence, AgentSignerEvidenceQueryFailureReason> {
-    let gate = preflight_controller_gate(state, selector).await?;
-    produce_current_agent_signer_evidence(state, selector, gate).await
+    let gate = preflight_controller_gate(state, selector)
+        .await
+        .map_err(|reason| {
+            tracing::warn!(
+                ?reason,
+                "Agent current evidence controller gate unavailable"
+            );
+            reason
+        })?;
+    produce_current_agent_signer_evidence(state, selector, gate)
+        .await
+        .map_err(|reason| {
+            tracing::warn!(?reason, "Agent current evidence state assembly failed");
+            reason
+        })
 }
 
 pub(crate) async fn freeze_current_agent_signer_evidence(
@@ -151,14 +164,30 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         .state
         .signing_key_binding;
     let gate = &admission_evidence.controller_account_gate_attestation;
-    let local_service_evidence = current_service_signer_evidence(state).await?;
+    let local_service_evidence =
+        current_service_signer_evidence(state)
+            .await
+            .map_err(|reason| {
+                tracing::warn!(
+                    ?reason,
+                    "Agent current evidence local Service closure failed"
+                );
+                reason
+            })?;
     let controller_evidence = current_controller_signer_evidence(
         state,
         &binding.controller_principal_id,
         &binding.controller_proof.verification_method,
         &local_service_evidence,
     )
-    .await?;
+    .await
+    .map_err(|reason| {
+        tracing::warn!(
+            ?reason,
+            "Agent current evidence controller signer closure failed"
+        );
+        reason
+    })?;
     let account_authority_evidence = fetch_service_signer_evidence(
         state,
         &gate.authority_id,
@@ -166,7 +195,14 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         Some(&gate.verification_method),
         gate.issued_at,
     )
-    .await?;
+    .await
+    .map_err(|reason| {
+        tracing::warn!(
+            ?reason,
+            "Agent current evidence Account Authority closure failed"
+        );
+        reason
+    })?;
     // The current branch is also the standard cold-recipient federation
     // branch.  When the verifier is a foreign recipient Station, retain its
     // authenticated Service evidence in the closure instead of requiring the
@@ -191,7 +227,10 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         &account_authority_evidence,
         &receiver_evidence,
     )
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    .map_err(|error| {
+        tracing::warn!(%error, "Agent current evidence root binding failed");
+        AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+    })?;
     let mut dependencies = Vec::new();
     let mut digests = std::collections::BTreeSet::new();
     for evidence in [
@@ -220,11 +259,16 @@ pub(crate) async fn issue_current_authenticated_agent_signer_evidence(
     ),
     AgentSignerEvidenceQueryFailureReason,
 > {
-    reserve_evidence_challenge(state, selector).await?;
+    reserve_evidence_challenge(state, selector).await.map_err(|reason| {
+        tracing::warn!(?reason, "Agent current evidence challenge reservation failed"); reason
+    })?;
     let (root, dependencies) = current_authenticated_agent_signer_evidence(state, selector).await?;
     persist_agent_signer_evidence_closure(state, &root, &dependencies)
         .await
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        .map_err(|error| {
+            tracing::warn!(%error, "Agent current evidence closure persistence failed");
+            AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+        })?;
     Ok((root, dependencies))
 }
 
@@ -922,6 +966,7 @@ async fn preflight_controller_gate(
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     if !response.status().is_success() {
+        tracing::warn!(status = %response.status(), "Agent evidence controller gate request failed");
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
     let response = response
