@@ -6,12 +6,25 @@ use arkret_models_collaboration::objects::relation::{
 
 use super::*;
 
+#[cfg(test)]
 const RELATION_CONFLICT_FANOUT_LIMIT: usize = 16;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RelationConflictProjectionError {
+    #[error("relation_conflict_fanout_exceeded")]
+    FanoutExceeded,
+    #[error("invalid relation conflict projection: {0}")]
+    InvalidHead(#[from] arkret_wire::WireError),
+}
 
 fn registered_relation_cardinality(relation_kind: &str) -> RelationCardinality {
     arkret_wire::RelationKind::from_wire(relation_kind)
         .descriptor()
-        .and_then(|metadata| RelationCardinality::from_registry_value(metadata.default_cardinality))
+        .and_then(|metadata| match metadata.primary_conflict_domain {
+            "from" => Some(RelationCardinality::ManyToOne),
+            "tuple" => Some(RelationCardinality::ManyToMany),
+            _ => RelationCardinality::from_registry_value(metadata.default_cardinality),
+        })
         .unwrap_or(RelationCardinality::ManyToMany)
 }
 
@@ -43,6 +56,9 @@ impl ProjectionState {
         let relation = relation_create_object(&operation.payload);
         let relation_id =
             arkret_identifiers::RelationId::from_event_id(&operation.context.event_id).to_string();
+        if let Some(existing) = self.relations.get(&relation_id) {
+            return ProjectionEffect::RelationCreated(existing.clone());
+        }
         let relation_kind = relation
             .get("relation_kind")
             .and_then(|v| v.as_str())
@@ -92,11 +108,6 @@ impl ProjectionState {
             updated_at: now,
         };
         let cardinality = registered_relation_cardinality(&state.relation_kind);
-        if self.relation_conflict_fanout_exceeded(&state, cardinality) {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
-            };
-        }
         self.relations.insert(relation_id.clone(), state);
         self.enforce_relation_cardinality_for(&relation_id, cardinality, now);
         ProjectionEffect::RelationCreated(
@@ -112,12 +123,7 @@ impl ProjectionState {
         relation: &SolandRelationState,
         cardinality: RelationCardinality,
     ) -> Vec<(Vec<String>, usize)> {
-        let mut sets = vec![(
-            self.active_relation_ids_matching(relation, |other| {
-                other.from_ref == relation.from_ref && other.to_ref == relation.to_ref
-            }),
-            1,
-        )];
+        let mut sets = Vec::new();
         match cardinality {
             RelationCardinality::OneToOne => {
                 if relation.from_ref.is_some() {
@@ -157,7 +163,12 @@ impl ProjectionState {
                     ));
                 }
             }
-            RelationCardinality::ManyToMany => {}
+            RelationCardinality::ManyToMany => sets.push((
+                self.active_relation_ids_matching(relation, |other| {
+                    other.from_ref == relation.from_ref && other.to_ref == relation.to_ref
+                }),
+                1,
+            )),
         }
         sets
     }
@@ -172,61 +183,9 @@ impl ProjectionState {
             .filter(|other| other.state != "tombstoned")
             .filter(|other| other.realm_id == relation.realm_id)
             .filter(|other| other.relation_kind == relation.relation_kind)
-            .filter(|other| other.scope_circle_id == relation.scope_circle_id)
             .filter(|other| matches(other))
             .map(|other| other.relation_id.clone())
             .collect()
-    }
-
-    fn relation_conflict_fanout_exceeded(
-        &self,
-        relation: &SolandRelationState,
-        cardinality: RelationCardinality,
-    ) -> bool {
-        if !relation.is_active() {
-            return false;
-        }
-        let candidates = self
-            .relations
-            .values()
-            .filter(|other| other.realm_id == relation.realm_id)
-            .filter(|other| other.relation_kind == relation.relation_kind)
-            .filter(|other| other.scope_circle_id == relation.scope_circle_id)
-            .filter(|other| other.state != "tombstoned")
-            .collect::<Vec<_>>();
-        let count_with_candidate = |matches: &dyn Fn(&SolandRelationState) -> bool| {
-            let mut ids = candidates
-                .iter()
-                .copied()
-                .filter(|other| matches(other))
-                .map(|other| other.relation_id.clone())
-                .collect::<BTreeSet<_>>();
-            ids.insert(relation.relation_id.clone());
-            ids.len()
-        };
-        if count_with_candidate(&|other| {
-            other.from_ref == relation.from_ref && other.to_ref == relation.to_ref
-        }) > RELATION_CONFLICT_FANOUT_LIMIT
-        {
-            return true;
-        }
-        let constrains_from = matches!(
-            cardinality,
-            RelationCardinality::OneToOne | RelationCardinality::ManyToOne
-        );
-        if constrains_from
-            && count_with_candidate(&|other| other.from_ref == relation.from_ref)
-                > RELATION_CONFLICT_FANOUT_LIMIT
-        {
-            return true;
-        }
-        let constrains_to = matches!(
-            cardinality,
-            RelationCardinality::OneToOne | RelationCardinality::OneToMany
-        );
-        constrains_to
-            && count_with_candidate(&|other| other.to_ref == relation.to_ref)
-                > RELATION_CONFLICT_FANOUT_LIMIT
     }
 
     /// Build the projection-only, bounded diagnostics required by
@@ -234,7 +193,16 @@ impl ProjectionState {
     /// retained Relation heads and never feeds back into reducer decisions.
     pub fn relation_conflict_diagnostics(
         &self,
-    ) -> arkret_wire::Result<Vec<RelationConflictDiagnostic>> {
+    ) -> Result<Vec<RelationConflictDiagnostic>, RelationConflictProjectionError> {
+        self.relation_conflict_diagnostics_visible_to(|_| true)
+    }
+
+    /// Visibility is evaluated over the complete group before any diagnostic
+    /// is constructed. Hidden or unrelated groups must not affect the caller.
+    pub fn relation_conflict_diagnostics_visible_to(
+        &self,
+        is_visible: impl Fn(&SolandRelationState) -> bool,
+    ) -> Result<Vec<RelationConflictDiagnostic>, RelationConflictProjectionError> {
         let mut groups = std::collections::BTreeMap::<String, BTreeSet<String>>::new();
         for relation in self
             .relations
@@ -242,7 +210,10 @@ impl ProjectionState {
             .filter(|relation| relation.state != "tombstoned")
         {
             let cardinality = registered_relation_cardinality(&relation.relation_kind);
-            let mut keys = vec![relation_conflict_key(relation, "tuple", true, true)?];
+            let mut keys = Vec::new();
+            if matches!(cardinality, RelationCardinality::ManyToMany) {
+                keys.push(relation_conflict_key(relation, "tuple", true, true)?);
+            }
             if matches!(
                 cardinality,
                 RelationCardinality::OneToOne | RelationCardinality::ManyToOne
@@ -268,6 +239,15 @@ impl ProjectionState {
             if relation_ids.len() < 2 {
                 continue;
             }
+            if !relation_ids
+                .iter()
+                .all(|id| self.relations.get(id).is_some_and(&is_visible))
+            {
+                continue;
+            }
+            if relation_ids.len() > RelationConflictDiagnostic::MAX_HEADS {
+                return Err(RelationConflictProjectionError::FanoutExceeded);
+            }
             let mut heads = Vec::with_capacity(relation_ids.len());
             for relation_id in relation_ids {
                 let relation = self.relations.get(&relation_id).ok_or_else(|| {
@@ -285,7 +265,8 @@ impl ProjectionState {
                     )
                 })?;
                 heads.push(RelationConflictCandidate {
-                    event_id: arkret_wire::EventId::new(source_event_id.clone())?,
+                    event_id: arkret_wire::EventId::new(source_event_id.clone())
+                        .map_err(arkret_wire::WireError::from)?,
                     reason: None,
                 });
             }
@@ -615,11 +596,6 @@ impl ProjectionState {
             apply_relation_patch(&mut candidate_relation, patch);
         }
         let cardinality = registered_relation_cardinality(&candidate_relation.relation_kind);
-        if self.relation_conflict_fanout_exceeded(&candidate_relation, cardinality) {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
-            };
-        }
         let relation = self
             .relations
             .get_mut(&relation_id)
@@ -777,7 +753,6 @@ fn relation_conflict_key(
         "from_ref": include_from.then_some(relation.from_ref.as_ref()).flatten(),
         "realm_id": relation.realm_id,
         "relation_kind": relation.relation_kind,
-        "scope_circle_id": relation.scope_circle_id,
         "to_ref": include_to.then_some(relation.to_ref.as_ref()).flatten(),
     }))
     .map_err(|error| {
@@ -1297,7 +1272,7 @@ mod cross_realm_relation_tests {
     }
 
     #[test]
-    fn duplicate_relation_rejects_conflict_fanout_above_limit() {
+    fn duplicate_relation_retains_complete_fanout_above_limit() {
         let mut proj = proj();
         let now = chrono::Utc::now();
         for index in 1..=RELATION_CONFLICT_FANOUT_LIMIT {
@@ -1327,10 +1302,15 @@ mod cross_realm_relation_tests {
 
         assert!(matches!(
             proj.apply_relation_create(&overflow, now),
-            ProjectionEffect::Rejected { reason }
-                if reason == arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED
+            ProjectionEffect::RelationCreated(_)
         ));
-        assert!(!proj.relations.contains_key(&overflow_id));
+        assert!(proj.relations.contains_key(&overflow_id));
+        assert!(
+            proj.relations
+                .values()
+                .all(|relation| !relation.is_active())
+        );
+        assert!(proj.relation_conflict_diagnostics().is_err());
         assert_eq!(
             proj.relations
                 .values()
@@ -1338,8 +1318,131 @@ mod cross_realm_relation_tests {
                 .filter(|relation| relation.from_object_ref() == Some(STRAND_A))
                 .filter(|relation| relation.to_object_ref() == Some(STRAND_A2))
                 .count(),
-            RELATION_CONFLICT_FANOUT_LIMIT
+            RELATION_CONFLICT_FANOUT_LIMIT + 1
         );
+    }
+
+    #[test]
+    fn relation_fanout_is_independent_of_arrival_order_and_circle() {
+        let now = chrono::Utc::now();
+        let operations = (1..=17)
+            .map(|index| {
+                relation_op_with_digest(
+                    &format!("{index:012x}"),
+                    "references",
+                    STRAND_A,
+                    STRAND_A2,
+                    &format!("sha256:{index:064x}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut forward = proj();
+        let mut backward = proj();
+        for operation in &operations {
+            forward.apply_relation_create(operation, now);
+        }
+        for operation in operations.iter().rev() {
+            backward.apply_relation_create(operation, now);
+        }
+        let heads = |projection: &ProjectionState| {
+            projection
+                .relations
+                .values()
+                .map(|relation| {
+                    (
+                        relation.relation_id.clone(),
+                        relation.source_event_id.clone(),
+                        relation.state.clone(),
+                    )
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(heads(&forward), heads(&backward));
+        assert_eq!(forward.relations.len(), 17);
+        assert!(
+            forward
+                .relations
+                .values()
+                .all(|relation| !relation.is_active())
+        );
+        assert!(forward.relation_conflict_diagnostics().is_err());
+        assert!(
+            forward
+                .relation_conflict_diagnostics_visible_to(|_| false)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            forward
+                .relation_conflict_diagnostics_visible_to(|relation| {
+                    relation.relation_id != relation_id_of(&operations[0])
+                })
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut scoped = proj();
+        scoped.apply_relation_create(&operations[0], now);
+        scoped
+            .relations
+            .get_mut(relation_id_of(&operations[0]).as_str())
+            .unwrap()
+            .scope_circle_id = Some(CIRCLE_A.to_owned());
+        scoped.apply_relation_create(&operations[1], now);
+        assert!(
+            scoped
+                .relations
+                .values()
+                .all(|relation| !relation.is_active())
+        );
+        let diagnostics = scoped.relation_conflict_diagnostics().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].heads.len(), 2);
+    }
+
+    #[test]
+    fn many_to_one_duplicates_have_one_primary_conflict_group() {
+        let mut projection = proj();
+        let now = chrono::Utc::now();
+        for index in 1..=2 {
+            projection.apply_relation_create(
+                &relation_op_with_digest(
+                    &format!("{index:012x}"),
+                    "belongs_to",
+                    STRAND_A,
+                    STRAND_A2,
+                    &format!("sha256:{index:064x}"),
+                ),
+                now,
+            );
+        }
+        let diagnostics = projection.relation_conflict_diagnostics().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].heads.len(), 2);
+    }
+
+    #[test]
+    fn replayed_create_does_not_revive_a_tombstoned_relation() {
+        let mut projection = proj();
+        let now = chrono::Utc::now();
+        let create = relation_op("references", STRAND_A, STRAND_A2);
+        let relation_id = relation_id_of(&create);
+        projection.apply_relation_create(&create, now);
+        let tombstone = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000099",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A).unwrap(),
+            arkret_wire::EventKind::RelationTombstone.as_str(),
+            json!({"relation_id": relation_id}),
+        );
+        assert!(matches!(
+            projection.apply_relation_delete(&tombstone),
+            ProjectionEffect::RelationDeleted { .. }
+        ));
+        projection.apply_relation_create(&create, now);
+        assert_eq!(projection.relations[&relation_id].state, "tombstoned");
     }
 
     #[test]
