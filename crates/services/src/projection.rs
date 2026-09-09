@@ -1206,13 +1206,17 @@ impl ProjectionService {
 
     /// Derive exact membership from accepted reducer stores at the frozen
     /// traversal basis, sharing the SDK's Realm/Circle activation rules.
-    pub async fn membership_at_verified_basis(
+    pub async fn member_history_at_verified_basis(
         &self,
         scope: &arkret_wire::HistoryEffectiveScope,
         actor: &arkret_wire::ActorId,
         basis: &arkret_wire::SealBasis,
-    ) -> arkret_wire::Result<arkret_state::history_authorization::VerifiedMembership> {
-        arkret_state::history_authorization::membership_at_verified_basis(
+        retained_events: &[arkret_wire::Event],
+    ) -> arkret_wire::Result<(
+        arkret_state::history_authorization::VerifiedMembership,
+        Option<u64>,
+    )> {
+        arkret_state::history_authorization::member_history_at_verified_basis(
             scope,
             actor,
             basis,
@@ -1222,6 +1226,7 @@ impl ProjectionService {
             &arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
                 self.control_event_store(),
             ),
+            retained_events,
         )
         .await
     }

@@ -283,15 +283,6 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
             );
             reason
         })?;
-    #[cfg(feature = "test-support")]
-    if let Some(path) = std::env::var_os("ARKRET_AGENT_CONTEXT_CANDIDATE_PATH") {
-        let candidate = serde_json::json!({"root": &root, "dependencies": &dependencies});
-        std::fs::write(
-            path,
-            serde_json::to_vec_pretty(&candidate).expect("test candidate JSON"),
-        )
-        .expect("test candidate output");
-    }
     let context_key = (root.signer_id().clone(), root.verification_method().clone());
     let previous = state
         .agent_evidence_cache
