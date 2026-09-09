@@ -32,7 +32,7 @@ use arkret_models_collaboration::http_bodies::{
 };
 use arkret_models_collaboration::objects::mimi::{
     MimiCiphertext, MimiConsentPurpose, MimiDelivery, MimiDeliveryStatus, MimiIdentifierMatch,
-    MimiOpaquePayload,
+    MimiKeyPackage, MimiOpaquePayload,
 };
 use arkret_signatures::http_signature::{
     Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,

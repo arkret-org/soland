@@ -174,7 +174,9 @@ pub(super) async fn mimi_bound_realm_id(
         .map(|binding| binding.map(|binding| binding.realm_id))
 }
 
-pub(super) fn enforce_mimi_submit_binding(
+pub(super) async fn enforce_mimi_submit_binding(
+    state: &AppState,
+    source_provider: &str,
     room_binding: &MimiRoomBindingProjection,
     body: &MimiSubmitMessageRequestBody,
     message: &Value,
@@ -244,6 +246,55 @@ pub(super) fn enforce_mimi_submit_binding(
         binding_group_id,
         epoch,
     )?;
+
+    let sender_route = body.sender_actor_id.route_service_id();
+    if sender_route.as_str() != source_provider {
+        return Err(AppError::capability_denied(
+            "MIMI source provider does not attest the sender's current route",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
+    }
+    if !crate::routing::realm_has_member(
+        state,
+        &room_binding.realm_id,
+        &body.sender_actor_id.to_string(),
+    )
+    .await
+    {
+        return Err(AppError::capability_denied(
+            "MIMI attributed sender is not a current Realm member",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
+    }
+
+    let effective_scope = serde_json::json!({
+        "kind": "realm",
+        "realm_id": room_binding.realm_id,
+    });
+    let projection = state.projections().snapshot();
+    let current = projection
+        .mls_commit_epochs
+        .values()
+        .find(|row| row.group_id == binding_group_id && row.effective_scope == effective_scope);
+    let Some(current) = current else {
+        return Err(AppError::param_invalid(
+            "MIMI submit_message has no accepted MLS security frontier",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
+    };
+    if current.epoch != epoch
+        || current.frontier_contested
+        || arkret_canonical::canonical_json_bytes(&current.governance_binding).map_err(|error| {
+            AppError::internal(format!("MLS frontier canonicalization: {error}"))
+        })? != arkret_canonical::canonical_json_bytes(governance_binding).map_err(|error| {
+            AppError::internal(format!("MIMI governance binding canonicalization: {error}"))
+        })?
+    {
+        return Err(AppError::param_invalid(
+            "MIMI submit_message does not match the current accepted MLS security frontier",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
+    }
     Ok(())
 }
 
@@ -398,6 +449,19 @@ pub(super) async fn admit_mimi_room_binding_event(
     }
     // Reject all cross-bound request/Event identities before domain-state validation.
     validate_mimi_room_binding_payload(binding)?;
+    if let Some(current) = current_mimi_room_binding_for_uri(state, expected_room_uri.as_str()).await?
+    {
+        let current_status = mimi_room_binding_security_payload(&current.binding)
+            .get("status")
+            .and_then(Value::as_str);
+        let next_status = binding.get("status").and_then(Value::as_str);
+        if current_status == Some("revoked") && next_status != Some("revoked") {
+            return Err(AppError::param_invalid(
+                "a revoked MIMI room binding cannot transition to another state",
+            )
+            .with_wire_code("mimi_room_binding_status_transition_invalid"));
+        }
+    }
     let sender_account = local_mimi_sender_account(&sender_actor_id, &state.service_core_id())?;
     let device_id = event
         .proofs

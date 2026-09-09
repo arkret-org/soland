@@ -57,6 +57,7 @@ use soland_domain::reducer::mls::KeyPackageTrustBinding;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
+    ClaimMlsKeyPackageCommand, ClaimMlsKeyPackageTarget,
     MlsKeyPackageState as MlsKeyPackageRow,
     PeerKeyPackageClaimCommand as PeerKeyPackageClaimAttempt,
     PeerKeyPackageClaimLedgerState as PeerKeyPackageClaimLedgerRecord,
@@ -4790,6 +4791,95 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
                     &required_capabilities,
                 )
         })
+}
+
+/// Claim the exact single-use KeyPackage requested through the MIMI facade.
+/// The MIMI adapter deliberately delegates the state transition to the same
+/// durable CAS used by the native KeyPackage lifecycle.
+pub(crate) async fn claim_mimi_keypackage(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    device_id: &arkret_wire::DeviceId,
+    realm_id: &str,
+    group_id: &str,
+) -> Result<Option<MlsKeyPackageRow>, AppError> {
+    let target_device_ids = BTreeSet::from([device_id.to_string()]);
+    let trust_selector = current_keypackage_claim_trust_selector(
+        state,
+        principal,
+        &target_device_ids,
+        Some(realm_id),
+        None,
+    )
+    .await?;
+    let now_secs = now().timestamp();
+    let candidate_ids = state
+        .projections()
+        .mls_key_package_records()
+        .iter()
+        .filter(|record| ordinary_keypackage_is_available(record))
+        .filter(|record| {
+            keypackage_matches_claim(
+                record,
+                principal.as_str(),
+                &target_device_ids,
+                &trust_selector,
+                now_secs,
+                &BTreeSet::from(["mimi.content.v1".to_owned()]),
+            )
+        })
+        .map(|record| (record.created_at, record.id.clone()))
+        .collect::<BTreeSet<_>>();
+
+    for (_, candidate_id) in candidate_ids {
+        let Some(candidate) = state
+            .mls_key_packages()
+            .key_package(&candidate_id)
+            .await
+            .map_err(|error| AppError::internal(format!("MIMI KeyPackage lookup: {error}")))?
+        else {
+            continue;
+        };
+        let binding = trust_binding_from_keypackage(&candidate)?;
+        let device_revocation_gate = if binding.device_authorize_event_id.is_some() {
+            let Some(candidate_device_id) = candidate.device_id.as_deref() else {
+                continue;
+            };
+            keypackage_device_revocation_gate(
+                state,
+                &candidate.actor_id,
+                candidate_device_id,
+                binding.device_authorize_event_id.as_deref(),
+            )
+            .await?
+        } else {
+            None
+        };
+        let claimed = state
+            .mls_key_packages()
+            .claim_key_package(ClaimMlsKeyPackageCommand {
+                id: &candidate_id,
+                target: ClaimMlsKeyPackageTarget::Group(group_id),
+                intended_realm_id: Some(realm_id),
+                device_authorize_event_id: binding.device_authorize_event_id.as_deref(),
+                agent_key_authorize_event_id: binding.agent_key_authorize_event_id.as_deref(),
+                device_revocation_gate: device_revocation_gate.as_ref(),
+                claimed_at: now_secs,
+                claim_expires_at_unix_ms: Some((now() + chrono::Duration::minutes(10)).timestamp_millis()),
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("MIMI KeyPackage claim: {error}")))?;
+        if let Some(claimed) = claimed {
+            state.projections().mark_key_package_claimed(
+                &candidate_id,
+                group_id.to_owned(),
+                now_secs,
+                claimed.claim_expires_at_unix_ms,
+            );
+            return Ok(Some(claimed));
+        }
+    }
+    Ok(None)
 }
 
 fn ordinary_keypackage_is_available(keypackage: &MlsKeyPackageRow) -> bool {

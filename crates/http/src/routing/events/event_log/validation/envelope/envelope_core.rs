@@ -853,17 +853,28 @@ async fn validate_event_envelope_with_ingress(
     )
     .await?;
     let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;
-    validate_data_event_capability_refs(
-        state,
-        actor_id.as_str(),
-        station_id.as_str(),
-        realm_id.as_str(),
-        &kind,
-        object,
-        &data_event_cells,
-        realm_authority_root_authorized,
-    )
-    .await?;
+    // The MIMI facade is the sole closed service-authored message adapter. Its
+    // exact current room-binding ref, provider attestation, attributed sender
+    // membership and accepted MLS frontier are verified before this internal
+    // admission is constructed. A service principal cannot hold a user
+    // capability grant, so that closed authority tuple substitutes only for
+    // the ordinary data-event capability lookup; every other validation and
+    // reducer step remains shared with native Event submission.
+    if !internal_admission.is_some_and(|admission| {
+        admission.authorizes_mimi_facade_write(session, object)
+    }) {
+        validate_data_event_capability_refs(
+            state,
+            actor_id.as_str(),
+            station_id.as_str(),
+            realm_id.as_str(),
+            &kind,
+            object,
+            &data_event_cells,
+            realm_authority_root_authorized,
+        )
+        .await?;
+    }
     validate_control_move_seal_basis(
         object,
         is_realm_bootstrap_followup || is_identity_anchor_authorize,

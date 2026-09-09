@@ -891,6 +891,15 @@ impl InternalEventAdmission {
         )
     }
 
+    pub(in crate::routing::events::event_log) fn authorizes_mimi_facade_write(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+    ) -> bool {
+        matches!(self.binding, InternalEventBinding::MimiProvider { .. })
+            && self.matches(session, object)
+    }
+
     /// Return whether this is one of the closed internal adapters whose
     /// producer is the local service principal itself.
     ///

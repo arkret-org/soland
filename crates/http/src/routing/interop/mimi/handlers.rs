@@ -38,12 +38,49 @@ pub(super) async fn mimi_key_material(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let typed = body.into_inner();
     let body = typed_body_value(&typed, "mimi key material")?;
-    verify_mimi_source_service_signature(state, req, None).await?;
+    let source_provider = verify_mimi_source_service_signature(state, req, None).await?;
+    if typed.requester_id.as_str() != source_provider {
+        return Err(AppError::capability_denied(
+            "MIMI key-material requester must be the attested source service",
+        ));
+    }
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_reason_code("mimi_draft_unsupported"));
     }
     verify_mimi_key_material_request_proofs(state, &typed).await?;
     let target = typed.strand_id.as_str();
+    let realm_id = typed.realm_id.as_ref().ok_or_else(|| {
+        AppError::param_invalid("MIMI key-material claim requires realm_id")
+            .with_wire_code("claim_failed")
+    })?;
+    let group_id = typed.mls_group_id.as_deref().ok_or_else(|| {
+        AppError::param_invalid("MIMI key-material claim requires mls_group_id")
+            .with_wire_code("claim_failed")
+    })?;
+    let claimed = crate::routing::mls::claim_mimi_keypackage(
+        state,
+        &typed.requester_id,
+        &typed.device_id,
+        realm_id.as_str(),
+        group_id,
+    )
+    .await?
+    .ok_or_else(|| crate::app_error!(ClaimFailed, "KeyPackage claim failed"))?;
+    let claimed_device = claimed.device_id.as_deref().ok_or_else(|| {
+        AppError::internal("claimed MIMI KeyPackage does not carry a device_id")
+    })?;
+    let keypackage = MimiKeyPackage {
+        device_id: arkret_wire::DeviceId::new(claimed_device.to_owned())
+            .map_err(|error| AppError::internal(format!("claimed device_id: {error}")))?,
+        keypackage_ref: Some(
+            arkret_wire::NonEmptyString::new(claimed.keypackage_ref.clone())
+                .map_err(|error| AppError::internal(format!("claimed KeyPackage ref: {error}")))?,
+        ),
+        mls_keypackage: arkret_wire::Base64UrlString::new(
+            arkret_canonical::base64url_encode(&claimed.key_package_bytes),
+        )
+        .map_err(|error| AppError::internal(format!("claimed KeyPackage bytes: {error}")))?,
+    };
     let _receipt = mimi_receipt(
         state,
         arkret_wire::ServiceOperationId::OPEN_MIMI_EXCHANGE_REQUEST_KEY_MATERIAL_V1,
@@ -51,11 +88,11 @@ pub(super) async fn mimi_key_material(
         json!({
             "target": target,
             "keypackage_claim_lifecycle": "single_use_required",
-            "production_gap": "full_mls_keypackage_claim_not_implemented"
+            "keypackage_ref": claimed.keypackage_ref,
         }),
     );
     json_ok(MimiKeyMaterialOutcome {
-        keypackages: Vec::new(),
+        keypackages: vec![keypackage],
         group_info: None,
         failures: Vec::new(),
         signature: None,
@@ -262,7 +299,15 @@ pub(super) async fn mimi_room_message(
             AppError::not_found("MIMI room is not bound to any Arkret Realm")
                 .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
-    enforce_mimi_submit_binding(&room_binding, &body, &message, associated_data.as_ref())?;
+    enforce_mimi_submit_binding(
+        state,
+        &source_provider,
+        &room_binding,
+        &body,
+        &message,
+        associated_data.as_ref(),
+    )
+    .await?;
     let realm_id = room_binding.realm_id.clone();
     let sender = body.sender_actor_id.to_string();
     let mapped_content = map_mimi_message_content(&message, &source_format)?;

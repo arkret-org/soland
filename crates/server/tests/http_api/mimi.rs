@@ -278,12 +278,62 @@ fn mimi_governance_binding(realm_id: &str, group_id: &str, epoch: u64) -> Value 
             "realm_id": realm_id,
         },
         "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "content_scheme": "mls_rfc9420",
     })
+}
+
+fn project_mimi_sender_and_frontier(
+    state: &AppState,
+    realm_id: &str,
+    group_id: &str,
+    epoch: u64,
+    sender: &arkret_wire::ActorId,
+) {
+    let now = chrono::Utc::now();
+    let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
+    let scope_key = soland_domain::reducer::mls::effective_scope_key(&effective_scope).unwrap();
+    let mut projection = state.test_projections().test_state().lock();
+    projection.members.insert(
+        (realm_id.to_owned(), sender.to_string()),
+        soland_domain::reducer::SolandMembershipState {
+            member: sender.to_string(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            membership_event_ref: Some(
+                "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn".to_owned(),
+            ),
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
+    projection.mls_commit_epochs.insert(
+        soland_domain::reducer::MlsCommitEpochKey::new(scope_key, group_id),
+        soland_domain::reducer::MlsCommitEpoch {
+            group_id: group_id.to_owned(),
+            effective_scope,
+            epoch,
+            leader_actor_id: sender.to_string(),
+            creator_device_id: MIMI_TEST_DEVICE_ID.to_owned(),
+            genesis_event_ref: "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn".to_owned(),
+            committed_at: now.timestamp(),
+            governance_binding: mimi_governance_binding(realm_id, group_id, epoch),
+            accepted_commit_digest: Some(format!("sha256:{}", "3".repeat(64))),
+            accepted_commit_ref: Some(
+                "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
+            ),
+            accepted_from_epoch: Some(epoch.saturating_sub(1)),
+            frontier_contested: false,
+        },
+    );
 }
 
 fn text_mimi_message(message_id: &str, body: &str) -> Value {
     json!({
         "source_format": "application/mimi-content",
+        "e2ee_downgrade": "mimi_bridge",
         "mimi_message_id": message_id,
         "original_envelope_hash": arkret_canonical::sha256_digest(message_id.as_bytes()),
         "content": {
@@ -1027,7 +1077,6 @@ fn mimi_report_rejects_ambiguous_room_heads_without_event_or_rate_side_effect() 
 }
 
 #[test]
-#[ignore = "implementation-regression: MIMI service-attested sender authority and MLS frontier verification are incomplete"]
 fn mimi_provider_facade_contracts_work() {
     run_on_deep_stack(
         "mimi_provider_facade_contracts_work",
@@ -1080,7 +1129,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     );
 
     let key_material_body = json!({
-        "requester_id": "did:web:alice.example",
+        "requester_id": MIMI_SOURCE_SERVICE_ID,
         "strand_id": MIMI_TEST_STRAND_ID,
         "device_id": MIMI_TEST_DEVICE_ID,
         "mimi_room_uri": mimi_room_uri(&state, "01JSMIMI"),
@@ -1088,24 +1137,17 @@ async fn mimi_provider_facade_contracts_work_body() {
         "mls_group_id": "mimi-group-01JSMIMI",
         "epoch": 1,
     });
-    let key_material: Value = signed_mimi_post!(
+    let mut key_material_response = signed_mimi_post!(
         state,
         "http://server/_arkret/open/mimi/key-material",
         key_material_body,
         None
     )
     .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(
-        key_material["failures"]
-            .as_array()
-            .map(Vec::len)
-            .unwrap_or(0),
-        0
-    );
+    .await;
+    assert_eq!(key_material_response.status_code, Some(StatusCode::BAD_REQUEST));
+    let key_material: Value = key_material_response.take_json().await.unwrap();
+    assert_eq!(problem_code(&key_material), "claim_failed");
 
     let room_id = "01JSMIMI";
     let group_id = "mimi-group-01JSMIMI";
@@ -1137,7 +1179,11 @@ async fn mimi_provider_facade_contracts_work_body() {
     .await;
     let room_binding_status = room_binding_response.status_code;
     let room_binding: Value = room_binding_response.take_json().await.unwrap();
-    if problem_code(&room_binding) == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+    if room_binding["type"]
+        .as_str()
+        .and_then(|uri| uri.rsplit('/').next())
+        == Some(arkret_wire::ErrorCode::UnsupportedFeature.as_str())
+    {
         assert_eq!(room_binding_status, Some(StatusCode::NOT_IMPLEMENTED));
         assert!(
             state
@@ -1164,7 +1210,7 @@ async fn mimi_provider_facade_contracts_work_body() {
             "kind": "mimi_uri",
             "identifier_commitment": commitment.clone(),
         }],
-        "requester_id": "did:web:alice.example",
+        "requester_id": MIMI_SOURCE_SERVICE_ID,
         "privacy_profile": "private_contact_discovery",
     });
     let identifier: Value = signed_mimi_post!(
@@ -1185,11 +1231,13 @@ async fn mimi_provider_facade_contracts_work_body() {
     assert_eq!(identifier["matches"][0]["matched"], false);
     assert_eq!(identifier["has_more"], false);
 
+    let sender = mimi_source_station_account("did:web:alice.example");
+    project_mimi_sender_and_frontier(&state, demo_realm_id(), group_id, 1, &sender);
     let message_body = mimi_submit_body(
         demo_realm_id(),
         group_id,
         1,
-        mimi_source_station_account("did:web:alice.example"),
+        sender,
         text_mimi_message("mimi-msg-contract-001", "hello from MIMI"),
     );
     let mapped: Value = signed_mimi_post!(
@@ -1203,7 +1251,10 @@ async fn mimi_provider_facade_contracts_work_body() {
     .take_json()
     .await
     .unwrap();
-    assert!(mapped["event_ref"].as_str().is_some());
+    assert!(
+        mapped["event_ref"].as_str().is_some(),
+        "mapped response: {mapped}"
+    );
     assert_eq!(mapped["delivery"]["status"], "accepted");
     // mimi-operations.schema.json#mimi_submit_message_outcome: only `delivery`
     // is required; an empty `rejected` is omitted (skip_serializing_if).
@@ -1215,8 +1266,8 @@ async fn mimi_provider_facade_contracts_work_body() {
     );
 
     let proxy_body = json!({
-        "asset_ref": "ak:blob:sha256:e2e",
-        "requester_id": "did:web:alice.example",
+        "asset_ref": format!("ak:blob:sha256:{}", "e".repeat(64)),
+        "requester_id": MIMI_SOURCE_SERVICE_ID,
         "strand_id": MIMI_TEST_STRAND_ID,
     });
     let proxy: Value = signed_mimi_post!(
@@ -1240,7 +1291,6 @@ async fn mimi_provider_facade_contracts_work_body() {
 }
 
 #[test]
-#[ignore = "implementation-regression: MIMI service-attested sender authority and MLS frontier verification are incomplete"]
 fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     run_on_deep_stack(
         "mimi_facade_writes_strand_into_canonical_reducer_chain",
@@ -1253,17 +1303,23 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let demo_realm = demo_realm_id();
-    let custom_realm_id = soland_test_support::cbs_basis::seed_event_derived_realm_genesis_event(
+    let custom_realm_value = seed_test_realm(
         &state,
         state.service_did().as_str(),
         "MIMI migration target",
+        None,
+        "restricted",
+        &[],
+        &[],
     )
     .await;
+    let custom_realm_id = custom_realm_value["realm_id"].as_str().unwrap().to_owned();
     let custom_realm = custom_realm_id.as_str();
     seed_test_realm_basis_seal(&state, demo_realm, state.service_did().as_str()).await;
     seed_test_realm_basis_seal(&state, custom_realm, state.service_did().as_str()).await;
     add_test_realm_member(&state, demo_realm, MIMI_SOURCE_SERVICE_DID);
     add_test_realm_member(&state, custom_realm, MIMI_SOURCE_SERVICE_DID);
+    add_test_realm_member(&state, custom_realm, "did:web:alice.example");
     let room_id = "01JSMIMI-P4-E2E";
     let group_id = "mimi-group-p4-001";
     let room_uri = mimi_room_uri(&state, room_id);
@@ -1289,7 +1345,11 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     .await;
     let update_status = update_response.status_code;
     let update_resp: Value = update_response.take_json().await.unwrap();
-    if problem_code(&update_resp) == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+    if update_resp["type"]
+        .as_str()
+        .and_then(|uri| uri.rsplit('/').next())
+        == Some(arkret_wire::ErrorCode::UnsupportedFeature.as_str())
+    {
         assert_eq!(update_status, Some(StatusCode::NOT_IMPLEMENTED));
         assert!(
             state
@@ -1309,6 +1369,8 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
         .expect("room_state_ref missing");
     assert!(binding_event_id.starts_with("ak:event:"));
 
+    let sender = mimi_source_station_account("did:web:remote.example");
+    project_mimi_sender_and_frontier(&state, demo_realm, group_id, 1, &sender);
     let msg_resp: Value = signed_mimi_post!(
         state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
@@ -1316,7 +1378,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             demo_realm,
             group_id,
             1,
-            mimi_source_station_account("did:web:remote.example"),
+            sender.clone(),
             text_mimi_message("mimi-msg-p4-001", "hello from MIMI P4"),
         ),
         Some(room_uri.as_str())
@@ -1331,21 +1393,23 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
         .unwrap_or_else(|| panic!("event_ref missing: {msg_resp}"));
 
     let events: Value = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [demo_realm]}))
+        .json(&serde_json::json!({"realm_ids": [demo_realm]}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    let list = events["events"].as_array().expect("events array");
+    let list = events["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("events array: {events}"));
 
     let binding_event = list
         .iter()
         .find(|event| event["event_id"] == binding_event_id)
         .expect("room_binding event missing from projection log");
     assert_eq!(event_kind(binding_event), Some("ak.mimi.room_binding"));
-    assert_eq!(binding_event["payload"]["mimi_room_id"], room_id);
+    assert_eq!(binding_event["payload"]["mimi_room_uri"], room_uri);
     assert_eq!(
         binding_event["payload"]["binding_scope"]["realm_id"],
         demo_realm
@@ -1356,22 +1420,28 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
         .find(|event| event["event_id"] == arkret_event_id)
         .expect("MIMI-ingressed message missing from projection log");
     assert_eq!(event_kind(message_event), Some("ak.message.create"));
-    assert_eq!(message_event["actor_id"], state.service_id().as_str());
     assert_eq!(
-        message_event["payload"]["metadata"]["mimi_provenance"]["original_sender"],
-        "did:web:remote.example"
+        message_event["actor_id"],
+        serde_json::to_value(arkret_wire::ActorId::service(
+            state.service_core_id().clone()
+        ))
+        .unwrap()
+    );
+    assert_eq!(
+        message_event["payload"]["mimi_provenance"]["attributed_sender_actor_id"],
+        serde_json::to_value(&sender).unwrap()
     );
     assert_eq!(
         message_event["payload"]["content"]["parts"][0]["body"],
         "hello from MIMI P4"
     );
     assert_eq!(
-        message_event["payload"]["metadata"]["mimi_provenance"]["mimi_message_id"],
-        "mimi-msg-p4-001"
+        message_event["payload"]["mimi_provenance"]["source_provider_id"],
+        MIMI_SOURCE_SERVICE_ID
     );
     assert_eq!(
-        message_event["payload"]["metadata"]["mimi_provenance"]["facade"],
-        "soland.mimi.v1"
+        message_event["payload"]["mimi_provenance"]["provenance"],
+        "mimi_facade"
     );
 
     let custom_group_id = "mimi-group-p4-custom";
@@ -1421,6 +1491,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     .unwrap();
     assert_eq!(rebound_resp["accepted"], true);
 
+    project_mimi_sender_and_frontier(&state, custom_realm, custom_group_id, 1, &sender);
     let msg_resp_2: Value = signed_mimi_post!(
         state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
@@ -1428,7 +1499,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             custom_realm,
             custom_group_id,
             1,
-            mimi_source_station_account("did:web:remote.example"),
+            sender,
             text_mimi_message("mimi-msg-p4-002", "second message"),
         ),
         Some(room_uri.as_str())
@@ -1503,7 +1574,6 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
 }
 
 #[test]
-#[ignore = "implementation-regression: MIMI service-attested sender authority and MLS frontier verification are incomplete"]
 fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     run_on_deep_stack(
         "mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content",
@@ -1543,7 +1613,11 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     .await;
     let update_status = update_response.status_code;
     let update_resp: Value = update_response.take_json().await.unwrap();
-    if problem_code(&update_resp) == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+    if update_resp["type"]
+        .as_str()
+        .and_then(|uri| uri.rsplit('/').next())
+        == Some(arkret_wire::ErrorCode::UnsupportedFeature.as_str())
+    {
         assert_eq!(update_status, Some(StatusCode::NOT_IMPLEMENTED));
         assert!(
             state
@@ -1558,6 +1632,8 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
         return;
     }
     assert_eq!(update_resp["accepted"], true, "room update: {update_resp}");
+    let sender = mimi_source_station_account("did:web:mimi.example");
+    project_mimi_sender_and_frontier(&state, realm_id, group_id, 1, &sender);
 
     let mut unmarked = signed_mimi_post!(
         state,
@@ -1566,7 +1642,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            mimi_source_station_account("did:web:mimi.example"),
+            sender.clone(),
             json!({
                 "source_format": "application/mimi-content",
                 "e2ee": true,
@@ -1592,7 +1668,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            mimi_source_station_account("did:web:mimi.example"),
+            sender.clone(),
             json!({
                 "source_format": "application/mimi-content",
                 "e2ee": true,
@@ -1623,7 +1699,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            mimi_source_station_account("did:web:mimi.example"),
+            sender.clone(),
             json!({
                 "source_format": "application/mimi-content",
                 "encrypted": true,
@@ -1657,7 +1733,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            mimi_source_station_account("did:web:mimi.example"),
+            sender,
             json!({
                 "source_format": "application/mimi-content",
                 "content_kind": "m.location.share.live",
@@ -1682,14 +1758,16 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
         .to_owned();
 
     let events: Value = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [realm_id]}))
+        .json(&serde_json::json!({"realm_ids": [realm_id]}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    let list = events["events"].as_array().expect("events array");
+    let list = events["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("events array: {events}"));
     let find = |event_id: &str| {
         list.iter()
             .find(|event| event["event_id"] == event_id)

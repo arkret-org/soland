@@ -109,8 +109,9 @@ pub(super) async fn apply_projection_preflight(
             ));
         }
         validate_active_series_authority_before_commit(state, parsed, operation).await?;
-        if let Err(reason) =
-            validate_content_encryption_floor(state, std::slice::from_ref(operation)).await
+        if !has_internal_plaintext_service_binding
+            && let Err(reason) =
+                validate_content_encryption_floor(state, std::slice::from_ref(operation)).await
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
