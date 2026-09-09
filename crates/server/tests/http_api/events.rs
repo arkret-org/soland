@@ -124,7 +124,6 @@ pub(super) async fn bind_controller_gate_mock(config: &mut AppConfig) -> tokio::
         .expect("controller gate mock binds");
     let authority_address = listener.local_addr().expect("mock address");
     config.account_authority_url = Some(format!("http://{authority_address}"));
-    config.account_authority_id = Some(soland_test_support::fixture_station_id().to_string());
     listener
 }
 

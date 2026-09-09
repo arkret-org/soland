@@ -380,8 +380,7 @@ pub fn historical_agent_signer_evidence_key(
         return Ok(None);
     };
     let AgentSignerEvidence::HistoricalEvent {
-        event_admission_receipt,
-        ..
+        event_admission, ..
     } = agent_signer_evidence.as_ref()
     else {
         return Ok(None);
@@ -389,8 +388,10 @@ pub fn historical_agent_signer_evidence_key(
     Ok(Some(HistoricalAgentSignerEvidenceKey {
         agent_id: signer_id.clone(),
         verification_method: verification_method.clone(),
-        event_id: event_admission_receipt.event_id.clone(),
-        receiver_id: event_admission_receipt.receiver_id.clone(),
+        event_id: event_admission.event_id().clone(),
+        receiver_id: event_admission
+            .receiver_id()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
     }))
 }
 

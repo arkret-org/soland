@@ -1,23 +1,22 @@
-//! Request-bound current signer evidence proxy and peer authority endpoint.
+//! Reusable current signer evidence proxy and peer authority endpoint.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use arkret_models_collaboration::{
-    CURRENT_SIGNER_EVIDENCE_MAX_LIFETIME_SECONDS, CurrentSignerEvidenceItem,
+    CompactAgentSignerResolutionEvidence, CurrentSignerEvidenceItem,
     CurrentSignerEvidenceQueryOutcome, CurrentSignerEvidenceQueryRequestBody,
     CurrentSignerEvidenceResponseCore, CurrentSignerEvidenceSelector,
 };
 use arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector;
 use arkret_wire::DidCoreId;
-use chrono::Utc;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
-use super::{AuthArgs, now};
+use super::AuthArgs;
 use crate::state::AppState;
 
 const PEER_PATH: &str = "/_arkret/peer/current-signer-evidence/query";
@@ -63,22 +62,10 @@ async fn self_query(
         proxy_peer_query(state, &body, &target).await?
     };
     outcome
-        .validate_for_request(&body, Utc::now())
+        .validate_transport_for_request(&body)
         .map_err(|error| {
             AppError::internal(format!("authority returned invalid evidence: {error}"))
         })?;
-    let key = crate::jws_verify::resolve_ed25519_pubkey_async(
-        state,
-        outcome.proof.verification_method.as_str(),
-    )
-    .await
-    .map_err(|_| AppError::not_found("current signer evidence is unavailable"))?;
-    arkret_signatures::current_signer_evidence::verify_current_signer_evidence_outcome(
-        &outcome,
-        &key,
-        Utc::now(),
-    )
-    .map_err(|_| AppError::not_found("current signer evidence is unavailable"))?;
     json_ok(outcome)
 }
 
@@ -105,7 +92,7 @@ async fn peer_query(
     body.validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if body.recipient_account_id.station_id != source {
-        return json_ok(opaque_empty_outcome(state, &body).await?);
+        return json_ok(query_outcome(&body, Vec::new()));
     }
     json_ok(issue_authority_outcome(state, &body, source).await?)
 }
@@ -122,84 +109,24 @@ async fn issue_authority_outcome(
     let mut evidence = Vec::new();
     if visible {
         for selector in &request.queries {
-            if let Some(item) = issue_selector(state, request, selector, &verifier_id).await? {
+            if let Some(item) = issue_selector(state, request, selector).await? {
                 evidence.push(item);
             }
         }
     }
-    signed_outcome(state, request, evidence)
+    Ok(query_outcome(request, evidence))
 }
 
-async fn opaque_empty_outcome(
-    state: &AppState,
+fn query_outcome(
     request: &CurrentSignerEvidenceQueryRequestBody,
-) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
-    signed_outcome(state, request, Vec::new())
-}
-
-fn signed_outcome(
-    state: &AppState,
-    request: &CurrentSignerEvidenceQueryRequestBody,
-    mut evidences: Vec<CurrentSignerEvidenceItem>,
-) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
-    let issued_at = now();
-    // Never extend an already-expired inner authorization to make the outer
-    // response look live.  Opaque omission preserves the same response shape
-    // as every other unavailable/unauthorized selector.
-    evidences.retain(|item| evidence_item_expiry(item).is_some_and(|expiry| expiry > issued_at));
-    let mut expires_at =
-        issued_at + chrono::Duration::seconds(CURRENT_SIGNER_EVIDENCE_MAX_LIFETIME_SECONDS);
-    for item in &evidences {
-        // The retain above established that every item has a live expiry.
-        expires_at = expires_at.min(evidence_item_expiry(item).expect("retained live evidence"));
-    }
-    let response = CurrentSignerEvidenceResponseCore {
-        request_id: request.request_id.clone(),
-        realm_id: request.realm_id.clone(),
-        operation_id: request.operation_id,
-        request_digest: request.request_digest.clone(),
-        recipient_account_id: request.recipient_account_id.clone(),
-        challenge: request.challenge.clone(),
-        issuer_id: state.service_core_id(),
-        issued_at,
-        expires_at,
-        evidences,
-    };
-    let verification_method = state
-        .service_verification_method("notary-key")
-        .map_err(|error| AppError::internal(format!("service notary method: {error}")))?;
-    let outcome = arkret_signatures::current_signer_evidence::sign_current_signer_evidence_outcome(
-        response,
-        verification_method,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| AppError::internal(format!("sign current signer evidence: {error}")))?;
-    Ok(outcome)
-}
-
-fn evidence_item_expiry(item: &CurrentSignerEvidenceItem) -> Option<chrono::DateTime<Utc>> {
-    match item {
-        CurrentSignerEvidenceItem::AccountDevice {
-            device_projection_attestation,
-            ..
-        } => Some(device_projection_attestation.attestation.expires_at),
-        CurrentSignerEvidenceItem::Agent {
-            authenticated_signer_evidence,
-            ..
-        } => match authenticated_signer_evidence {
-            arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
-                agent_signer_evidence,
-                ..
-            } => match agent_signer_evidence.as_ref() {
-                arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
-                    outer_attestation,
-                    ..
-                } => Some(outer_attestation.expires_at),
-                arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
-                    ..
-                } => None,
-            },
-            _ => None,
+    evidences: Vec<CurrentSignerEvidenceItem>,
+) -> CurrentSignerEvidenceQueryOutcome {
+    CurrentSignerEvidenceQueryOutcome {
+        response: CurrentSignerEvidenceResponseCore {
+            request_id: request.request_id.clone(),
+            realm_id: request.realm_id.clone(),
+            recipient_account_id: request.recipient_account_id.clone(),
+            evidences,
         },
     }
 }
@@ -251,7 +178,6 @@ async fn issue_selector(
     state: &AppState,
     request: &CurrentSignerEvidenceQueryRequestBody,
     selector: &CurrentSignerEvidenceSelector,
-    verifier_id: &DidCoreId,
 ) -> Result<Option<CurrentSignerEvidenceItem>, AppError> {
     match selector {
         CurrentSignerEvidenceSelector::AccountDevice {
@@ -288,25 +214,34 @@ async fn issue_selector(
             let selector = AgentSignerEvidenceQuerySelector::CurrentAdmission {
                 agent_id: actor.signing_principal_id().clone(),
                 verification_method: verification_method.clone(),
-                operation_id: request
-                    .agent_observation_operation_id()
-                    .map_err(|error| AppError::internal(error.to_string()))?,
-                request_digest: request.request_digest.clone(),
-                verifier_id: verifier_id.clone(),
-                audience: request.recipient_account_id.principal_id.clone(),
-                challenge: request.challenge.clone(),
             };
-            match super::agents::evidence::issue_current_authenticated_agent_signer_evidence(
+            match super::agents::evidence::current_authenticated_agent_signer_evidence(
                 state, &selector,
             )
             .await
             {
-                Ok((root, dependencies)) => Ok(Some(CurrentSignerEvidenceItem::Agent {
-                    actor: actor.clone(),
-                    verification_method: verification_method.clone(),
-                    authenticated_signer_evidence: root,
-                    dependencies,
-                })),
+                Ok((root, dependencies)) => {
+                    let compact = CompactAgentSignerResolutionEvidence::from_full(
+                        &root,
+                        &request.known_agent_state_digests,
+                    )
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+                    let mut missing = Vec::new();
+                    for dependency in dependencies {
+                        let reference = dependency
+                            .evidence_ref()
+                            .map_err(|error| AppError::internal(error.to_string()))?;
+                        if !request.known_signer_evidence_refs.contains(&reference) {
+                            missing.push(dependency);
+                        }
+                    }
+                    Ok(Some(CurrentSignerEvidenceItem::Agent {
+                        actor: actor.clone(),
+                        verification_method: verification_method.clone(),
+                        authenticated_signer_evidence: compact,
+                        dependencies: missing,
+                    }))
+                }
                 Err(reason) => {
                     tracing::warn!(
                         ?reason,

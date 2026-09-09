@@ -489,16 +489,12 @@ async fn agent_signer_evidence_bundle_for_sync(
         arkret_models_collaboration::sync_frames::account_sync::RealmSyncEntry,
     >,
 ) -> Option<arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceBundle> {
-    use arkret_models_collaboration::governance_dependencies::{
-        GovernanceDependency, GovernanceDependencySelector,
-    };
     use arkret_models_identity::AuthenticatedSignerResolutionEvidence;
     use arkret_models_identity::agent_signer_evidence::AgentSignerEvidence;
 
     const MAX_SYNC_EVIDENCE: usize = 256;
 
     let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone()).ok()?;
-    let store = state.persistence().governance_dependency_store();
     let mut evidence_by_receipt = BTreeMap::new();
     let mut conflicted_receipts = BTreeSet::new();
 
@@ -535,71 +531,30 @@ async fn agent_signer_evidence_bundle_for_sync(
             if producers.next().is_some() {
                 continue;
             }
-            let Some(evidence_ref) = producer.signer_resolution_evidence_ref.as_ref() else {
-                continue;
-            };
-            // The ref is the sole carrier of the evidence digest; a ref this
-            // snapshot cannot parse simply has no bundle to attach.
-            let Ok(evidence_digest) = evidence_ref.content_digest() else {
-                continue;
-            };
-            let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-                content_digest: evidence_digest.clone(),
-            };
-            let dependency = match store.get(&realm_id, &selector).await {
-                Ok(Some(dependency)) => dependency,
-                Ok(None) => match store.get_unscoped_signer_evidence(&selector).await {
-                    Ok(Some(dependency)) => dependency,
-                    Ok(None) => continue,
-                    Err(error) => {
-                        tracing::warn!(
-                            realm_id = %realm_id,
-                            event_id = %event.event_id,
-                            %error,
-                            "unscoped Agent signer evidence lookup failed during account sync"
-                        );
-                        continue;
-                    }
-                },
-                Err(error) => {
-                    tracing::warn!(
-                        realm_id = %realm_id,
-                        event_id = %event.event_id,
-                        %error,
-                        "Agent signer evidence dependency lookup failed during account sync"
-                    );
-                    continue;
-                }
-            };
-            let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                authenticated_signer_resolution_evidence,
-                ..
-            } = dependency
-            else {
-                continue;
-            };
-            if authenticated_signer_resolution_evidence
-                .validate_attester_binding()
-                .is_err()
-                || authenticated_signer_resolution_evidence
-                    .canonical_sha256_digest()
-                    .ok()
-                    .as_ref()
-                    != Some(&evidence_digest)
-                || authenticated_signer_resolution_evidence
-                    .evidence_ref()
-                    .ok()
-                    .as_ref()
-                    != Some(evidence_ref)
+            if !crate::routing::identity::agents::evidence::event_has_agent_signer(state, event)
+                .await
+                .unwrap_or(false)
             {
                 continue;
             }
+            let signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+            let Ok((authenticated_signer_resolution_evidence, _dependencies)) =
+                crate::routing::identity::agents::evidence::historical_authenticated_agent_signer_evidence(
+                    state,
+                    soland_storage::HistoricalAgentSignerEvidenceKey {
+                        agent_id: signer.signing_principal_id().clone(),
+                        verification_method: producer.verification_method.clone(),
+                        event_id: event.event_id.clone(),
+                        receiver_id: receiver_id.clone(),
+                    },
+                ).await
+            else { continue; };
             let AuthenticatedSignerResolutionEvidence::Agent {
                 signer_id,
                 verification_method,
                 agent_signer_evidence,
                 ..
-            } = authenticated_signer_resolution_evidence.as_ref()
+            } = &authenticated_signer_resolution_evidence
             else {
                 continue;
             };
@@ -610,25 +565,20 @@ async fn agent_signer_evidence_bundle_for_sync(
                 continue;
             }
             let AgentSignerEvidence::HistoricalEvent {
-                event_admission_receipt,
-                ..
+                event_admission, ..
             } = agent_signer_evidence.as_ref()
             else {
                 continue;
             };
-            if event_admission_receipt.event_id != event.event_id
-                || event_admission_receipt.event_digest() != producer.event_digest
-                || event_admission_receipt.realm_id != realm_id
-                || event_admission_receipt.agent_id != *signer_id
-                || event_admission_receipt.verification_method != *verification_method
-                || event_admission_receipt.receiver_id != receiver_id
+            if event_admission.event_id() != &event.event_id
+                || event_admission.realm_id() != &realm_id
+                || event_admission.agent_id() != signer_id
+                || event_admission.verification_method().ok() != Some(verification_method)
+                || event_admission.receiver_id().ok().as_ref() != Some(&receiver_id)
             {
                 continue;
             }
-            let receipt_key = (
-                event_admission_receipt.event_id.clone(),
-                event_admission_receipt.receiver_id.clone(),
-            );
+            let receipt_key = (event.event_id.clone(), receiver_id.clone());
             if conflicted_receipts.contains(&receipt_key) {
                 continue;
             }

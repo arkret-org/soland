@@ -44,6 +44,10 @@ fn ceremony_requested_scope() -> Value {
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn public_pairing_ceremony_activates_the_agent_runtime() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_test_writer()
+        .try_init();
     run_on_deep_stack(
         "public_pairing_ceremony_activates_the_agent_runtime",
         public_pairing_ceremony_activates_the_agent_runtime_body,
@@ -667,17 +671,9 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             )
             .unwrap(),
             realm_id: arkret_wire::RealmId::new(disclosure_realm).unwrap(),
-            operation_id: arkret_wire::ServiceOperationId::SelfSignalCommandSendV1,
-            request_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-                b"cold Agent Signal envelope",
-            ))
-            .unwrap(),
             recipient_account_id: controller_authority.clone(),
-            challenge: arkret_wire::NonEmptyString::new(format!(
-                "ak.challenge:{}",
-                "A".repeat(32)
-            ))
-            .unwrap(),
+            known_agent_state_digests: Vec::new(),
+            known_signer_evidence_refs: Vec::new(),
             queries: vec![
                 arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceSelector::Agent {
                     actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -688,7 +684,6 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
                 },
             ],
         };
-    let expected_observation_operation = request.agent_observation_operation_id().unwrap();
     let mut evidence_response =
         TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
             .add_header("authorization", format!("Bearer {token}"), true)
@@ -711,14 +706,6 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     outcome
         .validate_for_request(&request, chrono::Utc::now())
         .unwrap();
-    arkret_signatures::current_signer_evidence::verify_current_signer_evidence_outcome(
-        &outcome,
-        &state.notary_signing_key().verifying_key(),
-        chrono::Utc::now(),
-    )
-    .unwrap();
-    assert_eq!(outcome.response.issuer_id, service_core);
-    assert_eq!(outcome.response.verifier_id, state.service_core_id());
     let arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceItem::Agent {
         actor,
         verification_method: returned_method,
@@ -734,18 +721,20 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     };
     assert_eq!(returned_method, &verification_method);
     assert!(!dependencies.is_empty());
+    let full_root = authenticated_signer_evidence
+        .hydrate(&std::collections::BTreeMap::new())
+        .unwrap();
     let arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
         signer_id,
         agent_signer_evidence,
         ..
-    } = authenticated_signer_evidence
+    } = &full_root
     else {
         panic!("current Agent item did not contain an authenticated Agent root")
     };
     assert_eq!(signer_id, actor.signing_principal_id());
     let arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
         admission_evidence,
-        current_observation,
         ..
     } = agent_signer_evidence.as_ref()
     else {
@@ -759,32 +748,88 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             .status,
         arkret_models_identity::agent_signer_evidence::AgentAuthorizationStatus::Active
     );
-    assert_eq!(
-        current_observation.operation_id,
-        expected_observation_operation
+    let snapshot = &admission_evidence.agent_authority_state_evidence;
+    assert!(snapshot.lease.expires_at - snapshot.lease.issued_at <= chrono::Duration::seconds(300));
+    if let Some(path) = std::env::var_os("ARKRET_AGENT_CONTEXT_FIXTURE_PATH") {
+        let fixture = serde_json::json!({
+            "root": &full_root,
+            "dependencies": dependencies,
+            "actor": actor,
+            "verification_method": returned_method,
+            "realm_id": &request.realm_id,
+            "recipient_account_id": &request.recipient_account_id,
+            "valid_from": admission_evidence.valid_from(),
+        });
+        std::fs::write(path, serde_json::to_vec_pretty(&fixture).unwrap()).unwrap();
+    }
+    let mut refresh = request.clone();
+    refresh
+        .known_agent_state_digests
+        .push(snapshot.state_digest.clone());
+    refresh.known_signer_evidence_refs = dependencies
+        .iter()
+        .map(|item| item.evidence_ref().unwrap())
+        .collect();
+    let mut response = TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "arkret-operation",
+            arkret_wire::ServiceOperationId::SELF_CURRENT_SIGNER_EVIDENCE_READ_RESOLVE_V1,
+            true,
+        )
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&refresh).unwrap())
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let compact: arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceQueryOutcome = response.take_json().await.unwrap();
+    let cache =
+        std::collections::BTreeMap::from([(snapshot.state_digest.clone(), snapshot.state.clone())]);
+    compact
+        .validate_with_cache(&refresh, chrono::Utc::now(), &cache, dependencies)
+        .unwrap();
+    let arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceItem::Agent {
+        authenticated_signer_evidence: compact_root,
+        ..
+    } = &compact.response.evidences[0]
+    else {
+        panic!("wrong evidence kind")
+    };
+    let compact_json = serde_json::to_value(compact_root).unwrap();
+    assert!(
+        compact_json
+            .pointer(
+                "/agent_signer_evidence/admission_evidence/agent_authority_state_evidence/state"
+            )
+            .is_none()
     );
-    assert_eq!(current_observation.request_digest, request.request_digest);
-    assert_eq!(current_observation.verifier_id, state.service_core_id());
+    let rehydrated = compact_root.hydrate(&cache).unwrap();
+    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
+        agent_signer_evidence: fresh,
+        ..
+    } = rehydrated
+    else {
+        panic!("wrong root kind")
+    };
+    let arkret_models_identity::AgentSignerEvidence::CurrentAdmission {
+        admission_evidence: fresh,
+        ..
+    } = *fresh
+    else {
+        panic!("wrong mode")
+    };
+    assert_eq!(fresh.agent_authority_state_evidence.lease, snapshot.lease);
     assert_eq!(
-        current_observation.audience_id,
-        controller_authority.principal_id
+        fresh.controller_account_gate_attestation,
+        admission_evidence.controller_account_gate_attestation
     );
-    assert_eq!(current_observation.challenge, request.challenge);
-
     let mut wrong_request = request.clone();
-    wrong_request.challenge =
-        arkret_wire::NonEmptyString::new(format!("ak.challenge:{}", "B".repeat(32))).unwrap();
+    wrong_request.request_id =
+        arkret_wire::RequestId::new("ak:request:019b0000-0000-7000-8000-000000000226").unwrap();
     assert!(
         outcome
-            .validate_for_request(&wrong_request, chrono::Utc::now())
-            .is_err(),
-        "current Agent evidence must not replay under a different request challenge"
-    );
-    assert!(
-        outcome
-            .validate_for_request(&request, outcome.response.expires_at)
-            .is_err(),
-        "expired current Agent evidence must fail closed"
+            .validate_transport_for_request(&wrong_request)
+            .is_err()
     );
 }
 

@@ -4,6 +4,7 @@
 #[path = "../did_resolver_chain.rs"]
 pub mod did_resolver_chain;
 
+mod agent_evidence_cache;
 mod app_state;
 mod member_identity;
 mod notification;

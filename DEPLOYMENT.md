@@ -113,7 +113,6 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # SOLAND_FIRST_PROVISIONING is not required.
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
 SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
-SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk...
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
 SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
@@ -288,7 +287,6 @@ docker run --name soland --restart=always -d \
   -e SOLAND_KEYSTORE_MASTER_KEY_FILE=/run/secrets/soland-keystore-master-key \
   -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
-  -e SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk... \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
@@ -324,8 +322,7 @@ helm template soland ./deploy/helm/soland \
   --set env.SOLAND_FIRST_PROVISIONING=true \
   --set env.SOLAND_KEYSTORE_BACKEND=encrypted_file \
   --set env.SOLAND_KEYSTORE_PATH=/var/lib/soland/keystore/soland.v1 \
-  --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
-  --set env.SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk...
+  --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
 ```
 
 Create `soland-runtime` through the cluster's secret-management path before
@@ -579,7 +576,7 @@ pre-upgrade backup if you need to roll back.
 
 - `SOLAND_DEVELOPMENT_MODE` is unset (or explicitly `false`).
 - `SOLAND_ACCOUNT_AUTHORITY_URL` points at coauth's public account authority.
-- `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` pins the Account Authority service DID trusted for S2S account-status evidence.
+- The Account Authority signs as this Station with a delegated assertion method, even when it runs at a separate origin.
 - `SOLAND_SESSION_GRANT_INTROSPECTION_URL` points at coauth's
   `/_arkret/gate/account/session-grants/introspect`, and
   `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared

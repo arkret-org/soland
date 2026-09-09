@@ -262,9 +262,6 @@ pub struct AppConfig {
     /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub account_authority_url: Option<String>,
-    /// Deployment-private, fail-closed Account Authority signer identity pin.
-    /// It is never discovered or registered as an Arkret service role.
-    pub account_authority_id: Option<String>,
     /// Public assertion key delegated in this Station's signed DID inception.
     /// Changing this pin requires an authorized DID history update.
     pub account_authority_public_key_multibase: Option<String>,
@@ -879,7 +876,6 @@ impl AppConfig {
             media: MediaIssuerConfig::test_default(),
             cors_allow_origin: None,
             account_authority_url: None,
-            account_authority_id: None,
             account_authority_public_key_multibase: None,
             oidc_client_id: None,
             development_mode: false,
@@ -977,7 +973,6 @@ impl AppConfig {
         let livekit = load_livekit_config(values);
         let media = load_media_issuer_config(values);
         let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL");
-        let account_authority_id = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
         let account_authority_public_key_multibase =
             env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE");
         if let Some(key) = &account_authority_public_key_multibase {
@@ -985,29 +980,13 @@ impl AppConfig {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE is invalid: {error}")
             })?;
         }
-        // A pin needs something to pin. The reverse does not hold: a URL alone
-        // is a complete Account Authority configuration, because the signer
-        // identity is not operator input. The Account Authority signs as this
-        // Station under the `#account-authority` method authorized in the
-        // Station's own DID document, so the service id is this deployment's
-        // own and the signing key is read from the Authority's published keyset
-        // on every startup. `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` and
-        // `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE` stay as explicit
-        // overrides for a deployment that wants to name both by hand.
-        if account_authority_url.is_none() && account_authority_id.is_some() {
-            anyhow::bail!(
-                "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID requires SOLAND_ACCOUNT_AUTHORITY_URL"
-            );
-        }
+        // A separate Account Authority process still signs as this Station.
+        // Its public key is delegated by the Station's signed DID history;
+        // the optional key pin controls that delegation, not another identity.
         if account_authority_url.is_none() && account_authority_public_key_multibase.is_some() {
             anyhow::bail!(
                 "SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE requires SOLAND_ACCOUNT_AUTHORITY_URL"
             );
-        }
-        if let Some(value) = account_authority_id.as_deref() {
-            arkret_identifiers::DidCoreId::new(value.to_owned()).map_err(|error| {
-                anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID is invalid: {error}")
-            })?;
         }
         let oidc_client_id = env_non_empty(values, "SOLAND_OAUTH_CLIENT_ID");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
@@ -1283,7 +1262,6 @@ impl AppConfig {
             media,
             cors_allow_origin,
             account_authority_url,
-            account_authority_id,
             account_authority_public_key_multibase,
             oidc_client_id,
             development_mode,

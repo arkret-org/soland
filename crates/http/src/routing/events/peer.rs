@@ -413,32 +413,6 @@ async fn peer_principal_genesis(
         .and_then(json_ok)
 }
 
-/// The service id this deployment accepts its Account Authority under.
-///
-/// An Account Authority does not hold a service DID of its own. It signs as
-/// this Station, using the `#account-authority` verification method that the
-/// Station's own DID document authorizes and whose private half only the
-/// Account Authority holds. `federation::signature` resolves that method out of
-/// the durable DID history before any handler runs, so a caller reaching here
-/// has already proven control of a key this deployment published - which is the
-/// whole of the trust decision.
-///
-/// The service id is therefore this Station's own, and asking an operator to
-/// configure it is asking them to copy a value the process already knows.
-/// `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` stays available for a deployment whose
-/// Account Authority signs under some other id, and is enforced verbatim when
-/// set.
-fn account_authority_service_id(state: &AppState) -> Result<DidCoreId, AppError> {
-    match state.config().account_authority_id.as_deref() {
-        Some(configured) => DidCoreId::new(configured.to_owned()).map_err(|error| {
-            AppError::internal(format!(
-                "configured Account Authority identity is invalid: {error}"
-            ))
-        }),
-        None => Ok(state.service_core_id()),
-    }
-}
-
 async fn trusted_account_authority_binding(
     state: &AppState,
 ) -> Result<(DidCoreId, CanonicalServiceUrl), AppError> {
@@ -447,7 +421,9 @@ async fn trusted_account_authority_binding(
         .account_authority_url
         .as_deref()
         .ok_or_else(|| AppError::capability_denied("Account Authority is not configured"))?;
-    let authority_id = account_authority_service_id(state)?;
+    // A split Account Authority uses this Station's authorized assertion key.
+    // Its endpoint location never establishes a second service identity.
+    let authority_id = state.service_core_id();
     let authority_url = CanonicalServiceUrl::canonicalize(authority_url).map_err(|error| {
         AppError::internal(format!(
             "configured Account Authority URL is invalid: {error}"
@@ -2825,32 +2801,22 @@ mod account_authority_identity_tests {
 
     use super::*;
 
-    fn state_with(configured: Option<&str>) -> AppState {
+    fn state_with(endpoint: &str) -> AppState {
         let config = crate::config::AppConfig {
-            account_authority_url: Some("https://auth.example".to_owned()),
-            account_authority_id: configured.map(ToOwned::to_owned),
+            account_authority_url: Some(endpoint.to_owned()),
             ..crate::config::AppConfig::test_default()
         };
         AppState::new(config, Db { pool: None })
     }
 
-    #[test]
-    fn account_authority_defaults_to_this_stations_own_service_id() {
-        // Nothing configured: the Account Authority signs as this Station, so
-        // the id it must present is one the process already knows.
-        let state = state_with(None);
-        assert_eq!(
-            account_authority_service_id(&state).unwrap(),
-            state.service_core_id()
-        );
-
-        // An explicit override still wins verbatim, for a deployment whose
-        // Account Authority signs under some other id.
-        let other = "ak:did_core:webvh:QmUZxLmRSV6u65q6U6HjszryV1aAC9ubqEXVqRvH7dRSGX";
-        let state = state_with(Some(other));
-        assert_eq!(
-            account_authority_service_id(&state).unwrap().as_str(),
-            other
-        );
+    #[tokio::test]
+    async fn account_authority_endpoint_does_not_change_its_station_identity() {
+        for endpoint in ["https://auth.example", "https://another-process.example"] {
+            let state = state_with(endpoint);
+            assert_eq!(
+                trusted_account_authority_id(&state).await.unwrap(),
+                state.service_core_id()
+            );
+        }
     }
 }

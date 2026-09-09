@@ -115,6 +115,7 @@ pub struct AppState {
     consents: ConsentService,
     contacts: ContactService,
     agent_pairings: AgentPairingService,
+    pub(crate) agent_evidence_cache: Arc<super::agent_evidence_cache::AgentEvidenceCache>,
     device_pairings: DevicePairingService,
     agent_participations: AgentParticipationService,
     key_backups: KeyBackupService,
@@ -1216,6 +1217,9 @@ impl AppState {
             consents,
             contacts,
             agent_pairings,
+            agent_evidence_cache: Arc::new(
+                super::agent_evidence_cache::AgentEvidenceCache::default(),
+            ),
             device_pairings,
             agent_participations,
             key_backups,

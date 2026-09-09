@@ -3226,15 +3226,8 @@ async fn build_history_release_attestation(
         .source_authority_digest()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let (recipient_account_status, recipient_pcr_device, recipient_agent_control_evidence) =
-        build_history_recipient_authority_views(
-            state,
-            request,
-            response,
-            source_record_digest,
-            accepted_at,
-            response.expires_at,
-        )
-        .await?;
+        build_history_recipient_authority_views(state, request, accepted_at, response.expires_at)
+            .await?;
     let (archive_tuple, archive_coverage) = match rhrk_archive_material {
         Some((archive_tuple, replicas)) => {
             let members = replicas
@@ -3404,8 +3397,6 @@ async fn validate_rhrk_release_coverage(
 async fn build_history_recipient_authority_views(
     state: &AppState,
     request: &HistoryKeyRequest,
-    response: &HistoryKeyResponseSendRequest,
-    source_record_digest: &arkret_wire::Hash,
     observed_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<
@@ -3422,24 +3413,9 @@ async fn build_history_recipient_authority_views(
         requester_agent_key_authorize_event_id,
     } = &request.requester_endpoint_authorization
     {
-        let local_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(error.to_string()))?;
         let selector = AgentSignerEvidenceQuerySelector::CurrentAdmission {
             agent_id: requester_agent_id.clone(),
             verification_method: requester_agent_verification_method.clone(),
-            operation_id: arkret_wire::ProtocolOperationId::new(format!(
-                "ak:operation:history-release:{}",
-                response.response_id
-            ))
-            .map_err(|error| AppError::internal(error.to_string()))?,
-            request_digest: source_record_digest.clone(),
-            verifier_id: local_service_id.clone(),
-            audience: local_service_id,
-            challenge: arkret_wire::NonEmptyString::new(format!(
-                "history-release:{}",
-                response.response_id
-            ))
-            .map_err(|error| AppError::internal(error.to_string()))?,
         };
         let evidence =
             super::identity::agents::evidence::current_agent_signer_evidence(state, &selector)
@@ -3452,9 +3428,7 @@ async fn build_history_recipient_authority_views(
                 })?;
         let evidence = AgentSignerEvidence::from(evidence);
         let AgentSignerEvidence::CurrentAdmission {
-            admission_evidence,
-            current_observation,
-            ..
+            admission_evidence, ..
         } = &evidence
         else {
             unreachable!("current Agent evidence builder returned historical evidence")
@@ -3483,8 +3457,8 @@ async fn build_history_recipient_authority_views(
             },
             agent_signer_evidence_digest: agent_signer_evidence_digest(&evidence)
                 .map_err(|error| AppError::internal(error.to_string()))?,
-            observed_at: current_observation.evaluated_at,
-            expires_at: current_observation.expires_at,
+            observed_at: admission_evidence.valid_from(),
+            expires_at: admission_evidence.expires_at(),
         };
         locator
             .validate_for_current_evidence(&evidence)

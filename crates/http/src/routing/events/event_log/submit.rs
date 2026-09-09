@@ -2921,7 +2921,7 @@ pub(crate) async fn submit_federation_events(
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
     let mut quarantine = Vec::new();
-    let mut agent_event_admission_receipts = Vec::new();
+    let mut agent_event_admissions = Vec::new();
     let created_at = now();
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
     let profile_gate = match crate::routing::federation::federation_profile_intersection_for_peer(
@@ -3318,8 +3318,8 @@ pub(crate) async fn submit_federation_events(
         .await
         {
             Ok(response) => {
-                match load_agent_event_admission_receipt(state, typed_event).await {
-                    Ok(Some(receipt)) => agent_event_admission_receipts.push(receipt),
+                match load_agent_event_admission(state, typed_event).await {
+                    Ok(Some(receipt)) => agent_event_admissions.push(receipt),
                     Ok(None) if prepared_agent_receipt.is_none() => {}
                     Ok(None) => {
                         render_error(
@@ -3407,7 +3407,7 @@ pub(crate) async fn submit_federation_events(
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     );
-    outcome.agent_event_admission_receipts = agent_event_admission_receipts;
+    outcome.agent_event_admissions = agent_event_admissions;
     res.render(Json(outcome));
 }
 
@@ -3424,7 +3424,7 @@ async fn prepare_agent_event_admission_receipt(
         AgentDetachedJws, AgentEventAdmissionReceipt,
     };
 
-    if event.actor_kind != Some(arkret_wire::EnvelopeActorKind::Agent) {
+    if !crate::routing::identity::agents::evidence::event_has_agent_signer(state, event).await? {
         return Ok(None);
     }
     let Some(admission) = event.proofs.iter().find_map(|proof| match proof {
@@ -3433,6 +3433,13 @@ async fn prepare_agent_event_admission_receipt(
     }) else {
         return Err("federated Event omitted its Station admission proof".to_owned());
     };
+    let origin =
+        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
+            accepted_event: event.clone(),
+        };
+    if origin.receiver_id().map_err(|error| error.to_string())? == state.service_core_id() {
+        return Ok(None);
+    }
     let Some(producer_evidence_ref) = admission.producer_signer_resolution_evidence_ref.clone()
     else {
         return Ok(None);
@@ -3506,12 +3513,11 @@ async fn prepare_agent_event_admission_receipt(
     }))
 }
 
-async fn load_agent_event_admission_receipt(
+async fn load_agent_event_admission(
     state: &AppState,
     event: &arkret_wire::Event,
-) -> Result<Option<arkret_models_identity::agent_signer_evidence::AgentEventAdmissionReceipt>, String>
-{
-    if event.actor_kind != Some(arkret_wire::EnvelopeActorKind::Agent) {
+) -> Result<Option<arkret_models_identity::agent_signer_evidence::AgentEventAdmission>, String> {
+    if !crate::routing::identity::agents::evidence::event_has_agent_signer(state, event).await? {
         return Ok(None);
     }
     event
@@ -3522,6 +3528,13 @@ async fn load_agent_event_admission_receipt(
         .ok_or_else(|| "federated Event omitted its Station admission proof".to_owned())?;
     let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| format!("receiver service id is invalid: {error}"))?;
+    let origin =
+        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
+            accepted_event: event.clone(),
+        };
+    if origin.receiver_id().map_err(|error| error.to_string())? == receiver_id {
+        return Ok(Some(origin));
+    }
     let receipt_key = format!(
         "agent-event-admission-receipt:{}:{}",
         event.event_id, receiver_id
@@ -3534,7 +3547,11 @@ async fn load_agent_event_admission_receipt(
         .ok_or_else(|| "atomic receipt did not become visible".to_owned())?;
     let stored = serde_json::from_value(stored.response_body)
         .map_err(|error| format!("stored receipt is invalid: {error}"))?;
-    Ok(Some(stored))
+    Ok(Some(
+        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::ReceiverReceipt {
+            receipt: stored,
+        },
+    ))
 }
 
 async fn submit_direct_conversation_federation(

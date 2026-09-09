@@ -1341,11 +1341,7 @@ impl FederationDispatcher {
                     )
                 } else if (200..300).contains(&status)
                     && let Err(error) = self
-                        .capture_agent_event_admission_receipts(
-                            &row,
-                            &body_text,
-                            &peer_target.base_url,
-                        )
+                        .capture_agent_event_admissions(&row, &body_text, &peer_target.base_url)
                         .await
                 {
                     self.transport_retry(
@@ -1400,7 +1396,7 @@ impl FederationDispatcher {
         self.commit(command).await;
     }
 
-    async fn capture_agent_event_admission_receipts(
+    async fn capture_agent_event_admissions(
         &self,
         row: &PendingFederationDelivery,
         response_body: &str,
@@ -1442,8 +1438,12 @@ impl FederationDispatcher {
             else {
                 continue;
             };
-            if admission.producer_signer_resolution_evidence_ref.is_some()
-                && delivered.contains(&submission.event.event_id)
+            if delivered.contains(&submission.event.event_id)
+                && crate::routing::identity::agents::evidence::event_has_agent_signer(
+                    &self.state,
+                    &submission.event,
+                )
+                .await?
             {
                 expected.insert(
                     submission.event.event_id.clone(),
@@ -1451,22 +1451,22 @@ impl FederationDispatcher {
                 );
             }
         }
-        if expected.len() != outcome.agent_event_admission_receipts.len() {
+        if expected.len() != outcome.agent_event_admissions.len() {
             return Err("accepted Agent Event receipt set is incomplete".to_owned());
         }
-        for receipt in outcome.agent_event_admission_receipts {
-            let Some((event, admission)) = expected.remove(&receipt.event_id) else {
+        for receipt in outcome.agent_event_admissions {
+            let Some((event, admission)) = expected.remove(receipt.event_id()) else {
                 return Err("outcome contains an unexpected Agent Event receipt".to_owned());
             };
             let signer_id = event.executed_by.as_ref().unwrap_or(&event.actor_id);
-            if receipt.event_digest() != admission.event_digest
-                || receipt.realm_id != event.realm_id
-                || receipt.producer_accepted_at != admission.accepted_at
-                || receipt.agent_id != *signer_id.signing_principal_id()
-                || receipt.verification_method != admission.producer_verification_method
-                || Some(&receipt.producer_signer_resolution_evidence_ref)
+            if receipt.realm_id() != &event.realm_id
+                || receipt.producer_accepted_at().ok() != Some(admission.accepted_at)
+                || receipt.agent_id() != signer_id.signing_principal_id()
+                || receipt.verification_method().ok()
+                    != Some(&admission.producer_verification_method)
+                || receipt.producer_signer_resolution_evidence_ref().ok()
                     != admission.producer_signer_resolution_evidence_ref.as_ref()
-                || receipt.receiver_id != row.delivery.peer_id
+                || receipt.receiver_id().ok().as_ref() != Some(&row.delivery.peer_id)
             {
                 return Err("Agent Event receipt does not match the delivered Event".to_owned());
             }

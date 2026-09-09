@@ -1740,23 +1740,6 @@ pub(super) async fn accepted_event_envelope(
         let selector = arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
             agent_id: signer_id.signing_principal_id().clone(),
             verification_method: producer.verification_method.clone(),
-            operation_id: arkret_wire::ProtocolOperationId::new(
-                "ak:operation:ak.self.events.command.submit.v1",
-            )
-            .map_err(|error| SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                error,
-            ))?,
-            request_digest: event_digest.clone(),
-            verifier_id: service_id.clone(),
-            audience: service_id.clone(),
-            challenge: arkret_wire::NonEmptyString::new(event.event_id.as_str().to_owned())
-                .map_err(|error| SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    error.to_string(),
-                ))?,
         };
         Some(
             crate::routing::identity::agents::evidence::freeze_current_agent_signer_evidence(
