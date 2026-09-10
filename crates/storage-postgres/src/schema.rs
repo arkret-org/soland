@@ -1486,11 +1486,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    service_resolution_fork_quarantine (service_id, service_kind, artifact_family, artifact_key, conflicting_digest) {
+    service_resolution_fork_quarantine (service_id, service_kind, version_id, conflicting_digest) {
         service_id -> Text,
         service_kind -> Text,
-        artifact_family -> Text,
-        artifact_key -> Text,
+        version_id -> Text,
         accepted_digest -> Text,
         conflicting_digest -> Text,
         evidence -> Jsonb,

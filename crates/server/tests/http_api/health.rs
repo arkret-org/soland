@@ -355,16 +355,8 @@ async fn open_service_resolution_serves_byte_canonical_evidence_body() {
     let now = chrono::Utc::now();
     for offset in [0, 601, 1801] {
         let verified_at = now + chrono::Duration::seconds(offset);
-        let entry = arkret_models_identity::ServiceRouteCacheEntry {
-            service_id: projection.service_id.clone(),
-            service_kind: projection.service_kind.clone(),
-            did: projection.did.clone(),
-            method_history_head: projection.method_history_head.clone(),
-            version_id: projection.version_id.clone(),
-            base_url: projection.base_url.clone(),
-            verified_at,
-            cache_expires_at: verified_at + chrono::Duration::seconds(300),
-        };
+        let entry =
+            arkret_models_identity::VerifiedServiceRoute::new(projection.clone(), verified_at);
         assert!(matches!(
             store
                 .service_routes()

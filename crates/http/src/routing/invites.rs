@@ -772,7 +772,7 @@ async fn enqueue_remote_invite_delivery(
             delivery: FederationDeliveryRecord {
                 id: enqueued_id.clone(),
                 peer_id: recipient_id.clone(),
-                peer_url: Some(entry.base_url.trim_end_matches('/').to_owned()),
+                peer_url: Some(entry.base_url().trim_end_matches('/').to_owned()),
                 endpoint: PEER_INVITES_ENDPOINT.to_owned(),
                 idempotency_key: delivery.idempotency_key.clone(),
                 payload_json,

@@ -202,11 +202,7 @@ impl FrontierExchangeWorker {
         ) {
             return Err(format!("trust_domain_policy_denied:{reason}"));
         }
-        let target = format!(
-            "{}{}",
-            route.cache_entry.base_url.trim_end_matches('/'),
-            path
-        );
+        let target = format!("{}{}", route.base_url().trim_end_matches('/'), path);
         let body =
             arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
         let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
@@ -1112,8 +1108,7 @@ impl FrontierExchangeWorker {
             return Err("unexpected_actor_frontier_roots".to_owned());
         }
         let document =
-            crate::jws_verify::resolve_did_document_async(&self.state, &route.cache_entry.did)
-                .await?;
+            crate::jws_verify::resolve_did_document_async(&self.state, route.did()).await?;
         let result = validate_frontier_response(
             &state,
             peer_id.as_str(),
@@ -1129,8 +1124,7 @@ impl FrontierExchangeWorker {
         let refreshed =
             super::resolved_peer_route(&self.state, peer_id.as_str(), "station", true).await?;
         let document =
-            crate::jws_verify::resolve_did_document_async(&self.state, &refreshed.cache_entry.did)
-                .await?;
+            crate::jws_verify::resolve_did_document_async(&self.state, refreshed.did()).await?;
         validate_frontier_response(
             &state,
             peer_id.as_str(),

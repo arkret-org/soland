@@ -2338,11 +2338,9 @@ async fn contact_delivery_address(
             ServiceResolutionCarrier::ResolutionUrl {
                 resolution_url: format!(
                     "{}{}",
-                    route.cache_entry.base_url,
-                    arkret_models_identity::canonical_service_resolution_path(
-                        &route.cache_entry.service_id
-                    )
-                    .trim_start_matches('/')
+                    route.base_url(),
+                    arkret_models_identity::canonical_service_resolution_path(route.service_id())
+                        .trim_start_matches('/')
                 ),
             },
         )

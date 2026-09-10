@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_models_identity::{
-    AuthenticatedServiceResolution, ServiceResolutionCarrier, ServiceRouteCacheEntry,
+    AuthenticatedServiceResolution, ServiceResolutionCarrier, VerifiedServiceRoute,
 };
 use arkret_wire::{DidCoreId, Hash, TrustDomainId};
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use soland_storage::{MonotonicRouteWrite, ServiceResolutionForkEvidence, ServiceRouteStore};
 
 use crate::{ServiceError, ServiceResult};
@@ -26,7 +26,7 @@ pub struct VerifiedServiceDescribeMetadata {
 }
 #[derive(Clone, Debug)]
 pub struct ResolvedServiceRoute {
-    pub cache_entry: ServiceRouteCacheEntry,
+    pub route: VerifiedServiceRoute,
     pub trust_domain: TrustDomainId,
     pub protocol_version: String,
     pub describe_verified_at: DateTime<Utc>,
@@ -34,7 +34,23 @@ pub struct ResolvedServiceRoute {
 }
 impl ResolvedServiceRoute {
     pub fn is_routable_at(&self, now: DateTime<Utc>) -> bool {
-        self.cache_entry.is_routable_at(now) && now < self.describe_cache_expires_at
+        self.route.is_routable_at(now) && now < self.describe_cache_expires_at
+    }
+    #[must_use]
+    pub const fn service_id(&self) -> &DidCoreId {
+        self.route.service_id()
+    }
+    #[must_use]
+    pub const fn did(&self) -> &arkret_wire::Did {
+        self.route.did()
+    }
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        self.route.base_url()
+    }
+    #[must_use]
+    pub fn method_history_head(&self) -> &str {
+        self.route.method_history_head()
     }
     pub fn require_trust_domain(&self, expected: Option<&str>) -> ServiceResult<()> {
         if expected.is_some_and(|v| v != self.trust_domain.as_str()) {
@@ -99,7 +115,7 @@ impl ServiceRouteResolver {
                     .route_cache(service_id, service_kind)
                     .await?
                     .is_some_and(|c| {
-                        c.method_history_head == route.cache_entry.method_history_head
+                        c.method_history_head() == route.method_history_head()
                             && c.is_routable_at(now)
                     })
             {
@@ -119,7 +135,7 @@ impl ServiceRouteResolver {
         service_kind: &str,
         now: DateTime<Utc>,
         force_refresh: bool,
-    ) -> ServiceResult<ServiceRouteCacheEntry> {
+    ) -> ServiceResult<VerifiedServiceRoute> {
         if self.store.is_quarantined(service_id, service_kind).await? {
             return Err(ServiceError::Conflict(
                 "service DID is fork-quarantined".into(),
@@ -145,7 +161,7 @@ impl ServiceRouteResolver {
         service_id: &DidCoreId,
         service_kind: &str,
         now: DateTime<Utc>,
-    ) -> ServiceResult<ServiceRouteCacheEntry> {
+    ) -> ServiceResult<VerifiedServiceRoute> {
         let candidate = self
             .fetcher
             .fetch_carrier(carrier, service_id, service_kind)
@@ -159,7 +175,7 @@ impl ServiceRouteResolver {
         service_kind: &str,
         candidate: VerifiedRouteCandidate,
         now: DateTime<Utc>,
-    ) -> ServiceResult<ServiceRouteCacheEntry> {
+    ) -> ServiceResult<VerifiedServiceRoute> {
         if self.store.is_quarantined(service_id, service_kind).await? {
             return Err(ServiceError::Conflict(
                 "service DID is fork-quarantined".into(),
@@ -183,16 +199,7 @@ impl ServiceRouteResolver {
                 "describe disagrees with verified DID route".into(),
             ));
         }
-        let entry = ServiceRouteCacheEntry {
-            service_id: p.service_id,
-            service_kind: p.service_kind,
-            did: p.did,
-            method_history_head: p.method_history_head,
-            version_id: p.version_id,
-            base_url: p.base_url,
-            verified_at: now,
-            cache_expires_at: now + Duration::seconds(300),
-        };
+        let entry = VerifiedServiceRoute::new(p, now);
         match self
             .store
             .publish_route_cache(candidate.evidence.clone(), entry.clone())
@@ -209,10 +216,9 @@ impl ServiceRouteResolver {
                     .quarantine_fork(ServiceResolutionForkEvidence {
                         service_id: service_id.clone(),
                         service_kind: service_kind.to_owned(),
-                        artifact_family: "did_method".into(),
-                        artifact_key: entry.version_id.clone(),
+                        version_id: entry.version_id().to_owned(),
                         accepted_digest,
-                        conflicting_digest: Hash::new(entry.method_history_head.clone())
+                        conflicting_digest: Hash::new(entry.method_history_head().to_owned())
                             .map_err(|e| ServiceError::Internal(e.to_string()))?,
                         evidence: serde_json::to_value(candidate.evidence)
                             .map_err(|e| ServiceError::Internal(e.to_string()))?,
@@ -225,7 +231,7 @@ impl ServiceRouteResolver {
         self.resolved_routes.lock().insert(
             (service_id.to_string(), service_kind.to_owned()),
             ResolvedServiceRoute {
-                cache_entry: entry.clone(),
+                route: entry.clone(),
                 trust_domain: d.trust_domain,
                 protocol_version: d.protocol_version,
                 describe_verified_at: now,

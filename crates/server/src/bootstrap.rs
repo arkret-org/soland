@@ -2460,17 +2460,7 @@ mod tests {
         )
         .unwrap();
         let cache_from = |e: &arkret_models_identity::AuthenticatedServiceResolution, at| {
-            let p = e.projection().unwrap();
-            arkret_models_identity::ServiceRouteCacheEntry {
-                service_id: p.service_id,
-                service_kind: p.service_kind,
-                did: p.did,
-                method_history_head: p.method_history_head,
-                version_id: p.version_id,
-                base_url: p.base_url,
-                verified_at: at,
-                cache_expires_at: at + chrono::Duration::seconds(300),
-            }
+            arkret_models_identity::VerifiedServiceRoute::new(e.projection().unwrap(), at)
         };
         store
             .service_routes()

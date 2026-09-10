@@ -355,7 +355,7 @@ impl PersistenceHandle {
         &self,
         service_id: &arkret_wire::DidCoreId,
         service_kind: &str,
-    ) -> crate::ServiceResult<Option<arkret_models_identity::ServiceRouteCacheEntry>> {
+    ) -> crate::ServiceResult<Option<arkret_models_identity::VerifiedServiceRoute>> {
         Ok(self
             .persistence
             .service_routes()
@@ -878,11 +878,11 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
     async fn publish_route_cache(
         &self,
         evidence: arkret_models_identity::AuthenticatedServiceResolution,
-        entry: arkret_models_identity::ServiceRouteCacheEntry,
+        route: arkret_models_identity::VerifiedServiceRoute,
     ) -> PersistenceResult<soland_storage::MonotonicRouteWrite> {
         self.persistence
             .service_routes()
-            .publish_route_cache(evidence, entry)
+            .publish_route_cache(evidence, route)
             .await
     }
 
@@ -911,7 +911,7 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
         &self,
         service_id: &arkret_wire::DidCoreId,
         service_kind: &str,
-    ) -> PersistenceResult<Option<arkret_models_identity::ServiceRouteCacheEntry>> {
+    ) -> PersistenceResult<Option<arkret_models_identity::VerifiedServiceRoute>> {
         self.persistence
             .service_routes()
             .route_cache(service_id, service_kind)

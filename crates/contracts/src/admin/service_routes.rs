@@ -69,8 +69,7 @@ pub struct AdminServiceRouteCache {
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminServiceRouteQuarantine {
-    pub artifact_family: String,
-    pub artifact_key: String,
+    pub version_id: String,
     pub accepted_digest: String,
     pub conflicting_digest: String,
     pub quarantined_at: DateTime<Utc>,

@@ -1,4 +1,4 @@
-use arkret_models_identity::{ServiceMethodState, ServiceRouteCacheEntry};
+use arkret_models_identity::{ServiceMethodState, VerifiedServiceRoute};
 use arkret_wire::{DidCoreId, Hash};
 use chrono::{DateTime, Utc};
 
@@ -15,8 +15,7 @@ pub enum MonotonicRouteWrite {
 pub struct ServiceResolutionForkEvidence {
     pub service_id: DidCoreId,
     pub service_kind: String,
-    pub artifact_family: String,
-    pub artifact_key: String,
+    pub version_id: String,
     pub accepted_digest: Hash,
     pub conflicting_digest: Hash,
     pub evidence: serde_json::Value,
@@ -61,7 +60,7 @@ pub trait ServiceRouteStore: Send + Sync {
     async fn publish_route_cache(
         &self,
         evidence: arkret_models_identity::AuthenticatedServiceResolution,
-        entry: ServiceRouteCacheEntry,
+        route: VerifiedServiceRoute,
     ) -> PersistenceResult<MonotonicRouteWrite>;
 
     async fn quarantine_fork(
@@ -79,7 +78,7 @@ pub trait ServiceRouteStore: Send + Sync {
         &self,
         service_id: &DidCoreId,
         service_kind: &str,
-    ) -> PersistenceResult<Option<ServiceRouteCacheEntry>>;
+    ) -> PersistenceResult<Option<VerifiedServiceRoute>>;
 
     async fn evict_route_cache(
         &self,

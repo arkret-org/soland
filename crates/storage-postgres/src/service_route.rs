@@ -1,5 +1,5 @@
 use arkret_models_identity::{
-    AuthenticatedServiceResolution, ServiceMethodState, ServiceRouteCacheEntry,
+    AuthenticatedServiceResolution, ServiceMethodState, VerifiedServiceRoute,
 };
 use arkret_wire::{DidCoreId, Hash};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
@@ -43,9 +43,7 @@ struct QuarantineRow {
     #[diesel(sql_type = Text)]
     service_kind: String,
     #[diesel(sql_type = Text)]
-    artifact_family: String,
-    #[diesel(sql_type = Text)]
-    artifact_key: String,
+    version_id: String,
     #[diesel(sql_type = Text)]
     accepted_digest: String,
     #[diesel(sql_type = Text)]
@@ -110,7 +108,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let rows = sql_query("SELECT service_id,service_kind,artifact_family,artifact_key,accepted_digest,conflicting_digest,evidence,quarantined_at FROM service_resolution_fork_quarantine WHERE service_id=$1 AND service_kind=$2 ORDER BY quarantined_at DESC LIMIT $3")
+        let rows = sql_query("SELECT service_id,service_kind,version_id,accepted_digest,conflicting_digest,evidence,quarantined_at FROM service_resolution_fork_quarantine WHERE service_id=$1 AND service_kind=$2 ORDER BY quarantined_at DESC LIMIT $3")
             .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind)
             .bind::<BigInt,_>(i64::try_from(limit.clamp(1, 256)).unwrap_or(256))
             .load::<QuarantineRow>(&mut *conn).await.map_err(PersistenceError::database)?;
@@ -119,8 +117,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
                 Ok(ServiceResolutionForkEvidence {
                     service_id: row.service_id,
                     service_kind: row.service_kind,
-                    artifact_family: row.artifact_family,
-                    artifact_key: row.artifact_key,
+                    version_id: row.version_id,
                     accepted_digest: Hash::new(row.accepted_digest)
                         .map_err(|error| PersistenceError::Internal(error.to_string()))?,
                     conflicting_digest: Hash::new(row.conflicting_digest)
@@ -154,8 +151,8 @@ impl ServiceRouteStore for PgServiceRouteStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("INSERT INTO service_resolution_fork_quarantine(service_id,service_kind,artifact_family,artifact_key,accepted_digest,conflicting_digest,evidence,quarantined_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING")
-            .bind::<Text,_>(evidence.service_id.as_str()).bind::<Text,_>(&evidence.service_kind).bind::<Text,_>(&evidence.artifact_family).bind::<Text,_>(&evidence.artifact_key)
+        sql_query("INSERT INTO service_resolution_fork_quarantine(service_id,service_kind,version_id,accepted_digest,conflicting_digest,evidence,quarantined_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
+            .bind::<Text,_>(evidence.service_id.as_str()).bind::<Text,_>(&evidence.service_kind).bind::<Text,_>(&evidence.version_id)
             .bind::<Text,_>(evidence.accepted_digest.as_str()).bind::<Text,_>(evidence.conflicting_digest.as_str()).bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(evidence.quarantined_at)
             .execute(&mut *conn).await.map_err(PersistenceError::database)?;
         Ok(())
@@ -177,12 +174,17 @@ impl ServiceRouteStore for PgServiceRouteStore {
         &self,
         service_id: &DidCoreId,
         service_kind: &str,
-    ) -> PersistenceResult<Option<ServiceRouteCacheEntry>> {
+    ) -> PersistenceResult<Option<VerifiedServiceRoute>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("SELECT entry AS value FROM service_route_cache WHERE service_id=$1 AND service_kind=$2")
-            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind).get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.map(|row| decode(row.value)).transpose()
+        // The route cache is a replaceable performance cache that MAY vanish at
+        // any time (service-surface.md section 2.6), so a row this build can no
+        // longer decode is a cache miss, not a persistence fault. The accepted
+        // method-state floor lives in its own table and is never derived here.
+        Ok(sql_query("SELECT entry AS value FROM service_route_cache WHERE service_id=$1 AND service_kind=$2")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind).get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+            .and_then(|row| decode::<VerifiedServiceRoute>(row.value).ok()))
     }
 
     async fn evict_route_cache(
@@ -204,7 +206,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
     async fn publish_route_cache(
         &self,
         evidence: AuthenticatedServiceResolution,
-        entry: ServiceRouteCacheEntry,
+        route: VerifiedServiceRoute,
     ) -> PersistenceResult<MonotonicRouteWrite> {
         if matches!(
             evidence.method_history_evidence,
@@ -212,42 +214,31 @@ impl ServiceRouteStore for PgServiceRouteStore {
         ) {
             arkret_identity::verify_authenticated_service_resolution_history(
                 &evidence,
-                &entry.service_id,
-                entry.verified_at,
+                route.service_id(),
+                route.verified_at,
             )
             .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
         }
-        if entry.cache_expires_at <= entry.verified_at
-            || entry.cache_expires_at > entry.verified_at + chrono::Duration::seconds(300)
-        {
+        if route.cache_expires_at <= route.verified_at || !route.is_routable_at(route.verified_at) {
             return Err(PersistenceError::SchemaViolation(
                 "service route cache exceeds current verification lifetime".into(),
             ));
         }
-        let projection = evidence
-            .projection()
-            .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
-        if entry.service_id != projection.service_id
-            || entry.service_kind != projection.service_kind
-            || entry.did != projection.did
-            || entry.method_history_head != projection.method_history_head
-            || entry.version_id != projection.version_id
-            || entry.base_url != projection.base_url
+        // The caller may only cache the projection this evidence actually
+        // derives; the route carries that projection whole, so the two can only
+        // disagree by being different projections.
+        if route.projection
+            != evidence
+                .projection()
+                .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?
         {
             return Err(PersistenceError::SchemaViolation(
                 "route cache disagrees with DID state".into(),
             ));
         }
-        let state = ServiceMethodState {
-            service_id: entry.service_id.clone(),
-            service_kind: entry.service_kind.clone(),
-            did: entry.did.clone(),
-            method_history_head: entry.method_history_head.clone(),
-            version_id: entry.version_id.clone(),
-            verified_at: entry.verified_at,
-        };
+        let state = route.method_state();
         let state_value = encode(&state)?;
-        let entry_value = encode(&entry)?;
+        let entry_value = encode(&route)?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -270,7 +261,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
                 if current.verified_at>state.verified_at { return Ok(MonotonicRouteWrite::Stale); }
             }
             sql_query("INSERT INTO service_method_states(service_id,service_kind,method_state,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT(service_id,service_kind) DO UPDATE SET method_state=EXCLUDED.method_state,updated_at=EXCLUDED.updated_at").bind::<Text,_>(state.service_id.as_str()).bind::<Text,_>(&state.service_kind).bind::<Jsonb,_>(&state_value).bind::<Timestamptz,_>(state.verified_at).execute(conn).await?;
-            sql_query("INSERT INTO service_route_cache(service_id,service_kind,entry,cache_expires_at,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(service_id,service_kind) DO UPDATE SET entry=EXCLUDED.entry,cache_expires_at=EXCLUDED.cache_expires_at,updated_at=EXCLUDED.updated_at").bind::<Text,_>(entry.service_id.as_str()).bind::<Text,_>(&entry.service_kind).bind::<Jsonb,_>(&entry_value).bind::<Timestamptz,_>(entry.cache_expires_at).bind::<Timestamptz,_>(entry.verified_at).execute(conn).await?;
+            sql_query("INSERT INTO service_route_cache(service_id,service_kind,entry,cache_expires_at,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(service_id,service_kind) DO UPDATE SET entry=EXCLUDED.entry,cache_expires_at=EXCLUDED.cache_expires_at,updated_at=EXCLUDED.updated_at").bind::<Text,_>(route.service_id().as_str()).bind::<Text,_>(route.service_kind()).bind::<Jsonb,_>(&entry_value).bind::<Timestamptz,_>(route.cache_expires_at).bind::<Timestamptz,_>(route.verified_at).execute(conn).await?;
             Ok(MonotonicRouteWrite::Applied)
         }).await.map_err(PgTransactionError::into_persistence)
     }

@@ -3260,13 +3260,12 @@ CREATE TABLE public.service_method_states (
 CREATE TABLE public.service_resolution_fork_quarantine (
     service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     service_kind text NOT NULL,
-    artifact_family text NOT NULL,
-    artifact_key text NOT NULL,
+    version_id text NOT NULL,
     accepted_digest text NOT NULL,
     conflicting_digest text NOT NULL,
     evidence jsonb NOT NULL,
     quarantined_at timestamptz NOT NULL,
-    PRIMARY KEY (service_id, service_kind, artifact_family, artifact_key, conflicting_digest)
+    PRIMARY KEY (service_id, service_kind, version_id, conflicting_digest)
 );
 
 CREATE TABLE public.service_route_cache (

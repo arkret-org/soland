@@ -146,10 +146,10 @@ async fn load_detail(
         verified_at: f.verified_at,
     });
     let current_route = route_cache.as_ref().map(|e| AdminServiceRouteCurrent {
-        did: e.did.to_string(),
-        method_history_head: e.method_history_head.clone(),
-        version_id: e.version_id.clone(),
-        base_url: e.base_url.clone(),
+        did: e.did().to_string(),
+        method_history_head: e.method_history_head().to_owned(),
+        version_id: e.version_id().to_owned(),
+        base_url: e.base_url().to_owned(),
         verified_at: e.verified_at,
     });
     let cache = route_cache.as_ref().map(|e| AdminServiceRouteCache {
@@ -160,8 +160,7 @@ async fn load_detail(
     let quarantine = quarantines
         .into_iter()
         .map(|entry| AdminServiceRouteQuarantine {
-            artifact_family: entry.artifact_family,
-            artifact_key: entry.artifact_key,
+            version_id: entry.version_id,
             accepted_digest: entry.accepted_digest.to_string(),
             conflicting_digest: entry.conflicting_digest.to_string(),
             quarantined_at: entry.quarantined_at,

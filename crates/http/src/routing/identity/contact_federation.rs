@@ -123,7 +123,7 @@ pub(crate) async fn prepare_peer_contact_carrier(
                 format!("recipient service has no verified route: {error}"),
             )
         })?;
-    let peer_url = entry.base_url;
+    let peer_url = entry.base_url().to_owned();
     let (idempotency_key, _) = peer_contact_delivery_address(delivery);
     let payload_bytes = canonical::canonical_json_bytes(&delivery)
         .map_err(|error| AppError::internal(format!("contact delivery canonicalize: {error}")))?;
