@@ -1582,8 +1582,8 @@ async fn list_relation_projections(
     let state_filter =
         soland_http::util::query_param(req, "state").unwrap_or_else(|| "active".to_owned());
 
-    let (candidates, diagnostics): (Vec<SolandRelationState>, Vec<RelationConflictDiagnostic>) = {
-        let proj = state.projections().snapshot();
+    let proj = state.projections().snapshot();
+    let candidates: Vec<SolandRelationState> = {
         let candidates = proj
             .relations
             .values()
@@ -1617,21 +1617,16 @@ async fn list_relation_projections(
             })
             .cloned()
             .collect();
-        let diagnostics = proj.relation_conflict_diagnostics().map_err(|error| {
-            AppError::internal(format!("invalid relation conflict projection: {error}"))
-        })?;
-        (candidates, diagnostics)
+        candidates
     };
 
     let mut items = Vec::new();
-    let mut visible_event_ids = std::collections::BTreeSet::new();
+    let mut visible_relation_ids = std::collections::BTreeSet::new();
     for relation in candidates {
         if !realm_id_accessible(state, &relation.realm_id, Some(&session)).await {
             continue;
         }
-        if let Some(source_event_id) = relation.source_event_id.as_ref() {
-            visible_event_ids.insert(source_event_id.clone());
-        }
+        visible_relation_ids.insert(relation.relation_id.clone());
         items.push(RelationEdgeView {
             relation_id: relation.relation_id,
             realm_id: relation.realm_id,
@@ -1646,15 +1641,20 @@ async fn list_relation_projections(
         });
     }
     items.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
-    let diagnostics = diagnostics
-        .into_iter()
-        .filter(|diagnostic| {
-            diagnostic
-                .heads
-                .iter()
-                .all(|head| visible_event_ids.contains(head.event_id.as_str()))
+    let diagnostics = proj
+        .relation_conflict_diagnostics_visible_to(|relation| {
+            visible_relation_ids.contains(&relation.relation_id)
         })
-        .collect();
+        .map_err(|error| match error {
+            soland_domain::reducer::RelationConflictProjectionError::FanoutExceeded => {
+                crate::app_error!(
+                    FailedPrecondition,
+                    "relation conflict requires complete repair evidence"
+                )
+                .with_reason_code(arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED)
+            }
+            error => AppError::internal(error.to_string()),
+        })?;
     let total = total_count(items.len())?;
     json_ok(RelationEdgeList {
         items,
