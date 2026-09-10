@@ -10,7 +10,7 @@ use super::*;
 #[cfg(test)]
 mod tests;
 
-fn source_matches(event: &Event, projection: &PrincipalResolutionProjection) -> bool {
+pub(super) fn source_matches(event: &Event, projection: &PrincipalResolutionProjection) -> bool {
     let Ok(payload) = serde_json::to_value(&event.payload) else {
         return false;
     };
@@ -96,8 +96,12 @@ pub(super) async fn read(
         let selector=CurrentSelector {scope_ref:ScopeRef::Realm{realm_id:realm.clone()},
             cell_id:CellRef::new("ak:cell:ak.component.identity.resolution.v1:null".to_owned()).expect("registered identity selector")};
         let key=selector.canonical_key().map_err(|e|PersistenceError::Internal(e.to_string()))?;
-        let current=sql_query("SELECT h.payload,(r.ready AND (r.next_expiry IS NULL OR r.next_expiry>statement_timestamp())) AS ready,statement_timestamp() AS observed_at FROM current_result_heads h JOIN governance_current_ready r USING(realm_id) WHERE h.realm_id=$1 AND h.selector_key=$2")
-            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(key).get_result::<Current>(conn).await.optional()?;
+        // The closed human genesis transaction initializes identity before its
+        // first Seal. This exception exposes only that exact initial cell; it
+        // never makes a governance frontier ready. Once any Seal/readiness row
+        // exists, unavailability cannot fall back to the genesis value.
+        let current=sql_query("SELECT h.payload, COALESCE(CASE WHEN r.realm_id IS NOT NULL THEN r.ready AND (r.next_expiry IS NULL OR r.next_expiry>statement_timestamp()) ELSE h.payload->'result'->'value'->>'resolution_event_ref'=$3 AND NOT EXISTS(SELECT 1 FROM state_seals WHERE realm_id=$1) AND EXISTS(SELECT 1 FROM identity_anchor_account_slots s JOIN canonical_events a ON a.realm_id=s.realm_id AND a.kind='ak.device.authorize' AND a.state='accepted' WHERE s.realm_id=$1 AND s.create_event_id=$3 AND a.envelope->'prev_refs'=jsonb_build_array($3::text) AND a.envelope->'payload'->>'authorization_binding_kind'='registration_anchor') END,FALSE) AS ready,statement_timestamp() AS observed_at FROM current_result_heads h LEFT JOIN governance_current_ready r USING(realm_id) WHERE h.realm_id=$1 AND h.selector_key=$2")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(key).bind::<Text,_>(genesis_id.as_str()).get_result::<Current>(conn).await.optional()?;
         let Some(current)=current.filter(|row|row.ready) else {return Ok(CurrentPrincipalRead::Unavailable);};
         let Ok(entry)=CurrentResultEntry::try_from_json(current.payload) else {return Ok(CurrentPrincipalRead::Unavailable);};
         if entry.selector()!=&selector {return Ok(CurrentPrincipalRead::Unavailable);}

@@ -11,6 +11,7 @@ use soland_storage::{
 use crate::{PgPool, async_trait, pg_conn};
 
 mod current;
+pub(crate) mod genesis;
 
 pub struct PgPrincipalResolutionStore {
     pub pool: PgPool,

@@ -715,12 +715,6 @@ pub(super) async fn submit_identity_anchor_batch(
                 ));
             }
         }
-        if is_bootstrap
-            && let Err(error) =
-                persist_principal_resolution_projection(state, &accepted_create_event).await
-        {
-            tracing::error!(%error, event_id = %first.event_id, "principal genesis resolution read-index update failed");
-        }
     }
     if is_bootstrap {
         bootstrap_realm_member_index(

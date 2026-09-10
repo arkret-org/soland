@@ -1569,7 +1569,7 @@ impl EventStore for PgEventStore {
                 if let Some(frontier_cas) = frontier_cas {
                     assert_identity_anchor_frontier(conn, &frontier_cas).await.map_err(PersistenceError::database)?;
                 }
-                if let Some(slot) = account_slot {
+                if let Some(slot) = account_slot.as_ref() {
                     let affected = sql_query(
                         "INSERT INTO identity_anchor_account_slots \
                             (account_authority_id, account_subject, principal_id, station_id, realm_id, create_event_id) \
@@ -1598,7 +1598,7 @@ impl EventStore for PgEventStore {
                     }
                 }
                 let mut dependency_count = 0;
-                for record in records {
+                for record in &records {
                     let event_pk = match insert_canonical_event(conn, &record).await? {
                         CanonicalInsertOutcome::Inserted(pk) | CanonicalInsertOutcome::Replay(pk) => pk,
                         CanonicalInsertOutcome::Collision
@@ -1629,6 +1629,9 @@ impl EventStore for PgEventStore {
                         )
                         .await?;
                     }
+                }
+                if !reanchor_conflict && let Some(slot) = account_slot.as_ref() {
+                    crate::principal_resolution::genesis::initialize(conn, slot, &records).await?;
                 }
                 if !reanchor_conflict && dependency_count != governance_dependencies.len() {
                     return Err(PersistenceError::Conflict(
