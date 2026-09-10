@@ -202,10 +202,20 @@ pub(super) async fn authorize_key_backup_delete(
         .map_err(|error| AppError::internal(format!("delete-intent digest failed: {error}")))?;
 
     let proof_branch = match &body.proof {
-        KeyBackupDeleteProof::PrincipalSigning { proof } => {
-            verify_principal_signing_delete(state, &challenge, proof, &expected_digest, &canonical)
-                .await?;
-            "principal_signing"
+        KeyBackupDeleteProof::RecoveryUnlock {
+            recovery_session_id,
+            proof,
+        } => {
+            verify_recovery_unlock_delete(
+                state,
+                &challenge,
+                recovery_session_id.as_str(),
+                proof,
+                &expected_digest,
+                &canonical,
+            )
+            .await?;
+            "recovery_unlock"
         }
         KeyBackupDeleteProof::DeviceQuorum {
             threshold,
@@ -363,115 +373,57 @@ fn check_proof_envelope(
     Ok(())
 }
 
-/// `principal_signing`: the proof MUST be made by a principal control key that
-/// was accepted for the caller's exact `(principal_id, station_id)`
-/// account authority pair at `proof.created_at`.
-///
-/// The authenticated self endpoint supplies `principal_id`, and the local
-/// service identity supplies `station_id`; verification must resolve
-/// only that pair's unique local PCR lineage. Re-resolving a current did:webvh
-/// history head is not an alternative: a DID host outage MUST NOT decide this
-/// account-local authorization.
-async fn verify_principal_signing_delete(
+/// `recovery_unlock`: bind the delete proof to the exact verified, unconsumed
+/// recovery session and resolve the signer only from the policy snapshot frozen
+/// into that session.
+async fn verify_recovery_unlock_delete(
     state: &AppState,
     challenge: &KeysBackupsDeleteChallenge,
+    recovery_session_id: &str,
     proof: &PayloadProof,
     expected_digest: &arkret_identifiers::Hash,
     canonical: &[u8],
 ) -> Result<(), AppError> {
     check_proof_envelope(challenge, proof, expected_digest)?;
-    let (method_did, device_fragment) = proof
-        .verification_method
-        .as_str()
-        .rsplit_once('#')
-        .ok_or_else(|| {
-            AppError::capability_denied("principal proof method has no device fragment")
-        })?;
-    let method_did = arkret_identifiers::Did::new(method_did.to_owned()).map_err(|error| {
-        AppError::capability_denied(format!("principal proof DID is invalid: {error}"))
-    })?;
-    let method_principal = arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
-        AppError::capability_denied(format!("principal proof DID cannot be projected: {error}"))
-    })?;
-    if method_principal != challenge.account_id.principal_id {
-        return Err(AppError::capability_denied(
-            "principal proof method does not belong to the challenge authority pair",
+    if !recovery_session_id.starts_with(RECOVERY_SESSION_ID_PREFIX) {
+        return Err(AppError::param_invalid(
+            "key backup delete recovery_session_id must start with ak:recovery_session:",
         ));
     }
-    let device_id =
-        arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
-            AppError::capability_denied(format!(
-                "principal proof device fragment is invalid: {error}"
-            ))
-        })?;
-    let authority = state
-        .persistence()
-        .principal_resolution_by_account_id(&challenge.account_id)
+    let session = state
+        .recovery_sessions()
+        .session(recovery_session_id)
         .await
-        .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
+        .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?
         .ok_or_else(|| {
-            AppError::capability_denied("principal authority pair is not durably accepted")
+            AppError::capability_denied("key backup delete recovery session is unknown")
         })?;
-    let device = state
-        .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: challenge.account_id.principal_id.to_string(),
-            device_id: device_id.to_string(),
-        })
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("principal proof device lookup failed: {error}"))
-        })?
-        .ok_or_else(|| AppError::capability_denied("principal proof device is unavailable"))?;
-    if device.revoked_at.is_some() || device.verification_state != "verified" {
-        return Err(AppError::capability_denied(
-            "principal proof device is not active",
-        ));
-    }
-    let payload = serde_json::from_value::<
-        crate::routing::identity::device_signing::ProjectedDevicePayload,
-    >(device.payload)
-    .map_err(|error| {
-        AppError::internal(format!(
-            "principal proof device evidence is invalid: {error}"
-        ))
-    })?;
-    let authorize_event_id = payload.device_authorize_event_id.ok_or_else(|| {
-        AppError::capability_denied("principal proof device has no accepted authorization Event")
-    })?;
-    let authorize_event = state
-        .event_queries()
-        .canonical_event(authorize_event_id.as_str())
-        .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "principal proof authorization lookup failed: {error}"
-            ))
-        })?
-        .ok_or_else(|| {
-            AppError::capability_denied("principal proof authorization Event is unavailable")
-        })?;
-    if authorize_event.actor_id
-        != arkret_wire::ActorId::account(challenge.account_id.clone()).to_string()
-        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
-        || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
+    if session.principal_id != challenge.account_id.principal_id
+        || session.station_id != challenge.account_id.station_id
     {
         return Err(AppError::capability_denied(
-            "principal proof device authorization is outside the selected account lineage",
+            "key backup delete recovery session belongs to another account",
         ));
     }
-    let signing_key = payload
-        .device_public_key_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::capability_denied("principal proof device key is unavailable"))?;
-    let key = decode_ed25519_key(signing_key, "multibase").map_err(|error| {
-        AppError::capability_denied(format!("principal proof device key is invalid: {error}"))
-    })?;
+    if session.state != arkret_models_crypto::SessionState::Verified
+        || session.transaction_id.is_some()
+    {
+        return Err(AppError::capability_denied(
+            "key backup delete recovery session is not verified and unconsumed",
+        ));
+    }
+    if proof.created_at < session.created_at || proof.created_at > session.expires_at {
+        return Err(AppError::capability_denied(
+            "key backup delete recovery session is expired for this proof",
+        ));
+    }
+    let key = super::super::recovery::recovery_session_unlock_verifying_key(
+        &session,
+        proof.verification_method.as_str(),
+    )?;
     if !verify_detached_jws(&key, canonical, &proof.jws) {
         return Err(AppError::capability_denied(
-            "principal-signing key-backup deletion proof is invalid",
+            "recovery-unlock key-backup deletion proof is invalid",
         ));
     }
     Ok(())
@@ -571,8 +523,8 @@ async fn verify_device_quorum_delete(
 }
 
 /// `trusted_recovery_service`: never sufficient alone. The referenced session
-/// MUST be unexpired, unconsumed and established by principal signing, recovery
-/// unlock or device quorum.
+/// MUST be unexpired, unconsumed and established by recovery unlock or device
+/// quorum.
 #[allow(clippy::too_many_arguments)]
 async fn verify_trusted_recovery_service_delete(
     state: &AppState,
@@ -605,14 +557,26 @@ async fn verify_trusted_recovery_service_delete(
             "key backup delete recovery session belongs to another account",
         ));
     }
-    // The recovery-session states §7.8.1 accepts for the
-    // `trusted_recovery_service` branch: the session must have been
-    // *established* by principal signing, recovery unlock or device quorum,
-    // which in soland is exactly the `verified` terminal state — a `pending`
-    // session has not yet presented any of those factors.
-    if session.state != arkret_models_crypto::SessionState::Verified {
+    // A verified service-only session is not a second factor. Require the
+    // session's accepted proof summary to name one of the two establishing
+    // authority branches and reject sessions already bound to a transaction.
+    let establishing_kind =
+        super::super::recovery::recovery_session_proof_kind_and_digest(&session)
+            .map(|(kind, _)| kind)
+            .ok_or_else(|| {
+                AppError::capability_denied(
+                    "key backup delete recovery session has no accepted proof summary",
+                )
+            })?;
+    if session.state != arkret_models_crypto::SessionState::Verified
+        || session.transaction_id.is_some()
+        || !matches!(
+            establishing_kind.as_str(),
+            "recovery_unlock" | "device_quorum"
+        )
+    {
         return Err(AppError::capability_denied(
-            "key backup delete recovery session was not established by an accepted recovery factor",
+            "key backup delete recovery session was not established by recovery_unlock or device_quorum",
         ));
     }
     if proof.created_at < session.created_at || proof.created_at > session.expires_at {
@@ -620,22 +584,25 @@ async fn verify_trusted_recovery_service_delete(
             "key backup delete recovery session is expired for this proof",
         ));
     }
-    let policy = current_recovery_policy(state, &challenge.account_id).await?;
-    if !policy
-        .allowed_proof_kinds
+    if !session
+        .policy_payload
+        .get("allowed_proof_kinds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
         .iter()
-        .any(|kind| kind == "trusted_recovery_service")
+        .any(|kind| kind.as_str() == Some("trusted_recovery_service"))
     {
         return Err(AppError::capability_denied(
-            "the accepted recovery policy does not allow trusted_recovery_service",
+            "the recovery session policy does not allow trusted_recovery_service",
         ));
     }
-    if !policy_mentions_recovery_service(&policy, service_id.as_str()) {
+    if !snapshot_mentions_recovery_service(&session.policy_payload, service_id.as_str()) {
         return Err(AppError::capability_denied(
-            "key backup delete recovery service is not declared by the accepted recovery policy",
+            "key backup delete recovery service is not declared by the recovery session policy",
         ));
     }
-    if policy_requires_service_attestation(&policy) && !has_attestation {
+    if snapshot_requires_service_attestation(&session.policy_payload) && !has_attestation {
         return Err(AppError::capability_denied(
             "the accepted recovery policy requires an attestation_ref for this service",
         ));
@@ -716,26 +683,30 @@ async fn current_device_quorum_k(
     )
 }
 
-fn policy_mentions_recovery_service(
-    policy: &soland_services::identity::RecoveryPolicyState,
-    service_id: &str,
-) -> bool {
-    crate::routing::identity::device_signing::policy_mentions_identifier(
-        policy,
-        &[
-            "trusted_recovery_service",
-            "trusted_recovery_services",
-            "trusted_services",
-            "recovery_services",
-        ],
-        service_id,
-    )
+fn snapshot_mentions_recovery_service(policy: &Value, service_id: &str) -> bool {
+    [
+        "trusted_recovery_service",
+        "trusted_recovery_services",
+        "trusted_services",
+        "recovery_services",
+    ]
+    .iter()
+    .any(|key| {
+        policy
+            .get(*key)
+            .is_some_and(|value| value_mentions_identifier(value, service_id))
+    })
 }
 
-fn policy_requires_service_attestation(
-    policy: &soland_services::identity::RecoveryPolicyState,
-) -> bool {
-    crate::routing::identity::device_signing::policy_requires_trusted_service_attestation(policy)
+fn snapshot_requires_service_attestation(policy: &Value) -> bool {
+    [
+        "/trusted_recovery_service/attestation_required",
+        "/trusted_recovery_service/require_attestation",
+        "/proof_requirements/trusted_recovery_service/attestation_required",
+        "/proof_requirements/trusted_recovery_service/require_attestation",
+    ]
+    .iter()
+    .any(|pointer| policy.pointer(pointer).and_then(Value::as_bool) == Some(true))
 }
 
 fn quorum_verification_method_matches(

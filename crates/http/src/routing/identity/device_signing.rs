@@ -10,7 +10,7 @@ use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::Value;
 use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 
-use super::{device_signature_kid_points_to_device_key, value_mentions_identifier};
+use super::device_signature_kid_points_to_device_key;
 use crate::state::AppState;
 
 pub(crate) fn device_quorum_method_matches(
@@ -24,19 +24,6 @@ pub(crate) fn device_quorum_method_matches(
     };
     verification_method == format!("{principal_id}#{device_id}")
         || verification_method == format!("{device_public_key}#{fragment}")
-}
-
-pub(crate) fn policy_mentions_identifier(
-    policy: &RecoveryPolicyState,
-    top_level_keys: &[&str],
-    identifier: &str,
-) -> bool {
-    top_level_keys.iter().any(|key| {
-        policy
-            .raw_payload
-            .get(*key)
-            .is_some_and(|value| value_mentions_identifier(value, identifier))
-    })
 }
 
 pub(crate) fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
@@ -56,30 +43,6 @@ pub(crate) fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Op
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
     })
-}
-
-pub(crate) fn policy_requires_trusted_service_attestation(policy: &RecoveryPolicyState) -> bool {
-    [
-        "/trusted_recovery_service/attestation_required",
-        "/trusted_recovery_service/require_attestation",
-        "/proof_requirements/trusted_recovery_service/attestation_required",
-        "/proof_requirements/trusted_recovery_service/require_attestation",
-    ]
-    .iter()
-    .any(|pointer| {
-        policy
-            .raw_payload
-            .pointer(pointer)
-            .is_some_and(value_requires_attestation)
-    })
-}
-
-fn value_requires_attestation(value: &Value) -> bool {
-    match value {
-        Value::Bool(value) => *value,
-        Value::String(value) => matches!(value.as_str(), "required" | "true"),
-        _ => false,
-    }
 }
 
 pub fn validate_device_authorize_binding(

@@ -300,8 +300,8 @@ Witness types (`RecoveryProofKind`):
 - `TrustedRecoveryService` — third-party service signature; subject to
   `recovery_witness_revoke_lagging` if the service's revocation feed is
   stale relative to the freshness window.
-- `PrincipalSigning` — the principal itself signs (useful for portable
-  migrations where the principal is alive but the device set rotated).
+- `DidRoot` — the principal proves possession of the cold DID recovery
+  authority for a policy-authorized recovery ceremony.
 
 Operational behaviors:
 

@@ -229,7 +229,7 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
             )
         })?;
         super::super::recovery::recovery_session_unlock_verifying_key(record, verification_method)?
-    } else if proof.proof_kind == arkret_models_crypto::ProofKind::PrincipalSigning
+    } else if proof.proof_kind == arkret_models_crypto::ProofKind::CurrentDevice
         && recovery_session.is_none()
     {
         let record = state
@@ -292,15 +292,11 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
 /// Recovery-ceremony proof kinds whose transcript MUST be anchored to a
 /// verified/completed recovery session (key-management.md §7.7.1 / §7.8:
 /// an unbound proof MUST be rejected with `recovery_evidence_unbound`).
-/// `principal_signing` is outside that closed set: it is a device-signed
-/// decrypt proof, not a ceremony, and is therefore not anchored to a recovery
-/// session. It moves inside the set once the policy-layer recovery-session
-/// driver exists.
+/// `current_device` is outside that closed set: it is a device-signed decrypt
+/// proof, not a recovery ceremony, and is therefore not anchored to a durable
+/// recovery-session record.
 fn proof_kind_requires_recovery_session(proof_kind: &str) -> bool {
-    matches!(
-        proof_kind,
-        "recovery_unlock" | "threshold_recovery" | "device_quorum" | "trusted_recovery_service"
-    )
+    proof_kind != "current_device"
 }
 
 pub(super) async fn enforce_recovery_session_binding_when_present(
@@ -441,7 +437,7 @@ mod tests {
 
     // key-management.md §7.7.1 / §7.8 — recovery-ceremony proof kinds fail
     // closed when the claimed recovery session record is absent; the
-    // `principal_signing` device proof is outside that closed set and proceeds
+    // `current_device` proof is outside that closed set and proceeds
     // without a durable session record.
     #[test]
     fn recovery_ceremony_proof_kinds_require_a_recovery_session() {
@@ -456,7 +452,7 @@ mod tests {
                 "{kind} must require a durable recovery session"
             );
         }
-        assert!(!proof_kind_requires_recovery_session("principal_signing"));
+        assert!(!proof_kind_requires_recovery_session("current_device"));
         // Unknown kinds never reach this check (the shape validator rejects
         // them first), but classify them as session-requiring anyway so a
         // future closed-set widening cannot silently fail open here.
