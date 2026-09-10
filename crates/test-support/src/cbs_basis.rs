@@ -739,7 +739,13 @@ async fn persist_and_project_realm_genesis_event_with_history_access(
         ),
         (
             arkret_wire::EventKind::RealmPolicyBundle,
-            serde_json::json!({"policy_revision": 1, "content_encryption_floor": "e2ee_required"}),
+            // realm-and-space.md section 2.5: `content_encryption_floor`
+            // defaults to `allow_plaintext`, and the upgradable default Realm
+            // shape is `mls_rfc9420` + `allow_plaintext`. A fixture Realm that
+            // never ran `ak.realm.create` must plant that default; a test that
+            // wants the E2EE floor raises it itself, which the one-way ratchet
+            // always permits.
+            serde_json::json!({"policy_revision": 1, "content_encryption_floor": "allow_plaintext"}),
         ),
         (
             arkret_wire::EventKind::RealmJoinRule,

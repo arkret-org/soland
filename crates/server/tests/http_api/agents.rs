@@ -935,6 +935,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             controller_principal_id: controller_principal_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
             trust_domain: state.config().trust_domain.clone(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             created_at: now,
         },
     )

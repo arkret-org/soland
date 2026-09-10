@@ -7,7 +7,6 @@ pub(super) const ALLOWED_PROOF_KINDS: &[&str] = &[
     "recovery_unlock",
     "device_quorum",
     "trusted_recovery_service",
-    "threshold_recovery",
 ];
 
 #[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]

@@ -112,6 +112,33 @@ CREATE TABLE public.accounts (
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_station_key UNIQUE (station_id, principal_id);
 
+-- Durable evidence that this Station has held one account's authoring record
+-- without interruption since that account's local inception.
+--
+-- `sync/federation.md` section 5.3.4 makes this condition 2 of a decidable
+-- empty actor frontier: only a Station that can show the unbroken interval may
+-- answer `next_actor_seq = 0`; every other case MUST fail
+-- `frontier_unavailable` rather than initialize an actor chain from "the
+-- database returned no rows". The interval starts at the account's inception on
+-- this Station, which necessarily precedes every device generation of that
+-- account, so an unbroken interval covers the complete device generation
+-- lineage of any `authoring_device_generation_ref` by construction.
+--
+-- Backup restore, data import, migration, retention pruning and any interval
+-- whose content is undetermined break continuity: whoever performs one MUST
+-- stamp `broken_at`/`broken_reason`, and the row then fails the gate forever.
+-- Deleting the row has the same effect, because absence is also undecidable.
+CREATE TABLE public.account_authoring_continuity (
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
+    inception_at timestamp with time zone NOT NULL,
+    broken_at timestamp with time zone,
+    broken_reason text,
+    PRIMARY KEY (principal_id, station_id),
+    CONSTRAINT account_authoring_continuity_break_check
+        CHECK ((broken_at IS NULL) = (broken_reason IS NULL))
+);
+
 CREATE TABLE public.account_localparts (
     id uuid PRIMARY KEY,
     account_pk bigint NOT NULL,
@@ -665,6 +692,14 @@ CREATE INDEX canonical_events_actor_idx ON public.canonical_events USING btree (
 CREATE INDEX canonical_events_realm_actor_position_idx
     ON public.canonical_events USING btree (realm_pk, actor_id, actor_seq, id)
     WHERE state = 'accepted';
+
+-- Position occupancy for one `(realm_id, actor_id)` in every state.
+-- `sync/federation.md` section 5.3.4 condition 3 requires the enumeration behind
+-- a decidable empty actor frontier to cover pending outbound, submitted but
+-- undecided, accepted, quarantined and fork-resolution voided positions, so it
+-- MUST NOT run through the accepted-only partial index above.
+CREATE INDEX canonical_events_realm_actor_occupancy_idx
+    ON public.canonical_events USING btree (realm_id, actor_id);
 
 CREATE INDEX canonical_events_actor_received_idx ON public.canonical_events USING btree (actor_id, received_at, id);
 

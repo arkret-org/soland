@@ -19,6 +19,7 @@ pub(super) fn validate_recovery_policy(
         AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")
     })?;
+    reject_unexecutable_recovery_policy(&typed)?;
     typed.validate().map_err(|error| {
         AppError::param_invalid(format!(
             "recovery policy violates protocol invariants: {error}"
@@ -106,6 +107,77 @@ pub(super) fn validate_recovery_policy(
         verification_method: verification_method.to_owned(),
         raw_payload: payload.clone(),
     })
+}
+
+/// key-management.md §8.1 — publish / rotate MUST reject a policy the receiving
+/// deployment cannot execute, instead of accepting it and only failing when a
+/// real recovery is attempted. Every rejection here is `failed_precondition`.
+fn recovery_policy_unexecutable(message: impl Into<String>) -> AppError {
+    crate::app_error!(FailedPrecondition, message.into())
+}
+
+fn reject_unexecutable_recovery_policy(policy: &RecoveryPolicy) -> Result<(), AppError> {
+    for method in &policy.methods {
+        match method {
+            arkret_models_crypto::RecoveryMethod::DidRoot {} => {}
+            arkret_models_crypto::RecoveryMethod::RecoveryUnlock { keys } => {
+                for key in keys {
+                    if key.not_before >= key.expires_at
+                        || key
+                            .revoked_at
+                            .is_some_and(|revoked_at| revoked_at < key.not_before)
+                    {
+                        return Err(recovery_policy_unexecutable(
+                            "recovery_unlock key validity interval is empty or self-contradictory",
+                        ));
+                    }
+                    let hpke = &key.backup_hpke;
+                    if hpke.not_before >= hpke.expires_at
+                        || hpke
+                            .revoked_at
+                            .is_some_and(|revoked_at| revoked_at < hpke.not_before)
+                        || hpke.key_agreement_ref.as_str() == key.verification_method.as_str()
+                    {
+                        return Err(recovery_policy_unexecutable(
+                            "recovery_unlock backup_hpke entry is unusable for this signing key",
+                        ));
+                    }
+                }
+            }
+            arkret_models_crypto::RecoveryMethod::DeviceQuorum { k, member_ids } => {
+                let distinct = member_ids.iter().collect::<BTreeSet<_>>().len();
+                if usize::try_from(*k).unwrap_or(usize::MAX) > distinct {
+                    return Err(recovery_policy_unexecutable(format!(
+                        "device_quorum k={k} exceeds {distinct} distinct member devices"
+                    )));
+                }
+            }
+            arkret_models_crypto::RecoveryMethod::TrustedRecoveryService { services } => {
+                for service in services {
+                    let controller = arkret_identity::verification_method_did(
+                        service.authorization_verification_method.as_str(),
+                    )
+                    .map_err(|error| {
+                        recovery_policy_unexecutable(format!(
+                            "trusted_recovery_service authorization_verification_method is not a DID URL: {error}"
+                        ))
+                    })?;
+                    let controller_core = arkret_wire::project_did_to_core_id(&controller)
+                        .map_err(|error| {
+                            recovery_policy_unexecutable(format!(
+                                "trusted_recovery_service controller DID is not projectable: {error}"
+                            ))
+                        })?;
+                    if controller_core != service.service_id {
+                        return Err(recovery_policy_unexecutable(
+                            "trusted_recovery_service authorization_verification_method controller does not equal service_id",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn recovery_signature_error(message: impl Into<String>) -> AppError {

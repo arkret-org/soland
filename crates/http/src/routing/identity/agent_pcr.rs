@@ -843,6 +843,18 @@ pub(crate) fn validate_agent_pcr_genesis_object(
     .map_err(|error| schema_error(format!("Agent PCR notary is invalid: {error}")))?;
     let agent_id = arkret_identifiers::DidCoreId::new(agent_id.to_owned())
         .map_err(|error| schema_error(format!("Agent core id is invalid: {error}")))?;
+    // The Realm locks its suite at create time and Agent PCRs have no SHA-256
+    // exception, so the canonical rebuild must adopt the declared suite. The
+    // enum is the ordinary Realm digest registry, and the rebuilt object is
+    // still compared verbatim, so an unregistered value cannot get through.
+    let digest_suite = object
+        .get("digest_algorithm")
+        .and_then(Value::as_str)
+        .ok_or_else(|| schema_error("Agent PCR digest_algorithm is missing"))
+        .and_then(|value| {
+            arkret_canonical::digest_suite(value)
+                .map_err(|error| schema_error(format!("Agent PCR digest_algorithm: {error}")))
+        })?;
     let expected = arkret_bootstrap::build_agent_pcr_create_payload(
         arkret_bootstrap::AgentPcrCreatePayloadInput {
             agent_id,
@@ -855,6 +867,7 @@ pub(crate) fn validate_agent_pcr_genesis_object(
             trust_domain: arkret_wire::TrustDomainId::new(trust_domain.to_owned()).map_err(
                 |error| schema_error(format!("configured trust domain is invalid: {error}")),
             )?,
+            digest_suite,
             created_at: Utc::now(),
         },
     )
@@ -1196,6 +1209,7 @@ mod tests {
                 )
                 .unwrap(),
                 trust_domain: arkret_wire::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
                 created_at: Utc::now(),
             },
         )

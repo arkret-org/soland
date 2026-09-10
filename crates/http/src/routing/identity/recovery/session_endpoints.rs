@@ -132,10 +132,10 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 //   GET  recovery-sessions/{id}             — read status (principal-isolated)
 //   POST recovery-sessions/{id}/proofs      — verify a proof (pending -> verified)
 //
-// C-P3 — `/proofs` cryptographically verifies did_root, recovery_unlock, and
-// device_quorum and trusted_recovery_service over the canonical recovery-proof transcript and
-// advances `pending -> verified` ONLY on success. Policy-permitted
-// threshold_recovery currently returns 501
+// C-P3 — `/proofs` cryptographically verifies the four closed recovery methods
+// (did_root, recovery_unlock, device_quorum, trusted_recovery_service) over the
+// canonical recovery-proof transcript and advances `pending -> verified` ONLY on
+// success. Any other kind fails closed with 501
 // `recovery_proof_kind_unimplemented` rather than silently leaving the session
 // pending.
 //
@@ -153,7 +153,6 @@ pub(super) fn recovery_proof_summary(record: &RecoverySessionServiceState) -> Op
         "recovery_unlock" => RecoveryProofKind::RecoveryUnlock,
         "device_quorum" => RecoveryProofKind::DeviceQuorum,
         "trusted_recovery_service" => RecoveryProofKind::TrustedRecoveryService,
-        "threshold_recovery" => RecoveryProofKind::ThresholdRecovery,
         _ => return None,
     };
     let verification_method = proof
@@ -1066,24 +1065,15 @@ pub(super) async fn recovery_session_proof_submit(
     }
     let bound_policy: RecoveryPolicy = serde_json::from_value(record.policy_payload.clone())
         .map_err(|e| recovery_proof_authority_error(format!("bound policy invalid: {e}")))?;
-    if let Some(requirement) = &bound_policy.approval_requirement {
-        if requirement.min_approvals.unwrap_or(0) > 0
-            || requirement.announcement_required.unwrap_or(false)
-        {
-            return Err(recovery_proof_authority_error(
-                "policy requires additional independently verified approval or announcement",
-            ));
-        }
-        if requirement.cooldown_seconds.is_some_and(|seconds| {
-            chrono::Utc::now()
-                .signed_duration_since(record.created_at)
-                .num_seconds()
-                < i64::try_from(seconds).unwrap_or(i64::MAX)
-        }) {
-            return Err(recovery_proof_authority_error(
-                "policy recovery cooldown has not elapsed",
-            ));
-        }
+    if bound_policy.cooldown_seconds.is_some_and(|seconds| {
+        chrono::Utc::now()
+            .signed_duration_since(record.created_at)
+            .num_seconds()
+            < i64::try_from(seconds).unwrap_or(i64::MAX)
+    }) {
+        return Err(recovery_proof_authority_error(
+            "policy recovery cooldown has not elapsed",
+        ));
     }
     // Anti-replay: the proof MUST echo the server-issued session challenge.
     let echoed = proof
@@ -1320,19 +1310,14 @@ pub(super) async fn verify_trusted_recovery_service_proof(
         })?;
     let policy: RecoveryPolicy = serde_json::from_value(record.policy_payload.clone())
         .map_err(|e| recovery_proof_authority_error(format!("bound policy invalid: {e}")))?;
-    let Some(arkret_models_crypto::RecoveryMethod::TrustedRecoveryService { k, services }) =
+    let Some(arkret_models_crypto::RecoveryMethod::TrustedRecoveryService { services }) =
         policy.method(RecoveryProofKind::TrustedRecoveryService)
     else {
         return Err(recovery_proof_authority_error(
             "trusted service method is not enabled",
         ));
     };
-    if *k != 1 {
-        return Err(recovery_proof_authority_error(
-            "single-service proof cannot satisfy the policy service threshold",
-        ));
-    }
-    let service = services
+    services
         .iter()
         .find(|entry| {
             entry.service_id.as_str() == service_id
@@ -1344,11 +1329,6 @@ pub(super) async fn verify_trusted_recovery_service_proof(
                 "service, audience and signing method do not exactly match the accepted method",
             )
         })?;
-    if service.attestation_required.unwrap_or(false) {
-        return Err(recovery_proof_authority_error(
-            "required service attestation cannot be independently verified",
-        ));
-    }
     crate::jws_verify::validate_verification_method_controller(service_id, verification_method)
         .map_err(|error| {
             recovery_proof_authority_error(format!(

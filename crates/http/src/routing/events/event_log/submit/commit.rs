@@ -1,3 +1,4 @@
+use super::super::endpoints::VerifiedActorPredecessors;
 use super::*;
 
 pub(super) struct AcceptedEventCommit<'a> {
@@ -139,6 +140,7 @@ pub(super) async fn commit_accepted_event_stage(
                 state,
                 parsed.realm_id.clone(),
                 parsed.actor.clone(),
+                VerifiedActorPredecessors::none(),
             )
             .await
             .map_err(|frontier_error| {
@@ -261,6 +263,7 @@ pub(super) async fn commit_accepted_event_stage(
                     state,
                     parsed.realm_id.clone(),
                     parsed.actor.clone(),
+                    VerifiedActorPredecessors::none(),
                 )
                 .await
                 .map_err(|frontier_error| {

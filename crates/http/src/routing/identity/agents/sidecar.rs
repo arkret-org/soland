@@ -23,6 +23,7 @@ use soland_services::identity::{
 };
 
 use super::*;
+use crate::routing::events::event_log::VerifiedActorPredecessors;
 
 const SIDECAR_ENSURE_LOCK_SHARDS: usize = 256;
 const SIDECAR_LIST_PAGE_SIZE: usize = 100;
@@ -889,6 +890,7 @@ async fn prepare_sidecar(
         state,
         body.source_realm_id.clone(),
         controller_actor.clone(),
+        VerifiedActorPredecessors::none(),
     )
     .await?;
     let created_at = chrono::Utc::now();

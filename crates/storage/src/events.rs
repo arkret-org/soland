@@ -321,6 +321,21 @@ pub trait EventStore: Send + Sync {
         realm_id: &str,
         actor_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    /// Whether this Station holds any position at all for one
+    /// `(realm_id, actor_id)`, in every state.
+    ///
+    /// `sync/federation.md` section 5.3.4 condition 3: the enumeration behind a
+    /// decidable empty actor frontier MUST cover pending outbound, submitted
+    /// but undecided, accepted, quarantined and fork-resolution voided
+    /// positions. It therefore reads the raw event table plus the fork
+    /// normalization ledger, never the accepted-only view: a quarantined or
+    /// adjudicated-loser Event still occupies its sequence, and a normalization
+    /// row can name a position whose winning Event this Station never held.
+    async fn realm_actor_position_occupied(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> PersistenceResult<bool>;
     /// Accepted siblings at one exact Realm/actor sequence position. The
     /// caller supplies a small hard ceiling so over-fork detection never
     /// degenerates into an actor-history scan.

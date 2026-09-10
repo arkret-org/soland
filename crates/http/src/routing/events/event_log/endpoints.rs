@@ -1610,8 +1610,13 @@ async fn events_frontier(
         {
             return Err(AppError::not_found("realm not found"));
         }
-        let frontier =
-            load_realm_actor_frontier(state, realm_id, selected_actor_id.clone()).await?;
+        let frontier = load_realm_actor_frontier(
+            state,
+            realm_id,
+            selected_actor_id.clone(),
+            VerifiedActorPredecessors::none(),
+        )
+        .await?;
         return soland_http::result::json_ok(EventsFrontierState {
             frontier: EventsFrontierView::RealmActor(frontier),
         });
@@ -1696,7 +1701,15 @@ async fn events_frontier(
         }
         let realm_id = RealmId::new(realm_value)
             .map_err(|_| AppError::internal("stored realm_id is invalid"))?;
-        realms.push(load_realm_actor_frontier(state, realm_id, selected_actor_id.clone()).await?);
+        realms.push(
+            load_realm_actor_frontier(
+                state,
+                realm_id,
+                selected_actor_id.clone(),
+                VerifiedActorPredecessors::none(),
+            )
+            .await?,
+        );
     }
     let aggregate = ActorAggregateFrontierView {
         kind: ActorAggregateFrontierKind::ActorAggregate,
@@ -1942,9 +1955,14 @@ mod applet_managed_actor_pcr_access_tests {
                 principal.clone(),
                 arkret_wire::DidCoreId::new(format!("ak:did_core:web:{station}.example")).unwrap(),
             ));
-            let frontier = load_realm_actor_frontier(&state, realm.clone(), actor.clone())
-                .await
-                .unwrap();
+            let frontier = load_realm_actor_frontier(
+                &state,
+                realm.clone(),
+                actor.clone(),
+                VerifiedActorPredecessors::none(),
+            )
+            .await
+            .unwrap();
             assert_eq!(frontier.actor_id, actor);
             assert_eq!(frontier.next_actor_seq, expected_sequence);
             assert_eq!(frontier.frontier_event_ids.len(), 1);
@@ -2028,10 +2046,123 @@ mod applet_managed_actor_pcr_access_tests {
     }
 }
 
+/// `sync/federation.md` section 5.3.4, "decidable empty frontier".
+///
+/// `next_actor_seq = 0` with an empty `frontier_event_ids` asserts that this
+/// actor has never authored in this Realm. "The accepted-events query returned
+/// no rows" does not establish that, and initializing an actor chain from it is
+/// how a rejoin silently restarts at sequence 0 on top of history this Station
+/// merely failed to see. The four conditions below are the only way to reach
+/// that assertion; anything else — including anything undecidable — is
+/// `frontier_unavailable`, which stays retryable.
+///
+/// Condition 4 ("this bootstrap's `applicant_predecessor_events` verify to the
+/// empty set") is carried by [`VerifiedActorPredecessors`]: every caller states
+/// what it verified, so a future section 5.3.1 bootstrap cannot reach an empty
+/// frontier by routing around this check.
+async fn require_decidable_empty_realm_actor_frontier(
+    state: &AppState,
+    realm_id: &RealmId,
+    actor_id: &arkret_wire::ActorId,
+    verified_predecessors: VerifiedActorPredecessors<'_>,
+) -> Result<(), AppError> {
+    // 1. Single authoring entry. Every Event this actor can have in this Realm is produced through
+    //    this Station's own submit surface, which makes "never authored" a local fact this Station
+    //    is authoritative about rather than a claim about the whole network.
+    if *actor_id.route_service_id() != state.service_core_id() {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "actor frontier initialization is not decidable for a foreign authoring Station",
+        ));
+    }
+    // 2. Unbroken authoring record. Only an account has a local inception this Station can anchor;
+    //    a Service actor has no such anchor and is therefore undecidable rather than continuous.
+    let Some(account_id) = actor_id.as_account_id() else {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "actor frontier initialization has no account authoring continuity anchor",
+        ));
+    };
+    if !state
+        .persistence()
+        .account_authoring_record_is_continuous(account_id)
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FrontierUnavailable,
+                format!("account authoring continuity is unavailable: {error}"),
+            )
+        })?
+    {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "this Station does not hold an unbroken authoring record for the account",
+        ));
+    }
+    // 3. Deterministic, exhaustive, empty enumeration. The accepted-events read above is not that
+    //    enumeration: it hides quarantined Events and fork-resolution losers, both of which still
+    //    occupy a sequence.
+    if state
+        .event_queries()
+        .realm_actor_position_occupied(realm_id.as_str(), &actor_id.to_string())
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FrontierUnavailable,
+                format!("actor position enumeration did not complete: {error}"),
+            )
+        })?
+    {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "the actor already occupies a position this Station cannot read as accepted",
+        ));
+    }
+    // 4. No counter-evidence. A verified applicant predecessor for exactly this actor proves the
+    //    chain is not initial, so an empty frontier MUST NOT be claimed from it. Deriving the
+    //    frontier from that material is the bootstrap merge path, not this initialization gate.
+    if !verified_predecessors.is_empty() {
+        return Err(crate::app_error!(
+            FrontierUnavailable,
+            "verified applicant predecessors contradict an initial actor state",
+        ));
+    }
+    Ok(())
+}
+
+/// Applicant predecessor Events already verified under the ordinary Event acceptance rules for
+/// exactly this `(realm_id, actor_id)`.
+///
+/// `sync/federation.md` section 5.3.4 makes an empty verified set one of the four conditions for a
+/// decidable empty frontier, so the set has to reach the gate as an argument rather than as an
+/// assumption. Ordinary authoring surfaces hold no such material and say so with [`Self::none`];
+/// `ak.peer.realm_join.read.bootstrap.v1` supplies what it verified with
+/// [`Self::from_verified`]. Neither constructor accepts unverified remote material.
+#[derive(Clone, Copy)]
+pub(crate) struct VerifiedActorPredecessors<'a>(&'a [arkret_wire::Event]);
+
+impl<'a> VerifiedActorPredecessors<'a> {
+    /// This surface holds no bootstrap material at all.
+    pub(crate) const fn none() -> Self {
+        Self(&[])
+    }
+
+    /// Events that already passed the ordinary acceptance rules for this actor and Realm.
+    #[allow(dead_code)]
+    pub(crate) const fn from_verified(events: &'a [arkret_wire::Event]) -> Self {
+        Self(events)
+    }
+
+    const fn is_empty(self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 pub(crate) async fn load_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
     actor_id: arkret_wire::ActorId,
+    verified_predecessors: VerifiedActorPredecessors<'_>,
 ) -> Result<RealmActorFrontierView, AppError> {
     let records = state
         .event_queries()
@@ -2055,6 +2186,13 @@ pub(crate) async fn load_realm_actor_frontier(
             ids.dedup();
             (next_actor_seq, ids)
         } else {
+            require_decidable_empty_realm_actor_frontier(
+                state,
+                &realm_id,
+                &actor_id,
+                verified_predecessors,
+            )
+            .await?;
             (0, Vec::new())
         };
     build_realm_actor_frontier(

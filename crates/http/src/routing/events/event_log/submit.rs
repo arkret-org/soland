@@ -2175,11 +2175,13 @@ async fn validate_identity_creation_control_proof(
 ) -> Result<(), SubmitOneError> {
     let proof = &request.identity_creation_control_proof;
     let now = Utc::now();
+    // The complete historical registration evidence carries no freshness gate
+    // against this receiver's clock: its `accepted_at` is the relaying
+    // Authority's registry acceptance instant, not a claim about now.
     if proof.issued_at > now
         || proof.expires_at <= now
         || proof.expires_at - proof.issued_at > Duration::minutes(5)
         || proof.audience_id.as_str() != state.service_id().as_str()
-        || request.registration_did_evidence.accepted_at > now
     {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,

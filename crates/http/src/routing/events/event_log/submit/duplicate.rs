@@ -1,3 +1,4 @@
+use super::super::endpoints::VerifiedActorPredecessors;
 use super::*;
 
 /// Inputs needed to classify an event-id collision before any new canonical
@@ -137,6 +138,7 @@ pub(super) async fn resolve_existing_event_stage(
             state,
             parsed.realm_id.clone(),
             parsed.actor.clone(),
+            VerifiedActorPredecessors::none(),
         )
         .await
         .map_err(|error| {

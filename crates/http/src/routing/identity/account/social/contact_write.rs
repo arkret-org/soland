@@ -26,6 +26,7 @@ use ed25519_dalek::{Signature, Signer as _};
 use serde::de::DeserializeOwned;
 
 use super::*;
+use crate::routing::events::event_log::VerifiedActorPredecessors;
 
 const CONTACT_RESERVATION_TTL_MINUTES: i64 = 10;
 const CONTACT_OUTCOME_TTL_HOURS: i64 = 24;
@@ -721,6 +722,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         state,
         realm_id.clone(),
         holder.contact_actor_id(),
+        VerifiedActorPredecessors::none(),
     )
     .await?;
     let accepted_seal = if state.projections().is_conformance_fixture_realm(&realm_id) {

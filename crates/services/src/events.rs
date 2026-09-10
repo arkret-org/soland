@@ -902,6 +902,15 @@ pub trait EventReadPort: Send + Sync {
         realm_id: &str,
         actor_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>>;
+    /// `sync/federation.md` section 5.3.4 condition 3: complete position
+    /// occupancy for one `(realm_id, actor_id)` across every state, so an empty
+    /// actor frontier is decided by an exhaustive enumeration rather than by an
+    /// accepted-only read returning no rows.
+    async fn realm_actor_position_occupied(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> ServiceResult<bool>;
     async fn canonical_events_at_realm_actor_position(
         &self,
         realm_id: &str,
@@ -1301,6 +1310,15 @@ impl EventQueryService {
     ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events
             .canonical_events_for_realm_actor(realm_id, actor_id)
+            .await
+    }
+    pub async fn realm_actor_position_occupied(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> ServiceResult<bool> {
+        self.events
+            .realm_actor_position_occupied(realm_id, actor_id)
             .await
     }
     pub async fn canonical_events_at_realm_actor_position(

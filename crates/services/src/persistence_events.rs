@@ -279,6 +279,17 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .list_for_realm_actor(realm_id, actor_id)
             .await?)
     }
+    async fn realm_actor_position_occupied(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .events()
+            .realm_actor_position_occupied(realm_id, actor_id)
+            .await?)
+    }
     async fn canonical_events_at_realm_actor_position(
         &self,
         realm_id: &str,

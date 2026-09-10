@@ -240,7 +240,6 @@ pub(super) async fn authorize_key_backup_delete(
         KeyBackupDeleteProof::TrustedRecoveryService {
             service_id,
             recovery_session_id,
-            attestation_ref,
             proof,
         } => {
             verify_trusted_recovery_service_delete(
@@ -248,7 +247,6 @@ pub(super) async fn authorize_key_backup_delete(
                 &challenge,
                 service_id,
                 recovery_session_id.as_str(),
-                attestation_ref.is_some(),
                 proof,
                 &expected_digest,
                 &canonical,
@@ -542,7 +540,6 @@ async fn verify_trusted_recovery_service_delete(
     challenge: &KeysBackupsDeleteChallenge,
     service_id: &arkret_wire::DidCoreId,
     recovery_session_id: &str,
-    has_attestation: bool,
     proof: &PayloadProof,
     expected_digest: &arkret_identifiers::Hash,
     canonical: &[u8],
@@ -599,14 +596,14 @@ async fn verify_trusted_recovery_service_delete(
     let policy: arkret_models_crypto::RecoveryPolicy =
         serde_json::from_value(session.policy_payload.clone())
             .map_err(|e| AppError::capability_denied(format!("bound policy invalid: {e}")))?;
-    let Some(arkret_models_crypto::RecoveryMethod::TrustedRecoveryService { k, services }) =
+    let Some(arkret_models_crypto::RecoveryMethod::TrustedRecoveryService { services }) =
         policy.method(arkret_models_crypto::RecoveryProofKind::TrustedRecoveryService)
     else {
         return Err(AppError::capability_denied(
             "trusted service method not enabled",
         ));
     };
-    let service = services
+    services
         .iter()
         .find(|service| {
             service.service_id == *service_id
@@ -616,15 +613,17 @@ async fn verify_trusted_recovery_service_delete(
         .ok_or_else(|| {
             AppError::capability_denied("service method does not exactly match accepted policy")
         })?;
-    if *k != 1
-        || service.attestation_required.unwrap_or(false)
-        || policy.approval_requirement.is_some()
-    {
+    if policy.cooldown_seconds.is_some_and(|seconds| {
+        proof
+            .created_at
+            .signed_duration_since(session.created_at)
+            .num_seconds()
+            < i64::try_from(seconds).unwrap_or(i64::MAX)
+    }) {
         return Err(AppError::capability_denied(
-            "required service threshold or approval evidence is not satisfied",
+            "policy recovery cooldown has not elapsed",
         ));
     }
-    let _ = has_attestation;
     let service_did = arkret_identity::verification_method_did(proof.verification_method.as_str())
         .map_err(|error| AppError::capability_denied(error.to_string()))?;
     let service_core_id = arkret_wire::project_did_to_core_id(&service_did)

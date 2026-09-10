@@ -21,6 +21,7 @@ use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
+use crate::routing::events::event_log::VerifiedActorPredecessors;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -337,6 +338,9 @@ async fn prepare(
         state,
         body.realm_id.clone(),
         authenticated_actor.clone(),
+        // No section 5.3.1 bootstrap runs yet, so nothing is verified for this actor. When the
+        // bootstrap merge lands it passes what it verified here instead of widening this call.
+        VerifiedActorPredecessors::none(),
     )
     .await?;
     let unsigned_event = RealmJoinUnsignedEvent::prepare(

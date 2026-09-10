@@ -1924,6 +1924,31 @@ impl EventStore for PgEventStore {
         .map_err(PersistenceError::database)
     }
 
+    async fn realm_actor_position_occupied(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT EXISTS ( \
+                 SELECT 1 FROM canonical_events \
+                  WHERE realm_id = $1 AND actor_id = $2 \
+                 UNION ALL \
+                 SELECT 1 FROM federation_fork_normalization \
+                  WHERE realm_id = $1 AND actor_id = $2 \
+             ) AS occupied",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(actor_id)
+        .get_result::<PositionOccupancyRow>(&mut *conn)
+        .await
+        .map(|row| row.occupied)
+        .map_err(PersistenceError::database)
+    }
+
     async fn list_at_realm_actor_position(
         &self,
         realm_id: &str,
@@ -2105,6 +2130,12 @@ struct MessageRow {
     encrypted: bool,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(QueryableByName)]
+struct PositionOccupancyRow {
+    #[diesel(sql_type = Bool)]
+    occupied: bool,
 }
 
 impl From<MessageRow> for MessageRecord {

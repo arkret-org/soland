@@ -228,7 +228,7 @@ pub(crate) async fn validate_pcr_prepare_ackless_ingress(
     }
     Ok(())
 }
-pub(crate) use endpoints::load_realm_actor_frontier;
+pub(crate) use endpoints::{VerifiedActorPredecessors, load_realm_actor_frontier};
 pub(crate) use submit::accepted_event_digest_suites;
 #[cfg(feature = "test-support")]
 pub use submit::attach_fixture_station_admission_proof;
