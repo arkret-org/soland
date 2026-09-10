@@ -9,9 +9,9 @@ use arkret_models_collaboration::{
     CurrentSignerEvidenceResponseCore, CurrentSignerEvidenceSelector,
 };
 use arkret_models_identity::{
-    CurrentSignerKeyResult, SignerEvidenceResolvedStatus, SignerEvidenceUnavailableStatus,
-    SignerKeyQueryResult, SignerKeyQuerySelector, SignerKeysQueryOutcome,
-    SignerKeysQueryRequestBody, UnavailableSignerKeyResult,
+    CurrentSignerKeyResult, HistoricalAgentSignerKeyResult, SignerEvidenceResolvedStatus,
+    SignerEvidenceUnavailableStatus, SignerKeyQueryResult, SignerKeyQuerySelector,
+    SignerKeysQueryOutcome, SignerKeysQueryRequestBody, UnavailableSignerKeyResult,
 };
 use arkret_wire::DidCoreId;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -153,8 +153,10 @@ pub(crate) async fn resolve_self_signer_keys(
                     )
                     .await
                 }
-                SignerKeyQuerySelector::HistoricalAccountDevice(_)
-                | SignerKeyQuerySelector::HistoricalAgent(_) => None,
+                SignerKeyQuerySelector::HistoricalAgent(historical) => {
+                    historical_agent_key_result(state, historical).await
+                }
+                SignerKeyQuerySelector::HistoricalAccountDevice(_) => None,
             }
         } else {
             None
@@ -216,6 +218,53 @@ async fn current_key_result(
         }
     }
     None
+}
+
+async fn historical_agent_key_result(
+    state: &AppState,
+    historical: &arkret_models_identity::HistoricalAgentSelector,
+) -> Option<SignerKeyQueryResult> {
+    let selector = AgentSignerEvidenceQuerySelector::HistoricalEvent {
+        actor: historical.actor.clone(),
+        verification_method: historical.verification_method.clone(),
+        event_id: historical.event_id.clone(),
+        receiver_id: state.service_core_id(),
+    };
+    let (root, dependencies) =
+        super::agents::evidence::current_authenticated_agent_signer_evidence(state, &selector)
+            .await
+            .ok()?;
+    let key = super::agents::evidence::verified_station_agent_key(
+        state,
+        &selector,
+        &root,
+        &dependencies,
+        chrono::Utc::now(),
+    )
+    .await
+    .ok()?;
+    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
+        agent_signer_evidence,
+        ..
+    } = &root
+    else {
+        return None;
+    };
+    let arkret_models_identity::AgentSignerEvidence::HistoricalEvent {
+        event_admission, ..
+    } = agent_signer_evidence.as_ref()
+    else {
+        return None;
+    };
+    Some(SignerKeyQueryResult::HistoricalAgent(
+        HistoricalAgentSignerKeyResult {
+            selector: historical.clone(),
+            status: SignerEvidenceResolvedStatus::Resolved,
+            key,
+            accepted_at: event_admission.producer_accepted_at().ok()?,
+            signer_evidence_ref: root.evidence_ref().ok()?,
+        },
+    ))
 }
 
 async fn self_key_from_peer_item(
