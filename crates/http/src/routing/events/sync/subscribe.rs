@@ -236,7 +236,13 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     }
     let response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
     let initial_cursor = response.cursor.clone();
-    let initial_has_delta = body.after.is_none() || !delta_is_empty(&response);
+    // An unavailable detail has no new data or durable detail position. If
+    // returned immediately on every continuation, the detail/global turn
+    // alternation becomes an unbounded reconnect loop. Use the ordinary idle
+    // window, while retaining the unavailable result at timeout and allowing
+    // a relevant notification to wake it early.
+    let initial_has_delta = body.after.is_none()
+        || (!delta_is_empty(&response) && !only_unavailable_details(&response));
     let body_stream = async_stream::stream! {
         if initial_has_delta {
             yield Ok::<Bytes, std::io::Error>(ndjson_line(&response));
@@ -437,6 +443,25 @@ pub(crate) fn delta_is_empty(
             .notifications
             .as_ref()
             .is_none_or(|notifications| notifications.items.is_empty())
+}
+
+fn only_unavailable_details(
+    response: &arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
+) -> bool {
+    let Some(realms) = &response.realms else {
+        return false;
+    };
+    if realms.entries.is_empty()
+        || !realms
+            .entries
+            .values()
+            .all(|entry| entry.unavailable.is_some())
+    {
+        return false;
+    }
+    let mut without_details = response.clone();
+    without_details.realms = None;
+    delta_is_empty(&without_details)
 }
 
 pub(crate) async fn account_subscribe_notification_should_wake(
@@ -686,6 +711,29 @@ fn account_subscribe_scope_key(
 #[cfg(test)]
 mod account_query_tests {
     use super::*;
+
+    #[test]
+    fn unavailable_details_wait_without_hiding_other_progress() {
+        let pending = serde_json::json!({
+            "kind": "delta",
+            "cursor": "ak:cursor:pending",
+            "realms": {
+                "ak:realm:pending": {"unavailable": {"error_code": "frontier_unavailable"}}
+            }
+        });
+        let frame = serde_json::from_value(pending.clone()).unwrap();
+        assert!(only_unavailable_details(&frame));
+        // Timeout must still deliver the pending status, not erase it into
+        // an empty frontier. Control frames must also remain immediate.
+        assert!(!delta_is_empty(&frame));
+        let control = serde_json::from_value(json!({"kind":"resync_required"})).unwrap();
+        assert!(!only_unavailable_details(&control));
+        let mut with_progress = pending;
+        with_progress["realms"]["ak:realm:ready"] = json!({});
+        assert!(!only_unavailable_details(
+            &serde_json::from_value(with_progress).unwrap()
+        ));
+    }
 
     #[test]
     fn closed_query_preserves_empty_interest_and_rejects_ambiguous_encodings() {
