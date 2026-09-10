@@ -1,0 +1,172 @@
+use arkret_models_collaboration::sync_frames::current_results::{
+    CurrentResultEntry, CurrentTarget,
+};
+
+use super::*;
+
+#[tokio::test]
+async fn baseline_budget_does_not_complete_or_change_snapshot_and_authority_change_restarts() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let registry =
+        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+    let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"current window realm"),
+    ));
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        "ak:did_core:web:window.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    ));
+    let request = CurrentDetailRequest {
+        actor_id: actor.clone(),
+        realm_id: realm.clone(),
+        strand_ids: Some(vec![]),
+        all_members: false,
+        event_ids: vec![],
+    };
+    let mut conn = pg_conn(&pool).await.unwrap();
+    let revision=conn.transaction::<_,crate::PgTransactionError,_>(async |conn| {
+        let revision=crate::current_results::next_revision(conn).await?;
+        let mut entries=vec![];
+        for key in priorities(&request)? {
+            let selector:CurrentSelector=serde_json::from_str(&key).unwrap();
+            entries.push(CurrentResultEntry::try_from_json(serde_json::json!({
+                "selector":selector,"target":CurrentTarget::Realm,"revision":revision,
+                "result":{"status":"unavailable","reason":"bottom"}
+            })).unwrap());
+        }
+        crate::current_results::publish_entries(conn,&entries).await?;
+        sql_query("INSERT INTO account_summary_current(actor_key,realm_id,revision,membership,available) VALUES($1,$2,$3,'join',TRUE)")
+            .bind::<Text,_>(actor.canonical_key().unwrap()).bind::<Text,_>(realm.as_str()).bind::<BigInt,_>(revision as i64)
+            .execute(&mut *conn).await?;
+        sql_query("INSERT INTO governance_current_ready(realm_id,revision,ready) VALUES($1,$2,TRUE)")
+            .bind::<Text,_>(realm.as_str()).bind::<BigInt,_>(revision as i64).execute(&mut *conn).await?;
+        Ok(revision)
+    }).await.map_err(crate::PgTransactionError::into_persistence).unwrap();
+    let CurrentDetailOutcome::Page(first) =
+        page(&pool, &request, None, 1, &registry).await.unwrap()
+    else {
+        panic!("frozen page expected")
+    };
+    assert!(first.entries.is_empty());
+    assert!(!first.baseline.as_ref().unwrap().complete);
+    let CurrentDetailOutcome::Page(second) = page(
+        &pool,
+        &request,
+        Some(&first.progress),
+        1024 * 1024,
+        &registry,
+    )
+    .await
+    .unwrap() else {
+        panic!("continued page expected")
+    };
+    assert_eq!(
+        first.progress.snapshot_cursor,
+        second.progress.snapshot_cursor
+    );
+    assert_eq!(second.entries.len(), 4);
+    assert!(second.baseline.as_ref().unwrap().complete);
+    assert_eq!(second.progress.cut_revision, revision as i64);
+    // Pending work outside this requested event window cannot stall the Realm.
+    sql_query("INSERT INTO current_data_pending(realm_id,scope_key,cell_id,target_kind,target_key) VALUES($1,'test-scope','test-event-cell','event','unrequested-event')")
+        .bind::<Text,_>(realm.as_str()).execute(&mut *conn).await.unwrap();
+    assert!(matches!(
+        page(
+            &pool,
+            &request,
+            Some(&second.progress),
+            1024 * 1024,
+            &registry
+        )
+        .await
+        .unwrap(),
+        CurrentDetailOutcome::Page(_)
+    ));
+    sql_query("INSERT INTO current_data_pending(realm_id,scope_key,cell_id,target_kind,target_key) VALUES($1,'test-scope','test-realm-cell','realm','')")
+        .bind::<Text,_>(realm.as_str()).execute(&mut *conn).await.unwrap();
+    assert!(matches!(
+        page(
+            &pool,
+            &request,
+            Some(&second.progress),
+            1024 * 1024,
+            &registry
+        )
+        .await
+        .unwrap(),
+        CurrentDetailOutcome::Unavailable
+    ));
+    sql_query("DELETE FROM current_data_pending WHERE realm_id=$1")
+        .bind::<Text, _>(realm.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sql_query("UPDATE account_summary_clock SET revision=revision+1 WHERE singleton")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sql_query("UPDATE governance_current_ready SET revision=revision+1 WHERE realm_id=$1")
+        .bind::<Text, _>(realm.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(matches!(
+        page(
+            &pool,
+            &request,
+            Some(&first.progress),
+            1024 * 1024,
+            &registry
+        )
+        .await
+        .unwrap(),
+        CurrentDetailOutcome::Unavailable
+    ));
+    // A same-revision member population advances across a bounded page without
+    // skipping the last selector, leaving room for roster + worst-case coverage.
+    conn.transaction::<_,crate::PgTransactionError,_>(async |conn| {
+        let revision=crate::current_results::next_revision(conn).await?;
+        let mut entries=Vec::new();
+        for n in 0..33 {
+            let member=arkret_wire::ActorId::account(arkret_wire::AccountId::new(format!("ak:did_core:web:member{n}.example").parse().unwrap(),"ak:did_core:web:station.example".parse().unwrap()));
+            let subject=arkret_wire::cell::composite_subject(&[serde_json::json!(member.canonical_key().unwrap())]).unwrap();
+            entries.push(CurrentResultEntry::try_from_json(serde_json::json!({"selector":{"scope_ref":{"kind":"realm","realm_id":realm},"cell_id":format!("ak:cell:ak.component.member.state.v1:{subject}")},"target":{"kind":"member","actor_id":member},"revision":revision,"result":{"status":"value","value":"join"}})).unwrap());
+        }
+        crate::current_results::publish_entries(conn,&entries).await?;Ok(())
+    }).await.map_err(crate::PgTransactionError::into_persistence).unwrap();
+    let mut all = request.clone();
+    all.all_members = true;
+    let CurrentDetailOutcome::Page(first) = page(&pool, &all, None, 7 * 1024 * 1024, &registry)
+        .await
+        .unwrap()
+    else {
+        panic!("member page")
+    };
+    let members = |p: &CurrentDetailPage| {
+        p.entries
+            .iter()
+            .filter(|e| matches!(e.target(), CurrentTarget::Member { .. }))
+            .count()
+    };
+    assert_eq!(members(&first), 32);
+    assert!(!first.baseline.as_ref().unwrap().complete);
+    let CurrentDetailOutcome::Page(last) = page(
+        &pool,
+        &all,
+        Some(&first.progress),
+        7 * 1024 * 1024,
+        &registry,
+    )
+    .await
+    .unwrap() else {
+        panic!("member continuation")
+    };
+    assert_eq!(members(&last), 1);
+    assert!(last.baseline.as_ref().unwrap().complete);
+    assert_eq!(
+        first.progress.snapshot_cursor,
+        last.progress.snapshot_cursor
+    );
+}

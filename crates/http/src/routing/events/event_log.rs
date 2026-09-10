@@ -32,7 +32,7 @@ use arkret_models_collaboration::event_sync::{
     RealmSealFrontierView, SealFrontierState,
 };
 use arkret_models_collaboration::governance_dependencies::{
-    GovernanceDependency, GovernanceDependencySelector, SealPrepareOutcome, SealPrepareRequest,
+    GovernanceDependency, GovernanceDependencySelector, SealPrepareOutcome, SealPrepareRequestBody,
 };
 use arkret_models_collaboration::http_bodies::{
     EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventDeliveryTargetState,
@@ -74,6 +74,63 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::describe;
 
+fn current_query_error(error: arkret_wire::WireError) -> AppError {
+    let code = match error.error_code() {
+        Some(ErrorCode::PayloadTooLarge) => ErrorCode::PayloadTooLarge,
+        _ => ErrorCode::SchemaViolation,
+    };
+    AppError::from_rejection(code, error.to_string())
+}
+
+fn current_result_error(error: arkret_wire::WireError, fallback: ErrorCode) -> AppError {
+    let code = match error.error_code() {
+        Some(ErrorCode::LimitExceeded) => ErrorCode::LimitExceeded,
+        _ => fallback,
+    };
+    AppError::from_rejection(code, error.to_string())
+}
+
+#[cfg(test)]
+mod current_budget_error_tests {
+    use arkret_wire::WireError;
+
+    use super::*;
+
+    #[test]
+    fn current_query_budget_codes_do_not_depend_on_error_text() {
+        let oversized = current_query_error(WireError::ProtocolCode {
+            code: ErrorCode::PayloadTooLarge,
+            message: "canonical request exceeds its budget".to_owned(),
+        });
+        assert_eq!(oversized.code, ErrorCode::PayloadTooLarge);
+        assert_eq!(
+            error_http_status(oversized.code),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        let invalid = current_query_error(WireError::Protocol(
+            "payload_too_large appears in this invalid field".to_owned(),
+        ));
+        assert_eq!(invalid.code, ErrorCode::SchemaViolation);
+    }
+
+    #[test]
+    fn malformed_current_result_is_not_reported_as_a_budget_failure() {
+        let invalid = current_result_error(
+            WireError::Protocol("limit_exceeded is only diagnostic text".to_owned()),
+            ErrorCode::StateMismatch,
+        );
+        assert_eq!(invalid.code, ErrorCode::StateMismatch);
+        let oversized = current_result_error(
+            WireError::ProtocolCode {
+                code: ErrorCode::LimitExceeded,
+                message: "response cannot fit".to_owned(),
+            },
+            ErrorCode::FrontierUnavailable,
+        );
+        assert_eq!(oversized.code, ErrorCode::LimitExceeded);
+    }
+}
+
 /// Match a human session's exact AccountId against its durable PCR lineage.
 ///
 /// Registration commits this record before the rebuildable projection catches
@@ -112,6 +169,7 @@ pub(crate) mod governance_proof;
 mod history_authority;
 mod membership_authority;
 mod mls_accepted_artifact;
+mod mls_welcome_refs;
 pub(in crate::routing::events) use endpoints::router;
 
 mod inception;

@@ -8,6 +8,59 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
+#[test]
+fn current_principal_blinds_other_accounts_and_requires_closed_authenticated_request() {
+    run_on_deep_stack(
+        "current_principal_blinds_other_accounts_and_requires_closed_authenticated_request",
+        current_principal_request_body,
+    );
+}
+
+async fn current_principal_request_body() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    let app = app_from_state(state.clone());
+    let body = serde_json::json!({"request_id":"ak:request:01904100-0000-7000-8000-000000000001",
+        "account_id":{"principal_id":fixture_actor_core_id("did:web:alice.example"),"station_id":fixture_actor_core_id("did:web:wrong-server.example")}});
+    let response = TestClient::post("http://server/_arkret/self/account/current-principal")
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&body))
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::UNAUTHORIZED));
+    for (principal, station) in [
+        (
+            fixture_actor_core_id("did:web:alice.example"),
+            fixture_actor_core_id("did:web:wrong-server.example"),
+        ),
+        (
+            fixture_actor_core_id("did:web:unknown.example"),
+            state.service_core_id(),
+        ),
+    ] {
+        let mut wrong = body.clone();
+        wrong["account_id"] = serde_json::json!({"principal_id":principal,"station_id":station});
+        let mut response = TestClient::post("http://server/_arkret/self/account/current-principal")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_request_body(&wrong))
+            .send(&app)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND));
+        let error: Value = response.take_json().await.unwrap();
+        assert_eq!(error["error"]["code"], "not_found");
+    }
+    let mut invalid = body;
+    invalid["extra"] = serde_json::json!(true);
+    let response = TestClient::post("http://server/_arkret/self/account/current-principal")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&invalid))
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
+}
+
 async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
     use arkret_models_collaboration::events_payloads::device_identity::{
         DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,

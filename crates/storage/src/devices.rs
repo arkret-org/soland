@@ -71,6 +71,7 @@ pub trait DeviceMessageStore: Send + Sync {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
+        limit: usize,
     ) -> PersistenceResult<Vec<DeviceMessageRecord>>;
     /// Prune expired unacked messages and record the highest lost queue position per device.
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize>;

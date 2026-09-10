@@ -1,5 +1,5 @@
 use arkret_models_collaboration::history_key::{
-    EpochRange, HistoryKeyResponseContent, HistoryKeyResponseSendRequest, HistoryManifestAdmission,
+    EpochRange, HistoryKeyResponseContent, HistoryKeyResponseSendRequestBody, HistoryManifestAdmission,
     HistoryManifestAdmissionKind, HistoryManifestAdmissionPass, HistoryResponseManifest,
     validate_canonical_ranges,
 };
@@ -34,7 +34,7 @@ fn canonical_manifest_ranges(
 }
 
 pub fn construct_manifest_admission(
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     requested_ranges: &[EpochRange],
     traversal_intent_digest: &arkret_wire::Hash,
 ) -> Result<HistoryManifestAdmission, HistoryPreparationError> {
@@ -73,8 +73,8 @@ pub fn construct_manifest_admission(
 }
 
 fn named_chunk_range(
-    chunk_response: &HistoryKeyResponseSendRequest,
-    manifest_source: &HistoryKeyResponseSendRequest,
+    chunk_response: &HistoryKeyResponseSendRequestBody,
+    manifest_source: &HistoryKeyResponseSendRequestBody,
     missing_detail: &'static str,
 ) -> Result<EpochRange, HistoryPreparationError> {
     let HistoryKeyResponseContent::Chunk(chunk) = &chunk_response.content else {
@@ -99,7 +99,7 @@ fn named_chunk_range(
 }
 
 pub fn validate_local_chunk_manifest(
-    chunk_response: &HistoryKeyResponseSendRequest,
+    chunk_response: &HistoryKeyResponseSendRequestBody,
     accepted_manifest: &soland_storage::HistoryAcceptedManifestRecord,
 ) -> Result<EpochRange, HistoryPreparationError> {
     if accepted_manifest.manifest_admission.request_digest != chunk_response.request_digest
@@ -118,8 +118,8 @@ pub fn validate_local_chunk_manifest(
 }
 
 pub fn validate_remote_chunk_manifest(
-    chunk_response: &HistoryKeyResponseSendRequest,
-    accepted_manifest_source: &HistoryKeyResponseSendRequest,
+    chunk_response: &HistoryKeyResponseSendRequestBody,
+    accepted_manifest_source: &HistoryKeyResponseSendRequestBody,
 ) -> Result<EpochRange, HistoryPreparationError> {
     if accepted_manifest_source.request_digest != chunk_response.request_digest
         || accepted_manifest_source.request_receipt_digest != chunk_response.request_receipt_digest
@@ -169,7 +169,7 @@ mod tests {
         arkret_wire::Hash::new(format!("sha256:{}", byte.repeat(64))).unwrap()
     }
 
-    fn fixture_manifest() -> HistoryKeyResponseSendRequest {
+    fn fixture_manifest() -> HistoryKeyResponseSendRequestBody {
         let fixture = arkret_schema_conformance::spec_json_artifact(
             "fixtures/history-key-recovery-fixture.json",
         )
@@ -180,7 +180,7 @@ mod tests {
         .unwrap()
     }
 
-    fn fixture_admission(manifest: &HistoryKeyResponseSendRequest) -> HistoryManifestAdmission {
+    fn fixture_admission(manifest: &HistoryKeyResponseSendRequestBody) -> HistoryManifestAdmission {
         let HistoryKeyResponseContent::Manifest(content) = &manifest.content else {
             unreachable!()
         };
@@ -193,9 +193,9 @@ mod tests {
     }
 
     fn fixture_chunk(
-        manifest: &HistoryKeyResponseSendRequest,
+        manifest: &HistoryKeyResponseSendRequestBody,
         admission: &HistoryManifestAdmission,
-    ) -> HistoryKeyResponseSendRequest {
+    ) -> HistoryKeyResponseSendRequestBody {
         let HistoryKeyResponseContent::Manifest(content) = &manifest.content else {
             unreachable!()
         };

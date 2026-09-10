@@ -6,7 +6,7 @@ use arkret_models_collaboration::governance_dependencies::{
 };
 use arkret_models_crypto::{
     MlsEpochHead, MlsGovernanceBindingPayload, MlsGovernanceFrontierOutcome,
-    MlsGovernanceFrontierRequest, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
+    MlsGovernanceFrontierRequestBody, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
     ProposedMlsGroupGenesisBinding,
 };
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -34,14 +34,12 @@ pub(super) async fn mls_governance_proof(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<MlsGovernanceFrontierRequest>,
+    body: JsonBody<MlsGovernanceFrontierRequestBody>,
 ) -> JsonResult<MlsGovernanceFrontierOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
-    request
-        .validate()
-        .map_err(|error| AppError::param_invalid(format!("invalid proof request: {error}")))?;
+    request.validate().map_err(super::current_query_error)?;
     super::super::require_agent_session_scope(
         &session,
         arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF_V1,
@@ -78,7 +76,7 @@ pub(super) async fn mls_governance_proof(
 
 async fn materialize_self_governance_frontier(
     state: &AppState,
-    request: &MlsGovernanceFrontierRequest,
+    request: &MlsGovernanceFrontierRequestBody,
 ) -> Result<MlsGovernanceFrontierOutcome, AppError> {
     let realm_id = request
         .effective_scope
@@ -1554,6 +1552,7 @@ fn group_genesis_binding(
 
 fn map_governance_frontier_error(error: arkret_wire::WireError) -> AppError {
     let code = match error.error_code() {
+        Some(ErrorCode::LimitExceeded) => ErrorCode::LimitExceeded,
         Some(ErrorCode::MlsGovernanceProofBoundsExceeded) => {
             ErrorCode::MlsGovernanceProofBoundsExceeded
         }

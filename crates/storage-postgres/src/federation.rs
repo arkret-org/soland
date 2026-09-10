@@ -930,6 +930,7 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
         let resolution = resolution.clone();
         let scope = normalization_scope_columns(scope)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::events::lock_canonical_realm(conn, &resolution.realm_id).await?;
             crate::realm_identity::ensure_realm_pk(conn, &resolution.realm_id).await?;
             // Replaying one accepted Event is idempotent; a second verdict for
             // a settled subject must fail rather than re-adjudicate it.

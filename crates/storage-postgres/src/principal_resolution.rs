@@ -10,6 +10,8 @@ use soland_storage::{
 
 use crate::{PgPool, async_trait, pg_conn};
 
+mod current;
+
 pub struct PgPrincipalResolutionStore {
     pub pool: PgPool,
 }
@@ -129,6 +131,12 @@ impl PgPrincipalResolutionStore {
 
 #[async_trait]
 impl PrincipalResolutionStore for PgPrincipalResolutionStore {
+    async fn current_principal(
+        &self,
+        account_id: &AccountId,
+    ) -> PersistenceResult<soland_storage::CurrentPrincipalRead> {
+        current::read(&self.pool, account_id).await
+    }
     async fn by_account_id(
         &self,
         account_id: &AccountId,

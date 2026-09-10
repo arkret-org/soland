@@ -419,6 +419,15 @@ async fn admit_caller_signed_account_data_set(
     )
     .await
     .map_err(|error| {
+        if error.code() == "cas_conflict" {
+            let mut mapped = crate::app_error!(CasConflict, error.message());
+            if let Some(details) = error.details().and_then(Value::as_object) {
+                for (key, value) in details {
+                    mapped = mapped.with_wire_detail(key, value);
+                }
+            }
+            return mapped;
+        }
         crate::app_error!(
             ParamInvalid,
             format!("account_data Event admission failed: {}", error.message()),

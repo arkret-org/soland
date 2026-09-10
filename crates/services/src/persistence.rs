@@ -31,6 +31,14 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    /// Read the bounded Welcome discovery index without exposing its store.
+    pub async fn discover_mls_welcome_refs(
+        &self,
+        query: &soland_storage::MlsWelcomeDiscoveryQuery,
+    ) -> PersistenceResult<soland_storage::MlsWelcomeDiscoveryPage> {
+        self.persistence.mls_welcomes().discover(query).await
+    }
+
     pub fn bind_history_authority_view_cas(
         &self,
         authority_view_cas: Arc<dyn soland_storage::HistoryAuthorityViewCas>,
@@ -366,6 +374,17 @@ impl PersistenceHandle {
             .persistence
             .principal_resolutions()
             .by_account_id(account_id)
+            .await?)
+    }
+
+    pub async fn current_principal(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> crate::ServiceResult<soland_storage::CurrentPrincipalRead> {
+        Ok(self
+            .persistence
+            .principal_resolutions()
+            .current_principal(account_id)
             .await?)
     }
 

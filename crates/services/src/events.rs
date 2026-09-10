@@ -225,22 +225,6 @@ impl RealmDirectoryService {
         self.index.lock().get(realm_id).cloned()
     }
 
-    /// Clone only selected entries. Account-wide discovery remains a separate
-    /// operation; explicit Realm filters never clone or sort the global index.
-    pub fn entries_for_sync(
-        &self,
-        selected: Option<&BTreeSet<RealmId>>,
-    ) -> Vec<RealmDirectoryEntry> {
-        let index = self.index.lock();
-        match selected {
-            Some(ids) => ids.iter().filter_map(|id| index.get(id).cloned()).collect(),
-            None => index
-                .entries_iter()
-                .map(|(_, entry)| entry.clone())
-                .collect(),
-        }
-    }
-
     pub fn upsert(&self, entry: RealmDirectoryEntry) {
         self.index.lock().upsert(entry);
     }
@@ -777,6 +761,8 @@ use crate::federation::FederationDeliveryRecord;
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
+    pub mls_public_producer: Option<soland_storage::MlsPublicHandshakeProducer>,
+    pub mls_public_genesis: Option<soland_storage::MlsPublicGenesisInput>,
     pub mls_frontier_leaves: Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>,
     /// Origin admission was verified; historical sibling union is permitted.
     pub replicated: bool,
@@ -1665,6 +1651,11 @@ pub struct AdvanceMlsEpochCommand {
 
 #[async_trait::async_trait]
 pub trait MlsCommitReadPort: Send + Sync {
+    async fn public_genesis_candidate(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> ServiceResult<Option<soland_storage::MlsPublicGenesisRecord>>;
+
     async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>>;
     async fn commit(
         &self,
@@ -1693,6 +1684,13 @@ pub struct MlsCommitQueryService {
 }
 
 impl MlsCommitQueryService {
+    pub async fn public_genesis_candidate(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> ServiceResult<Option<soland_storage::MlsPublicGenesisRecord>> {
+        self.commits.public_genesis_candidate(event_id).await
+    }
+
     pub fn new(commits: Arc<dyn MlsCommitReadPort>) -> Self {
         Self { commits }
     }
@@ -2436,6 +2434,8 @@ mod tests {
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
+                mls_public_producer: None,
+                mls_public_genesis: None,
                 mls_frontier_leaves: None,
                 replicated: false,
                 membership_compensation_evidence: None,

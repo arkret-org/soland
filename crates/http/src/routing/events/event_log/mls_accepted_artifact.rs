@@ -2,7 +2,7 @@ use arkret_models_collaboration::events_payloads::{
     MlsGenesisPayload, MlsWelcomePayload, MlsWelcomeRecipient,
 };
 use arkret_models_crypto::{
-    MlsAcceptedArtifactOutcome, MlsAcceptedArtifactRequest, MlsCommitPayload, MlsEpochHead,
+    MlsAcceptedArtifactOutcome, MlsAcceptedArtifactRequestBody, MlsCommitPayload, MlsEpochHead,
     MlsGovernanceBindingPayload,
 };
 use arkret_state::lattice::CellState;
@@ -17,14 +17,12 @@ pub(super) async fn read(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<MlsAcceptedArtifactRequest>,
+    body: JsonBody<MlsAcceptedArtifactRequestBody>,
 ) -> JsonResult<MlsAcceptedArtifactOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let query = body.into_inner();
-    query
-        .validate()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    query.validate().map_err(super::current_query_error)?;
     super::super::require_agent_session_scope(
         &session,
         arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_ACCEPTED_ARTIFACT_V1,
@@ -135,7 +133,7 @@ fn welcome_matches_session(welcome: &MlsWelcomePayload, session: &SessionRecord)
 
 async fn materialize(
     state: &AppState,
-    query: &MlsAcceptedArtifactRequest,
+    query: &MlsAcceptedArtifactRequestBody,
     event: &Event,
 ) -> Result<MlsAcceptedArtifactOutcome, AppError> {
     let realm_id = &event.realm_id;
@@ -249,13 +247,9 @@ async fn materialize(
         mls_frontier_leaves: leaves,
         current_epoch_head: current,
     };
-    outcome.validate_for_request(query).map_err(|error| {
-        if error.to_string().contains("limit_exceeded") {
-            crate::app_error!(LimitExceeded, error.to_string())
-        } else {
-            crate::app_error!(StateMismatch, error.to_string())
-        }
-    })?;
+    outcome
+        .validate_for_request(query)
+        .map_err(|error| super::current_result_error(error, ErrorCode::StateMismatch))?;
     Ok(outcome)
 }
 

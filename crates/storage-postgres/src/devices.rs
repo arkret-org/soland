@@ -468,6 +468,7 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
+        limit: usize,
     ) -> PersistenceResult<Vec<DeviceMessageRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -476,11 +477,12 @@ impl DeviceMessageStore for PgDeviceMessageStore {
             "SELECT idempotency_key, sender, recipient, device_id, position, content, created_at \
              FROM device_messages \
              WHERE recipient = $1 AND device_id = $2 AND position > $3 \
-             ORDER BY position ASC",
+             ORDER BY position ASC LIMIT $4",
         )
         .bind::<Text, _>(recipient)
         .bind::<Text, _>(device_id)
         .bind::<BigInt, _>(queue_position)
+        .bind::<BigInt, _>(limit.min(1001) as i64)
         .load::<DeviceMessageRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(DeviceMessageRecord::from).collect())

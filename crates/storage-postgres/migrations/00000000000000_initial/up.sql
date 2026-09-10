@@ -585,6 +585,61 @@ CREATE TABLE public.mls_frontier_inputs (
     canonical_bytes bytea NOT NULL
 );
 
+-- Verified public epoch-zero candidate, not a current membership authority.
+-- The source Event FK keeps its actor/proof and withdrawal state authoritative.
+CREATE TABLE public.mls_public_genesis_states (
+    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    source_canonical_bytes bytea NOT NULL,
+    source_available boolean NOT NULL,
+    input_bytes bytea NOT NULL,
+    public_state bytea NOT NULL,
+    producer_signing_key text NOT NULL,
+    producer_device_authorization jsonb
+);
+
+-- Public candidates stay separate from the winning epoch and membership authority.
+CREATE TABLE public.mls_public_proposal_sources (
+    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    source_canonical_bytes bytea NOT NULL,
+    source_available boolean NOT NULL,
+    producer jsonb NOT NULL
+);
+CREATE TABLE public.mls_public_commit_states (
+    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    source_canonical_bytes bytea NOT NULL,
+    base_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    public_state bytea NOT NULL,
+    transition jsonb NOT NULL,
+    source_available boolean NOT NULL,
+    CHECK (event_pk <> base_event_pk)
+);
+CREATE TABLE public.mls_public_transition_dependencies (
+    transition_event_pk bigint NOT NULL REFERENCES public.mls_public_commit_states(event_pk) ON DELETE RESTRICT,
+    source_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    PRIMARY KEY (transition_event_pk, source_event_pk),
+    CHECK (transition_event_pk <> source_event_pk)
+);
+CREATE INDEX mls_public_transition_source_idx ON public.mls_public_transition_dependencies(source_event_pk);
+CREATE FUNCTION public.invalidate_mls_public_suffix() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (OLD.state = 'accepted' AND NEW.state <> 'accepted') OR OLD.canonical_bytes IS DISTINCT FROM NEW.canonical_bytes THEN
+        UPDATE mls_public_genesis_states SET source_available=FALSE WHERE event_pk=NEW.pk;
+        UPDATE mls_public_proposal_sources SET source_available=FALSE WHERE event_pk=NEW.pk;
+        WITH RECURSIVE affected(event_pk) AS (
+            SELECT NEW.pk
+            UNION
+            SELECT d.transition_event_pk FROM mls_public_transition_dependencies d
+            JOIN affected a ON a.event_pk=d.source_event_pk
+        )
+        UPDATE mls_public_commit_states SET source_available=FALSE
+        WHERE event_pk IN (SELECT event_pk FROM affected);
+    END IF;
+    RETURN NEW;
+END
+$$;
+CREATE TRIGGER canonical_mls_public_source_withdrawal AFTER UPDATE OF state, canonical_bytes ON public.canonical_events
+FOR EACH ROW EXECUTE FUNCTION public.invalidate_mls_public_suffix();
+
 -- Transport-only membership compensation evidence accepted with one Event.
 -- The FK supplies Event identity without copying it into the evidence body;
 -- canonical_bytes are retained independently because this carrier is outside
@@ -1148,6 +1203,8 @@ CREATE TABLE public.history_key_responses (
     source_sender_domain text NOT NULL,
     source_record_digest text NOT NULL,
     source_record_json jsonb NOT NULL,
+    source_signer_result_json jsonb NOT NULL,
+    cipher_suite text NOT NULL,
     manifest_admission_json jsonb,
     manifest_digest text,
     manifest_admission_digest text,
@@ -1203,6 +1260,10 @@ CREATE TABLE public.history_key_responses (
 CREATE INDEX history_key_responses_request_stream_idx
     ON public.history_key_responses (request_id, sequence)
     WHERE state IN ('accepted', 'lost');
+
+CREATE INDEX history_key_responses_pending_sequence_idx
+    ON public.history_key_responses (request_id, sequence)
+    WHERE state = 'reserved';
 
 CREATE INDEX history_key_responses_accepted_manifest_idx
     ON public.history_key_responses (request_id, manifest_digest, manifest_admission_digest)
@@ -1457,7 +1518,24 @@ CREATE TABLE public.contact_verified_mirrors (
 CREATE INDEX contact_verified_mirrors_verified_at_idx
     ON public.contact_verified_mirrors USING btree (verified_at);
 
+-- Device inventory is a single-Station local directory. Only trusted service
+-- identity provisioning initializes its immutable owner; requests cannot claim it.
+CREATE TABLE device_inventory_station (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton),
+    station_id TEXT NOT NULL UNIQUE CHECK(station_id LIKE 'ak:did_core:%')
+);
+CREATE FUNCTION current_device_inventory_station() RETURNS TEXT LANGUAGE sql STABLE AS $$
+    SELECT station_id FROM device_inventory_station WHERE singleton
+$$;
+CREATE FUNCTION immutable_device_inventory_station() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.station_id<>NEW.station_id THEN RAISE EXCEPTION 'device inventory belongs to another Station'; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER device_inventory_station_immutable BEFORE UPDATE ON device_inventory_station FOR EACH ROW EXECUTE FUNCTION immutable_device_inventory_station();
 CREATE TABLE public.devices (
+    station_id TEXT NOT NULL DEFAULT current_device_inventory_station() REFERENCES device_inventory_station(station_id),
     id uuid PRIMARY KEY,
     actor_id text NOT NULL,
     device_id text NOT NULL,
@@ -2869,6 +2947,7 @@ CREATE TABLE public.recovery_sessions (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     station_id text NOT NULL,
     requesting_device_id text NOT NULL,
+    requesting_device_public_key_did text NOT NULL,
     trust_domain text NOT NULL,
     policy_id uuid NOT NULL,
     policy_version integer NOT NULL,
@@ -2980,7 +3059,7 @@ CREATE TABLE public.sync_cursor_handles (
     target jsonb,
     issued_at_ms bigint NOT NULL,
     expires_at_ms bigint NOT NULL,
-    CONSTRAINT sync_cursor_handles_purpose_check CHECK ((purpose = ANY (ARRAY['stream'::text, 'barrier'::text])))
+    CONSTRAINT sync_cursor_handles_purpose_check CHECK (purpose IN ('stream','barrier','realm_list','ak.self.account.stream.subscribe.v1','ak.self.device_messages.read.list.v1'))
 );
 
 CREATE INDEX sync_cursor_handles_expiry_idx ON public.sync_cursor_handles USING btree (expires_at_ms);
@@ -3107,6 +3186,18 @@ CREATE TABLE public.service_identity (
     id text PRIMARY KEY,
     identity jsonb NOT NULL
 );
+
+CREATE FUNCTION bind_device_inventory_station() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE station TEXT;
+BEGIN
+    station := NEW.identity->'identity'->>'service_id';
+    IF station IS NULL OR station NOT LIKE 'ak:did_core:%' THEN RAISE EXCEPTION 'service identity lacks Station'; END IF;
+    INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,station)
+        ON CONFLICT(singleton) DO UPDATE SET station_id=EXCLUDED.station_id;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER service_identity_device_station BEFORE INSERT OR UPDATE ON service_identity FOR EACH ROW EXECUTE FUNCTION bind_device_inventory_station();
 
 -- Rebuildable owner-side PCR resolution projection. Canonical Events and
 -- Seals remain protocol truth; these rows provide a crash-safe account-local
@@ -3330,4 +3421,431 @@ CREATE TABLE public.member_identity_handle_claims (
     expires_at timestamp with time zone,
     envelope jsonb NOT NULL,
     PRIMARY KEY (subject_id, digest)
+);
+
+-- Account summaries are accepted governance projections, never discovery rows.
+-- A transactional counter gives committed cuts; a sequence would permit holes.
+CREATE TABLE account_summary_clock (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991)
+);
+INSERT INTO account_summary_clock (singleton, revision) VALUES (TRUE, 0);
+CREATE TABLE account_summary_members (
+    realm_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    actor_key TEXT NOT NULL,
+    PRIMARY KEY (realm_id, cell_id),
+    UNIQUE (realm_id, actor_key)
+);
+CREATE TABLE account_summary_current (
+    actor_key TEXT NOT NULL,
+    realm_id TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    membership TEXT CHECK (membership IN ('join', 'knock')),
+    title TEXT,
+    default_strand_id TEXT,
+    available BOOLEAN NOT NULL,
+    PRIMARY KEY (actor_key, realm_id)
+);
+CREATE INDEX account_summary_current_realm ON account_summary_current (realm_id, actor_key);
+CREATE TABLE account_summary_versions (
+    actor_key TEXT NOT NULL,
+    realm_id TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    activity_position BIGINT NOT NULL,
+    valid_until BIGINT,
+    membership TEXT CHECK (membership IN ('join', 'knock')),
+    title TEXT,
+    default_strand_id TEXT,
+    invalidated BOOLEAN NOT NULL,
+    PRIMARY KEY (actor_key, revision, realm_id)
+);
+CREATE INDEX account_summary_snapshot_scan ON account_summary_versions
+    (actor_key, activity_position DESC, realm_id COLLATE "C", revision DESC);
+-- Rebuildable account-global MVCC projection. Writes publish a complete current
+-- value and close its old version in the source transaction. Snapshot reads use
+-- the indexed validity interval; they never replay the holder's Event history.
+CREATE TABLE account_global_clock (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton),
+    revision BIGINT NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991)
+);
+INSERT INTO account_global_clock VALUES(TRUE,0);
+CREATE TABLE account_global_versions (
+    actor_key TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    valid_until BIGINT,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    payload JSONB NOT NULL,
+    PRIMARY KEY(actor_key,channel,item_key,revision)
+);
+CREATE INDEX account_global_snapshot ON account_global_versions(actor_key,channel,item_key,revision DESC);
+CREATE INDEX account_global_changes ON account_global_versions(actor_key,channel,revision);
+CREATE UNIQUE INDEX account_global_current ON account_global_versions(actor_key,channel,item_key) WHERE valid_until IS NULL;
+CREATE INDEX account_summary_retired ON account_summary_versions(valid_until) WHERE valid_until IS NOT NULL;
+CREATE INDEX account_global_retired ON account_global_versions(valid_until) WHERE valid_until IS NOT NULL;
+CREATE TABLE account_sync_retention (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton),
+    summary_floor BIGINT NOT NULL DEFAULT 0 CHECK(summary_floor>=0),
+    global_floor BIGINT NOT NULL DEFAULT 0 CHECK(global_floor>=0)
+);
+INSERT INTO account_sync_retention(singleton) VALUES(TRUE);
+CREATE TABLE account_sync_snapshot_reservations (
+    bucket BIGINT PRIMARY KEY,
+    summary_floor BIGINT NOT NULL CHECK(summary_floor>=0),
+    global_floor BIGINT NOT NULL CHECK(global_floor>=0),
+    expires_at_ms BIGINT NOT NULL
+);
+CREATE TABLE account_sync_cursor_retention (
+    handle TEXT PRIMARY KEY REFERENCES sync_cursor_handles(id) ON DELETE CASCADE,
+    summary_floor BIGINT NOT NULL CHECK(summary_floor>=0),
+    global_floor BIGINT NOT NULL CHECK(global_floor>=0)
+);
+CREATE INDEX account_sync_cursor_summary_floor ON account_sync_cursor_retention(summary_floor);
+CREATE INDEX account_sync_cursor_global_floor ON account_sync_cursor_retention(global_floor);
+CREATE FUNCTION project_account_global_value(a TEXT,c TEXT,k TEXT,p JSONB,d BOOLEAN) RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE r BIGINT;
+BEGIN
+    UPDATE account_global_clock SET revision=revision+1 WHERE singleton RETURNING revision INTO r;
+    UPDATE account_global_versions SET valid_until=r WHERE actor_key=a AND channel=c AND item_key=k AND valid_until IS NULL;
+    INSERT INTO account_global_versions(actor_key,channel,item_key,revision,deleted,payload) VALUES(a,c,k,r,d,p);
+END;
+$$;
+-- Only withdrawal invalidates an already published CAS winner. Admission alone
+-- is not a successful holder CAS and must never select the current value.
+CREATE FUNCTION invalidate_account_global_event() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.kind='ak.account_data.set' AND OLD.state='accepted' AND NEW.state<>'accepted' THEN
+        -- Serialize the current-source comparison with all CAS publications.
+        -- A withdrawal must not invalidate a newer source installed while waiting.
+        PERFORM 1 FROM account_global_clock WHERE singleton FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM account_global_versions WHERE actor_key=OLD.actor_id
+            AND channel='account_data_events' AND valid_until IS NULL
+            AND payload->'value'->>'event_id'=OLD.envelope->>'event_id') THEN
+            PERFORM project_account_global_value(OLD.actor_id,'account_data_events',
+                'event:'||(OLD.envelope->'payload'->>'key'),jsonb_build_object('source','invalidated'),TRUE);
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER account_global_event_withdrawal AFTER UPDATE OF state ON canonical_events FOR EACH ROW EXECUTE FUNCTION invalidate_account_global_event();
+CREATE FUNCTION project_account_global_cas() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM project_account_global_value(NEW.actor_id,'station_cas',NEW.account_data_key,to_jsonb(NEW),NEW.tombstone);
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER account_global_cas AFTER INSERT OR UPDATE ON account_datas FOR EACH ROW EXECUTE FUNCTION project_account_global_cas();
+CREATE FUNCTION project_account_global_notification() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.source_event_id IS NULL THEN
+        PERFORM project_account_global_value(NEW.recipient_actor_id,'notifications',NEW.id::TEXT,to_jsonb(NEW)||jsonb_build_object('notification_id',NEW.id),NEW.projection_action='remove');
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER account_global_notification AFTER INSERT OR UPDATE ON notifications FOR EACH ROW EXECUTE FUNCTION project_account_global_notification();
+-- Device interests are account-global and derive from membership, never the
+-- UI's detail filter. Each relationship emits an explicit change or removal.
+CREATE FUNCTION account_device_interest_visible(recipient TEXT, owner TEXT) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT recipient::jsonb->>'kind'='account' AND owner::jsonb->>'kind'='account'
+    AND (recipient=owner OR EXISTS (
+        SELECT 1 FROM account_summary_current a JOIN account_summary_current b USING(realm_id)
+        JOIN accepted_events creation ON creation.realm_id=a.realm_id AND creation.kind='ak.realm.create'
+        WHERE a.actor_key=recipient AND b.actor_key=owner
+          AND a.membership='join' AND b.membership='join' AND a.available AND b.available
+          AND jsonb_typeof(creation.envelope->'payload'->'object'->'schema_refs')='array'
+          AND NOT (creation.envelope->'payload'->'object'->'schema_refs' ? 'ak.profile.mls.minimal_metadata_realm.v1')
+    ))
+$$;
+CREATE FUNCTION refresh_account_device_interest(recipient TEXT, owner TEXT) RETURNS VOID LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM project_account_global_value(recipient,'device_lists',owner,owner::jsonb,
+        NOT COALESCE(account_device_interest_visible(recipient,owner),FALSE));
+END;
+$$;
+CREATE FUNCTION project_account_global_devices() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE owner TEXT; recipient TEXT;
+BEGIN
+    owner := '{"account_id":{"principal_id":'||to_json(NEW.actor_id)::TEXT||',"station_id":'||to_json(NEW.station_id)::TEXT||'},"kind":"account"}';
+    PERFORM refresh_account_device_interest(owner,owner);
+    FOR recipient IN SELECT DISTINCT a.actor_key FROM account_summary_current a JOIN account_summary_current b USING(realm_id) WHERE b.actor_key=owner LOOP
+        IF recipient<>owner THEN PERFORM refresh_account_device_interest(recipient,owner); END IF;
+    END LOOP;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER account_global_devices AFTER INSERT OR UPDATE ON devices FOR EACH ROW EXECUTE FUNCTION project_account_global_devices();
+CREATE FUNCTION project_account_global_membership() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE peer TEXT;
+BEGIN
+    PERFORM refresh_account_device_interest(NEW.actor_key,NEW.actor_key);
+    FOR peer IN SELECT actor_key FROM account_summary_current WHERE realm_id=NEW.realm_id AND actor_key<>NEW.actor_key LOOP
+        PERFORM refresh_account_device_interest(NEW.actor_key,peer);
+        PERFORM refresh_account_device_interest(peer,NEW.actor_key);
+    END LOOP;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER account_global_membership AFTER INSERT OR UPDATE ON account_summary_current FOR EACH ROW EXECUTE FUNCTION project_account_global_membership();
+
+-- Accepted Welcome discovery is independent of the notification queue. All
+-- publishers serialize with the same scope clock used to freeze read windows.
+CREATE TABLE mls_welcome_discovery_scopes (
+    scope jsonb NOT NULL, group_id text NOT NULL, realm_id text NOT NULL,
+    revision bigint NOT NULL DEFAULT 1, position bigint NOT NULL DEFAULT 0,
+    available boolean NOT NULL DEFAULT false, head jsonb,
+    PRIMARY KEY (scope, group_id)
+);
+CREATE INDEX mls_welcome_discovery_scope_realm ON mls_welcome_discovery_scopes(realm_id);
+CREATE TABLE mls_welcome_discovery_membership (
+    realm_id text NOT NULL, cell_id text NOT NULL, revision bigint NOT NULL DEFAULT 1,
+    current_value jsonb, available boolean NOT NULL DEFAULT false, cas_heads jsonb NOT NULL,
+    PRIMARY KEY(realm_id,cell_id)
+);
+CREATE TABLE mls_welcome_discovery_chain (
+    scope jsonb NOT NULL, group_id text NOT NULL, epoch bigint NOT NULL,
+    event_ref text NOT NULL, PRIMARY KEY(scope, group_id, epoch),
+    UNIQUE(scope, group_id, event_ref)
+);
+CREATE INDEX mls_welcome_discovery_chain_event ON mls_welcome_discovery_chain(event_ref);
+CREATE TABLE mls_welcome_discovery_entries (
+    event_pk bigint PRIMARY KEY REFERENCES canonical_events(pk) ON DELETE CASCADE,
+    event_ref text NOT NULL, scope jsonb NOT NULL, group_id text NOT NULL,
+    endpoint jsonb NOT NULL, authorization_ref text NOT NULL,
+    position bigint NOT NULL, commit_ref text NOT NULL, expires_at timestamptz NOT NULL,
+    claim_source text NOT NULL, claim_request text NOT NULL, claim_id text NOT NULL,
+    eligible boolean NOT NULL,
+    UNIQUE(scope, group_id, position)
+);
+CREATE INDEX mls_welcome_discovery_page ON mls_welcome_discovery_entries(scope, group_id, endpoint, authorization_ref, position) WHERE eligible;
+CREATE INDEX mls_welcome_discovery_expiry ON mls_welcome_discovery_entries(scope, group_id, expires_at) WHERE eligible;
+CREATE INDEX mls_welcome_discovery_claim ON mls_welcome_discovery_entries(claim_source, claim_request, claim_id);
+CREATE INDEX mls_welcome_discovery_transition ON mls_welcome_discovery_entries(scope, group_id, commit_ref);
+CREATE TABLE mls_welcome_discovery_windows (
+    id uuid PRIMARY KEY, scope jsonb NOT NULL, group_id text NOT NULL,
+    endpoint jsonb NOT NULL, authority_context jsonb NOT NULL, page_limit integer NOT NULL,
+    revision bigint NOT NULL, upper_position bigint NOT NULL, after_position bigint NOT NULL,
+    expires_at timestamptz NOT NULL
+);
+CREATE INDEX mls_welcome_discovery_window_expiry ON mls_welcome_discovery_windows(expires_at);
+
+CREATE FUNCTION project_mls_welcome_discovery() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p jsonb; s jsonb; g text; endpoint_value jsonb; principal text; auth_ref text;
+        next_position bigint; visible boolean;
+BEGIN
+    IF TG_OP = 'UPDATE' AND (NEW.state<>OLD.state OR NEW.canonical_bytes<>OLD.canonical_bytes) THEN
+        IF NEW.kind IN ('ak.member.state','ak.circle.member') OR OLD.kind IN ('ak.member.state','ak.circle.member') THEN
+            UPDATE mls_welcome_discovery_membership SET available=false,revision=revision+1 WHERE realm_id=NEW.realm_id OR realm_id=OLD.realm_id;
+        END IF;
+        UPDATE mls_welcome_discovery_scopes s SET available=false,head=NULL,revision=s.revision+1
+            WHERE EXISTS(SELECT 1 FROM mls_welcome_discovery_chain c WHERE c.scope=s.scope AND c.group_id=s.group_id
+                AND c.event_ref IN (OLD.envelope->>'event_id',NEW.envelope->>'event_id'));
+        WITH affected AS MATERIALIZED (
+            SELECT scope,group_id,min(epoch) AS epoch FROM mls_welcome_discovery_chain
+              WHERE event_ref IN (OLD.envelope->>'event_id',NEW.envelope->>'event_id') GROUP BY scope,group_id
+        ), removed AS (
+            DELETE FROM mls_welcome_discovery_chain c USING affected a
+              WHERE c.scope=a.scope AND c.group_id=a.group_id AND c.epoch>=a.epoch RETURNING c.scope,c.group_id,c.event_ref
+        ) UPDATE mls_welcome_discovery_entries e SET eligible=false FROM removed r
+              WHERE e.scope=r.scope AND e.group_id=r.group_id AND e.commit_ref=r.event_ref;
+    END IF;
+    IF NEW.kind <> 'ak.mls.welcome' THEN
+        IF TG_OP = 'UPDATE' AND OLD.kind = 'ak.mls.welcome' THEN
+            UPDATE mls_welcome_discovery_scopes c SET revision = revision + 1
+              FROM mls_welcome_discovery_entries e WHERE e.event_pk = NEW.pk AND c.scope=e.scope AND c.group_id=e.group_id;
+            DELETE FROM mls_welcome_discovery_entries WHERE event_pk=NEW.pk;
+        END IF;
+        RETURN NEW;
+    END IF;
+    p := NEW.envelope->'payload'; s := NEW.envelope->'scope_ref'; g := p->>'mls_group_id';
+    principal := COALESCE(p->>'recipient_principal_id',p->>'recipient_agent_id',p->>'recipient_pairwise_actor_id');
+    endpoint_value := jsonb_build_object('principal_id',principal,'station_id',p#>>'{claim_receipt,destination_id}',
+      'device_id',p->>'recipient_device_id','agent_id',p->>'recipient_agent_id',
+      'verification_method',COALESCE(p->>'recipient_agent_verification_method',p->>'recipient_pairwise_verification_method'));
+    auth_ref := COALESCE(p#>>'{claim_ref,device_authorize_event_id}',p->>'agent_key_authorize_event_id',p->>'recipient_pairwise_verification_method');
+    IF s IS NULL OR g IS NULL OR principal IS NULL OR auth_ref IS NULL THEN
+        RAISE EXCEPTION 'accepted Welcome lacks exact discovery binding';
+    END IF;
+    INSERT INTO mls_welcome_discovery_scopes(scope,group_id,realm_id) VALUES(s,g,NEW.realm_id) ON CONFLICT DO NOTHING;
+    PERFORM 1 FROM mls_welcome_discovery_scopes WHERE scope=s AND group_id=g FOR UPDATE;
+    SELECT position INTO next_position FROM mls_welcome_discovery_entries WHERE event_pk=NEW.pk;
+    IF next_position IS NULL THEN
+        UPDATE mls_welcome_discovery_scopes SET position=position+1 WHERE scope=s AND group_id=g RETURNING position INTO next_position;
+    ELSE
+        UPDATE mls_welcome_discovery_scopes SET revision=revision+1 WHERE scope=s AND group_id=g;
+    END IF;
+    visible := NEW.state='accepted' AND EXISTS(SELECT 1 FROM mls_welcome_discovery_chain WHERE scope=s AND group_id=g AND event_ref=p->>'commit_ref')
+      AND EXISTS(SELECT 1 FROM peer_keypackage_claims ledger WHERE ledger.source_id=p#>>'{claim_receipt,source_id}' AND ledger.claim_request_id=p#>>'{claim_receipt,claim_request_id}' AND ledger.state IN ('claimed','last_resort_claimed')
+        AND ledger.outcome->'claim_receipt'=p->'claim_receipt' AND ledger.outcome#>>'{claims,0,claim_id}'=p->>'claim_id');
+    INSERT INTO mls_welcome_discovery_entries(event_pk,event_ref,scope,group_id,endpoint,authorization_ref,position,commit_ref,expires_at,claim_source,claim_request,claim_id,eligible)
+      VALUES(NEW.pk,NEW.envelope->>'event_id',s,g,endpoint_value,auth_ref,next_position,p->>'commit_ref',LEAST((p->>'expires_at')::timestamptz,(p#>>'{claim_receipt,expires_at}')::timestamptz),
+        p#>>'{claim_receipt,source_id}',p#>>'{claim_receipt,claim_request_id}',p->>'claim_id',visible)
+      ON CONFLICT(event_pk) DO UPDATE SET event_ref=EXCLUDED.event_ref,scope=EXCLUDED.scope,group_id=EXCLUDED.group_id,
+        endpoint=EXCLUDED.endpoint,authorization_ref=EXCLUDED.authorization_ref,commit_ref=EXCLUDED.commit_ref,expires_at=EXCLUDED.expires_at,
+        claim_source=EXCLUDED.claim_source,claim_request=EXCLUDED.claim_request,claim_id=EXCLUDED.claim_id,eligible=EXCLUDED.eligible;
+    RETURN NEW;
+END; $$;
+CREATE TRIGGER canonical_welcome_discovery AFTER INSERT OR UPDATE OF envelope,state ON canonical_events
+    FOR EACH ROW EXECUTE FUNCTION project_mls_welcome_discovery();
+
+CREATE FUNCTION invalidate_mls_welcome_claim() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.state <> OLD.state AND NEW.state NOT IN ('claimed','last_resort_claimed') THEN
+        UPDATE mls_welcome_discovery_scopes c SET revision=revision+1
+          WHERE EXISTS(SELECT 1 FROM mls_welcome_discovery_entries e WHERE e.scope=c.scope AND e.group_id=c.group_id
+            AND e.claim_source=NEW.source_id AND e.claim_request=NEW.claim_request_id AND e.eligible);
+        UPDATE mls_welcome_discovery_entries SET eligible=false WHERE claim_source=NEW.source_id AND claim_request=NEW.claim_request_id;
+    END IF;
+    RETURN NEW;
+END; $$;
+CREATE TRIGGER welcome_discovery_claim AFTER UPDATE OF state ON peer_keypackage_claims FOR EACH ROW EXECUTE FUNCTION invalidate_mls_welcome_claim();
+
+CREATE INDEX canonical_account_data_source_id ON canonical_events ((envelope->>'event_id')) WHERE kind='ak.account_data.set';
+
+-- A withdrawn holder source is unavailable, not an invented tombstone/revision.
+-- Invoked inside the value read statement so guard and content share its MVCC cut.
+CREATE FUNCTION account_data_source_current(a TEXT,k TEXT) RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM account_global_versions v WHERE actor_key=a AND channel='account_data_events'
+        AND item_key='event:'||k AND valid_until IS NULL AND (payload->>'source'='invalidated'
+        OR NOT EXISTS(SELECT 1 FROM accepted_events e WHERE e.kind='ak.account_data.set'
+            AND e.envelope->>'event_id'=v.payload->'value'->>'event_id'))) THEN
+        RAISE EXCEPTION 'account data current source is unavailable';
+    END IF;
+    RETURN TRUE;
+END;
+$$;
+
+-- Withdraw shared-device discovery in the very transaction that withdraws the
+-- immutable create context; no later Seal or client request is needed.
+CREATE FUNCTION invalidate_account_device_create() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE interest RECORD;
+BEGIN
+    IF OLD.kind='ak.realm.create' AND OLD.state='accepted' AND NEW.state<>'accepted' THEN
+        PERFORM 1 FROM account_global_clock WHERE singleton FOR UPDATE;
+        FOR interest IN
+            SELECT v.actor_key,v.item_key FROM account_global_versions v
+            JOIN account_summary_current recipient ON recipient.actor_key=v.actor_key AND recipient.realm_id=OLD.realm_id
+            JOIN account_summary_current owner ON owner.actor_key=v.item_key AND owner.realm_id=OLD.realm_id
+            WHERE v.channel='device_lists' AND v.valid_until IS NULL AND NOT v.deleted
+              AND v.actor_key<>v.item_key
+              AND NOT COALESCE(account_device_interest_visible(v.actor_key,v.item_key),FALSE)
+        LOOP
+            PERFORM project_account_global_value(interest.actor_key,'device_lists',interest.item_key,interest.item_key::jsonb,TRUE);
+        END LOOP;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER account_global_realm_create_withdrawal AFTER UPDATE OF state ON canonical_events FOR EACH ROW EXECUTE FUNCTION invalidate_account_device_create();
+
+-- Data-plane materialized sources remain independent from receiver arrival
+-- order and from the governance Seal checkpoints. Scope is part of identity.
+CREATE TABLE current_data_sources (
+    target_kind TEXT NOT NULL, target_key TEXT NOT NULL,
+    realm_id TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    event_id BYTEA NOT NULL REFERENCES canonical_events(id),
+    event_digest TEXT NOT NULL,
+    source_value JSONB NOT NULL,
+    causal_bases TEXT[] NOT NULL,
+    available BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY (realm_id,scope_key,cell_id,event_id),
+    UNIQUE (realm_id,scope_key,cell_id,event_digest)
+);
+CREATE INDEX current_data_source_dependency ON current_data_sources USING gin(causal_bases);
+CREATE INDEX current_data_source_event ON current_data_sources(event_id);
+CREATE INDEX current_data_source_digest ON current_data_sources(event_digest);
+-- A source withdrawal or an unfinished domain fold must never look like an
+-- empty complete baseline. Rebuilders clear this only with full publication.
+CREATE TABLE current_data_pending (
+ target_kind TEXT NOT NULL, target_key TEXT NOT NULL,
+ realm_id TEXT NOT NULL, scope_key TEXT NOT NULL, cell_id TEXT NOT NULL,
+ PRIMARY KEY(realm_id,scope_key,cell_id)
+);
+CREATE INDEX current_data_pending_target ON current_data_pending(realm_id,target_kind,target_key);
+CREATE TABLE current_data_heads (
+    realm_id TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    event_id BYTEA NOT NULL,
+    PRIMARY KEY (realm_id,scope_key,cell_id,event_id),
+    FOREIGN KEY (realm_id,scope_key,cell_id,event_id)
+      REFERENCES current_data_sources(realm_id,scope_key,cell_id,event_id)
+);
+
+CREATE TABLE current_data_dependencies (
+ source_event_id BYTEA NOT NULL REFERENCES canonical_events(id),
+ ancestor_event_id BYTEA NOT NULL REFERENCES canonical_events(id),
+ PRIMARY KEY(source_event_id,ancestor_event_id)
+);
+CREATE INDEX current_data_dependencies_ancestor ON current_data_dependencies(ancestor_event_id,source_event_id);
+
+CREATE FUNCTION invalidate_current_data_sources() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.state='accepted' AND NEW.state<>'accepted' THEN
+        WITH RECURSIVE affected(realm_id,scope_key,cell_id,event_digest) AS (
+            SELECT realm_id,scope_key,cell_id,event_digest FROM current_data_sources
+            WHERE event_id=OLD.id OR event_id IN (
+                SELECT source_event_id FROM current_data_dependencies WHERE ancestor_event_id=OLD.id)
+            UNION
+            SELECT child.realm_id,child.scope_key,child.cell_id,child.event_digest
+            FROM current_data_sources child JOIN affected parent
+              ON child.realm_id=parent.realm_id AND child.scope_key=parent.scope_key
+             AND child.cell_id=parent.cell_id AND child.causal_bases @> ARRAY[parent.event_digest]
+        ), updated AS (
+            UPDATE current_data_sources source SET available=FALSE FROM affected
+            WHERE source.realm_id=affected.realm_id AND source.scope_key=affected.scope_key
+              AND source.cell_id=affected.cell_id AND source.event_digest=affected.event_digest
+            RETURNING source.realm_id,source.scope_key,source.cell_id,source.target_kind,source.target_key
+        )
+        INSERT INTO current_data_pending(realm_id,scope_key,cell_id,target_kind,target_key)
+        SELECT DISTINCT realm_id,scope_key,cell_id,target_kind,target_key FROM updated
+        ON CONFLICT DO NOTHING;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER current_data_source_withdrawal AFTER UPDATE OF state ON canonical_events
+FOR EACH ROW EXECUTE FUNCTION invalidate_current_data_sources();
+
+CREATE TABLE current_result_heads (
+ realm_id TEXT NOT NULL, selector_key TEXT COLLATE "C" NOT NULL,
+ revision BIGINT NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991),
+ target_kind TEXT NOT NULL CHECK(target_kind IN ('realm','strand','member','event')),
+ target_key TEXT COLLATE "C" NOT NULL, payload JSONB NOT NULL,
+ PRIMARY KEY(realm_id,selector_key)
+);
+CREATE INDEX current_result_head_target ON current_result_heads(realm_id,target_kind,target_key,selector_key);
+CREATE TABLE current_result_versions (
+ realm_id TEXT NOT NULL, selector_key TEXT COLLATE "C" NOT NULL,
+ revision BIGINT NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991),
+ valid_until BIGINT CHECK(valid_until>revision),
+ target_kind TEXT NOT NULL CHECK(target_kind IN ('realm','strand','member','event')),
+ target_key TEXT COLLATE "C" NOT NULL, payload JSONB NOT NULL,
+ PRIMARY KEY(realm_id,selector_key,revision)
+);
+CREATE INDEX current_result_version_scan ON current_result_versions(realm_id,target_kind,target_key,revision,selector_key);
+CREATE INDEX current_result_version_changes ON current_result_versions(realm_id,revision,selector_key);
+CREATE INDEX current_result_version_gc ON current_result_versions(valid_until) WHERE valid_until IS NOT NULL;
+
+-- Irreversible composite subjects need an accepted origin association. This
+-- records selector/target identity, never a second copy of a current value.
+CREATE TABLE current_selector_origins (
+ realm_id TEXT NOT NULL, cell_id TEXT NOT NULL, scope_key TEXT NOT NULL,
+ selector JSONB NOT NULL, target JSONB NOT NULL,
+ source_event_id BYTEA NOT NULL CHECK(octet_length(source_event_id)=33),
+ PRIMARY KEY(realm_id,cell_id,scope_key)
+);
+CREATE INDEX current_selector_origin_event ON current_selector_origins(source_event_id);
+
+-- Governance result completeness is separate from account summary visibility.
+CREATE TABLE governance_current_ready (
+ realm_id TEXT PRIMARY KEY, ready BOOLEAN NOT NULL,
+ revision BIGINT NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991),
+ next_expiry TIMESTAMPTZ NULL
 );

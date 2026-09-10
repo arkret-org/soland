@@ -167,6 +167,7 @@ pub struct RecoverySessionRecord {
     pub principal_id: arkret_identifiers::DidCoreId,
     pub station_id: arkret_identifiers::DidCoreId,
     pub requesting_device_id: String,
+    pub requesting_device_public_key_did: String,
     pub trust_domain: String,
     pub policy_id: String,
     pub policy_version: u32,

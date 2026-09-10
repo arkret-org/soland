@@ -89,23 +89,19 @@ fn stream_cursor_handle_binding(
     filter_digest: &str,
     realms_positions: &BTreeMap<String, i64>,
     account_realms_positions: &BTreeMap<String, i64>,
-    device_list_positions: &BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> Vec<u8> {
     let account_id = arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(principal_id.to_owned()).unwrap(),
         arkret_wire::DidCoreId::new(service_id.to_owned()).unwrap(),
     );
-    stream_cursor_handle_binding_with_notification_position(
+    account_cursor_handle_binding(
         Some(&account_id),
         device_id,
         filter_digest,
         realms_positions,
         account_realms_positions,
-        device_list_positions,
         to_device_position,
-        0,
-        0,
     )
 }
 
@@ -118,15 +114,12 @@ fn account_cursor_binding_separates_same_core_at_different_stations() {
     let account_b = arkret_wire::AccountId::new(principal_id, station_b);
     let positions = BTreeMap::new();
     let bind = |account_id| {
-        stream_cursor_handle_binding_with_notification_position(
+        account_cursor_handle_binding(
             Some(account_id),
             "ak:device:01904100-0000-7000-8000-000000000001",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             &positions,
             &positions,
-            &positions,
-            0,
-            0,
             0,
         )
     };
@@ -139,7 +132,6 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
     let key = b"test-cursor-key-0123456789abcdef";
     let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
     let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
-    let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let binding = stream_cursor_handle_binding(
         "ak:did_core:web:alice.example",
         "ak:device:1",
@@ -147,7 +139,6 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
         "fd0",
         &realms,
         &account_realms,
-        &device_lists,
         3,
     );
     let h1 = derive_cursor_handle(key, &binding);
@@ -219,28 +210,6 @@ fn sync_cursor_decode_rejects_low_entropy_or_padded_handles() {
 }
 
 #[test]
-fn initial_current_baseline_contains_required_control_and_default_strand_facets() {
-    assert!(required_current_baseline_kind(
-        &arkret_wire::EventKind::RealmCreate
-    ));
-    assert!(required_current_baseline_kind(
-        &arkret_wire::EventKind::RealmPolicyBundle
-    ));
-    assert!(required_current_baseline_kind(
-        &arkret_wire::EventKind::RealmHistoryAccess
-    ));
-    assert!(required_current_baseline_kind(
-        &arkret_wire::EventKind::RealmSetDefaultStrand
-    ));
-    assert!(required_current_baseline_kind(
-        &arkret_wire::EventKind::StrandCreate
-    ));
-    assert!(!required_current_baseline_kind(
-        &arkret_wire::EventKind::MessageCreate
-    ));
-}
-
-#[test]
 fn derive_cursor_handle_excludes_devices_timestamp() {
     // The per-mint `devices` timestamp must NOT enter the binding, so two
     // mints at different wall-clock times but identical realm/to_device
@@ -248,7 +217,6 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
     let key = b"test-cursor-key-0123456789abcdef";
     let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
     let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
-    let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let a = stream_cursor_handle_binding(
         "ak:did_core:web:principal.example",
         "d",
@@ -256,7 +224,6 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
         "f",
         &realms,
         &account_realms,
-        &device_lists,
         3,
     );
     let b = stream_cursor_handle_binding(
@@ -266,7 +233,6 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
         "f",
         &realms,
         &account_realms,
-        &device_lists,
         3,
     );
     assert_eq!(derive_cursor_handle(key, &a), derive_cursor_handle(key, &b));
@@ -277,8 +243,6 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
     let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
     let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
     let advanced_account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 12i64)]);
-    let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
-    let advanced_device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 14i64)]);
     let base = stream_cursor_handle_binding(
         "ak:did_core:web:principal.example",
         "d",
@@ -286,7 +250,6 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         "f",
         &realms,
         &account_realms,
-        &device_lists,
         3,
     );
     let other_device = stream_cursor_handle_binding(
@@ -296,7 +259,6 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         "f",
         &realms,
         &account_realms,
-        &device_lists,
         3,
     );
     let advanced = stream_cursor_handle_binding(
@@ -306,7 +268,6 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         "f",
         &realms,
         &account_realms,
-        &device_lists,
         4,
     );
     let advanced_account = stream_cursor_handle_binding(
@@ -316,17 +277,6 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         "f",
         &realms,
         &advanced_account_realms,
-        &device_lists,
-        3,
-    );
-    let advanced_devices = stream_cursor_handle_binding(
-        "ak:did_core:web:principal.example",
-        "d",
-        "ak:did_core:web:station.example",
-        "f",
-        &realms,
-        &account_realms,
-        &advanced_device_lists,
         3,
     );
     let k1 = b"key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -345,11 +295,6 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         derive_cursor_handle(k1, &base),
         derive_cursor_handle(k1, &advanced_account),
         "advanced account projection position -> different handle"
-    );
-    assert_ne!(
-        derive_cursor_handle(k1, &base),
-        derive_cursor_handle(k1, &advanced_devices),
-        "advanced device-list position -> different handle"
     );
     assert_ne!(
         derive_cursor_handle(k1, &base),
@@ -613,24 +558,8 @@ const ROSTER_ACTOR: &str = "ak:did_core:web:alice.example";
 const ROSTER_SUBJECT: &str = "ak:did_core:web:alice-principal.example";
 const ROSTER_CALLER: &str = "ak:did_core:web:bob.example";
 
-fn roster_body(audience: &str) -> SyncRequestBody {
-    let mut extra = BTreeMap::new();
-    extra.insert("audience".to_owned(), json!(audience));
-    SyncRequestBody {
-        after: None,
-        catchup: None,
-        filter: Some(
-            arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
-                realm_ids: Vec::new(),
-                timeline_limit: None,
-                lazy_load_members: false,
-                include_redundant_members: false,
-                event_types: Vec::new(),
-                not_event_types: Vec::new(),
-                extra,
-            },
-        ),
-    }
+fn roster_body(_audience: &str) -> SyncRequestBody {
+    SyncRequestBody::default()
 }
 
 fn roster_session(state: &AppState, actor: &str) -> SessionIdentityState {
@@ -970,216 +899,6 @@ async fn store_canonical_event(state: &AppState, record: soland_services::events
 }
 
 #[tokio::test]
-async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
-    let mut config = test_config();
-    config.seed_demo_data = false;
-    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    state.realm_directory().upsert(roster_realm(false, true));
-    let session = roster_session(&state, ROSTER_CALLER);
-    let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
-    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let pre_join_received_at = created_at + chrono::Duration::milliseconds(100);
-    let joined_at = created_at + chrono::Duration::milliseconds(200);
-    let post_join_received_at = created_at + chrono::Duration::milliseconds(300);
-
-    state
-        .realms()
-        .store_realm_metadata(
-            ROSTER_REALM,
-            soland_services::events::RealmMetadata {
-                owner: ROSTER_ACTOR.to_owned(),
-                deleted: false,
-                discoverability: "invite_only".to_owned(),
-                history_access: "since_join".to_owned(),
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: Some("none".to_owned()),
-                plaintext_visible_services: BTreeSet::new(),
-                plaintext_visible_service_classes: BTreeMap::new(),
-                minimal_metadata_realm: false,
-                created_at,
-                updated_at: created_at,
-            },
-        )
-        .await
-        .expect("realm meta stored");
-
-    insert_projected_membership_at(&state, ROSTER_CALLER, "join", joined_at);
-
-    let pre_join_record = canonical_event_record_received_at(
-        1,
-        arkret_wire::EventKind::MessageCreate,
-        json!({
-            "strand_id": strand_id,
-            "content": {"kind": "ak.content.text", "body": "before join"}
-        }),
-        ROSTER_ACTOR,
-        created_at,
-        pre_join_received_at,
-    );
-    let post_join_record = canonical_event_record_received_at(
-        2,
-        arkret_wire::EventKind::MessageCreate,
-        json!({
-            "strand_id": strand_id,
-            "content": {"kind": "ak.content.text", "body": "after join"}
-        }),
-        ROSTER_ACTOR,
-        created_at,
-        post_join_received_at,
-    );
-    let pre_join_event_id = pre_join_record.event_id.clone();
-    let post_join_event_id = post_join_record.event_id.clone();
-    let pre_join_payload = json!({
-        "event_id": pre_join_event_id,
-        "realm_id": ROSTER_REALM,
-        "strand_id": strand_id,
-        "track_name": "discussion",
-        "sender": ROSTER_ACTOR,
-        "content": {"kind": "ak.content.text", "body": "before join"}
-    });
-    let post_join_payload = json!({
-        "event_id": post_join_event_id,
-        "realm_id": ROSTER_REALM,
-        "strand_id": strand_id,
-        "track_name": "discussion",
-        "sender": ROSTER_ACTOR,
-        "content": {"kind": "ak.content.text", "body": "after join"}
-    });
-    let pre_join_message = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000002e1",
-        arkret_wire::EventKind::MessageCreate,
-        pre_join_payload.clone(),
-        created_at,
-    );
-    let post_join_message = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000002e2",
-        arkret_wire::EventKind::MessageCreate,
-        post_join_payload.clone(),
-        created_at,
-    );
-    {
-        let mut projection = state.test_projection().lock();
-        projection.apply(&pre_join_message, state.hlc());
-        projection.apply(&post_join_message, state.hlc());
-    }
-    store_canonical_event(&state, pre_join_record).await;
-    store_canonical_event(&state, post_join_record).await;
-
-    let body = roster_body(state.service_id());
-    let snapshot = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let timeline_events = &snapshot.realms.as_ref().unwrap().entries[ROSTER_REALM]
-        .timeline
-        .as_ref()
-        .unwrap()
-        .events;
-    assert!(
-        !timeline_events
-            .iter()
-            .any(|event| event.event_id.as_str() == pre_join_event_id),
-        "joined history must hide messages received before the member joined"
-    );
-    assert!(
-        timeline_events
-            .iter()
-            .any(|event| event.event_id.as_str() == post_join_event_id),
-        "joined history must include messages received after the member joined even when created_at predates joined_at"
-    );
-}
-
-fn insert_member_identity_subject(state: &AppState) {
-    use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
-    insert_projected_membership(state, ROSTER_ACTOR, "join");
-    insert_projected_membership(state, ROSTER_CALLER, "join");
-    let identity_payload = json!({
-        "member_identity": {
-            "subject_actor_id": roster_actor(ROSTER_SUBJECT),
-            "display_profile": { "display_name": "Alice" }
-        }
-    });
-    let payload_digest = arkret_canonical::sha256_digest(
-        arkret_canonical::canonical_json_bytes(&identity_payload).unwrap(),
-    );
-    state.test_insert_member_identity(MemberIdentityEventRecord {
-        event_id: "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx".to_owned(),
-        subject: MemberIdentitySubjectKey {
-            realm_id: ROSTER_REALM.to_owned(),
-            actor_id: roster_actor(ROSTER_ACTOR).to_string(),
-            segment: "member_identity".to_owned(),
-        },
-        payload_digest,
-        replaces: Vec::new(),
-        raw_event: json!({
-            "event_id": "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx",
-            "event_kind": arkret_wire::EventKind::MemberIdentityUpdate,
-            "realm_id": ROSTER_REALM,
-            "created_at": now(),
-            "payload": {
-                "realm_id": ROSTER_REALM,
-                "actor_id": roster_actor(ROSTER_ACTOR),
-                "segment": "member_identity",
-                "identity_payload": identity_payload,
-            }
-        }),
-    });
-}
-
-fn handle_claim(
-    _state: &AppState,
-    issuer: &str,
-    audience: &str,
-    expires_at: DateTime<Utc>,
-    status: &str,
-    extra: Option<Value>,
-) -> Value {
-    let status = serde_json::from_value::<arkret_models_identity::HandleClaimStatus>(json!(status))
-        .expect("fixture status");
-    let aliases = extra.into_iter().map(|value| value.to_string()).collect();
-    serde_json::to_value(crate::state::test_handle_claim(
-        roster_actor(ROSTER_SUBJECT)
-            .as_account_id()
-            .unwrap()
-            .clone(),
-        arkret_wire::DidCoreId::new(issuer).unwrap(),
-        (!audience.is_empty()).then(|| audience.to_owned()),
-        expires_at,
-        status,
-        aliases,
-    ))
-    .unwrap()
-}
-
-fn cache_claim(state: &AppState, claim: Value) -> String {
-    state.test_cache_handle_claim(claim).expect("claim cached")
-}
-
-fn roster_row(
-    state: &AppState,
-    realm: &RealmDirectoryEntry,
-    session: Option<&SessionIdentityState>,
-) -> Value {
-    let body = roster_body(state.service_id());
-    roster_members_for_realm(state, realm, session, &body)
-        .into_iter()
-        .find(|row| row["actor_id"] == json!(roster_actor(ROSTER_ACTOR)))
-        .expect("actor row")
-}
-
-fn roster_membership_for_actor<'a>(rows: &'a [Value], actor: &str) -> Option<&'a str> {
-    rows.iter()
-        .find(|row| row["actor_id"] == json!(roster_actor(actor)))
-        .and_then(|row| row["membership"].as_str())
-}
-
-// SPEC-CR-010 / SOL-05-008 — `project_member_identity_update` MUST store the
-// canonical `ak:event:` id (threaded through `ProjectionContext`) so the
-// effective-set / replaces / R3.2 digests live in the same id space as a
-// spec-compliant client, whose `replaces[].event_id` is a `ak:event:` id.
-#[tokio::test]
 async fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
     use crate::routing::events::projection::project_member_identity_update;
 
@@ -1277,286 +996,6 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
             .all(|entry| entry.event_id.as_str().starts_with("ak:event:")),
         "effective entries must live in the ak:event: id space"
     );
-}
-
-#[test]
-fn roster_includes_only_complete_projected_member_actors() {
-    let state = test_state();
-    insert_projected_membership(&state, ROSTER_ACTOR, "join");
-    insert_projected_membership(&state, ROSTER_CALLER, "join");
-    insert_projected_membership(&state, "ak:did_core:web:carol.example", "join");
-    insert_projected_membership(&state, "ak:did_core:web:dave.example", "knock");
-    let realm = roster_realm(false, false);
-    let body = roster_body(state.service_id());
-    let session = roster_session(&state, ROSTER_ACTOR);
-
-    let rows = roster_members_for_realm(&state, &realm, Some(&session), &body);
-
-    assert_eq!(
-        roster_membership_for_actor(&rows, ROSTER_ACTOR),
-        Some("join"),
-        "creator is present only through its explicit membership projection"
-    );
-    assert_eq!(
-        roster_membership_for_actor(&rows, ROSTER_CALLER),
-        Some("join"),
-        "accepted Account member from the projected member FSM is emitted"
-    );
-    assert_eq!(
-        roster_membership_for_actor(&rows, "ak:did_core:web:carol.example"),
-        Some("join")
-    );
-    assert_eq!(
-        roster_membership_for_actor(&rows, "ak:did_core:web:dave.example"),
-        Some("knock")
-    );
-}
-
-#[test]
-fn roster_suppresses_terminal_projected_membership_over_directory_fallback() {
-    let state = test_state();
-    insert_projected_membership(&state, ROSTER_ACTOR, "leave");
-    let realm = roster_realm(false, false);
-    let body = roster_body(state.service_id());
-
-    let rows = roster_members_for_realm(&state, &realm, None, &body);
-
-    assert_eq!(roster_membership_for_actor(&rows, ROSTER_ACTOR), None);
-}
-
-#[test]
-fn roster_preserves_two_stations_for_the_same_principal() {
-    let state = test_state();
-    insert_projected_membership(&state, ROSTER_ACTOR, "join");
-    let local_actor = roster_actor(ROSTER_ACTOR);
-    let remote_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        local_actor.signing_principal_id().clone(),
-        arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-    ));
-    let mut remote_member = state
-        .test_projection()
-        .lock()
-        .members
-        .get(&(ROSTER_REALM.to_owned(), local_actor.to_string()))
-        .unwrap()
-        .clone();
-    remote_member.member = remote_actor.to_string();
-    state.test_projection().lock().members.insert(
-        (ROSTER_REALM.to_owned(), remote_actor.to_string()),
-        remote_member,
-    );
-    let realm = roster_realm(true, true);
-    let rows = roster_members_for_realm(&state, &realm, None, &roster_body(state.service_id()));
-    assert_eq!(
-        rows.len(),
-        2,
-        "directory-only principals do not create member Accounts"
-    );
-    assert!(rows.iter().any(|row| row["actor_id"] == json!(local_actor)));
-    assert!(
-        rows.iter()
-            .any(|row| row["actor_id"] == json!(remote_actor))
-    );
-}
-
-#[test]
-fn roster_rejects_a_handle_claim_for_the_same_principal_at_another_station() {
-    let state = test_state();
-    insert_member_identity_subject(&state);
-    let claim = serde_json::to_value(crate::state::test_handle_claim(
-        arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(ROSTER_SUBJECT).unwrap(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        ),
-        arkret_wire::DidCoreId::new(state.service_id()).unwrap(),
-        Some(state.service_id().to_owned()),
-        now() + chrono::Duration::hours(1),
-        arkret_models_identity::HandleClaimStatus::Verified,
-        Vec::new(),
-    ))
-    .unwrap();
-    cache_claim(&state, claim);
-    let realm = roster_realm(false, true);
-    let session = roster_session(&state, ROSTER_CALLER);
-    let row = roster_row(&state, &realm, Some(&session));
-    assert_eq!(
-        row["subject_account_id"],
-        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
-    );
-    assert!(row.get("handle_claim_digests").is_none());
-    assert!(row.get("handle_claims").is_none());
-}
-
-#[test]
-fn roster_discloses_handle_claim_for_visible_trusted_issuer() {
-    let state = test_state();
-    insert_member_identity_subject(&state);
-    let claim = handle_claim(
-        &state,
-        state.service_id(),
-        state.service_id(),
-        now() + chrono::Duration::hours(1),
-        "verified",
-        None,
-    );
-    let digest = cache_claim(&state, claim);
-    let realm = roster_realm(false, true);
-    let session = roster_session(&state, ROSTER_CALLER);
-
-    let row = roster_row(&state, &realm, Some(&session));
-
-    assert_eq!(
-        row["subject_account_id"],
-        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
-    );
-    assert_eq!(row["handle_claim_digests"], json!([digest]));
-    let inline_claim: arkret_models_identity::HandleClaim =
-        serde_json::from_value(row["handle_claims"][0].clone()).unwrap();
-    assert_eq!(
-        inline_claim.claim_digest().unwrap().to_string(),
-        row["handle_claim_digests"][0].as_str().unwrap()
-    );
-    assert!(row.get("handle_claims_limited").is_none());
-}
-
-#[test]
-fn roster_hides_handle_claim_from_untrusted_issuer() {
-    let state = test_state();
-    insert_member_identity_subject(&state);
-    cache_claim(
-        &state,
-        handle_claim(
-            &state,
-            "ak:did_core:web:evil.example",
-            "",
-            now() + chrono::Duration::hours(1),
-            "verified",
-            None,
-        ),
-    );
-    let realm = roster_realm(false, true);
-    let session = roster_session(&state, ROSTER_CALLER);
-
-    let row = roster_row(&state, &realm, Some(&session));
-
-    assert_eq!(
-        row["subject_account_id"],
-        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
-    );
-    assert!(row.get("handle_claim_digests").is_none());
-    assert!(row.get("handle_claims").is_none());
-}
-
-#[test]
-fn roster_hides_expired_handle_claim() {
-    let state = test_state();
-    insert_member_identity_subject(&state);
-    cache_claim(
-        &state,
-        handle_claim(
-            &state,
-            state.service_id(),
-            state.service_id(),
-            now() - chrono::Duration::seconds(1),
-            "verified",
-            None,
-        ),
-    );
-    let realm = roster_realm(false, true);
-    let session = roster_session(&state, ROSTER_CALLER);
-
-    let row = roster_row(&state, &realm, Some(&session));
-
-    assert_eq!(
-        row["subject_account_id"],
-        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
-    );
-    assert!(row.get("handle_claim_digests").is_none());
-}
-
-#[test]
-fn roster_hides_revoked_handle_claim() {
-    let state = test_state();
-    insert_member_identity_subject(&state);
-    cache_claim(
-        &state,
-        handle_claim(
-            &state,
-            state.service_id(),
-            state.service_id(),
-            now() + chrono::Duration::hours(1),
-            "revoked",
-            None,
-        ),
-    );
-    let realm = roster_realm(false, true);
-    let session = roster_session(&state, ROSTER_CALLER);
-
-    let row = roster_row(&state, &realm, Some(&session));
-
-    assert_eq!(
-        row["subject_account_id"],
-        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
-    );
-    assert!(row.get("handle_claim_digests").is_none());
-}
-
-#[test]
-fn roster_disclosure_depends_on_realm_policy() {
-    let state = test_state();
-    insert_member_identity_subject(&state);
-    let digest = cache_claim(
-        &state,
-        handle_claim(
-            &state,
-            state.service_id(),
-            "",
-            now() + chrono::Duration::hours(1),
-            "verified",
-            None,
-        ),
-    );
-
-    let private_realm = roster_realm(false, false);
-    let private_row = roster_row(&state, &private_realm, None);
-    assert!(private_row.get("subject_account_id").is_none());
-    assert!(private_row.get("handle_claim_digests").is_none());
-    assert!(private_row.get("handle_claims").is_none());
-
-    let public_realm = roster_realm(true, false);
-    let public_row = roster_row(&state, &public_realm, None);
-    assert_eq!(
-        public_row["subject_account_id"],
-        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
-    );
-    assert_eq!(public_row["handle_claim_digests"], json!([digest]));
-}
-
-#[test]
-fn roster_limits_large_inline_handle_claim_payloads() {
-    let state = test_state();
-    insert_member_identity_subject(&state);
-    let claim = handle_claim(
-        &state,
-        state.service_id(),
-        state.service_id(),
-        now() + chrono::Duration::hours(1),
-        "verified",
-        Some(json!([{"blob": "x".repeat(HANDLE_CLAIMS_INLINE_MAX_BYTES + 1)}])),
-    );
-    let digest = cache_claim(&state, claim);
-    let realm = roster_realm(false, true);
-    let session = roster_session(&state, ROSTER_CALLER);
-
-    let row = roster_row(&state, &realm, Some(&session));
-
-    assert_eq!(
-        row["subject_account_id"],
-        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
-    );
-    assert_eq!(row["handle_claim_digests"], json!([digest]));
-    assert!(row.get("handle_claims").is_none());
-    assert_eq!(row["handle_claims_limited"], true);
 }
 
 #[tokio::test]
@@ -1703,519 +1142,6 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     );
 }
 
-#[tokio::test]
-async fn sync_snapshot_emits_state_events_without_timeline_messages() {
-    let mut config = test_config();
-    config.seed_demo_data = false;
-    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    let session = roster_session(&state, ROSTER_CALLER);
-    state.realm_directory().upsert(roster_realm(false, true));
-
-    let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let second_created_at = first_created_at + chrono::Duration::seconds(1);
-    let meta_created_at = first_created_at - chrono::Duration::seconds(1);
-    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", meta_created_at);
-    insert_projected_membership_at(&state, ROSTER_CALLER, "join", meta_created_at);
-    state
-        .realms()
-        .store_realm_metadata(
-            ROSTER_REALM,
-            soland_services::events::RealmMetadata {
-                owner: ROSTER_ACTOR.to_owned(),
-                deleted: false,
-                discoverability: "invite_only".to_owned(),
-                history_access: "all_history_for_current_members".to_owned(),
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: None,
-                plaintext_visible_services: BTreeSet::new(),
-                plaintext_visible_service_classes: BTreeMap::new(),
-                minimal_metadata_realm: false,
-                created_at: meta_created_at,
-                updated_at: meta_created_at,
-            },
-        )
-        .await
-        .expect("realm meta stored");
-    let first_payload = json!({
-        "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
-        "patch": {"synthesis": {"$op": "set", "value": "first"}}
-    });
-    let first_record = canonical_event_record_received_at(
-        1,
-        arkret_wire::EventKind::StrandUpdate,
-        first_payload.clone(),
-        ROSTER_ACTOR,
-        first_created_at,
-        first_created_at,
-    );
-    store_canonical_event(&state, first_record.clone()).await;
-    crate::routing::events::projection::append_projection_event(
-        &state,
-        soland_services::events::ProjectedEvent {
-            event_id: first_record.event_id.clone(),
-            realm_id: ROSTER_REALM.to_owned(),
-            event_kind: arkret_wire::EventKind::StrandUpdate,
-            operation_kind: "state".to_owned(),
-            operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
-            sender: Some(ROSTER_ACTOR.to_owned()),
-            payload: first_payload,
-            created_at: first_created_at,
-            received_at: first_created_at,
-        },
-    )
-    .await
-    .expect("first state event appended");
-
-    let body = roster_body(state.service_id());
-    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let initial_value = serde_json::to_value(&initial).unwrap();
-    let initial_events = initial_value["realms"][ROSTER_REALM]["state"]["events"]
-        .as_array()
-        .expect("state events array");
-    assert_eq!(initial_events.len(), 1);
-    assert_eq!(
-        initial_events[0]["actor_id"],
-        json!(roster_actor(ROSTER_ACTOR))
-    );
-
-    let filter_value = sync_filter_value(body.filter.as_ref());
-    let initial_cursor = parse_and_validate_sync_cursor(
-        initial.cursor.as_deref().unwrap(),
-        &state,
-        Some(&session),
-        filter_value.as_ref(),
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .expect("initial cursor parses");
-
-    let second_payload = json!({
-        "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
-        "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
-    });
-    let second_record = canonical_event_record_received_at(
-        2,
-        arkret_wire::EventKind::StrandUpdate,
-        second_payload.clone(),
-        ROSTER_CALLER,
-        second_created_at,
-        second_created_at,
-    );
-    store_canonical_event(&state, second_record.clone()).await;
-    crate::routing::events::projection::append_projection_event(
-        &state,
-        soland_services::events::ProjectedEvent {
-            event_id: second_record.event_id.clone(),
-            realm_id: ROSTER_REALM.to_owned(),
-            event_kind: arkret_wire::EventKind::StrandUpdate,
-            operation_kind: "state".to_owned(),
-            operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
-            sender: Some(ROSTER_CALLER.to_owned()),
-            payload: second_payload,
-            created_at: second_created_at,
-            received_at: second_created_at,
-        },
-    )
-    .await
-    .expect("second state event appended");
-
-    let mut incremental_body = body.clone();
-    incremental_body.after = initial.cursor.clone();
-    let incremental =
-        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
-    let incremental_value = serde_json::to_value(&incremental).unwrap();
-    let incremental_events = incremental_value["realms"][ROSTER_REALM]["state"]["events"]
-        .as_array()
-        .expect("incremental state events array");
-    assert_eq!(
-        incremental_events.len(),
-        1,
-        "state-only updates must keep the Realm in incremental sync"
-    );
-    assert_eq!(
-        incremental_events[0]["actor_id"],
-        json!(roster_actor(ROSTER_CALLER))
-    );
-    assert_eq!(
-        incremental_value["realms"][ROSTER_REALM]["timeline"]["events"]
-            .as_array()
-            .expect("timeline events")
-            .len(),
-        0
-    );
-}
-
-#[tokio::test]
-async fn membership_only_projection_advances_incremental_roster() {
-    let mut config = test_config();
-    config.seed_demo_data = false;
-    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    let session = roster_session(&state, ROSTER_ACTOR);
-    state.realm_directory().upsert(roster_realm(false, false));
-
-    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:30:00.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", created_at);
-    state
-        .realms()
-        .store_realm_metadata(
-            ROSTER_REALM,
-            soland_services::events::RealmMetadata {
-                owner: ROSTER_ACTOR.to_owned(),
-                deleted: false,
-                discoverability: "invite_only".to_owned(),
-                history_access: "all_history_for_current_members".to_owned(),
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: Some("mls_rfc9420".to_owned()),
-                plaintext_visible_services: BTreeSet::new(),
-                plaintext_visible_service_classes: BTreeMap::new(),
-                minimal_metadata_realm: false,
-                created_at,
-                updated_at: created_at,
-            },
-        )
-        .await
-        .expect("realm meta stored");
-
-    let body = roster_body(state.service_id());
-    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let filter_value = sync_filter_value(body.filter.as_ref());
-    let initial_cursor = parse_and_validate_sync_cursor(
-        initial.cursor.as_deref().unwrap(),
-        &state,
-        Some(&session),
-        filter_value.as_ref(),
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .expect("initial cursor parses");
-
-    let member_join = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000c6",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "realm_id": ROSTER_REALM,
-            "member_id": roster_actor(ROSTER_CALLER),
-            "membership": "join",
-            "sender": ROSTER_ACTOR
-        }),
-        created_at + chrono::Duration::seconds(1),
-    );
-    crate::routing::events::projection::project_accepted_operations(
-        &state,
-        ROSTER_ACTOR,
-        &[member_join],
-    )
-    .await;
-
-    let mut incremental_body = body;
-    incremental_body.after = initial.cursor;
-    let incremental =
-        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
-    let value = serde_json::to_value(&incremental).unwrap();
-    let members = value["realms"][ROSTER_REALM]["member_roster"]["entries"]
-        .as_array()
-        .expect("membership-only delta must include the current roster projection");
-    assert_eq!(
-        roster_membership_for_actor(members, ROSTER_CALLER),
-        Some("join"),
-        "ak.member.state(join) must wake account sync and expose the joined member without a timeline message"
-    );
-    assert_eq!(
-        value["realms"][ROSTER_REALM]["member_roster"]["limited"],
-        json!(false)
-    );
-}
-
-#[tokio::test]
-async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
-    let mut config = test_config();
-    config.seed_demo_data = false;
-    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    let session = roster_session(&state, ROSTER_CALLER);
-    let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
-    let message_event_id = "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx";
-    let message_id = "ak:message:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx";
-    let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let realm_create = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000c1",
-        arkret_wire::EventKind::RealmCreate,
-        json!({
-            "object": {
-                "id": ROSTER_REALM,
-                "title": "Pinned welcome space",
-                "created_by": ROSTER_ACTOR,
-                "default_join_rule": "invite",
-                "history_access": "since_join",
-                "encryption_profile": "none"
-            }
-        }),
-        base,
-    );
-    let member_join = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000c2",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "realm_id": ROSTER_REALM,
-            "member_id": roster_actor(ROSTER_CALLER),
-            "membership": "join",
-            "sender": ROSTER_ACTOR
-        }),
-        base + chrono::Duration::seconds(1),
-    );
-    let strand_create = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000c3",
-        arkret_wire::EventKind::StrandCreate,
-        json!({
-            "object": {
-                "id": strand_id,
-                "realm_id": ROSTER_REALM,
-                "created_by": ROSTER_ACTOR,
-                "metadata": {"title": "Discussion"}
-            }
-        }),
-        base + chrono::Duration::seconds(2),
-    );
-    let message_create = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000c4",
-        arkret_wire::EventKind::MessageCreate,
-        json!({
-            "event_id": message_event_id,
-            "realm_id": ROSTER_REALM,
-            "strand_id": strand_id,
-            "track_name": "discussion",
-            "sender": ROSTER_ACTOR,
-            "content": {"kind": "ak.content.text", "body": "Pinned welcome"}
-        }),
-        base + chrono::Duration::seconds(3),
-    );
-    crate::routing::events::projection::project_accepted_operations(
-        &state,
-        ROSTER_ACTOR,
-        &[realm_create, member_join, strand_create, message_create],
-    )
-    .await;
-
-    let body = roster_body(state.service_id());
-    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let filter_value = sync_filter_value(body.filter.as_ref());
-    let initial_cursor = parse_and_validate_sync_cursor(
-        initial.cursor.as_deref().unwrap(),
-        &state,
-        Some(&session),
-        filter_value.as_ref(),
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .expect("initial cursor parses");
-
-    let pin_payload = json!({
-        "pin_scope": {"kind": "strand", "id": strand_id},
-        "target_ref": message_id,
-        "rank": "r1"
-    });
-    let pin_record = canonical_event_record_received_at(
-        5,
-        arkret_wire::EventKind::PinAdd,
-        pin_payload.clone(),
-        ROSTER_ACTOR,
-        base + chrono::Duration::seconds(4),
-        base + chrono::Duration::seconds(4),
-    );
-    let pin_add = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000c5",
-        arkret_wire::EventKind::PinAdd,
-        json!({
-            "event_id": pin_record.event_id.clone(),
-            "pin_scope": {"kind": "strand", "id": strand_id},
-            "target_ref": message_id,
-            "rank": "r1",
-            "sender": ROSTER_ACTOR
-        }),
-        base + chrono::Duration::seconds(4),
-    );
-    store_canonical_event(&state, pin_record).await;
-    crate::routing::events::projection::project_accepted_operations(
-        &state,
-        ROSTER_ACTOR,
-        &[pin_add],
-    )
-    .await;
-
-    let mut incremental_body = body.clone();
-    incremental_body.after = initial.cursor.clone();
-    let incremental =
-        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
-    let incremental_value = serde_json::to_value(&incremental).unwrap();
-    let state_events = incremental_value["realms"][ROSTER_REALM]["state"]["events"]
-        .as_array()
-        .expect("state events array");
-    assert!(
-        state_events.iter().any(
-            |event| event["kind"] == arkret_wire::EventKind::PinAdd.as_str()
-                && event["payload"]["target_ref"] == message_id
-        ),
-        "joined members must receive shared pin state events through account sync"
-    );
-}
-
-#[tokio::test]
-async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
-    let mut config = test_config();
-    config.seed_demo_data = false;
-    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    let session = roster_session(&state, ROSTER_CALLER);
-    let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
-    let message_event_id = "ak:event:AQ-IyBN9yVn52Yqaah8H-_0fuHhf3ImJTExtFDnU3ebQ";
-    let redaction_event_id = "ak:event:ARd31VEuNctVD_m_3KpeoN5D_TuBpgHos97UPSApGL_6";
-    let message_id = "ak:message:AQ-IyBN9yVn52Yqaah8H-_0fuHhf3ImJTExtFDnU3ebQ";
-    let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let revision_record = canonical_event_record_received_at(
-        5,
-        arkret_wire::EventKind::MessageRevise,
-        json!({
-            "message_id": message_id,
-            "content": {"kind": "ak.content.text", "body": "edited"}
-        }),
-        ROSTER_ACTOR,
-        base + chrono::Duration::seconds(4),
-        base + chrono::Duration::seconds(4),
-    );
-    let revision_event_id = revision_record.event_id.clone();
-    let realm_create = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000001c1",
-        arkret_wire::EventKind::RealmCreate,
-        json!({
-            "object": {
-                "id": ROSTER_REALM,
-                "title": "Redacted revision space",
-                "created_by": ROSTER_ACTOR,
-                "default_join_rule": "invite",
-                "history_access": "since_join",
-                "encryption_profile": "none"
-            }
-        }),
-        base,
-    );
-    let member_join = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000001c2",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "realm_id": ROSTER_REALM,
-            "member_id": roster_actor(ROSTER_CALLER),
-            "membership": "join",
-            "sender": ROSTER_ACTOR
-        }),
-        base + chrono::Duration::seconds(1),
-    );
-    let strand_create = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000001c3",
-        arkret_wire::EventKind::StrandCreate,
-        json!({
-            "object": {
-                "id": strand_id,
-                "realm_id": ROSTER_REALM,
-                "created_by": ROSTER_ACTOR,
-                "metadata": {"title": "Discussion"}
-            }
-        }),
-        base + chrono::Duration::seconds(2),
-    );
-    let message_create = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000001c4",
-        arkret_wire::EventKind::MessageCreate,
-        json!({
-            "event_id": message_event_id,
-            "realm_id": ROSTER_REALM,
-            "strand_id": strand_id,
-            "track_name": "discussion",
-            "sender": ROSTER_ACTOR,
-            "content": {"kind": "ak.content.text", "body": "original"}
-        }),
-        base + chrono::Duration::seconds(3),
-    );
-    let message_revise = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000001c5",
-        arkret_wire::EventKind::MessageRevise,
-        json!({
-            "event_id": revision_event_id,
-            "message_id": message_id,
-            "realm_id": ROSTER_REALM,
-            "strand_id": strand_id,
-            "sender": ROSTER_ACTOR,
-            "content": {"kind": "ak.content.text", "body": "edited"}
-        }),
-        base + chrono::Duration::seconds(4),
-    );
-    let message_redact = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000001c6",
-        arkret_wire::EventKind::MessageRedact,
-        json!({
-            "event_id": redaction_event_id,
-            "message_id": message_id,
-            "realm_id": ROSTER_REALM,
-            "sender": ROSTER_ACTOR,
-            "reason": "user requested tombstone"
-        }),
-        base + chrono::Duration::seconds(5),
-    );
-    crate::routing::events::projection::project_accepted_operations(
-        &state,
-        ROSTER_ACTOR,
-        &[
-            realm_create,
-            member_join,
-            strand_create,
-            message_create,
-            message_revise,
-            message_redact,
-        ],
-    )
-    .await;
-    store_canonical_event(&state, revision_record).await;
-
-    let body = roster_body(state.service_id());
-    let snapshot = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let snapshot_value = serde_json::to_value(&snapshot).unwrap();
-    let timeline_events = snapshot_value["realms"][ROSTER_REALM]["timeline"]["events"]
-        .as_array()
-        .expect("timeline events array");
-    let matching = timeline_events
-        .iter()
-        .filter(|event| event["payload"]["message_id"] == message_id)
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        matching.len(),
-        1,
-        "timeline must surface one logical tombstone per message_id"
-    );
-    assert_eq!(matching[0]["event_id"], revision_event_id);
-    assert_eq!(matching[0]["payload"]["redacted"], true);
-    assert_eq!(matching[0]["payload"]["state"], "redacted");
-    assert_eq!(matching[0]["payload"]["message_id"], message_id);
-    assert_eq!(matching[0]["payload"]["strand_id"], strand_id);
-    assert_eq!(
-        matching[0]["payload"]["content"]["body"], "[redacted]",
-        "sync must not fall back to the plaintext canonical revision"
-    );
-    assert_eq!(matching[0]["unsigned"]["projection_only"], true);
-    assert_eq!(matching[0]["proofs"], json!([]));
-}
-
 #[test]
 fn auth_material_present_separates_anonymous_from_bad_credential() {
     // Genuinely anonymous: no Authorization header, no query token → the
@@ -2250,13 +1176,6 @@ fn auth_material_present_separates_anonymous_from_bad_credential() {
 
     // A non-bearer Authorization scheme is not bearer material on its own.
     assert!(!auth_material_present(Some("Basic dXNlcjpwYXNz"), None));
-}
-
-fn assert_integrity_error(error: SyncCursorError) {
-    match error {
-        SyncCursorError::Integrity(_) => {}
-        other => panic!("expected cursor integrity error, got {other:?}"),
-    }
 }
 
 fn assert_invalid_or_integrity_error(error: SyncCursorError) {
@@ -2417,32 +1336,16 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
 }
 
 #[test]
-fn sync_filter_digest_normalizes_account_filter_collections() {
-    let filter_a = json!({
-        "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
-        "event_kinds": ["ak.reaction.add", "ak.message.create", "ak.message.create"],
-        "not_event_kinds": ["ak.redaction", "ak.audit.accessed"],
-        "lazy_load_members": false,
-        "include_redundant_members": false
-    });
-    let filter_b = json!({
-        "realms": ["ak:realm:a", "ak:realm:b"],
-        "event_kinds": ["ak.message.create", "ak.reaction.add"],
-        "not_event_kinds": ["ak.audit.accessed", "ak.redaction"]
-    });
-    assert_eq!(
-        sync_filter_digest(Some(&filter_a)),
-        sync_filter_digest(Some(&filter_b))
-    );
-
-    let narrowed = json!({
-        "realms": ["ak:realm:a", "ak:realm:b"],
-        "event_kinds": ["ak.message.create"],
-        "not_event_kinds": ["ak.audit.accessed", "ak.redaction"]
-    });
+fn account_filter_digest_retains_explicit_empty_and_false() {
+    let absent = cursor::account_filter_digest(None);
+    assert_eq!(absent, cursor::account_filter_digest(Some(&json!({}))));
     assert_ne!(
-        sync_filter_digest(Some(&filter_a)),
-        sync_filter_digest(Some(&narrowed))
+        absent,
+        cursor::account_filter_digest(Some(&json!({"realm_ids": []})))
+    );
+    assert_ne!(
+        absent,
+        cursor::account_filter_digest(Some(&json!({"lazy_load_members": false})))
     );
 }
 
@@ -2502,7 +1405,6 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
         None,
         positions.clone(),
         BTreeMap::new(),
-        BTreeMap::new(),
         3,
     )
     .await;
@@ -2511,7 +1413,6 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
         Some(&session),
         None,
         positions.clone(),
-        BTreeMap::new(),
         BTreeMap::new(),
         3,
     )
@@ -2529,17 +1430,10 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
     );
 
     // Frontier advances -> a different handle; the OLD token still
-    // resolves (rows coexist until forward-progress pruning).
-    let advanced = sync_token_for_client_sync(
-        &state,
-        Some(&session),
-        None,
-        positions,
-        BTreeMap::new(),
-        BTreeMap::new(),
-        4,
-    )
-    .await;
+    // resolves (rows coexist until expiry).
+    let advanced =
+        sync_token_for_client_sync(&state, Some(&session), None, positions, BTreeMap::new(), 4)
+            .await;
     assert_ne!(handle_of(&first), handle_of(&advanced));
     let parsed_old = parse_and_validate_sync_cursor(&first, &state, Some(&session), None, now_ms)
         .await
@@ -2553,7 +1447,7 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
 }
 
 #[tokio::test]
-async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
+async fn presenting_a_newer_cursor_preserves_older_retry_authority() {
     let state = test_state();
     let session = roster_session(&state, "ak:did_core:web:alice.example");
     let positions = BTreeMap::from([("ak:realm:prune-test".to_owned(), 1i64)]);
@@ -2565,46 +1459,25 @@ async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
         None,
         positions.clone(),
         BTreeMap::new(),
-        BTreeMap::new(),
         1,
     )
     .await;
     // Deterministic issued_at_ms is stamped at first mint; ensure the
     // second mint lands strictly later on the ms clock.
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    let new_token = sync_token_for_client_sync(
-        &state,
-        Some(&session),
-        None,
-        positions,
-        BTreeMap::new(),
-        BTreeMap::new(),
-        2,
-    )
-    .await;
+    let new_token =
+        sync_token_for_client_sync(&state, Some(&session), None, positions, BTreeMap::new(), 2)
+            .await;
 
     let presented =
         parse_and_validate_sync_cursor(&new_token, &state, Some(&session), None, now_ms)
             .await
             .expect("new cursor parses");
-    let pruned = state
-        .sync()
-        .prune_superseded_cursors(
-            &cursor_binding_subject_for_session(&state, &session),
-            &session.device_id,
-            &sync_filter_digest(None),
-            presented
-                .issued_at_ms
-                .expect("stateful cursor carries issued_at_ms"),
-        )
+    assert_eq!(presented.to_device_position, 2);
+    let old = parse_and_validate_sync_cursor(&old_token, &state, Some(&session), None, now_ms)
         .await
-        .expect("prune runs");
-    assert_eq!(pruned, 1, "the superseded older handle row is deleted");
-
-    let error = parse_and_validate_sync_cursor(&old_token, &state, Some(&session), None, now_ms)
-        .await
-        .expect_err("pruned handle no longer resolves");
-    assert_integrity_error(error);
+        .expect("an older immutable cursor remains resumable until its expiry");
+    assert_eq!(old.to_device_position, 1);
     parse_and_validate_sync_cursor(&new_token, &state, Some(&session), None, now_ms)
         .await
         .expect("presented cursor still parses");
@@ -2618,7 +1491,6 @@ async fn revoked_cursor_returns_revoked_error() {
         None,
         None,
         BTreeMap::from([("ak:realm:revoke-test".to_owned(), 3)]),
-        BTreeMap::new(),
         BTreeMap::new(),
         5,
     )
@@ -2661,7 +1533,6 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         None,
         BTreeMap::from([("ak:realm:revoke-gc".to_owned(), 1)]),
         BTreeMap::new(),
-        BTreeMap::new(),
         0,
     )
     .await;
@@ -2688,4 +1559,126 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         state.sync().cached_cursor_revocation_count() == 0,
         "expired revocation entry should have been pruned"
     );
+}
+
+#[tokio::test]
+async fn selected_unknown_realm_stays_unavailable_without_advancing_detail_positions() {
+    let state = test_state();
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
+    let realm = "ak:realm:AQVZRUJrSSC16EodjmqL6mBFC9TGwv6oxx-sQlJzlvxS";
+    let body: SyncRequestBody =
+        serde_json::from_value(json!({"filter": {"realm_ids": [realm]}})).unwrap();
+    let frame = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &body,
+        &SyncCursor {
+            detail_turn: true,
+            ..SyncCursor::default()
+        },
+    )
+    .await;
+    let entry = &frame.realms.as_ref().unwrap().entries[realm];
+    assert_eq!(
+        entry.unavailable.as_ref().unwrap().error_code,
+        arkret_models_collaboration::sync_frames::demand_sync::RealmDetailErrorCode::NotFound
+    );
+    assert!(
+        entry.current.is_none()
+            && entry.state_at_window_start.is_none()
+            && entry.timeline.is_none()
+            && entry.baseline.is_none()
+    );
+    let filter = sync_filter_value(body.filter.as_ref());
+    let cursor = parse_and_validate_sync_cursor(
+        frame.cursor.as_deref().unwrap(),
+        &state,
+        Some(&session),
+        filter.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        cursor.positions.is_empty()
+            && cursor.account_positions.is_empty()
+            && cursor.detail_positions.is_empty()
+    );
+}
+
+#[tokio::test]
+async fn account_and_device_queue_cursors_reject_cross_operation_resume() {
+    let state = test_state();
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
+    let now = chrono::Utc::now().timestamp_millis();
+    let account = sync_token_for_client_sync(
+        &state,
+        Some(&session),
+        None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        7,
+    )
+    .await;
+    let queue = device_messages_cursor(&state, &session, 7).await.unwrap();
+    assert_ne!(account, queue);
+    assert!(
+        parse_account_cursor(&queue, &state, Some(&session), None, now, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        parse_account_cursor(&queue, &state, Some(&session), Some(&json!({})), now, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        parse_device_messages_cursor(&account, &state, &session, now)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        parse_device_messages_cursor(&queue, &state, &session, now)
+            .await
+            .unwrap(),
+        7
+    );
+    parse_account_cursor(&account, &state, Some(&session), None, now, false)
+        .await
+        .unwrap();
+    let other = roster_session(&state, "ak:did_core:web:bob.example");
+    assert!(
+        parse_device_messages_cursor(&queue, &state, &other, now)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn realm_list_snapshot_identity_is_stable_and_never_renews_its_deadline() {
+    let state = test_state();
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
+    let (watermark, global_watermark) = state.sync().account_sync_watermarks().await.unwrap();
+    let mut position = RealmListPosition {
+        watermark,
+        global_watermark,
+        expires_at_ms: chrono::Utc::now().timestamp_millis() + 3_600_000,
+        after: None,
+    };
+    let first = realm_list_token(&state, &session, &position).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let repeated = realm_list_token(&state, &session, &position).await.unwrap();
+    assert_eq!(
+        first, repeated,
+        "later pages must retain the same snapshot identity"
+    );
+    let parsed = parse_realm_list_cursor(&state, &session, first.as_str())
+        .await
+        .unwrap();
+    assert_eq!(parsed.expires_at_ms, position.expires_at_ms);
+    position.expires_at_ms = chrono::Utc::now().timestamp_millis() - 1;
+    assert!(matches!(
+        realm_list_token(&state, &session, &position).await,
+        Err(SyncCursorError::Expired)
+    ));
 }

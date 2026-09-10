@@ -7,7 +7,7 @@ pub(super) fn sign_history_response_record(
     sequence: u64,
     cursor: String,
     sent_at: chrono::DateTime<chrono::Utc>,
-    source_record: HistoryKeyResponseSendRequest,
+    source_record: HistoryKeyResponseSendRequestBody,
     manifest_admission: HistoryManifestAdmission,
     release_service_signer_evidence: &GovernanceDependency,
 ) -> Result<HistoryKeyResponseRecord, AppError> {
@@ -56,7 +56,7 @@ pub(super) fn sign_history_chunk_response_record(
     sequence: u64,
     cursor: String,
     sent_at: chrono::DateTime<chrono::Utc>,
-    source_record: HistoryKeyResponseSendRequest,
+    source_record: HistoryKeyResponseSendRequestBody,
     release_attestation: HistoryReleaseAttestation,
     release_service_signer_evidence: &GovernanceDependency,
 ) -> Result<HistoryKeyResponseRecord, AppError> {

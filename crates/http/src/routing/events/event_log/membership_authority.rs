@@ -1,5 +1,5 @@
 use arkret_models_collaboration::history_key::{
-    MembershipAuthorityOutcome, MembershipAuthorityRequest,
+    MembershipAuthorityOutcome, MembershipAuthorityRequestBody,
 };
 use arkret_state::lattice::CellState;
 
@@ -13,7 +13,7 @@ pub(super) async fn read(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<MembershipAuthorityRequest>,
+    body: JsonBody<MembershipAuthorityRequestBody>,
 ) -> JsonResult<MembershipAuthorityOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -28,11 +28,9 @@ pub(super) async fn read(
 pub(super) async fn current_membership(
     state: &AppState,
     session: &SessionRecord,
-    query: &MembershipAuthorityRequest,
+    query: &MembershipAuthorityRequestBody,
 ) -> Result<MembershipAuthorityOutcome, AppError> {
-    query
-        .validate()
-        .map_err(|e| AppError::param_invalid(e.to_string()))?;
+    query.validate().map_err(super::current_query_error)?;
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     let account_id = actor
@@ -124,7 +122,9 @@ pub(super) async fn current_membership(
         seal_basis: query.seal_basis.clone(),
         authorization_incarnation: membership.incarnation().clone(),
     };
-    outcome.validate_for_request(&query).map_err(unavailable)?;
+    outcome
+        .validate_for_request(&query)
+        .map_err(|error| super::current_result_error(error, ErrorCode::FrontierUnavailable))?;
     Ok(outcome)
 }
 

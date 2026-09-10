@@ -462,7 +462,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
     let device_b_messages_before_logout = state
         .test_persistence()
         .device_messages()
-        .list_after(actor, device_b, 0)
+        .list_after(actor, device_b, 0, 101)
         .await
         .unwrap();
     assert!(
@@ -521,14 +521,14 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
     let device_a_messages = state
         .test_persistence()
         .device_messages()
-        .list_after(actor, device_a, 0)
+        .list_after(actor, device_a, 0, 101)
         .await
         .unwrap();
     assert!(device_a_messages.is_empty());
     let device_b_messages = state
         .test_persistence()
         .device_messages()
-        .list_after(actor, device_b, 0)
+        .list_after(actor, device_b, 0, 101)
         .await
         .unwrap();
     assert_eq!(

@@ -1422,7 +1422,9 @@ async fn continue_issue_terminal_receipt(
                 "accepted device authorization payload is invalid: {error}"
             ))
         })?;
-    if authorization_payload.device_id != *expected_device_id
+    if authorization_payload.device_public_key_did.as_str()
+        != recovery_session.requesting_device_public_key_did
+        || authorization_payload.device_id != *expected_device_id
         || authorization_payload.recovery_session_id.as_ref() != Some(expected_recovery_session_id)
     {
         return Err(crate::app_error!(

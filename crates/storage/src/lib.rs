@@ -54,6 +54,8 @@ mod invite_new_source_ledger;
 mod key_backup;
 mod member_identity;
 mod mls;
+mod mls_public_state;
+pub use mls_public_state::*;
 mod moderation;
 mod multisig;
 mod notifications;
@@ -117,6 +119,8 @@ pub use sessions::*;
 pub use sidecars::*;
 pub use signal::*;
 pub use sync_cursor::*;
+mod current_sync;
+pub use current_sync::*;
 pub use unit_of_work::*;
 pub use websocket_auth::*;
 pub use webvh::*;
@@ -185,6 +189,8 @@ pub enum ConflictCode {
     AppletRevoked,
     /// `actor_seq` is older than the accepted actor frontier.
     CasConflict,
+    /// An exact source needed for a current reducer result is unavailable.
+    DependencyMissing,
     /// The device pairing request the Event refers to does not exist.
     DevicePairingNotFound,
     /// The exact device generation has an unresolved revoke proposal.
@@ -216,6 +222,8 @@ pub enum ConflictCode {
     RecoveryPolicySupersedesInvalid,
     /// A recovery session with the requested id already exists.
     RecoverySessionAlreadyExists,
+    /// A registered reducer could not produce the required typed result.
+    ReducerProjectionFailed,
     /// The organization registration challenge does not match.
     OrganizationRegistrationChallengeInvalid,
     /// The organization registration was revoked.
@@ -232,10 +240,11 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 26] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
+        Self::DependencyMissing,
         Self::DevicePairingNotFound,
         Self::DeviceRevocationPending,
         Self::DeviceRevoked,
@@ -251,6 +260,7 @@ impl ConflictCode {
         Self::RecoveryPolicyVersionNotMonotonic,
         Self::RecoveryPolicySupersedesInvalid,
         Self::RecoverySessionAlreadyExists,
+        Self::ReducerProjectionFailed,
         Self::OrganizationRegistrationChallengeInvalid,
         Self::OrganizationRegistrationRevoked,
         Self::OrganizationRegistrationStale,
@@ -265,6 +275,7 @@ impl ConflictCode {
             Self::ApprovalNonceReused => arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
             Self::AppletRevoked => "applet_revoked",
             Self::CasConflict => "cas_conflict",
+            Self::DependencyMissing => "dependency_missing",
             Self::DevicePairingNotFound => "device_pairing_not_found",
             Self::DeviceRevocationPending => "device_revocation_pending",
             Self::DeviceRevoked => "device_revoked",
@@ -280,6 +291,7 @@ impl ConflictCode {
             Self::RecoveryPolicyVersionNotMonotonic => "recovery_policy_version_not_monotonic",
             Self::RecoveryPolicySupersedesInvalid => "recovery_policy_supersedes_invalid",
             Self::RecoverySessionAlreadyExists => "recovery_session_already_exists",
+            Self::ReducerProjectionFailed => "reducer_projection_failed",
             Self::OrganizationRegistrationChallengeInvalid => {
                 "organization_registration_challenge_invalid"
             }

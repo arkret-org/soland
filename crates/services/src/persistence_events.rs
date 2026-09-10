@@ -87,6 +87,8 @@ fn persistence_event_commit_request(
     command: crate::events::CommitAcceptedEventCommand,
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
+        mls_public_producer: command.mls_public_producer,
+        mls_public_genesis: command.mls_public_genesis,
         mls_frontier_leaves: command.mls_frontier_leaves,
         replicated: command.replicated,
         event: command.event,
@@ -689,6 +691,17 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
 
 #[async_trait::async_trait]
 impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
+    async fn public_genesis_candidate(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> crate::ServiceResult<Option<soland_storage::MlsPublicGenesisRecord>> {
+        Ok(self
+            .0
+            .mls_commits()
+            .public_genesis_candidate(event_id)
+            .await?)
+    }
+
     async fn commits(&self) -> crate::ServiceResult<Vec<crate::events::MlsCommitState>> {
         self.0
             .mls_commits()

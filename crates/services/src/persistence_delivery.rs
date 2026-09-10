@@ -297,11 +297,12 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
+        limit: usize,
     ) -> crate::ServiceResult<Vec<crate::delivery::DeviceMessageState>> {
         Ok(self
             .0
             .device_messages()
-            .list_after(recipient, device_id, queue_position)
+            .list_after(recipient, device_id, queue_position, limit)
             .await?)
     }
 

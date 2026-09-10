@@ -4,7 +4,7 @@ use arkret_models_collaboration::governance_dependencies::{
 };
 use arkret_models_collaboration::history_key::{
     ArchiveAuthorizationTuple, HistoryGovernanceTraversalIntent,
-    HistoryGovernanceTraversalRetention, HistoryKeyResponseSendRequest,
+    HistoryGovernanceTraversalRetention, HistoryKeyResponseSendRequestBody,
     OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveReplica,
     OrganizationRecoveryArchiveReplicaOutcome, PeerHistoryTraversalAccess,
     SelfHistoryTraversalAccess,
@@ -455,7 +455,7 @@ pub enum HistoryTraversalRetainedObject {
 /// Validate the exact source signer-evidence closure bound by a history
 /// response and materialize the retention pins that keep it resolvable.
 pub fn history_source_signer_retained_dependencies(
-    source: &HistoryKeyResponseSendRequest,
+    source: &HistoryKeyResponseSendRequestBody,
     dependencies: &[GovernanceDependency],
 ) -> PersistenceResult<Vec<(HistoryTraversalPin, HistoryTraversalRetainedObject)>> {
     validate_history_source_signer_dependency_closure(source, dependencies)

@@ -50,6 +50,14 @@ async fn postgres_audit_regression_satisfies_account_localpart_remove_contract()
 async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
+    // This contract bypasses runtime bootstrap, so install its trusted local
+    // inventory owner explicitly before exercising device writes.
+    {
+        use diesel_async::RunQueryDsl;
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,'ak:did_core:web:storage-contract.example') ON CONFLICT(singleton) DO NOTHING")
+            .execute(&mut *conn).await.unwrap();
+    }
     let inventory = PgDeviceInventoryStore { pool: pool.clone() };
     let messages = PgDeviceMessageStore { pool };
     let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
@@ -777,6 +785,8 @@ fn franking_event_request(
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     soland_storage::EventCommitRequest {
+        mls_public_producer: None,
+        mls_public_genesis: None,
         mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
@@ -2842,6 +2852,8 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(EventCommitRequest {
+            mls_public_producer: None,
+            mls_public_genesis: None,
             mls_frontier_leaves: None,
             replicated: false,
             governance_dependencies: Vec::new(),
@@ -3386,6 +3398,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         .commit_event_batch(EventBatchCommitRequest {
             events: vec![
                 EventCommitRequest {
+                    mls_public_producer: None,
+                    mls_public_genesis: None,
                     mls_frontier_leaves: None,
                     replicated: false,
                     governance_dependencies: Vec::new(),
@@ -3402,6 +3416,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     outbox: Vec::new(),
                 },
                 EventCommitRequest {
+                    mls_public_producer: None,
+                    mls_public_genesis: None,
                     mls_frontier_leaves: None,
                     replicated: false,
                     governance_dependencies: Vec::new(),
@@ -3795,6 +3811,8 @@ mod control_move_ingress_negatives {
             ingress: Option<arkret_state::state::store::ControlProposalIngress>,
         ) -> EventCommitRequest {
             EventCommitRequest {
+                mls_public_producer: None,
+                mls_public_genesis: None,
                 mls_frontier_leaves: None,
                 replicated: false,
                 governance_dependencies: Vec::new(),
@@ -4664,4 +4682,226 @@ async fn postgres_fork_resolution_collision_verdict_admits_the_winning_preimage(
             .canonical_bytes,
         losing_preimage,
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_checkpoint_reuses_untouched_cells_and_invalidates_changed_rules() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    use arkret_state::lattice::ordered_log::IssuedOp;
+    use arkret_state::lattice::{CellState, LatticeKind, SealedOp};
+    use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
+    use arkret_state::state::{CellRegistry, EventCellBottom, MemoryCellRegistry};
+    use arkret_wire::{CellRef, Hash, LatticeOp, LatticeOpType};
+    use diesel::sql_types::{Jsonb, Text};
+    use diesel::{QueryableByName, sql_query};
+    use diesel_async::RunQueryDsl;
+
+    #[derive(QueryableByName)]
+    struct OpRow {
+        #[diesel(sql_type = Jsonb)]
+        op_json: serde_json::Value,
+    }
+    fn registry(changed: bool) -> Arc<dyn CellRegistry> {
+        let mut registry = MemoryCellRegistry::empty();
+        registry.register(
+            arkret_wire::CellFamilyId::REALM_POLICY_V1,
+            LatticeKind::CasRegister,
+            EventCellBottom::Reject,
+        );
+        if changed {
+            registry.register_fsm(
+                arkret_wire::CellFamilyId::MEMBER_STATE_V1,
+                Some(serde_json::json!("leave")),
+                vec![(serde_json::json!("leave"), serde_json::json!("join"))],
+                EventCellBottom::Reject,
+            );
+        }
+        Arc::new(registry)
+    }
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let realm = arkret_wire::RealmId::new(event_derived_realm_id(
+        format!("checkpoint-cell-reuse:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let cells = ["changed", "untouched"].map(|subject| {
+        CellRef::new(format!(
+            "ak:cell:{}:{subject}",
+            arkret_wire::CellFamilyId::REALM_POLICY_V1
+        ))
+        .unwrap()
+    });
+    let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+        device_authorize_event_id: format!("ak:event:{}", "b".repeat(43)),
+        device_generation_ref: 1,
+        seal_basis_digest: format!("sha256:{}", "c".repeat(64)),
+    });
+    let mut stores =
+        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), registry(false));
+    let mut covered = BTreeSet::new();
+    let mut frontier = Vec::new();
+    let mut history = BTreeMap::<CellRef, Vec<Vec<IssuedOp>>>::new();
+    let mut previous_move = None;
+    let mut saved_untouched = None;
+    let mut genesis_id = None;
+    for step in 0..3 {
+        if step == 2 {
+            stores = soland_storage_postgres::build_state_resolution_stores(
+                Some(pool.clone()),
+                registry(true),
+            );
+            assert!(
+                stores
+                    .event_seal_committer
+                    .effective_state_checkpoint(&frontier[0])
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "changed rules must not reuse old derived values"
+            );
+        }
+        let (event, digest) = seal_dependency_contract_event(&realm, &format!("cell-step-{step}"));
+        stores
+            .control_event_store
+            .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
+            .await
+            .unwrap();
+        covered.insert(digest.clone());
+        let selected = if step == 0 { &cells[..] } else { &cells[..1] };
+        let ops = selected
+            .iter()
+            .map(|cell| {
+                let issued = IssuedOp {
+                    issuer_id: event.actor_id.clone(),
+                    op: SealedOp::superseding(
+                        digest.clone(),
+                        LatticeOp {
+                            op_type: LatticeOpType::Set,
+                            tag: None,
+                            value: Some(serde_json::json!(step + 1)),
+                            from: None,
+                            to: None,
+                            reason: None,
+                            issuer_seq: None,
+                        },
+                        previous_move.iter().cloned().collect(),
+                    ),
+                };
+                history
+                    .entry(cell.clone())
+                    .or_default()
+                    .push(vec![issued.clone()]);
+                (cell.clone(), issued)
+            })
+            .collect::<Vec<_>>();
+        let mut expected = BTreeMap::new();
+        let mut heads = arkret_state::CasHeadsByCell::new();
+        for (cell, batches) in &history {
+            let binding = stores.cell_registry.resolve(&realm, cell).unwrap();
+            expected.insert(
+                cell.clone(),
+                arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), cell, batches),
+            );
+            heads.insert(
+                cell.clone(),
+                arkret_state::causal_heads_for_batches(binding.lattice.kind(), batches),
+            );
+        }
+        let mut seal = seal_dependency_contract_seal(
+            &realm,
+            frontier.clone(),
+            digest.clone(),
+            &covered,
+            Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
+        );
+        seal.availability_receipt_digests.clear();
+        seal.state_root = arkret_state::compute_state_root(
+            arkret_state::GovernanceView::new(&expected, &heads),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        seal.id = seal
+            .derive_id(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        if step == 2 {
+            assert!(
+                stores
+                    .event_seal_committer
+                    .commit_if_frontier(
+                        &seal,
+                        arkret_canonical::DigestSuite::Sha256,
+                        &frontier,
+                        &ops,
+                        &covered,
+                        None,
+                        &[]
+                    )
+                    .await
+                    .is_err(),
+                "context change must read the previously untouched cell history"
+            );
+            let mut conn = pool.get().await.unwrap();
+            sql_query("UPDATE state_cell_ops SET op_json = $1 WHERE seal_id = $2 AND cell_id = $3")
+                .bind::<Jsonb, _>(saved_untouched.as_ref().unwrap())
+                .bind::<Text, _>(genesis_id.as_ref().unwrap())
+                .bind::<Text, _>(cells[1].as_str())
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        assert!(
+            stores
+                .event_seal_committer
+                .commit_if_frontier(
+                    &seal,
+                    arkret_canonical::DigestSuite::Sha256,
+                    &frontier,
+                    &ops,
+                    &covered,
+                    None,
+                    &[]
+                )
+                .await
+                .unwrap()
+        );
+        let restarted = soland_storage_postgres::build_state_resolution_stores(
+            Some(pool.clone()),
+            registry(step == 2),
+        );
+        let checkpoint = restarted
+            .event_seal_committer
+            .effective_state_checkpoint(&seal.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.state, expected);
+        assert_eq!(checkpoint.cas_heads, heads);
+        assert_eq!(
+            checkpoint.state.get(&cells[1]),
+            Some(&CellState::Value(serde_json::json!(1)))
+        );
+        if step == 0 {
+            let mut conn = pool.get().await.unwrap();
+            let row =
+                sql_query("SELECT op_json FROM state_cell_ops WHERE seal_id = $1 AND cell_id = $2")
+                    .bind::<Text, _>(seal.id.as_str())
+                    .bind::<Text, _>(cells[1].as_str())
+                    .get_result::<OpRow>(&mut conn)
+                    .await
+                    .unwrap();
+            saved_untouched = Some(row.op_json);
+            genesis_id = Some(seal.id.to_string());
+            // A deliberately undecodable untouched row proves that the next
+            // same-context successor does not fetch/decode unrelated history.
+            sql_query("UPDATE state_cell_ops SET op_json = '{}'::jsonb WHERE seal_id = $1 AND cell_id = $2")
+                .bind::<Text, _>(seal.id.as_str()).bind::<Text, _>(cells[1].as_str())
+                .execute(&mut conn).await.unwrap();
+        }
+        previous_move = Some(digest);
+        frontier = vec![seal.id];
+    }
 }

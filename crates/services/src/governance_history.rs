@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
-    PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
+    PeerGovernanceDependencyResolveRequestBody, SelfGovernanceDependencyResolveRequestBody,
 };
 use arkret_models_collaboration::history_key::{
-    HistoryKeyResponseAckRequest, HistoryResponseId, OrganizationRecoveryArchiveListQuery,
+    HistoryKeyResponseAckRequestBody, HistoryResponseId, OrganizationRecoveryArchiveListQuery,
     OrganizationRecoveryArchiveReplica, OrganizationRecoveryArchiveReplicaOutcome,
     PeerHistoryTraversalAccess, SelfHistoryTraversalAccess,
 };
@@ -68,7 +68,7 @@ impl GovernanceHistoryService {
 
     pub async fn resolve_self_dependencies(
         &self,
-        request: SelfGovernanceDependencyResolveRequest,
+        request: SelfGovernanceDependencyResolveRequestBody,
         ordinary_realm_visible: bool,
         caller: &ActorId,
         now: DateTime<Utc>,
@@ -94,7 +94,7 @@ impl GovernanceHistoryService {
 
     pub async fn resolve_peer_dependencies(
         &self,
-        request: PeerGovernanceDependencyResolveRequest,
+        request: PeerGovernanceDependencyResolveRequestBody,
         ordinary_realm_visible: bool,
         caller: &DidCoreId,
         now: DateTime<Utc>,
@@ -723,7 +723,7 @@ impl GovernanceHistoryService {
     pub async fn ack_history_response_stream(
         &self,
         response_capability_commitment: &Hash,
-        request: &HistoryKeyResponseAckRequest,
+        request: &HistoryKeyResponseAckRequestBody,
         now: DateTime<Utc>,
     ) -> ServiceResult<String> {
         Ok(self

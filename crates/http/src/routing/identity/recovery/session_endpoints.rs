@@ -4,7 +4,110 @@ use soland_services::identity::RecoverySessionState as RecoverySessionServiceSta
 use super::*;
 use crate::routing::identity::value_mentions_identifier;
 
+fn verify_recovery_device_possession(
+    payload: &RecoverySessionCreateRequestBody,
+    session_grant_id: &str,
+    session_grant_cnf_jkt: &str,
+) -> Result<(), AppError> {
+    let possession = payload
+        .possession_transcript(
+            arkret_wire::SessionGrantId::new(session_grant_id.to_owned())
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            session_grant_cnf_jkt.to_owned(),
+        )
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+    let possession_bytes = possession
+        .signing_bytes()
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+    let public_key = arkret_canonical::decode_ed25519_multibase(
+        payload
+            .requesting_device_public_key_did
+            .as_str()
+            .strip_prefix("did:key:")
+            .unwrap_or(""),
+    )
+    .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(payload.requesting_device_signature.as_str())
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+    let signature = ed25519_dalek::Signature::from_slice(&signature_bytes)
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
+    key.verify_strict(&possession_bytes, &signature)
+        .map_err(|_| {
+            crate::app_error!(
+                CapabilityDenied,
+                "recovery replacement identity key possession proof is invalid"
+            )
+            .with_reason_code("recovery_evidence_unbound")
+        })?;
+    Ok(())
+}
+
 const RECOVERY_SESSION_TTL_SECS: i64 = 900;
+
+#[cfg(test)]
+mod possession_tests {
+    use ed25519_dalek::Signer as _;
+
+    use super::*;
+
+    #[test]
+    fn create_possession_rejects_another_grant_or_replacement_key() {
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[42; 32]);
+        let transcript: arkret_models_crypto::RecoveryDevicePossessionTranscript = serde_json::from_value(serde_json::json!({
+            "schema":"ak.identity.recovery_device_possession.v1",
+            "request_id":"ak:request:01904100-0000-7000-8000-000000000001",
+            "session_grant_id":"ak:session_grant:Af0GheZX08ev4L1fQoFdngIpe5c_9Lk7SQqfN4jztzDW",
+            "session_grant_cnf_jkt":"A".repeat(43),
+            "account_id":{"principal_id":"ak:did_core:web:alice.example","station_id":"ak:did_core:web:station.example"},
+            "requesting_device_id":"ak:device:01904100-0000-7000-8000-000000000071",
+            "requesting_device_public_key_did":format!("did:key:{}",arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes())),
+            "trust_domain":"ak:trust_domain:01904100-0000-7000-8000-000000000001"
+        })).unwrap();
+        let signature = signer.sign(&transcript.signing_bytes().unwrap());
+        let request = transcript
+            .clone()
+            .into_request(
+                arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+                    .unwrap(),
+            )
+            .unwrap();
+        verify_recovery_device_possession(
+            &request,
+            transcript.session_grant_id.as_str(),
+            &transcript.session_grant_cnf_jkt,
+        )
+        .unwrap();
+        assert!(
+            verify_recovery_device_possession(
+                &request,
+                transcript.session_grant_id.as_str(),
+                &"B".repeat(43)
+            )
+            .is_err()
+        );
+        let mut changed = request;
+        changed.requesting_device_public_key_did = arkret_wire::DidKey::new(format!(
+            "did:key:{}",
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                ed25519_dalek::SigningKey::from_bytes(&[43; 32])
+                    .verifying_key()
+                    .as_bytes()
+            )
+        ))
+        .unwrap();
+        assert!(
+            verify_recovery_device_possession(
+                &changed,
+                transcript.session_grant_id.as_str(),
+                &transcript.session_grant_cnf_jkt
+            )
+            .is_err()
+        );
+    }
+}
 
 fn generate_recovery_challenge() -> String {
     URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>())
@@ -110,6 +213,7 @@ struct RecoveryTranscriptContext {
     session_grant_cnf_jkt: String,
     account_id: AccountId,
     requesting_device_id: DeviceId,
+    requesting_device_public_key_did: arkret_wire::DidKey,
     trust_domain: TrustDomainId,
     policy_id: PolicyId,
     policy_version: u64,
@@ -132,6 +236,10 @@ fn typed_recovery_transcript_context(
             .map_err(|error| stored_recovery_type_error("session_grant_id", error))?,
         session_grant_cnf_jkt: record.session_grant_cnf_jkt.clone(),
         account_id: AccountId::new(record.principal_id.clone(), record.station_id.clone()),
+        requesting_device_public_key_did: arkret_wire::DidKey::new(
+            record.requesting_device_public_key_did.clone(),
+        )
+        .map_err(|error| stored_recovery_type_error("requesting_device_public_key_did", error))?,
         requesting_device_id: DeviceId::new(record.requesting_device_id.clone())
             .map_err(|error| stored_recovery_type_error("requesting_device_id", error))?,
         trust_domain: TrustDomainId::new(record.trust_domain.clone())
@@ -163,6 +271,7 @@ pub(super) fn typed_recovery_session_state(
         session_grant_cnf_jkt: transcript.session_grant_cnf_jkt,
         account_id: transcript.account_id,
         requesting_device_id: transcript.requesting_device_id,
+        requesting_device_public_key_did: transcript.requesting_device_public_key_did,
         trust_domain: transcript.trust_domain,
         policy_id: transcript.policy_id,
         policy_version: transcript.policy_version,
@@ -465,6 +574,7 @@ pub(super) async fn recovery_session_create(
         recovery_grant_coordinates(&session)?;
     let principal = session.actor.clone();
     let payload = body.into_inner();
+    verify_recovery_device_possession(&payload, &session_grant_id, &session_grant_cnf_jkt)?;
     let create_intent_digest = Hash::new(arkret_canonical::canonical_sha256(&payload).map_err(
         |error| AppError::internal(format!("recovery create canonicalization failed: {error}")),
     )?)
@@ -676,6 +786,7 @@ pub(super) async fn recovery_session_create(
         principal_id: account_id.principal_id.clone(),
         station_id: account_id.station_id.clone(),
         requesting_device_id,
+        requesting_device_public_key_did: payload.requesting_device_public_key_did.to_string(),
         trust_domain,
         policy_id: active.policy_id.clone(),
         policy_version: active.version,
@@ -1416,6 +1527,7 @@ pub(super) fn did_root_recovery_proof_transcript(
         session_grant_cnf_jkt: context.session_grant_cnf_jkt,
         account_id: context.account_id,
         requesting_device_id: context.requesting_device_id,
+        requesting_device_public_key_did: context.requesting_device_public_key_did,
         trust_domain: context.trust_domain,
         policy_id: context.policy_id,
         policy_version: context.policy_version,
@@ -1448,6 +1560,7 @@ pub(super) fn generic_recovery_proof_transcript(
         session_grant_cnf_jkt: context.session_grant_cnf_jkt,
         account_id: context.account_id,
         requesting_device_id: context.requesting_device_id,
+        requesting_device_public_key_did: context.requesting_device_public_key_did,
         trust_domain: context.trust_domain,
         policy_id: context.policy_id,
         policy_version: context.policy_version,

@@ -1,6 +1,8 @@
+mod transaction_locks;
 use std::collections::{BTreeMap, BTreeSet};
 
 use diesel::sql_types::SmallInt;
+pub(crate) use transaction_locks::{lock_canonical_event_inputs, lock_canonical_realm};
 
 use super::{
     Array, AsyncConnection, AsyncPgConnection, BigInt, Binary, Bool, CanonicalEventRecord,
@@ -393,6 +395,7 @@ pub(crate) async fn admit_collision_winner(
     let Some(realm_id) = realm_id else {
         return Ok(());
     };
+    lock_canonical_realm(conn, realm_id).await?;
     let received_at =
         chrono::DateTime::from_timestamp_millis(winner_sealed_at_ms).ok_or_else(|| {
             PersistenceError::SchemaViolation(
@@ -437,6 +440,7 @@ pub(crate) async fn insert_canonical_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
 ) -> PersistenceResult<CanonicalInsertOutcome> {
+    lock_canonical_event_inputs(conn, &[record]).await?;
     let identity = ids::validated_event_identity_parts_for_suite(
         &record.event_id,
         &record.canonical_digest,
@@ -641,19 +645,7 @@ async fn preflight_canonical_events(
 ) -> PersistenceResult<bool> {
     let mut ordered = records.iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| left.event_id.cmp(&right.event_id));
-    for record in &ordered {
-        let identity = ids::validated_event_identity_parts_for_suite(
-            &record.event_id,
-            &record.canonical_digest,
-            &record.canonical_bytes,
-            record.digest_suite,
-        )?;
-        sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
-            .bind::<Binary, _>(identity.id.to_vec())
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
-    }
+    lock_canonical_event_inputs(conn, &ordered).await?;
     let mut incoming = BTreeMap::<String, &CanonicalEventRecord>::new();
     for record in ordered {
         let identity = ids::validated_event_identity_parts_for_suite(

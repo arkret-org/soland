@@ -35,9 +35,9 @@ use events::strand::{
     discussion_track_for_projection_event, strand_id_for_projection_event, strand_id_from_realm_id,
     strand_projection_for_realm,
 };
-use events::sync::{SyncCursorError, parse_and_validate_sync_cursor, sync_token_for_client_sync};
+use events::sync::SyncCursorError;
 use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
-use identity::device_messages::{TO_DEVICE_PAGE_LIMIT, device_message_envelopes_after};
+use identity::device_messages::device_message_envelopes_after;
 #[cfg(test)]
 use identity::did::validate_did_document_services;
 use soland_http::util::{

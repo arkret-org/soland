@@ -30,7 +30,8 @@ use soland_services::delivery::{
 };
 use soland_services::identity::DeviceIdentity;
 
-use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
+use super::{SyncCursorError, now};
+use crate::routing::events::sync::{device_messages_cursor, parse_device_messages_cursor};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -601,36 +602,15 @@ async fn get_device_messages(
     let session = aa.authenticated_session(state, req).await?;
     let cursor = after.into_inner();
     let cursor_position = match cursor {
-        Some(cursor) => match parse_and_validate_sync_cursor(
+        Some(cursor) => match parse_device_messages_cursor(
             &cursor,
             state,
-            Some(&session),
-            None,
+            &session,
             chrono::Utc::now().timestamp_millis(),
         )
         .await
         {
-            Ok(cursor) => {
-                // Presenting a valid cursor proves the client persisted it;
-                // strictly-older handle rows for this stream are superseded.
-                // Best-effort.
-                if let Some(presented_issued_at_ms) = cursor.issued_at_ms {
-                    let binding_subject =
-                        crate::routing::events::sync::cursor_binding_subject_for_session(
-                            state, &session,
-                        );
-                    let _ = state
-                        .sync()
-                        .prune_superseded_cursors(
-                            &binding_subject,
-                            &session.device_id,
-                            &crate::routing::events::sync::sync_filter_digest(None),
-                            presented_issued_at_ms,
-                        )
-                        .await;
-                }
-                cursor.to_device_position
-            }
+            Ok(position) => position,
             Err(SyncCursorError::Expired) => {
                 return Err(crate::app_error!(CursorExpired, "cursor has expired",));
             }
@@ -668,7 +648,12 @@ async fn get_device_messages(
     let lost = lost_watermark.is_some_and(|position| position > cursor_position);
     let queued = state
         .deliveries()
-        .device_messages_after(&session.actor, &session.device_id, cursor_position)
+        .device_messages_after(
+            &session.actor,
+            &session.device_id,
+            cursor_position,
+            page_limit + 1,
+        )
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let has_more = queued.len() > page_limit;
@@ -696,16 +681,9 @@ async fn get_device_messages(
         None
     } else {
         Some(
-            sync_token_for_client_sync(
-                state,
-                Some(&session),
-                None,
-                BTreeMap::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
-                to_device_position,
-            )
-            .await,
+            device_messages_cursor(state, &session, to_device_position)
+                .await
+                .map_err(|_| AppError::internal("cannot persist device queue cursor".to_owned()))?,
         )
     };
     json_ok(DeviceMessagesGetOutcome {
@@ -1000,13 +978,13 @@ mod tests {
         );
         let controller_queue = state
             .deliveries()
-            .device_messages_after(controller, other_controller_device, 0)
+            .device_messages_after(controller, other_controller_device, 0, 101)
             .await
             .expect("controller queue");
         assert_eq!(controller_queue.len(), 1);
         let agent_queue = state
             .deliveries()
-            .device_messages_after(agent, agent_device, 0)
+            .device_messages_after(agent, agent_device, 0, 101)
             .await
             .expect("agent queue");
         assert!(
@@ -1015,7 +993,7 @@ mod tests {
         );
         let cross_queue = state
             .deliveries()
-            .device_messages_after(controller, agent_device, 0)
+            .device_messages_after(controller, agent_device, 0, 101)
             .await
             .expect("cross queue");
         assert!(
@@ -1091,7 +1069,7 @@ mod tests {
         for device_id in [first_device, second_device] {
             let queued = state
                 .deliveries()
-                .device_messages_after(holder, device_id, 0)
+                .device_messages_after(holder, device_id, 0, 101)
                 .await
                 .expect("holder device queue");
             assert_eq!(queued.len(), 1);

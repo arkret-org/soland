@@ -793,6 +793,86 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
 
 #[async_trait::async_trait]
 impl crate::sync::CursorStorePort for PersistenceCursorStore {
+    async fn current_detail_page(
+        &self,
+        request: &soland_storage::CurrentDetailRequest,
+        progress: Option<&soland_storage::CurrentDetailProgress>,
+        byte_budget: usize,
+        registry: &dyn arkret_state::state::CellRegistry,
+    ) -> crate::ServiceResult<soland_storage::CurrentDetailOutcome> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .current_detail_page(request, progress, byte_budget, registry)
+            .await?)
+    }
+    async fn account_summary_has_join(
+        &self,
+        actor_key: &str,
+        realm_id: &str,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .account_summary_has_join(actor_key, realm_id)
+            .await?)
+    }
+    async fn account_sync_watermarks(&self) -> crate::ServiceResult<(i64, i64)> {
+        Ok(self.0.sync_cursors().account_sync_watermarks().await?)
+    }
+    async fn account_global_watermark(&self) -> crate::ServiceResult<i64> {
+        Ok(self.0.sync_cursors().account_global_watermark().await?)
+    }
+    async fn account_global_page(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+        after_key: &str,
+        after_revision: Option<i64>,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<soland_storage::AccountGlobalVersion>> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .account_global_page(
+                actor_key,
+                channel,
+                watermark,
+                after_key,
+                after_revision,
+                limit,
+            )
+            .await?)
+    }
+    async fn account_summary_watermark(&self) -> crate::ServiceResult<i64> {
+        Ok(self.0.sync_cursors().account_summary_watermark().await?)
+    }
+    async fn account_summary_page(
+        &self,
+        actor_key: &str,
+        watermark: i64,
+        after: Option<&soland_storage::AccountSummaryKey>,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<soland_storage::AccountSummaryVersion>> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .account_summary_page(actor_key, watermark, after, limit)
+            .await?)
+    }
+    async fn account_summary_changes(
+        &self,
+        actor_key: &str,
+        after: i64,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<soland_storage::AccountSummaryVersion>> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .account_summary_changes(actor_key, after, limit)
+            .await?)
+    }
     async fn get(&self, handle: &str) -> crate::ServiceResult<Option<crate::sync::CursorState>> {
         Ok(self.0.sync_cursors().get(handle).await?)
     }
@@ -804,25 +884,6 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
 
     async fn delete(&self, handle: &str) -> crate::ServiceResult<bool> {
         Ok(self.0.sync_cursors().delete(handle).await?)
-    }
-
-    async fn prune_stream_superseded(
-        &self,
-        binding_subject: &str,
-        device_id: &str,
-        filter_digest: &str,
-        presented_issued_at_ms: i64,
-    ) -> crate::ServiceResult<usize> {
-        Ok(self
-            .0
-            .sync_cursors()
-            .prune_stream_superseded(
-                binding_subject,
-                device_id,
-                filter_digest,
-                presented_issued_at_ms,
-            )
-            .await?)
     }
 
     async fn prune_expired(&self, now_ms: i64) -> crate::ServiceResult<usize> {

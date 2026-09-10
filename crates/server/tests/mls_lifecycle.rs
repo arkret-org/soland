@@ -1103,7 +1103,7 @@ async fn mls_lifecycle_end_to_end_body() {
     let queued_welcomes = state
         .test_persistence()
         .device_messages()
-        .list_after(bob_core.as_str(), bob_device, 0)
+        .list_after(bob_core.as_str(), bob_device, 0, 101)
         .await
         .expect("Welcome to-device queue query");
     assert_eq!(

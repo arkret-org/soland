@@ -1,5 +1,5 @@
 use arkret_models_collaboration::history_key::{
-    HistoryAuthorityOutcome, HistoryAuthorityRequest, MembershipAuthorityRequest,
+    HistoryAuthorityOutcome, HistoryAuthorityRequestBody, MembershipAuthorityRequestBody,
 };
 use arkret_state::lattice::CellState;
 
@@ -10,7 +10,7 @@ pub(super) async fn read(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<HistoryAuthorityRequest>,
+    body: JsonBody<HistoryAuthorityRequestBody>,
 ) -> JsonResult<HistoryAuthorityOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -19,13 +19,11 @@ pub(super) async fn read(
         arkret_wire::ServiceOperationId::SELF_SEALS_READ_HISTORY_AUTHORITY_V1,
     )?;
     let query = body.into_inner();
-    query
-        .validate()
-        .map_err(|e| AppError::param_invalid(e.to_string()))?;
+    query.validate().map_err(super::current_query_error)?;
     let membership = super::membership_authority::current_membership(
         state,
         &session,
-        &MembershipAuthorityRequest {
+        &MembershipAuthorityRequestBody {
             effective_scope: query.effective_scope.clone(),
             actor_id: query.actor_id.clone(),
             seal_basis: query.seal_basis.clone(),
@@ -124,7 +122,9 @@ pub(super) async fn read(
         join_epoch,
         history_floor_epoch,
     };
-    outcome.validate_for_request(&query).map_err(unavailable)?;
+    outcome
+        .validate_for_request(&query)
+        .map_err(|error| super::current_result_error(error, ErrorCode::FrontierUnavailable))?;
     json_ok(outcome)
 }
 

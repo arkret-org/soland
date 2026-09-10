@@ -16,9 +16,8 @@ pub use soland_storage::{
 /// roster `member_display_state_digest`. The reducer
 /// (`reducer::apply_member_identity_update`) consults the guard for the
 /// optimistic-concurrency check (`expected_state_digest`) and writes
-/// accepted events back; the sync roster
-/// (`sync::roster_members_for_realm`) reads the resulting snapshot to
-/// emit `MemberRosterEntry`.
+/// accepted events back. Demand sync currently emits only bounded membership
+/// rows; disclosure-aware identity enrichment needs a bounded durable reader.
 ///
 /// This registry is the synchronous in-memory projection surface; the
 /// durable copy lives in the `member_identity_events` /

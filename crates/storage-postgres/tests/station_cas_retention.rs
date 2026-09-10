@@ -8,7 +8,9 @@ use soland_storage_postgres::{Db, PgAccountDataStore, PgPool};
 async fn test_pool() -> PgPool {
     let url = support::contract_database_url();
     support::ensure_contract_database(&url).await;
-    Db::connect(&url).await.expect("connect contract database");
+    Db::connect(Some(&url), Default::default())
+        .await
+        .expect("connect contract database");
     let manager = AsyncDieselConnectionManager::new(&url);
     Pool::builder(manager).build().expect("build postgres pool")
 }

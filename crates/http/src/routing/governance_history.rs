@@ -1,7 +1,7 @@
 use arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload;
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
-    PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
+    PeerGovernanceDependencyResolveRequestBody, SelfGovernanceDependencyResolveRequestBody,
     governance_attester_evidence_selectors,
 };
 use arkret_models_collaboration::history_key::{
@@ -13,9 +13,9 @@ use arkret_models_collaboration::history_key::{
     HistoryKeyRequestReceipt, HistoryKeyRequestReceiptKind, HistoryKeyRequestRecord,
     HistoryKeyRequestReplica, HistoryKeyRequestReplicaDestinationAuthorization,
     HistoryKeyRequestReplicaKind, HistoryKeyRequestReplicaOutcome, HistoryKeyResponseAckOutcome,
-    HistoryKeyResponseAckRequest, HistoryKeyResponseContent, HistoryKeyResponseListOutcome,
+    HistoryKeyResponseAckRequestBody, HistoryKeyResponseContent, HistoryKeyResponseListOutcome,
     HistoryKeyResponseListQuery, HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt,
-    HistoryKeyResponseSendRequest, HistoryKeySourceRelay, HistoryManifestAdmission,
+    HistoryKeyResponseSendRequestBody, HistoryKeySourceRelay, HistoryManifestAdmission,
     HistoryManifestAdmissionPass, HistoryReleaseAttestation, HistoryReleaseAttestationKind,
     HistoryReleaseVerifierProfile, HistoryRequestId, HistoryResponseAckTokenClaims,
     HistoryResponseCapabilityPlaintext, HistoryResponseCapabilityPlaintextKind,
@@ -99,7 +99,7 @@ fn map_history_preparation_error(
 }
 
 fn history_response_source_record_digest(
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
 ) -> Result<arkret_wire::Hash, AppError> {
     response
         .source_record_digest()
@@ -539,7 +539,7 @@ fn validate_mls_material_bytes(
     })
 }
 
-async fn load_mls_public_blob(
+pub(crate) async fn load_mls_public_blob(
     state: &AppState,
     blob_ref: &str,
     limit: usize,
@@ -709,7 +709,7 @@ fn seal_outcome(
 #[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.governance_dependencies.v1"))]
 async fn resolve_self_dependencies(
     aa: AuthArgs,
-    body: JsonBody<SelfGovernanceDependencyResolveRequest>,
+    body: JsonBody<SelfGovernanceDependencyResolveRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<GovernanceDependencyResolveOutcome> {
@@ -746,7 +746,7 @@ async fn resolve_peer_dependencies(
     let source_service_core_id = arkret_wire::DidCoreId::new(source_id.clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let request = req
-        .parse_json::<PeerGovernanceDependencyResolveRequest>()
+        .parse_json::<PeerGovernanceDependencyResolveRequestBody>()
         .await
         .map_err(|_| AppError::json_invalid("invalid governance dependency request"))?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
@@ -1129,7 +1129,7 @@ async fn validate_local_history_release_binding(
 #[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.command.send.v1"))]
 async fn send_history_key_response(
     aa: AuthArgs,
-    body: JsonBody<HistoryKeyResponseSendRequest>,
+    body: JsonBody<HistoryKeyResponseSendRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
@@ -1167,7 +1167,10 @@ async fn send_history_key_response(
     let checkpoint = validate_retained_history_cut(state, &request_record).await?;
     let source_signer_dependencies =
         resolve_history_source_signer_dependencies(state, &response, None).await?;
-    verify_history_source_proof(state, &response, &checkpoint, &source_signer_dependencies).await?;
+    let source_signer_result =
+        verify_history_source_proof(state, &response, &checkpoint, &source_signer_dependencies)
+            .await?;
+    let cipher_suite = history_receiver_cipher_suite(&checkpoint, &request_record).await?;
     let has_reservation = matches!(
         state
             .persistence()
@@ -1211,6 +1214,8 @@ async fn send_history_key_response(
             &request_record,
             source_relay.as_ref(),
             source_signer_dependencies,
+            source_signer_result,
+            cipher_suite,
         )
         .await
     } else {
@@ -1220,6 +1225,8 @@ async fn send_history_key_response(
             &source_record_digest,
             source_relay.as_ref(),
             source_signer_dependencies,
+            source_signer_result,
+            cipher_suite,
         )
         .await
     }
@@ -1313,13 +1320,14 @@ async fn relay_history_key_response(
         }
         SourceKind::OrganizationRecoveryHolder => {}
     }
-    verify_history_source_proof(
+    let source_signer_result = verify_history_source_proof(
         state,
         &relay.response,
         &checkpoint,
         &source_signer_dependencies,
     )
     .await?;
+    let cipher_suite = history_receiver_cipher_suite(&checkpoint, &request_record).await?;
     validate_history_source_relay_binding(state, &relay.response, &relay.source_relay_attestation)
         .await?;
     if matches!(
@@ -1333,6 +1341,8 @@ async fn relay_history_key_response(
             &request_record,
             Some(&relay.source_relay_attestation),
             source_signer_dependencies,
+            source_signer_result,
+            cipher_suite,
         )
         .await
     } else {
@@ -1342,6 +1352,8 @@ async fn relay_history_key_response(
             &source_record_digest,
             Some(&relay.source_relay_attestation),
             source_signer_dependencies,
+            source_signer_result,
+            cipher_suite,
         )
         .await
     }
@@ -1349,7 +1361,7 @@ async fn relay_history_key_response(
 
 async fn resolve_history_source_signer_dependencies(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     peer_source_id: Option<&arkret_wire::DidCoreId>,
 ) -> Result<Vec<GovernanceDependency>, AppError> {
     let realm_id = match &response.effective_scope {
@@ -1417,7 +1429,7 @@ async fn resolve_history_source_signer_dependencies(
             && let Some(peer_source_id) = peer_source_id
         {
             let resolving_transitive_attesters = primary_resolved;
-            let request = PeerGovernanceDependencyResolveRequest {
+            let request = PeerGovernanceDependencyResolveRequestBody {
                 realm_id: realm_id.clone(),
                 selectors: missing.clone(),
                 byte_limit: 8 * 1_024 * 1_024,
@@ -1591,7 +1603,7 @@ fn history_source_author_profile(
 }
 
 fn history_source_signer_content_digest(
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
 ) -> Result<arkret_wire::Hash, AppError> {
     response
         .source_signer_evidence_ref
@@ -1601,52 +1613,70 @@ fn history_source_signer_content_digest(
 
 async fn verify_history_source_proof(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     checkpoint: &MlsGovernanceVerificationCheckpoint,
     dependencies: &[GovernanceDependency],
-) -> Result<(), AppError> {
+) -> Result<arkret_models_collaboration::history_key::HistorySourceSignerResult, AppError> {
     let trust_state = state.clone();
-    arkret::verify_history_source_proof(
-        response,
-        checkpoint,
-        dependencies,
-        move |request| {
-            let trust_state = trust_state.clone();
-            Box::pin(async move {
-                match request {
-                    arkret::HistorySourceProofExternalVerificationRequest::Agent {
+    arkret::verify_history_source_proof(response, checkpoint, dependencies, move |request| {
+        let trust_state = trust_state.clone();
+        Box::pin(async move {
+            match request {
+                arkret::HistorySourceProofExternalVerificationRequest::Agent {
+                    source_record,
+                    signer_evidence,
+                    dependencies,
+                } => {
+                    arkret::verify_agent_history_source_key(
                         source_record,
                         signer_evidence,
                         dependencies,
-                    } => {
-                        arkret::verify_agent_history_source_key(
-                            source_record,
-                            signer_evidence,
-                            dependencies,
-                            move |trust_request| {
-                                let trust_state = trust_state.clone();
-                                Box::pin(async move {
-                                    verify_agent_history_trust(&trust_state, trust_request).await
-                                })
-                            },
-                        )
-                        .await
-                    }
-                    arkret::HistorySourceProofExternalVerificationRequest::MinimalMetadata {
-                        signer_evidence, ..
-                    } => {
-                        // This verifies the source signature under the carried key only.
-                        // The receiver must still authenticate the encrypted IdentityLink
-                        // and exact active LeafNode in its local MLS state. Admission
-                        // separately checks the relay binding and pins the evidence.
-                        let bytes = arkret_wire::base64url::base64url_decode(
-                            signer_evidence.response_signing_public_key_b64u.as_str().as_bytes(),
-                        )?;
-                        Ok(arkret_signatures::proof::PublicKeyMaterial::Ed25519Raw { bytes })
-                    }
+                        move |trust_request| {
+                            let trust_state = trust_state.clone();
+                            Box::pin(async move {
+                                verify_agent_history_trust(&trust_state, trust_request).await
+                            })
+                        },
+                    )
+                    .await
                 }
-            })
-        },
+                arkret::HistorySourceProofExternalVerificationRequest::MinimalMetadata {
+                    signer_evidence,
+                    ..
+                } => {
+                    // This verifies the source signature under the carried key only.
+                    // The receiver must still authenticate the encrypted IdentityLink
+                    // and exact active LeafNode in its local MLS state. Admission
+                    // separately checks the relay binding and pins the evidence.
+                    let bytes = arkret_wire::base64url::base64url_decode(
+                        signer_evidence
+                            .response_signing_public_key_b64u
+                            .as_str()
+                            .as_bytes(),
+                    )?;
+                    Ok(arkret_signatures::proof::PublicKeyMaterial::Ed25519Raw { bytes })
+                }
+            }
+        })
+    })
+    .await
+    .map_err(|error| AppError::capability_denied(error.to_string()))
+}
+
+async fn history_receiver_cipher_suite(
+    checkpoint: &MlsGovernanceVerificationCheckpoint,
+    request_record: &soland_storage::HistoryRequestRecord,
+) -> Result<String, AppError> {
+    let request = &request_record.write.request;
+    let group_id = request
+        .effective_scope
+        .canonical_mls_group_id()
+        .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    arkret::winning_history_cipher_suite_from_verified_checkpoint(
+        checkpoint,
+        &request.effective_scope,
+        &group_id,
+        &request.requested_ranges,
     )
     .await
     .map_err(|error| AppError::capability_denied(error.to_string()))
@@ -1654,7 +1684,7 @@ async fn verify_history_source_proof(
 
 async fn build_local_history_source_relay(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
     source_signer_dependencies: &[GovernanceDependency],
 ) -> Result<SourceRelayAttestation, AppError> {
@@ -1810,7 +1840,7 @@ async fn build_local_history_source_relay(
 
 async fn local_rhrk_source_authority(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     request: &HistoryKeyRequest,
     realm_id: &arkret_wire::RealmId,
 ) -> Result<
@@ -1909,7 +1939,7 @@ async fn local_rhrk_source_authority(
 
 async fn history_response_coverage_ranges(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
 ) -> Result<Vec<arkret_models_collaboration::history_key::EpochRange>, AppError> {
     let manifest = match &response.content {
         HistoryKeyResponseContent::Manifest(manifest) => manifest,
@@ -2098,7 +2128,7 @@ fn current_rhrk_holder_authority_observation(
 
 async fn validate_history_source_relay_binding(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     attestation: &SourceRelayAttestation,
 ) -> Result<(), AppError> {
     if let SourceAuthorityLocator::OrganizationRecoveryHolder {
@@ -2538,7 +2568,7 @@ async fn collect_history_dependencies(
 
 async fn validate_history_response_request_binding(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
 ) -> Result<soland_storage::HistoryRequestRecord, AppError> {
     let request = state
         .persistence()
@@ -2562,11 +2592,13 @@ async fn validate_history_response_request_binding(
 
 async fn accept_history_response_manifest(
     state: &AppState,
-    response: HistoryKeyResponseSendRequest,
+    response: HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
     request_record: &soland_storage::HistoryRequestRecord,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
+    source_signer_result: arkret_models_collaboration::history_key::HistorySourceSignerResult,
+    cipher_suite: String,
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let history = state.persistence().governance_history_service();
     let mut existing_reservation = None;
@@ -2577,6 +2609,11 @@ async fn accept_history_response_manifest(
     {
         match retry {
             soland_storage::HistoryResponseRetryRecord::Accepted(receipt) => {
+                if receipt.source_record_digest != *source_record_digest {
+                    return Err(AppError::conflict(
+                        "history response ID is already bound to different bytes",
+                    ));
+                }
                 return json_ok(*receipt);
             }
             soland_storage::HistoryResponseRetryRecord::Expired(_) => {
@@ -2640,6 +2677,8 @@ async fn accept_history_response_manifest(
     let reservation_input = soland_storage::HistoryResponseReservationInput {
         source_record_digest: source_record_digest.clone(),
         source_record: response.clone(),
+        source_signer_result,
+        cipher_suite,
         manifest_admission: Some(admission.clone()),
         release_attestation: None,
         release_service_signer_evidence,
@@ -2872,10 +2911,12 @@ pub(crate) fn agent_history_key_verifier(
 
 async fn accept_history_response_chunk(
     state: &AppState,
-    response: HistoryKeyResponseSendRequest,
+    response: HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
+    source_signer_result: arkret_models_collaboration::history_key::HistorySourceSignerResult,
+    cipher_suite: String,
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let history = state.persistence().governance_history_service();
     let mut existing_reservation = None;
@@ -2886,6 +2927,11 @@ async fn accept_history_response_chunk(
     {
         match retry {
             soland_storage::HistoryResponseRetryRecord::Accepted(receipt) => {
+                if receipt.source_record_digest != *source_record_digest {
+                    return Err(AppError::conflict(
+                        "history response ID is already bound to different bytes",
+                    ));
+                }
                 return json_ok(*receipt);
             }
             soland_storage::HistoryResponseRetryRecord::Expired(_) => {
@@ -2990,6 +3036,8 @@ async fn accept_history_response_chunk(
     let reservation_input = soland_storage::HistoryResponseReservationInput {
         source_record_digest: source_record_digest.clone(),
         source_record: response.clone(),
+        source_signer_result,
+        cipher_suite,
         manifest_admission: None,
         release_attestation: Some(release_attestation.clone()),
         release_service_signer_evidence,
@@ -3055,7 +3103,7 @@ async fn accept_history_response_chunk(
 async fn build_history_release_attestation(
     state: &AppState,
     request_record: &soland_storage::HistoryRequestRecord,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
     source_relay: &SourceRelayAttestation,
     manifest_admission: &HistoryManifestAdmission,
@@ -3271,7 +3319,7 @@ async fn build_history_release_attestation(
 async fn validate_rhrk_release_coverage(
     state: &AppState,
     source_relay: &SourceRelayAttestation,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     released_range: &arkret_models_collaboration::history_key::EpochRange,
 ) -> Result<
     (
@@ -3384,7 +3432,7 @@ async fn build_history_recipient_authority_views(
     } = &request.requester_endpoint_authorization
     {
         let selector = AgentSignerEvidenceQuerySelector::CurrentAdmission {
-            agent_id: requester_agent_id.clone(),
+            actor: request.requester_actor_id.clone(),
             verification_method: requester_agent_verification_method.clone(),
         };
         let evidence =
@@ -3576,7 +3624,7 @@ async fn build_history_recipient_authority_views(
 async fn validate_manifest_current_gate(
     state: &AppState,
     request_record: &soland_storage::HistoryRequestRecord,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
     source_relay: &SourceRelayAttestation,
 ) -> Result<(), AppError> {
@@ -4373,7 +4421,7 @@ fn map_service_error(error: soland_services::ServiceError) -> AppError {
 
 #[cfg(test)]
 mod canonical_response_digest_tests {
-    use arkret_models_collaboration::history_key::HistoryKeyResponseSendRequest;
+    use arkret_models_collaboration::history_key::HistoryKeyResponseSendRequestBody;
     use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
     use arkret_wire::BlobRef;
     use serde_json::json;
@@ -4389,7 +4437,7 @@ mod canonical_response_digest_tests {
             "fixtures/history-key-recovery-fixture.json",
         )
         .expect("history recovery fixture");
-        let response: HistoryKeyResponseSendRequest = serde_json::from_value(
+        let response: HistoryKeyResponseSendRequestBody = serde_json::from_value(
             fixture["response_stream_cases"]["wire_instances"]["manifest_send"].clone(),
         )
         .expect("typed history response fixture");

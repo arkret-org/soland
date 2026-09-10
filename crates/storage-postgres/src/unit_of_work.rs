@@ -173,6 +173,7 @@ async fn commit_mls_frontier_input(
 ) -> PersistenceResult<()> {
     let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone())
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    crate::mls_public_state::commit_genesis(conn, event_pk, request).await?;
     arkret_wire::event_submission::validate_mls_submission_leaves(
         &event,
         request.mls_frontier_leaves.as_deref(),
@@ -595,19 +596,8 @@ async fn preflight_event_batch(
 ) -> Result<Option<CommitTransactionOutcome>, PgTransactionError> {
     let mut ordered = events.iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| left.event.event_id.cmp(&right.event.event_id));
-    for item in &ordered {
-        let identity = ids::validated_event_identity_parts_for_suite(
-            &item.event.event_id,
-            &item.event.canonical_digest,
-            &item.event.canonical_bytes,
-            item.event.digest_suite,
-        )?;
-        sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
-            .bind::<Binary, _>(identity.id.to_vec())
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
-    }
+    let records = ordered.iter().map(|item| &item.event).collect::<Vec<_>>();
+    crate::events::lock_canonical_event_inputs(conn, &records).await?;
     let mut incoming = std::collections::BTreeMap::<String, &CanonicalEventRecord>::new();
     for item in &ordered {
         let identity = ids::validated_event_identity_parts_for_suite(
@@ -1191,6 +1181,8 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     "schema_violation: accepted Event envelope is not canonical wire: {error}"
                 ))
             })?;
+            commit_holder_account_data(conn, &typed_event).await?;
+            crate::current_data::commit_sources(conn, &typed_event, request.event.digest_suite).await?;
             if let Some(contact_projection) = request.contact_projection {
                 commit_contact_projection(conn, contact_projection).await?;
             }
@@ -1847,4 +1839,90 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
 struct EventPkRow {
     #[diesel(sql_type = BigInt)]
     pk: i64,
+}
+
+#[derive(diesel::QueryableByName)]
+struct HolderStationRow {
+    #[diesel(sql_type=Text)]
+    station: String,
+}
+/// The accepted holder Event and CAS/global current row are one transaction.
+async fn commit_holder_account_data(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::AccountDataSet {
+        return Ok(());
+    }
+    let account = event.actor_id.as_account_id().ok_or_else(|| {
+        PersistenceError::SchemaViolation("account data holder must be an Account".to_owned())
+    })?;
+    let station = sql_query(
+        "SELECT identity->'identity'->>'service_id' AS station FROM service_identity WHERE id=$1",
+    )
+    .bind::<Text, _>(soland_storage::SINGLETON_ID)
+    .get_result::<HolderStationRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| {
+        PersistenceError::Internal(
+            "trusted service identity is unavailable for holder CAS".to_owned(),
+        )
+    })?;
+    if account.station_id.as_str() != station.station {
+        return Ok(());
+    }
+    let key = event
+        .payload
+        .get("key")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| PersistenceError::SchemaViolation("account data key missing".to_owned()))?;
+    let expected = event
+        .payload
+        .get("expected_revision")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            PersistenceError::SchemaViolation("account data revision missing".to_owned())
+        })?;
+    let tombstone = event
+        .payload
+        .get("tombstone")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let payload = if tombstone {
+        serde_json::Value::Null
+    } else {
+        event
+            .payload
+            .get("body")
+            .or_else(|| event.payload.get("encrypted_payload"))
+            .cloned()
+            .ok_or_else(|| {
+                PersistenceError::SchemaViolation("account data value missing".to_owned())
+            })?
+    };
+    let record = soland_storage::AccountDataRecord {
+        actor: event.actor_id.to_string(),
+        account_data_key: key.to_owned(),
+        revision: expected.checked_add(1).ok_or_else(|| {
+            PersistenceError::Conflict("cas_conflict: account data revision exhausted".to_owned())
+        })?,
+        payload,
+        tombstone,
+        updated_at: event.created_at,
+    };
+    match crate::accounts::compare_account_data_in_transaction(
+        conn,
+        &record,
+        expected,
+        Some(&event.event_id),
+    )
+    .await?
+    {
+        soland_storage::AccountDataCasResult::Applied(_) => Ok(()),
+        soland_storage::AccountDataCasResult::Conflict(_) => Err(PersistenceError::Conflict(
+            "cas_conflict: account data revision changed before accepted commit".to_owned(),
+        )),
+    }
 }

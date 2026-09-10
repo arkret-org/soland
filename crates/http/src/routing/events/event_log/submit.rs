@@ -1019,7 +1019,6 @@ impl SubmitOneError {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::routing) fn details(&self) -> Option<&Value> {
         match self {
             Self::Rejected { details, .. } => details.as_ref(),

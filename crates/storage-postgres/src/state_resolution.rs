@@ -1,3 +1,7 @@
+mod account_summary;
+mod current_results;
+mod welcome_discovery;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -50,18 +54,60 @@ pub struct SealEffectiveStateCheckpoint {
 
 /// The stored form of a checkpoint's joined view.
 ///
-/// Written as a tagged object so the `cas_heads` half travels with the values it
-/// was derived from. A row written before the head half existed decodes as
-/// `None` and the checkpoint is skipped, which costs one full recompute and is
-/// the only safe reading: such a row cannot reproduce a CAS cell's leaf.
+/// The complete current structure is required. Corrupt or incomplete stored
+/// state must fail explicitly instead of silently becoming a cache miss.
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StoredCheckpointView {
     cells: BTreeMap<CellRef, CellState>,
     cas_heads: arkret_state::CasHeadsByCell,
+    rule_context: CheckpointRuleContext,
+    current_mv_heads: current_results::CurrentMvHeads,
+    current_mv_ready: bool,
 }
 
-fn checkpoint_view_from_value(value: Value) -> Option<StoredCheckpointView> {
-    serde_json::from_value::<StoredCheckpointView>(value).ok()
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+enum CheckpointRuleContext {
+    Unavailable {},
+    Stable { digest: Hash },
+}
+
+impl CheckpointRuleContext {
+    fn capture(registry: &dyn CellRegistry, realm: &RealmId) -> StoreResult<Self> {
+        Ok(match registry.checkpoint_context(realm)? {
+            Some(digest) => {
+                static IMPLEMENTATION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                let implementation = IMPLEMENTATION.get_or_init(|| {
+                    arkret_canonical::sha256_digest(concat!(
+                        include_str!("state_resolution.rs"),
+                        include_str!("state_resolution/account_summary.rs")
+                    ))
+                });
+                let context = arkret_canonical::canonical_json_bytes(&serde_json::json!({
+                    "evaluation_contract": "soland-sealed-cell-view-v1",
+                    "registry": digest,
+                    "implementation": implementation,
+                }))
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+                Self::Stable {
+                    digest: Hash::new(arkret_canonical::sha256_digest(context))
+                        .map_err(|error| StoreError::Backend(error.to_string()))?,
+                }
+            }
+            None => Self::Unavailable {},
+        })
+    }
+
+    fn reusable_with(&self, other: &Self) -> bool {
+        matches!(self, Self::Stable { .. }) && self == other
+    }
+}
+
+fn checkpoint_view_from_value(value: Value) -> StoreResult<StoredCheckpointView> {
+    serde_json::from_value::<StoredCheckpointView>(value).map_err(|error| {
+        StoreError::Backend(format!("invalid effective-state checkpoint: {error}"))
+    })
 }
 
 #[async_trait]
@@ -576,6 +622,26 @@ async fn lock_seal_realm(
         .map(|_| ())
 }
 
+/// Refresh time-sensitive current results inside the caller's sync transaction.
+/// The caller acquires its retention lock before entering this Realm lock.
+pub(crate) async fn refresh_current_if_expired(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    registry: &dyn CellRegistry,
+) -> soland_storage::PersistenceResult<()> {
+    let result: Result<(), EventSealCommitError> = async {
+        lock_seal_realm(conn, realm_id).await?;
+        let due = sql_query("SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND next_expiry IS NOT NULL AND next_expiry <= clock_timestamp()")
+            .bind::<Text,_>(realm_id).get_result::<CountRow>(&mut *conn).await?.value != 0;
+        if due {
+            account_summary::invalidate(conn, realm_id).await?;
+            account_summary::publish_current_frontier(conn, realm_id, registry).await?;
+        }
+        Ok(())
+    }.await;
+    result.map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+}
+
 async fn lock_seal_identity(
     conn: &mut AsyncPgConnection,
     seal_id: &str,
@@ -722,6 +788,7 @@ async fn preflight_state_seal(
     .execute(&mut *conn)
     .await?;
     for affected_realm in [stored.realm_id.as_str(), realm_id] {
+        account_summary::invalidate(conn, affected_realm).await?;
         sql_query(
             "INSERT INTO state_seal_quarantine_realms (seal_id, realm_id) VALUES ($1, $2) \
              ON CONFLICT (seal_id, realm_id) DO NOTHING",
@@ -749,6 +816,7 @@ async fn insert_new_state_seal(
     conn: &mut AsyncPgConnection,
     insert: &StateSealInsert<'_>,
 ) -> Result<(), diesel::result::Error> {
+    account_summary::invalidate(conn, insert.realm_id).await?;
     sql_query(
         "INSERT INTO state_seals \
          (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_refs, is_genesis) \
@@ -1983,6 +2051,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         }
         let pool = self.pool.clone();
         let cell_registry = self.cell_registry.clone();
+        let rule_context = CheckpointRuleContext::capture(cell_registry.as_ref(), &seal.realm_id)?;
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
         let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
             StoreError::Backend(format!("Seal ID canonical encoding failed: {error}"))
@@ -2129,14 +2198,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         )
                         .into());
                     }
-                    let checkpoint_view = checkpoint_view_from_value(checkpoint.state_json)
-                        .ok_or_else(|| {
-                            StoreError::Conflict(
-                                "duplicate_conflict: exact Seal replay checkpoint predates the \
-                                 cas_register head set and cannot reproduce state_root"
-                                    .to_owned(),
-                            )
-                        })?;
+                    let checkpoint_view = checkpoint_view_from_value(checkpoint.state_json)?;
                     let checkpoint_root = compute_state_root(
                         arkret_state::GovernanceView::new(
                             &checkpoint_view.cells,
@@ -2216,10 +2278,49 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     .execute(&mut *conn)
                     .await?;
                 }
+                let mut reused = None;
+                if let [predecessor] = predecessor_seal_ids.as_slice() {
+                    let row = sql_query(
+                        "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
+                         FROM state_seal_effective_checkpoints WHERE seal_id = $1",
+                    )
+                    .bind::<Text, _>(predecessor)
+                    .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
+                    .await
+                    .optional()?;
+                    if let Some(row) = row {
+                        let view = checkpoint_view_from_value(row.state_json)?;
+                        if row.realm_id != realm_id
+                            || !row.covered_seal_ids.contains(predecessor)
+                        {
+                            return Err(StoreError::Backend(
+                                "invalid predecessor checkpoint identity".to_owned(),
+                            ).into());
+                        }
+                        let predecessor_coverage = row.covered_event_digests
+                            .into_iter().collect::<BTreeSet<_>>();
+                        let supplied_moves = new_rows.iter()
+                            .map(|(_, _, move_id, _)| move_id.clone()).collect::<BTreeSet<_>>();
+                        if view.rule_context.reusable_with(&rule_context)
+                            && predecessor_coverage.is_subset(&covered)
+                            && covered.difference(&predecessor_coverage)
+                                .all(|id| supplied_moves.contains(id))
+                        {
+                            reused = Some(view);
+                        }
+                    }
+                }
+                let touched = reused.as_ref().map(|_| new_rows.iter()
+                    .map(|(_, cell, _, _)| cell.clone()).collect::<BTreeSet<_>>()
+                    .into_iter().collect::<Vec<_>>());
+                // The immutable rule snapshot permits reusing untouched cell
+                // values. Changed cells still replay their complete covered
+                // batches; no settled value is treated as causal sufficient state.
                 let rows = sql_query(
                     "SELECT op.cell_id, op.seal_id, op.op_json \
                      FROM state_cell_ops op \
-                     WHERE op.realm_id = $1 AND (op.seal_id = $2 OR EXISTS ( \
+                     WHERE op.realm_id = $1 AND ($3::text[] IS NULL OR op.cell_id = ANY($3)) \
+                       AND (op.seal_id = $2 OR EXISTS ( \
                        SELECT 1 FROM state_seals s \
                        WHERE s.id = op.seal_id AND NOT EXISTS ( \
                          SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id \
@@ -2229,6 +2330,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 )
                 .bind::<Text, _>(&realm_id)
                 .bind::<Text, _>(&seal_id)
+                .bind::<Nullable<Array<Text>>, _>(&touched)
                 .load::<EventCellOpRow>(&mut *conn)
                 .await?;
                 let mut batches_by_cell =
@@ -2251,8 +2353,9 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 }
                 let realm = RealmId::new(realm_id.clone())
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
-                let mut joined = std::collections::BTreeMap::new();
-                let mut joined_cas_heads = arkret_state::CasHeadsByCell::new();
+                let (mut joined, mut joined_cas_heads) = reused
+                    .map(|view| (view.cells, view.cas_heads))
+                    .unwrap_or_default();
                 // No pre-sort: joins are commutative and ordering by the typed
                 // `move_id` string would imply a tie-break `encoding.md` 4.2 forbids.
                 for (cell, batches) in batches_by_cell {
@@ -2260,6 +2363,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
                     // A `cas_register` cell's state_root leaf is its head set
                     // (spec section 6.2.1), derived from these same batches.
+                    joined_cas_heads.remove(&cell);
                     if arkret_state::is_causal_register(binding.lattice.kind()) {
                         let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
                         if !heads.is_empty() {
@@ -2316,9 +2420,13 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
                 insert_new_state_seal(conn, &insert).await?;
+                let (current_mv_heads, current_mv_ready) = current_results::advance_mv_heads(conn, &realm_id, &predecessor_seal_ids, &new_rows, &rule_context).await?;
                 let checkpoint_state_json = serde_json::to_value(StoredCheckpointView {
                     cells: joined.clone(),
                     cas_heads: joined_cas_heads.clone(),
+                    rule_context: rule_context.clone(),
+                    current_mv_heads: current_mv_heads.clone(),
+                    current_mv_ready,
                 })
                 .map_err(serde_to_store)?;
                 let checkpoint_coverage = covered.iter().cloned().collect::<Vec<_>>();
@@ -2364,6 +2472,12 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         sealed_at,
                     )
                     .await?;
+                }
+                account_summary::register_delta_members(conn, &realm_id, &delta).await?;
+                if expected.iter().all(|leaf| predecessor_seal_ids.contains(leaf)) {
+                    account_summary::publish(conn, &realm_id, &joined, &joined_cas_heads, &current_mv_heads, current_mv_ready).await?;
+                } else {
+                    account_summary::publish_current_frontier(conn, &realm_id, cell_registry.as_ref()).await?;
                 }
                 Ok(SealInsertOutcome::Inserted)
             })
@@ -2411,6 +2525,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         seal_id: &SealId,
     ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
         let pool = self.pool.clone();
+        let cell_registry = self.cell_registry.clone();
         let seal_id = seal_id.clone();
         await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
@@ -2440,18 +2555,18 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         SealId::new(id).map_err(|error| StoreError::Backend(error.to_string()))
                     })
                     .collect::<StoreResult<BTreeSet<_>>>()?;
-                // A pre-head row yields `None`: skipping it costs one recompute,
-                // whereas trusting it would compare against a value-shaped CAS
-                // leaf and reject a perfectly good Seal.
-                Ok(checkpoint_view_from_value(row.state_json).map(|view| {
-                    SealEffectiveStateCheckpoint {
-                        realm_id,
-                        seal_id,
-                        covered_event_digests,
-                        covered_seal_ids,
-                        state: view.cells,
-                        cas_heads: view.cas_heads,
-                    }
+                let view = checkpoint_view_from_value(row.state_json)?;
+                let current = CheckpointRuleContext::capture(cell_registry.as_ref(), &realm_id)?;
+                if !view.rule_context.reusable_with(&current) {
+                    return Ok(None);
+                }
+                Ok(Some(SealEffectiveStateCheckpoint {
+                    realm_id,
+                    seal_id,
+                    covered_event_digests,
+                    covered_seal_ids,
+                    state: view.cells,
+                    cas_heads: view.cas_heads,
                 }))
             })
             .transpose()
@@ -2642,11 +2757,20 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         seal_id: &SealId,
     ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
         let _guard = self.lock.lock().await;
-        Ok(self
+        let checkpoint = self
             .effective_state_checkpoints
             .lock()
             .get(seal_id)
-            .cloned())
+            .cloned();
+        if let Some(checkpoint) = &checkpoint
+            && self
+                .cell_registry
+                .checkpoint_context(&checkpoint.realm_id)?
+                .is_none()
+        {
+            return Ok(None);
+        }
+        Ok(checkpoint)
     }
 }
 
@@ -2971,8 +3095,8 @@ mod event_seal_commit_tests {
     use super::{
         BTreeSet, CellRef, CellRegistry, CellStore, ControlEventStore, EventSealCommitStore, Hash,
         LatticeOp, MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp,
-        build_state_resolution_stores, compute_state_root, effective_state_with_new_ops,
-        sealed_op_from_value, sealed_op_to_value,
+        build_state_resolution_stores, checkpoint_view_from_value, compute_state_root,
+        effective_state_with_new_ops, sealed_op_from_value, sealed_op_to_value,
     };
 
     #[test]
@@ -3023,6 +3147,24 @@ mod event_seal_commit_tests {
             sealed_op_from_value(encoded).expect("decode stored op"),
             issued
         );
+    }
+
+    #[test]
+    fn incomplete_or_unknown_checkpoint_fields_are_errors() {
+        for damaged in [
+            json!({"cells": {}}),
+            json!({"cells": {}, "cas_heads": {}}),
+            json!({"cells": {}, "cas_heads": {}, "rule_context": null}),
+            json!({"cells": {}, "cas_heads": {},
+                "rule_context": {"status": "unavailable"}, "obsolete": true}),
+        ] {
+            assert!(checkpoint_view_from_value(damaged).is_err());
+        }
+        let valid = checkpoint_view_from_value(json!({
+            "cells": {}, "cas_heads": {}, "rule_context": {"status": "unavailable"}, "current_mv_heads": {}, "current_mv_ready": true
+        }))
+        .unwrap();
+        assert!(!valid.rule_context.reusable_with(&valid.rule_context));
     }
 
     #[test]

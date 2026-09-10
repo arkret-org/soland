@@ -111,6 +111,17 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         Some(session) => session,
         None => return,
     };
+    if let Some(token) = body
+        .realm_list
+        .as_ref()
+        .and_then(|request| request.after.as_ref())
+    {
+        if let Err(error) = cursor::parse_realm_list_cursor(&state, &session, token.as_str()).await
+        {
+            render_account_cursor_error(res, error, false);
+            return;
+        }
+    }
     let filter_value = sync_filter_value(body.filter.as_ref());
     let wait_for_event_id =
         if let Ok(wait_for) = depot.get_typed::<soland_http::openapi_routes::WaitForSyncToken>() {
@@ -136,12 +147,13 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         return;
     }
     let after_cursor = if let Some(after) = body.after.as_deref() {
-        match parse_and_validate_sync_cursor(
+        match cursor::parse_account_cursor(
             after,
             &state,
             Some(&session),
             filter_value.as_ref(),
             chrono::Utc::now().timestamp_millis(),
+            body.replace_filter == Some(true),
         )
         .await
         {
@@ -189,65 +201,9 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     } else {
         SyncCursor::default()
     };
-    if body.after.is_some() {
-        let actor = match crate::routing::identity::session_actor::session_actor_from_credential(
-            &state, &session,
-        ) {
-            Ok(actor) => actor.to_string(),
-            Err(error) => {
-                tracing::error!(%error, "authenticated account subscribe session has no actor");
-                render_error(
-                    res,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "authenticated session actor is unavailable",
-                );
-                return;
-            }
-        };
-        let position = u64::try_from(after_cursor.account_data_position).unwrap_or_default();
-        match state
-            .account_data()
-            .change_position_is_replayable(&actor, position)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                soland_http::error::render_error_code(
-                    soland_http::error::ErrorCode::StreamResyncRequired,
-                    res,
-                    "account-data changes are no longer retained; initial resync is required",
-                );
-                return;
-            }
-            Err(error) => {
-                tracing::error!(%actor, %error, "failed to verify account-data cursor coverage");
-                render_error(
-                    res,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "temporarily_unavailable",
-                    "account-data cursor coverage is temporarily unavailable",
-                );
-                return;
-            }
-        }
-    }
-    // Forward-progress cleanup: presenting a valid cursor proves the client
-    // persisted it, so every strictly-older handle row for this stream is
-    // superseded and can go. Keeps the durable table at ~2 rows per active
-    // (principal, device, filter) stream. Best-effort.
-    if let Some(presented_issued_at_ms) = after_cursor.issued_at_ms {
-        let binding_subject = cursor_binding_subject_for_session(&state, &session);
-        let _ = state
-            .sync()
-            .prune_superseded_cursors(
-                &binding_subject,
-                &session.device_id,
-                &sync_filter_digest(filter_value.as_ref()),
-                presented_issued_at_ms,
-            )
-            .await;
-    }
+    // A newer request does not prove older in-flight responses were installed.
+    // Keep unexpired handles available for exact retry and filter replacement;
+    // the durable TTL sweeper performs safe reclamation.
     // client-sync.md: the account subscribe surface is read-only. Transient
     // state is not carried here at all in v1 — presence, typing, receipts and
     // call signalling are encrypted Signals on `ak.self.signal.*`, so no
@@ -284,7 +240,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     let body_stream = async_stream::stream! {
         if initial_has_delta {
             yield Ok::<Bytes, std::io::Error>(ndjson_line(&response));
-            if body.catchup.unwrap_or(false) {
+            if body.catchup.unwrap_or(false) && initial_cursor.is_some() {
                 yield Ok::<Bytes, std::io::Error>(ndjson_line(&account_catchup_complete_frame(
                     initial_cursor.clone(),
                 )));
@@ -316,7 +272,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                     } else {
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(&final_snapshot));
                     }
-                    if body.catchup.unwrap_or(false) {
+                    if body.catchup.unwrap_or(false) && final_cursor.is_some() {
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(
                             &account_catchup_complete_frame(final_cursor),
                         ));
@@ -374,7 +330,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                         }
                         let delta_cursor = delta.cursor.clone();
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(&delta));
-                        if body.catchup.unwrap_or(false) {
+                        if body.catchup.unwrap_or(false) && delta_cursor.is_some() {
                             yield Ok::<Bytes, std::io::Error>(ndjson_line(
                                 &account_catchup_complete_frame(delta_cursor),
                             ));
@@ -409,6 +365,10 @@ pub(crate) fn account_frontier_frame(
     cursor: Option<String>,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+        realm_list: None,
+        realm_list_changes: None,
+        realm_invalidations: None,
+        baseline: None,
         kind: arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Frontier,
         cursor,
         realms: None,
@@ -416,7 +376,6 @@ pub(crate) fn account_frontier_frame(
         device_lists: None,
         account_data: None,
         notifications: None,
-        agent_signer_evidence_bundle: None,
         partial: None,
         priority: None,
         reconnect_after_ms: None,
@@ -427,6 +386,10 @@ pub(crate) fn account_catchup_complete_frame(
     cursor: Option<String>,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+        realm_list: None,
+        realm_list_changes: None,
+        realm_invalidations: None,
+        baseline: None,
         kind: arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::CatchupComplete,
         cursor,
         realms: None,
@@ -434,7 +397,6 @@ pub(crate) fn account_catchup_complete_frame(
         device_lists: None,
         account_data: None,
         notifications: None,
-        agent_signer_evidence_bundle: None,
         partial: None,
         priority: None,
         reconnect_after_ms: None,
@@ -449,10 +411,24 @@ pub(crate) fn account_catchup_complete_frame(
 pub(crate) fn delta_is_empty(
     response: &arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
 ) -> bool {
-    response
-        .realms
+    if response.kind != arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Delta
+        || response.realm_list.is_some() || response.realm_list_changes.is_some()
+        || response.realm_invalidations.as_ref().is_some_and(|items| !items.is_empty())
+        || response.baseline.is_some() { return false; }
+    response.account_data.as_ref().is_none_or(|data| {
+        data.events.is_empty()
+            && data
+                .station_cas
+                .as_ref()
+                .is_none_or(|cas| cas.upserts.is_empty() && cas.removals.is_empty())
+    }) && response
+        .device_lists
         .as_ref()
-        .is_none_or(|realms| realms.entries.is_empty())
+        .is_none_or(|devices| devices.changed_ids.is_empty() && devices.left_ids.is_empty())
+        && response
+            .realms
+            .as_ref()
+            .is_none_or(|realms| realms.entries.is_empty())
         && response
             .to_device
             .as_ref()
@@ -499,65 +475,101 @@ pub(crate) async fn account_subscribe_notification_should_wake(
 }
 
 fn account_subscribe_query(req: &mut Request) -> Result<SyncRequestBody, String> {
-    // Decode the dotted deepObject binding shared with the SDK HTTP client.
-    // Invalid filters must fail closed rather than silently widening scope.
-    let mut filter = serde_json::Map::new();
-    for (name, value) in
-        url::form_urlencoded::parse(req.uri().query().unwrap_or_default().as_bytes())
-    {
-        if name == "filter" {
-            return Err("use filter.<field> query parameters for account filters".to_owned());
+    parse_account_subscribe_query(req.uri().query().unwrap_or_default())
+}
+
+fn parse_account_subscribe_query(query: &str) -> Result<SyncRequestBody, String> {
+    let mut values = BTreeMap::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let name = decode_account_query_component(name)?;
+        let value = decode_account_query_component(value)?;
+        if !matches!(
+            name.as_str(),
+            "after" | "catchup" | "filter" | "realm_list" | "replace_filter"
+        ) {
+            return Err(format!("unsupported account subscribe parameter {name}"));
         }
-        let Some(field) = name.strip_prefix("filter.") else {
-            continue;
-        };
-        match field {
-            "realms" | "event_kinds" | "not_event_kinds" => {
-                if value.is_empty() {
-                    return Err(format!("filter.{field} must not contain empty values"));
-                }
-                filter
-                    .entry(field.to_owned())
-                    .or_insert_with(|| json!([]))
-                    .as_array_mut()
-                    .expect("collection field")
-                    .push(Value::String(value.into_owned()));
-            }
-            "timeline_limit" | "lazy_load_members" | "include_redundant_members" => {
-                if filter.contains_key(field) {
-                    return Err(format!("filter.{field} must appear once"));
-                }
-                let parsed = if field == "timeline_limit" {
-                    json!(
-                        value
-                            .parse::<u32>()
-                            .map_err(|_| "invalid filter.timeline_limit".to_owned())?
-                    )
-                } else {
-                    json!(
-                        value
-                            .parse::<bool>()
-                            .map_err(|_| format!("invalid filter.{field}"))?
-                    )
-                };
-                filter.insert(field.to_owned(), parsed);
-            }
-            _ => return Err(format!("unsupported account filter field {field}")),
+        if values.insert(name, value).is_some() {
+            return Err("account subscribe parameters must appear exactly once".to_owned());
         }
     }
-    let filter = if filter.is_empty() {
-        None
-    } else {
-        Some(
-            serde_json::from_value(Value::Object(filter))
-                .map_err(|error| format!("invalid account filter: {error}"))?,
-        )
-    };
-    Ok(SyncRequestBody {
-        after: query_param(req, "after"),
-        catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
+    let filter = values
+        .remove("filter")
+        .map(|value| {
+            require_canonical_query_object(&value)?;
+            serde_json::from_str::<
+                    arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
+                >(&value)
+                .map_err(|error| format!("invalid account filter: {error}"))
+        })
+        .transpose()?;
+    let realm_list = values
+        .remove("realm_list")
+        .map(|value| {
+            require_canonical_query_object(&value)?;
+            serde_json::from_str::<
+                arkret_models_collaboration::sync_frames::demand_sync::RealmListRequest,
+            >(&value)
+            .map_err(|error| format!("invalid Realm list request: {error}"))
+        })
+        .transpose()?;
+    let catchup = values
+        .remove("catchup")
+        .map(|value| {
+            value
+                .parse::<bool>()
+                .map_err(|_| "invalid catchup boolean".to_owned())
+        })
+        .transpose()?;
+    let replace_filter = values
+        .remove("replace_filter")
+        .map(|value| {
+            value
+                .parse::<bool>()
+                .map_err(|_| "invalid replace_filter boolean".to_owned())
+        })
+        .transpose()?;
+    let body = SyncRequestBody {
+        after: values.remove("after"),
+        catchup,
         filter,
-    })
+        realm_list,
+        replace_filter,
+    };
+    body.validate().map_err(|error| error.to_string())?;
+    Ok(body)
+}
+
+fn decode_account_query_component(value: &str) -> Result<String, String> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut bytes = value.bytes();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'%' => {
+                let high = bytes.next().and_then(|byte| (byte as char).to_digit(16));
+                let low = bytes.next().and_then(|byte| (byte as char).to_digit(16));
+                let (Some(high), Some(low)) = (high, low) else {
+                    return Err("invalid query percent encoding".to_owned());
+                };
+                decoded.push((high * 16 + low) as u8);
+            }
+            b'+' => decoded.push(b' '),
+            byte => decoded.push(byte),
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| "account query must be UTF-8".to_owned())
+}
+
+fn require_canonical_query_object(value: &str) -> Result<(), String> {
+    let object: Value = serde_json::from_str(value).map_err(|error| error.to_string())?;
+    if !object.is_object()
+        || arkret_canonical::canonical_json_bytes(&object).map_err(|error| error.to_string())?
+            != value.as_bytes()
+    {
+        return Err("account query object must use canonical JSON".to_owned());
+    }
+    Ok(())
 }
 
 pub(crate) async fn wait_for_account_projection_barrier(
@@ -625,7 +637,7 @@ fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barri
 pub(crate) fn sync_filter_value(
     filter: Option<&arkret_models_collaboration::sync_frames::client_sync::SyncFilter>,
 ) -> Option<Value> {
-    filter.and_then(|filter| serde_json::to_value(filter).ok())
+    Some(arkret_models_collaboration::sync_frames::client_sync::normalized_sync_filter(filter))
 }
 
 fn account_reconnect_control_frame(
@@ -643,12 +655,15 @@ fn account_reconnect_control_frame(
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
         kind,
         cursor,
+        baseline: None,
+        realm_list: None,
+        realm_list_changes: None,
+        realm_invalidations: None,
         realms: None,
         to_device: None,
         device_lists: None,
         account_data: None,
         notifications: None,
-        agent_signer_evidence_bundle: None,
         partial: None,
         priority: None,
         reconnect_after_ms: Some(reconnect_after_ms),
@@ -664,12 +679,35 @@ fn account_subscribe_scope_key(
     format!(
         "ak.self.account.stream.subscribe.v1|{}|filter={}",
         subscribe_subject(req, session),
-        sync_filter_digest(filter_value.as_ref())
+        cursor::account_filter_digest(filter_value.as_ref())
     )
 }
 
-pub(crate) fn roster_member_actor_id(member: &Value) -> Option<String> {
-    serde_json::from_value::<arkret_wire::ActorId>(member.get("actor_id")?.clone())
-        .ok()
-        .map(|actor| actor.to_string())
+#[cfg(test)]
+mod account_query_tests {
+    use super::*;
+
+    #[test]
+    fn closed_query_preserves_empty_interest_and_rejects_ambiguous_encodings() {
+        let empty = parse_account_subscribe_query(
+            "filter=%7B%22realm_ids%22%3A%5B%5D%7D&realm_list=%7B%7D",
+        )
+        .unwrap();
+        assert_eq!(empty.filter.unwrap().realm_ids, Some(Vec::new()));
+        for query in [
+            "filter.realm_ids=x",
+            "filter=%7B%7D&filter=%7B%7D",
+            "catchup=garbage",
+            "catchup=true&catchup=false",
+            "filter=%7B%22realm_ids%22%3Anull%7D",
+            "filter=%7B%22timeline_limit%22%3A1%2C%22timeline_limit%22%3A2%7D",
+            "filter=%7B%20%7D",
+            "filter=%FF",
+            "filter=%GG",
+            "realm_list=%7B%22limit%22%3A101%7D",
+            "replace_filter=true",
+        ] {
+            assert!(parse_account_subscribe_query(query).is_err(), "{query}");
+        }
+    }
 }

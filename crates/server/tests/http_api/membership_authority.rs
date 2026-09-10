@@ -1,5 +1,5 @@
 use arkret_models_collaboration::history_key::{
-    MembershipAuthorityOutcome, MembershipAuthorityRequest,
+    MembershipAuthorityOutcome, MembershipAuthorityRequestBody,
 };
 
 use super::common::*;
@@ -7,7 +7,7 @@ use super::common::*;
 async fn read(
     state: &AppState,
     token: &str,
-    query: &MembershipAuthorityRequest,
+    query: &MembershipAuthorityRequestBody,
 ) -> salvo::Response {
     TestClient::post("http://server/_arkret/self/seals/membership-authority")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -36,7 +36,7 @@ async fn current_body() {
             .await
             .unwrap();
     let actor = fixture_account_actor(&state, "did:web:alice.example");
-    let query = MembershipAuthorityRequest {
+    let query = MembershipAuthorityRequestBody {
         effective_scope: arkret_wire::HistoryEffectiveScope::Realm {
             realm_id: demo_realm_id().parse().unwrap(),
         },
@@ -62,7 +62,7 @@ async fn current_body() {
         .unwrap();
     assert_eq!(&result.authorization_incarnation, expected.incarnation());
     // A current membership alone cannot invent an MLS history floor.
-    let history_query = arkret_models_collaboration::history_key::HistoryAuthorityRequest {
+    let history_query = arkret_models_collaboration::history_key::HistoryAuthorityRequestBody {
         effective_scope: query.effective_scope.clone(),
         actor_id: query.actor_id.clone(),
         seal_basis: query.seal_basis.clone(),

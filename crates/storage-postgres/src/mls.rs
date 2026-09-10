@@ -815,6 +815,12 @@ async fn load_peer_claim(
 }
 #[async_trait]
 impl MlsWelcomeStore for PgMlsWelcomeStore {
+    async fn discover(
+        &self,
+        query: &soland_storage::MlsWelcomeDiscoveryQuery,
+    ) -> PersistenceResult<soland_storage::MlsWelcomeDiscoveryPage> {
+        crate::mls_welcome_discovery::discover(&self.pool, query).await
+    }
     async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -868,6 +874,16 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
 }
 #[async_trait]
 impl MlsCommitStore for PgMlsCommitStore {
+    async fn public_genesis_candidate(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<soland_storage::MlsPublicGenesisRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::mls_public_state::read_genesis(&mut conn, event_id).await
+    }
+
     async fn get(
         &self,
         effective_scope: &Value,

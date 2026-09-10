@@ -163,7 +163,7 @@ pub(super) async fn resolve_admission_dependency(
     if source.as_str() == state.service_id() {
         return Err("dependency_missing: local admission dependency is unavailable".to_owned());
     }
-    let request = arkret_models_collaboration::governance_dependencies::PeerGovernanceDependencyResolveRequest {
+    let request = arkret_models_collaboration::governance_dependencies::PeerGovernanceDependencyResolveRequestBody {
         realm_id: realm_id.clone(), selectors: vec![selector.clone()], byte_limit: 8 * 1024 * 1024, history_traversal_access: None,
     };
     let outcome = crate::routing::federation::rhrk_acquisition::fetch_peer_governance_dependencies(

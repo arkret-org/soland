@@ -46,11 +46,26 @@ pub enum PrincipalResolutionCasResult {
     Conflict(Option<PrincipalResolutionRecord>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum CurrentPrincipalRead {
+    Missing,
+    Unavailable,
+    Ready {
+        pcr_realm_id: RealmId,
+        projection: PrincipalResolutionProjection,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    },
+}
+
 /// Durable, rebuildable read index over one PCR's canonical resolution Events.
 /// Canonical Event/Seal storage remains the authority; this trait only gives
 /// current/history reads an atomic head and bounded ordered history.
 #[async_trait]
 pub trait PrincipalResolutionStore: Send + Sync {
+    async fn current_principal(
+        &self,
+        account_id: &AccountId,
+    ) -> PersistenceResult<CurrentPrincipalRead>;
     async fn by_account_id(
         &self,
         account_id: &AccountId,

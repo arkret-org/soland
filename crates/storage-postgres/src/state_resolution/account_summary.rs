@@ -1,0 +1,327 @@
+//! Account summary publication at the accepted Seal transaction boundary.
+use super::*;
+
+#[derive(QueryableByName)]
+struct SummaryMemberRow {
+    #[diesel(sql_type = Text)]
+    cell_id: String,
+    #[diesel(sql_type = Text)]
+    actor_key: String,
+}
+
+/// Invalidations precede every frontier mutation, including bare Seal imports
+/// and collision quarantine. A later verified publication restores availability.
+pub(super) async fn invalidate(
+    conn: &mut AsyncPgConnection,
+    realm: &str,
+) -> Result<(), diesel::result::Error> {
+    super::welcome_discovery::invalidate(conn, realm).await?;
+    let revision = sql_query(
+        "UPDATE account_summary_clock SET revision = revision + 1
+        WHERE singleton RETURNING revision AS value",
+    )
+    .get_result::<CountRow>(&mut *conn)
+    .await?
+    .value;
+    super::current_results::invalidate(conn, realm, revision).await?;
+    sql_query(
+        "UPDATE account_summary_versions v SET valid_until = $2
+        FROM account_summary_current c WHERE c.realm_id = $1
+          AND v.actor_key = c.actor_key AND v.realm_id = c.realm_id AND v.revision = c.revision",
+    )
+    .bind::<Text, _>(realm)
+    .bind::<BigInt, _>(revision)
+    .execute(&mut *conn)
+    .await?;
+    sql_query("INSERT INTO account_summary_versions
+        (actor_key, realm_id, revision, activity_position, membership, title, default_strand_id, invalidated)
+        SELECT c.actor_key, c.realm_id, $2, v.activity_position, c.membership, c.title, c.default_strand_id, TRUE
+        FROM account_summary_current c JOIN account_summary_versions v
+          ON v.actor_key = c.actor_key AND v.realm_id = c.realm_id AND v.revision = c.revision
+        WHERE c.realm_id = $1")
+        .bind::<Text, _>(realm).bind::<BigInt, _>(revision).execute(&mut *conn).await?;
+    sql_query(
+        "UPDATE account_summary_current SET available = FALSE, revision = $2 WHERE realm_id = $1",
+    )
+    .bind::<Text, _>(realm)
+    .bind::<BigInt, _>(revision)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn register_delta_members(
+    conn: &mut AsyncPgConnection,
+    realm: &str,
+    delta: &[String],
+) -> Result<(), EventSealCommitError> {
+    let rows = sql_query(
+        "SELECT event_json AS value FROM state_control_events
+        WHERE realm_id = $1 AND event_digest = ANY($2)",
+    )
+    .bind::<Text, _>(realm)
+    .bind::<Array<Text>, _>(delta)
+    .load::<JsonRow>(&mut *conn)
+    .await?;
+    for row in rows {
+        let event = control_event_from_value(row.value)?;
+        if event.kind != arkret_wire::EventKind::MemberState {
+            continue;
+        }
+        let payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
+            serde_json::from_value(serde_json::to_value(&event.payload).map_err(serde_to_store)?)
+                .map_err(serde_to_store)?;
+        let actor_key = payload
+            .member_id
+            .canonical_key()
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let subject = arkret_wire::composite_subject(&[actor_key.clone()])
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let cell = arkret_wire::subject_cell(arkret_wire::CellFamilyId::MEMBER_STATE_V1, &subject);
+        // Compare the immutable mapping on conflict instead of accepting a
+        // different actor for a colliding composite subject.
+        let count = sql_query(
+            "INSERT INTO account_summary_members (realm_id, cell_id, actor_key)
+            VALUES ($1, $2, $3) ON CONFLICT (realm_id, cell_id) DO UPDATE
+            SET actor_key = account_summary_members.actor_key
+            WHERE account_summary_members.actor_key = EXCLUDED.actor_key",
+        )
+        .bind::<Text, _>(realm)
+        .bind::<Text, _>(&cell)
+        .bind::<Text, _>(&actor_key)
+        .execute(&mut *conn)
+        .await?;
+        if count != 1 {
+            return Err(StoreError::Conflict(
+                "account summary ActorId subject collision".to_owned(),
+            )
+            .into());
+        }
+    }
+    super::current_results::register_delta_origins(conn, realm, delta).await?;
+    Ok(())
+}
+
+fn singleton<'a>(cells: &'a BTreeMap<CellRef, CellState>, family: &str) -> Option<&'a Value> {
+    let cell = CellRef::new(format!("ak:cell:{family}:null")).ok()?;
+    match cells.get(&cell)? {
+        CellState::Value(value) => Some(value),
+        CellState::Bottom(_) => None,
+    }
+}
+
+pub(super) async fn publish(
+    conn: &mut AsyncPgConnection,
+    realm: &str,
+    cells: &BTreeMap<CellRef, CellState>,
+    cas_heads: &arkret_state::CasHeadsByCell,
+    current_mv_heads: &super::current_results::CurrentMvHeads,
+    current_mv_ready: bool,
+) -> Result<(), EventSealCommitError> {
+    super::welcome_discovery::publish(conn, realm, cells, cas_heads).await?;
+    let rows = sql_query("SELECT cell_id, actor_key FROM account_summary_members WHERE realm_id = $1 ORDER BY actor_key")
+        .bind::<Text, _>(realm).load::<SummaryMemberRow>(&mut *conn).await?;
+    let title = singleton(cells, arkret_wire::CellFamilyId::REALM_PROFILE_V1)
+        .and_then(|profile| profile.get("title"))
+        .and_then(Value::as_str);
+    let default_strand = singleton(
+        cells,
+        arkret_wire::CellFamilyId::REALM_SET_DEFAULT_STRAND_V1,
+    )
+    .and_then(Value::as_str);
+    let destroyed = singleton(cells, arkret_wire::CellFamilyId::REALM_DESTROY_V1).is_some();
+    let revision = sql_query(
+        "UPDATE account_summary_clock SET revision = revision + 1
+        WHERE singleton RETURNING revision AS value",
+    )
+    .get_result::<CountRow>(&mut *conn)
+    .await?
+    .value;
+    for row in rows {
+        let cell = CellRef::new(row.cell_id).map_err(|e| StoreError::Backend(e.to_string()))?;
+        let membership = if destroyed {
+            None
+        } else {
+            match cells.get(&cell) {
+                Some(CellState::Value(value)) => value
+                    .as_str()
+                    .filter(|state| matches!(*state, "join" | "knock")),
+                _ => None,
+            }
+        };
+        let title = (membership == Some("join")).then_some(title).flatten();
+        let default_strand = (membership == Some("join"))
+            .then_some(default_strand)
+            .flatten();
+        sql_query(
+            "UPDATE account_summary_versions SET valid_until = $3
+            WHERE actor_key = $1 AND realm_id = $2 AND valid_until IS NULL",
+        )
+        .bind::<Text, _>(&row.actor_key)
+        .bind::<Text, _>(realm)
+        .bind::<BigInt, _>(revision)
+        .execute(&mut *conn)
+        .await?;
+        sql_query("INSERT INTO account_summary_versions
+            (actor_key, realm_id, revision, activity_position, membership, title, default_strand_id, invalidated)
+            VALUES ($1, $2, $3, $3, $4, $5, $6, TRUE)")
+            .bind::<Text, _>(&row.actor_key).bind::<Text, _>(realm).bind::<BigInt, _>(revision)
+            .bind::<Nullable<Text>, _>(membership).bind::<Nullable<Text>, _>(title)
+            .bind::<Nullable<Text>, _>(default_strand).execute(&mut *conn).await?;
+        sql_query(
+            "INSERT INTO account_summary_current
+            (actor_key, realm_id, revision, membership, title, default_strand_id, available)
+            VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+            ON CONFLICT (actor_key, realm_id) DO UPDATE SET revision = EXCLUDED.revision,
+              membership = EXCLUDED.membership, title = EXCLUDED.title,
+              default_strand_id = EXCLUDED.default_strand_id, available = TRUE",
+        )
+        .bind::<Text, _>(&row.actor_key)
+        .bind::<Text, _>(realm)
+        .bind::<BigInt, _>(revision)
+        .bind::<Nullable<Text>, _>(membership)
+        .bind::<Nullable<Text>, _>(title)
+        .bind::<Nullable<Text>, _>(default_strand)
+        .execute(&mut *conn)
+        .await?;
+    }
+    super::current_results::publish(
+        conn,
+        realm,
+        cells,
+        revision,
+        current_mv_heads,
+        current_mv_ready,
+    )
+    .await?;
+    Ok(())
+}
+
+/// A concurrent branch checkpoint is not the current Realm result. Join the
+/// union of the current leaves using the same SDK batch reducer as acceptance.
+pub(super) async fn publish_current_frontier(
+    conn: &mut AsyncPgConnection,
+    realm: &str,
+    registry: &dyn CellRegistry,
+) -> Result<(), EventSealCommitError> {
+    let leaves = sql_query(
+        "SELECT parent.id AS value FROM state_seals parent
+        WHERE parent.realm_id = $1
+          AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = parent.id)
+          AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id = $1
+            AND child.predecessor_refs ? parent.id
+            AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = child.id))",
+    )
+    .bind::<Text, _>(realm)
+    .load::<TextRow>(&mut *conn)
+    .await?;
+    let single_leaf = leaves.len() == 1;
+    let realm_id =
+        RealmId::new(realm.to_owned()).map_err(|e| StoreError::Backend(e.to_string()))?;
+    let rule_context = CheckpointRuleContext::capture(registry, &realm_id)?;
+    let mut covered = BTreeSet::new();
+    let mut mv_views = Vec::new();
+    let mut current_mv_ready = true;
+    for leaf in leaves {
+        let row = sql_query(
+            "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json
+            FROM state_seal_effective_checkpoints WHERE seal_id = $1",
+        )
+        .bind::<Text, _>(&leaf.value)
+        .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
+        .await
+        .optional()?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        if row.realm_id != realm || !row.covered_seal_ids.contains(&leaf.value) {
+            return Err(
+                StoreError::Backend("invalid current summary checkpoint".to_owned()).into(),
+            );
+        }
+        let view = checkpoint_view_from_value(row.state_json)?;
+        if !view.rule_context.reusable_with(&rule_context) {
+            return Ok(());
+        }
+        let quarantined = sql_query(
+            "SELECT COUNT(*) AS value FROM state_seal_quarantine WHERE seal_id = ANY($1)",
+        )
+        .bind::<Array<Text>, _>(&row.covered_seal_ids)
+        .get_result::<CountRow>(&mut *conn)
+        .await?
+        .value;
+        if quarantined != 0 {
+            return Ok(());
+        }
+        if single_leaf {
+            return publish(
+                conn,
+                realm,
+                &view.cells,
+                &view.cas_heads,
+                &view.current_mv_heads,
+                view.current_mv_ready,
+            )
+            .await;
+        }
+        current_mv_ready &= view.current_mv_ready;
+        mv_views.push((
+            view.current_mv_heads,
+            row.covered_event_digests.iter().cloned().collect(),
+        ));
+        covered.extend(row.covered_event_digests);
+    }
+    let covered = covered.into_iter().collect::<Vec<_>>();
+    let rows = sql_query(
+        "SELECT op.cell_id, op.seal_id, op.op_json FROM state_cell_ops op
+        WHERE op.realm_id = $1 AND op.move_id = ANY($2)
+          AND EXISTS (SELECT 1 FROM state_seals s WHERE s.id = op.seal_id)
+          AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = op.seal_id)
+        ORDER BY op.cell_id, op.seq",
+    )
+    .bind::<Text, _>(realm)
+    .bind::<Array<Text>, _>(&covered)
+    .load::<EventCellOpRow>(&mut *conn)
+    .await?;
+    let mut batches = BTreeMap::<CellRef, Vec<(String, Vec<IssuedOp>)>>::new();
+    for row in rows {
+        let cell = CellRef::new(row.cell_id).map_err(|e| StoreError::Backend(e.to_string()))?;
+        let issued = sealed_op_from_value(row.op_json)?;
+        let batches = batches.entry(cell).or_default();
+        if let Some((seal, ops)) = batches.last_mut()
+            && seal == &row.seal_id
+        {
+            ops.push(issued);
+        } else {
+            batches.push((row.seal_id, vec![issued]));
+        }
+    }
+    let realm_id =
+        RealmId::new(realm.to_owned()).map_err(|e| StoreError::Backend(e.to_string()))?;
+    let mut cells = BTreeMap::new();
+    let mut cas_heads = arkret_state::CasHeadsByCell::new();
+    for (cell, batches) in batches {
+        let binding = registry.resolve(&realm_id, &cell)?;
+        let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
+        if arkret_state::is_causal_register(binding.lattice.kind()) {
+            let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
+            if !heads.is_empty() {
+                cas_heads.insert(cell.clone(), heads);
+            }
+        }
+        cells.insert(
+            cell.clone(),
+            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches),
+        );
+    }
+    let current_mv_heads = super::current_results::merge_mv_views(&mv_views)?;
+    publish(
+        conn,
+        realm,
+        &cells,
+        &cas_heads,
+        &current_mv_heads,
+        current_mv_ready,
+    )
+    .await
+}

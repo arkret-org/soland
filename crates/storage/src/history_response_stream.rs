@@ -3,10 +3,11 @@ use std::sync::Arc;
 use arkret_models_collaboration::governance_dependencies::GovernanceDependency;
 use arkret_models_collaboration::history_key::{
     HistoryGovernanceTraversalIntent, HistoryKeyRequest, HistoryKeyRequestReceipt,
-    HistoryKeyRequestReplica, HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord,
-    HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest,
+    HistoryKeyRequestReplica, HistoryKeyResponseAckRequestBody, HistoryKeyResponseLostRecord,
+    HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequestBody,
     HistoryManifestAdmission, HistoryReleaseAttestation, HistoryResponseAckTokenClaims,
-    HistoryResponseId, HistoryResponsePageEntry, SealedHistoryResponseCapability,
+    HistoryResponseId, HistoryResponsePageEntry, HistorySourceSignerResult,
+    SealedHistoryResponseCapability,
 };
 use arkret_wire::{Hash, HistoryEffectiveScope};
 use async_trait::async_trait;
@@ -261,7 +262,9 @@ pub struct HistoryRequestPage {
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistoryResponseReservationInput {
     pub source_record_digest: Hash,
-    pub source_record: HistoryKeyResponseSendRequest,
+    pub source_record: HistoryKeyResponseSendRequestBody,
+    pub source_signer_result: HistorySourceSignerResult,
+    pub cipher_suite: String,
     pub manifest_admission: Option<HistoryManifestAdmission>,
     pub release_attestation: Option<HistoryReleaseAttestation>,
     pub release_service_signer_evidence: GovernanceDependency,
@@ -282,6 +285,17 @@ impl HistoryResponseReservationInput {
         self.source_record
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        self.source_signer_result
+            .validate_for_source(&self.source_record)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if !arkret_wire::MLS_CIPHERSUITES
+            .iter()
+            .any(|suite| suite.canonical_id == self.cipher_suite)
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history suite is unregistered".to_owned(),
+            ));
+        }
         match (
             &self.source_record.content,
             &self.manifest_admission,
@@ -398,7 +412,7 @@ pub struct HistoryResponseReservationRecord {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistoryAcceptedManifestRecord {
-    pub source_record: HistoryKeyResponseSendRequest,
+    pub source_record: HistoryKeyResponseSendRequestBody,
     pub manifest_admission: HistoryManifestAdmission,
 }
 
@@ -481,6 +495,7 @@ impl HistoryResponseCompleteWrite {
                 "history response record exceeds 8 MiB".to_owned(),
             ));
         }
+
         Ok(canonical_bytes.len())
     }
 
@@ -505,6 +520,8 @@ pub enum HistoryResponseCompleteOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistoryResponseReadPage {
     pub entries: Vec<HistoryResponsePageEntry>,
+    pub source_signer_results: Vec<HistorySourceSignerResult>,
+    pub cipher_suite: Option<String>,
     pub cursor: Option<String>,
     pub limited: bool,
     pub high_water_sequence: Option<u64>,
@@ -585,7 +602,41 @@ pub fn history_lost_record_bytes(
             "history lost record exceeds 8 MiB".to_owned(),
         ));
     }
+    validate_history_singleton_page(
+        HistoryResponsePageEntry::Lost {
+            lost_record: Box::new(lost_record.clone()),
+        },
+        vec![],
+        None,
+    )?;
     Ok(bytes.len())
+}
+
+pub fn validate_history_singleton_page(
+    entry: HistoryResponsePageEntry,
+    source_signer_results: Vec<HistorySourceSignerResult>,
+    cipher_suite: Option<String>,
+) -> PersistenceResult<()> {
+    let cursor = match &entry {
+        HistoryResponsePageEntry::Record { record } => record.cursor.clone(),
+        HistoryResponsePageEntry::Lost { lost_record } => lost_record.cursor.clone(),
+    };
+    // Admission must leave enough room to deliver the record even when the
+    // page needs a continuation cursor and the service's 32-byte HMAC token.
+    arkret_models_collaboration::history_key::HistoryKeyResponseListOutcome {
+        entries: vec![entry],
+        source_signer_results,
+        cipher_suite,
+        ack_token: Some(arkret_wire::base64url::base64url_encode(&[0_u8; 32])),
+        cursor: Some(cursor),
+        limited: true,
+    }
+    .validate()
+    .map_err(|error| {
+        PersistenceError::SchemaViolation(format!(
+            "history record cannot fit a complete singleton page: {error}"
+        ))
+    })
 }
 
 #[async_trait]
@@ -679,7 +730,7 @@ pub trait HistoryResponseStreamStore: Send + Sync {
     async fn ack_response_stream(
         &self,
         response_capability_commitment: &Hash,
-        request: &HistoryKeyResponseAckRequest,
+        request: &HistoryKeyResponseAckRequestBody,
         now: DateTime<Utc>,
     ) -> PersistenceResult<String>;
 

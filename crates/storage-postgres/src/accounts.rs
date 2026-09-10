@@ -388,7 +388,7 @@ impl AccountDataStore for PgAccountDataStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
-             FROM account_datas WHERE actor_id = $1 AND account_data_key = $2",
+             FROM account_datas WHERE actor_id = $1 AND account_data_key = $2 AND account_data_source_current(actor_id,account_data_key)",
         )
         .bind::<Text, _>(actor)
         .bind::<Text, _>(account_data_key)
@@ -404,75 +404,17 @@ impl AccountDataStore for PgAccountDataStore {
         record: &AccountDataRecord,
         expected_revision: u64,
     ) -> PersistenceResult<AccountDataCasResult> {
-        let expected_revision = i64::try_from(expected_revision).map_err(|_| {
-            PersistenceError::Conflict("account_data revision exceeds i64 storage range".to_owned())
-        })?;
-        let revision = i64::try_from(record.revision).map_err(|_| {
-            PersistenceError::Conflict("account_data revision exceeds i64 storage range".to_owned())
-        })?;
-        if revision
-            != expected_revision.checked_add(1).ok_or_else(|| {
-                PersistenceError::Conflict("account_data revision exhausted".to_owned())
-            })?
-        {
-            return Err(PersistenceError::Internal(
-                "account_data record revision must equal expected_revision + 1".to_owned(),
-            ));
-        }
-        let mut conn = pg_conn(&self.pool)
+        self.compare_and_set_inner(record, expected_revision, None)
             .await
-            .map_err(PersistenceError::database)?;
-        let applied = sql_query(
-            "WITH updated AS ( \
-                 UPDATE account_datas SET revision = $4, payload = $5, tombstone = $6, updated_at = $7 \
-                 WHERE actor_id = $2 AND account_data_key = $3 AND revision = $8 \
-                 RETURNING actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
-             ), inserted AS ( \
-                 INSERT INTO account_datas \
-                    (id, actor_id, account_data_key, revision, payload, tombstone, updated_at) \
-                 SELECT $1, $2, $3, $4, $5, $6, $7 \
-                 WHERE $8 = 0 AND NOT EXISTS ( \
-                     SELECT 1 FROM account_datas WHERE actor_id = $2 AND account_data_key = $3 \
-                 ) \
-                 ON CONFLICT (actor_id, account_data_key) DO NOTHING \
-                 RETURNING actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
-             ), applied AS ( \
-                 SELECT * FROM updated UNION ALL SELECT * FROM inserted \
-             ), changed AS ( \
-                 INSERT INTO account_data_changes \
-                    (actor_id, account_data_key, revision, payload, tombstone, updated_at) \
-                 SELECT actor, account_data_key, revision, payload, tombstone, updated_at \
-                 FROM applied \
-                 RETURNING position \
-             ), retention AS ( \
-                 INSERT INTO account_data_change_retention \
-                    (actor_id, latest_position, retained_through_position, updated_at) \
-                 SELECT $2, position, 0, now() FROM changed \
-                 ON CONFLICT (actor_id) DO UPDATE SET \
-                    latest_position = GREATEST(account_data_change_retention.latest_position, EXCLUDED.latest_position), \
-                    updated_at = EXCLUDED.updated_at \
-                 RETURNING latest_position \
-             ) \
-             SELECT applied.* FROM applied \
-             CROSS JOIN (SELECT count(*) FROM retention) AS retention_count",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Text, _>(&record.actor)
-        .bind::<Text, _>(&record.account_data_key)
-        .bind::<BigInt, _>(revision)
-        .bind::<Jsonb, _>(&record.payload)
-        .bind::<Bool, _>(record.tombstone)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .bind::<BigInt, _>(expected_revision)
-        .get_result::<AccountDataRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        if let Some(applied) = applied {
-            return Ok(AccountDataCasResult::Applied(applied.into()));
-        }
-        let current = self.get(&record.actor, &record.account_data_key).await?;
-        Ok(AccountDataCasResult::Conflict(current))
+    }
+    async fn compare_and_set_holder_event(
+        &self,
+        record: &AccountDataRecord,
+        expected_revision: u64,
+        source_event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<AccountDataCasResult> {
+        self.compare_and_set_inner(record, expected_revision, Some(source_event_id))
+            .await
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
@@ -481,7 +423,7 @@ impl AccountDataStore for PgAccountDataStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
-             FROM account_datas WHERE actor_id = $1 AND tombstone = FALSE \
+             FROM account_datas WHERE actor_id = $1 AND tombstone = FALSE AND account_data_source_current(actor_id,account_data_key) \
              ORDER BY account_data_key",
         )
         .bind::<Text, _>(actor)
@@ -506,7 +448,7 @@ impl AccountDataStore for PgAccountDataStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT position, actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
-             FROM account_data_changes WHERE actor_id = $1 AND position > $2 ORDER BY position",
+             FROM account_data_changes WHERE actor_id = $1 AND position > $2 AND account_data_source_current(actor_id,account_data_key) ORDER BY position",
         )
         .bind::<Text, _>(actor)
         .bind::<BigInt, _>(position)
@@ -554,7 +496,7 @@ impl AccountDataStore for PgAccountDataStore {
                  ) LIMIT 1 \
              ), live_rows AS ( \
                  SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
-                 FROM account_datas WHERE actor_id = $1 AND tombstone = FALSE \
+                 FROM account_datas WHERE actor_id = $1 AND tombstone = FALSE AND account_data_source_current(actor_id,account_data_key) \
              ) \
              SELECT current_position.position, live_rows.actor, live_rows.account_data_key, \
                     live_rows.revision, live_rows.payload, live_rows.tombstone, live_rows.updated_at \
@@ -856,4 +798,105 @@ impl From<AccountDataRow> for AccountDataRecord {
             updated_at: row.updated_at,
         }
     }
+}
+
+impl PgAccountDataStore {
+    async fn compare_and_set_inner(
+        &self,
+        record: &AccountDataRecord,
+        expected_revision: u64,
+        source_event_id: Option<&arkret_wire::EventId>,
+    ) -> PersistenceResult<AccountDataCasResult> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        compare_account_data_in_transaction(&mut conn, record, expected_revision, source_event_id)
+            .await
+    }
+}
+pub(crate) async fn compare_account_data_in_transaction(
+    conn: &mut diesel_async::AsyncPgConnection,
+    record: &AccountDataRecord,
+    expected_revision: u64,
+    source_event_id: Option<&arkret_wire::EventId>,
+) -> PersistenceResult<AccountDataCasResult> {
+    let expected_revision = i64::try_from(expected_revision).map_err(|_| {
+        PersistenceError::Conflict("account_data revision exceeds i64 storage range".to_owned())
+    })?;
+    let revision = i64::try_from(record.revision).map_err(|_| {
+        PersistenceError::Conflict("account_data revision exceeds i64 storage range".to_owned())
+    })?;
+    if revision
+        != expected_revision.checked_add(1).ok_or_else(|| {
+            PersistenceError::Conflict("account_data revision exhausted".to_owned())
+        })?
+    {
+        return Err(PersistenceError::Internal(
+            "account_data record revision must equal expected_revision + 1".to_owned(),
+        ));
+    }
+    let applied = sql_query(
+            "WITH source AS MATERIALIZED ( SELECT e.envelope FROM canonical_events e \
+                 WHERE e.id=$9 AND e.state='accepted' AND e.kind='ak.account_data.set' AND e.actor_id=$2 \
+                   AND e.envelope->'payload'->>'key'=$3 AND e.realm_id IS NOT DISTINCT FROM e.envelope->>'realm_id' \
+                   AND (e.envelope->'payload'->>'expected_revision')::bigint=$8 \
+                   AND COALESCE((e.envelope->'payload'->>'tombstone')::boolean,FALSE)=$6 \
+                   AND ($6 OR COALESCE(e.envelope->'payload'->'body',e.envelope->'payload'->'encrypted_payload')=$5) \
+                   AND EXISTS (SELECT 1 FROM accepted_events a WHERE a.id=e.id) FOR SHARE OF e \
+             ), updated AS ( \
+                 UPDATE account_datas SET revision = $4, payload = $5, tombstone = $6, updated_at = $7 \
+                 WHERE actor_id = $2 AND account_data_key = $3 AND revision = $8 AND ($9::bytea IS NULL OR EXISTS (SELECT 1 FROM source)) \
+                 RETURNING actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+             ), inserted AS ( \
+                 INSERT INTO account_datas \
+                    (id, actor_id, account_data_key, revision, payload, tombstone, updated_at) \
+                 SELECT $1, $2, $3, $4, $5, $6, $7 \
+                 WHERE $8 = 0 AND ($9::bytea IS NULL OR EXISTS (SELECT 1 FROM source)) AND NOT EXISTS ( \
+                     SELECT 1 FROM account_datas WHERE actor_id = $2 AND account_data_key = $3 \
+                 ) \
+                 ON CONFLICT (actor_id, account_data_key) DO NOTHING \
+                 RETURNING actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+             ), applied AS ( \
+                 SELECT * FROM updated UNION ALL SELECT * FROM inserted \
+             ), changed AS ( \
+                 INSERT INTO account_data_changes \
+                    (actor_id, account_data_key, revision, payload, tombstone, updated_at) \
+                 SELECT actor, account_data_key, revision, payload, tombstone, updated_at \
+                 FROM applied \
+                 RETURNING position \
+             ), retention AS ( \
+                 INSERT INTO account_data_change_retention \
+                    (actor_id, latest_position, retained_through_position, updated_at) \
+                 SELECT $2, position, 0, now() FROM changed \
+                 ON CONFLICT (actor_id) DO UPDATE SET \
+                    latest_position = GREATEST(account_data_change_retention.latest_position, EXCLUDED.latest_position), \
+                    updated_at = EXCLUDED.updated_at \
+                 RETURNING latest_position \
+             ) \
+             , published AS MATERIALIZED ( \
+                 SELECT project_account_global_value($2,'account_data_events','event:'||$3, \
+                    jsonb_build_object('source','event','value',source.envelope),$6) FROM applied CROSS JOIN source \
+             ) SELECT applied.* FROM applied \
+             CROSS JOIN (SELECT count(*) FROM retention) AS retention_count CROSS JOIN (SELECT count(*) FROM published) AS published_count",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
+        .bind::<Text, _>(&record.actor)
+        .bind::<Text, _>(&record.account_data_key)
+        .bind::<BigInt, _>(revision)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<Bool, _>(record.tombstone)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .bind::<BigInt, _>(expected_revision)
+        .bind::<Nullable<diesel::sql_types::Binary>, _>(source_event_id.map(|id| id.token_bytes().to_vec()))
+        .get_result::<AccountDataRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+    if let Some(applied) = applied {
+        return Ok(AccountDataCasResult::Applied(applied.into()));
+    }
+    let current = sql_query("SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at FROM account_datas WHERE actor_id=$1 AND account_data_key=$2 AND account_data_source_current(actor_id,account_data_key)")
+            .bind::<Text,_>(&record.actor).bind::<Text,_>(&record.account_data_key)
+            .get_result::<AccountDataRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.map(AccountDataRecord::from);
+    Ok(AccountDataCasResult::Conflict(current))
 }

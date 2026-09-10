@@ -1744,7 +1744,7 @@ pub(super) async fn accepted_event_envelope(
             .unwrap_or(&event.actor_id)
             .clone();
         let selector = arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-            agent_id: signer_id.signing_principal_id().clone(),
+            actor: signer_id.clone(),
             verification_method: producer.verification_method.clone(),
         };
         Some(

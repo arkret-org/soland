@@ -100,6 +100,40 @@ pub(super) async fn commit_accepted_event_stage(
         // visible instead of falling through to a 500 labelled "events store
         // unavailable".
         let conflict = error.conflict_code();
+        if conflict == Some(ConflictCode::CasConflict)
+            && parsed.kind == arkret_wire::EventKind::AccountDataSet.as_str()
+        {
+            let payload = &envelope_for_bootstrap["payload"];
+            if let (Some(key), Some(expected)) = (
+                payload["key"].as_str(),
+                payload["expected_revision"].as_u64(),
+            ) {
+                let current = state
+                    .account_data()
+                    .entry(&parsed.actor.to_string(), key)
+                    .await
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            error.to_string(),
+                        )
+                    })?;
+                let revision = current.as_ref().map_or(0, |row| row.revision);
+                if revision != expected {
+                    let mut details = json!({"account_data_key":key,"current_revision":revision});
+                    if let Some(row) = current.filter(|row| !row.tombstone) {
+                        details["current_entry"] = json!({"account_data_key":row.account_data_key,"revision":row.revision,"content":row.payload,"updated_at":arkret_canonical::format_timestamp_canonical(row.updated_at)});
+                    }
+                    return Err(SubmitOneError::new(
+                        StatusCode::CONFLICT,
+                        "cas_conflict",
+                        "account data revision changed before accepted commit",
+                    )
+                    .with_details(details));
+                }
+            }
+        }
         if conflict == Some(ConflictCode::CasConflict) {
             let current_frontier = super::super::endpoints::load_realm_actor_frontier(
                 state,
@@ -137,6 +171,27 @@ pub(super) async fn commit_accepted_event_stage(
             return Err(SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
+                message,
+            ));
+        }
+        if conflict == Some(ConflictCode::ReducerProjectionFailed) {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "reducer_projection_failed",
+                message,
+            ));
+        }
+        if conflict == Some(ConflictCode::FailedPrecondition) {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                message,
+            ));
+        }
+        if conflict == Some(ConflictCode::DependencyMissing) {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "dependency_missing",
                 message,
             ));
         }

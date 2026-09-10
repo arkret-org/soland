@@ -12,16 +12,47 @@ use crate::ServiceResult;
 
 #[async_trait]
 pub trait CursorStorePort: Send + Sync {
+    async fn current_detail_page(
+        &self,
+        request: &soland_storage::CurrentDetailRequest,
+        progress: Option<&soland_storage::CurrentDetailProgress>,
+        byte_budget: usize,
+        registry: &dyn arkret_state::state::CellRegistry,
+    ) -> ServiceResult<soland_storage::CurrentDetailOutcome>;
+    async fn account_summary_has_join(
+        &self,
+        actor_key: &str,
+        realm_id: &str,
+    ) -> ServiceResult<bool>;
+    async fn account_sync_watermarks(&self) -> ServiceResult<(i64, i64)>;
+    async fn account_global_watermark(&self) -> ServiceResult<i64>;
+    async fn account_global_page(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+        after_key: &str,
+        after_revision: Option<i64>,
+        limit: usize,
+    ) -> ServiceResult<Vec<soland_storage::AccountGlobalVersion>>;
+    async fn account_summary_watermark(&self) -> ServiceResult<i64>;
+    async fn account_summary_page(
+        &self,
+        actor_key: &str,
+        watermark: i64,
+        after: Option<&soland_storage::AccountSummaryKey>,
+        limit: usize,
+    ) -> ServiceResult<Vec<soland_storage::AccountSummaryVersion>>;
+    async fn account_summary_changes(
+        &self,
+        actor_key: &str,
+        after_revision: i64,
+        limit: usize,
+    ) -> ServiceResult<Vec<soland_storage::AccountSummaryVersion>>;
     async fn get(&self, handle: &str) -> ServiceResult<Option<CursorState>>;
     async fn upsert(&self, record: &CursorState) -> ServiceResult<()>;
     async fn delete(&self, handle: &str) -> ServiceResult<bool>;
-    async fn prune_stream_superseded(
-        &self,
-        binding_subject: &str,
-        device_id: &str,
-        filter_digest: &str,
-        presented_issued_at_ms: i64,
-    ) -> ServiceResult<usize>;
+
     async fn prune_expired(&self, now_ms: i64) -> ServiceResult<usize>;
     async fn record_revocation(&self, record: &CursorRevocationState) -> ServiceResult<()>;
     async fn active_revocations(
@@ -84,6 +115,81 @@ impl SyncService {
     }
 
     /// The durable WebSocket challenge / replay ledger (§3.1).
+    pub async fn account_sync_watermarks(&self) -> ServiceResult<(i64, i64)> {
+        self.cursors.account_sync_watermarks().await
+    }
+    pub async fn account_global_watermark(&self) -> ServiceResult<i64> {
+        self.cursors.account_global_watermark().await
+    }
+    pub async fn account_global_page(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+        after_key: &str,
+        after_revision: Option<i64>,
+        limit: usize,
+    ) -> ServiceResult<Vec<soland_storage::AccountGlobalVersion>> {
+        self.cursors
+            .account_global_page(
+                actor_key,
+                channel,
+                watermark,
+                after_key,
+                after_revision,
+                limit,
+            )
+            .await
+    }
+    pub async fn account_summary_has_join(
+        &self,
+        actor_key: &str,
+        realm_id: &str,
+    ) -> ServiceResult<bool> {
+        self.cursors
+            .account_summary_has_join(actor_key, realm_id)
+            .await
+    }
+
+    pub async fn current_detail_page(
+        &self,
+        request: &soland_storage::CurrentDetailRequest,
+        progress: Option<&soland_storage::CurrentDetailProgress>,
+        byte_budget: usize,
+        registry: &dyn arkret_state::state::CellRegistry,
+    ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
+        self.cursors
+            .current_detail_page(request, progress, byte_budget, registry)
+            .await
+    }
+
+    pub async fn account_summary_watermark(&self) -> ServiceResult<i64> {
+        self.cursors.account_summary_watermark().await
+    }
+
+    pub async fn account_summary_page(
+        &self,
+        actor_key: &str,
+        watermark: i64,
+        after: Option<&soland_storage::AccountSummaryKey>,
+        limit: usize,
+    ) -> ServiceResult<Vec<soland_storage::AccountSummaryVersion>> {
+        self.cursors
+            .account_summary_page(actor_key, watermark, after, limit)
+            .await
+    }
+
+    pub async fn account_summary_changes(
+        &self,
+        actor_key: &str,
+        after_revision: i64,
+        limit: usize,
+    ) -> ServiceResult<Vec<soland_storage::AccountSummaryVersion>> {
+        self.cursors
+            .account_summary_changes(actor_key, after_revision, limit)
+            .await
+    }
+
     pub fn websocket_auth(&self) -> &dyn WebsocketAuthPort {
         self.websocket_auth.as_ref()
     }
@@ -158,23 +264,6 @@ impl SyncService {
         self.cursors.delete(handle).await
     }
 
-    pub async fn prune_superseded_cursors(
-        &self,
-        binding_subject: &str,
-        device_id: &str,
-        filter_digest: &str,
-        presented_issued_at_ms: i64,
-    ) -> ServiceResult<usize> {
-        self.cursors
-            .prune_stream_superseded(
-                binding_subject,
-                device_id,
-                filter_digest,
-                presented_issued_at_ms,
-            )
-            .await
-    }
-
     pub async fn prune_expired_cursors(&self, now_ms: i64) -> ServiceResult<usize> {
         self.cursors.prune_expired(now_ms).await
     }
@@ -205,6 +294,55 @@ mod tests {
 
     #[async_trait]
     impl CursorStorePort for RecordingCursors {
+        async fn current_detail_page(
+            &self,
+            _: &soland_storage::CurrentDetailRequest,
+            _: Option<&soland_storage::CurrentDetailProgress>,
+            _: usize,
+            _: &dyn arkret_state::state::CellRegistry,
+        ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
+            Ok(soland_storage::CurrentDetailOutcome::Unavailable)
+        }
+        async fn account_summary_has_join(&self, _: &str, _: &str) -> ServiceResult<bool> {
+            Ok(false)
+        }
+        async fn account_sync_watermarks(&self) -> ServiceResult<(i64, i64)> {
+            Ok((0, 0))
+        }
+        async fn account_global_watermark(&self) -> ServiceResult<i64> {
+            Ok(0)
+        }
+        async fn account_global_page(
+            &self,
+            _: &str,
+            _: &str,
+            _: i64,
+            _: &str,
+            _: Option<i64>,
+            _: usize,
+        ) -> ServiceResult<Vec<soland_storage::AccountGlobalVersion>> {
+            Ok(Vec::new())
+        }
+        async fn account_summary_watermark(&self) -> ServiceResult<i64> {
+            Ok(0)
+        }
+        async fn account_summary_page(
+            &self,
+            _: &str,
+            _: i64,
+            _: Option<&soland_storage::AccountSummaryKey>,
+            _: usize,
+        ) -> ServiceResult<Vec<soland_storage::AccountSummaryVersion>> {
+            Ok(Vec::new())
+        }
+        async fn account_summary_changes(
+            &self,
+            _: &str,
+            _: i64,
+            _: usize,
+        ) -> ServiceResult<Vec<soland_storage::AccountSummaryVersion>> {
+            Ok(Vec::new())
+        }
         async fn get(&self, handle: &str) -> ServiceResult<Option<CursorState>> {
             Ok(self
                 .0
@@ -225,16 +363,6 @@ mod tests {
             let before = records.len();
             records.retain(|record| record.handle != handle);
             Ok(records.len() != before)
-        }
-
-        async fn prune_stream_superseded(
-            &self,
-            _binding_subject: &str,
-            _device_id: &str,
-            _filter_digest: &str,
-            _presented_issued_at_ms: i64,
-        ) -> ServiceResult<usize> {
-            Ok(0)
         }
 
         async fn prune_expired(&self, _now_ms: i64) -> ServiceResult<usize> {

@@ -7,6 +7,8 @@ use arkret_models_collaboration::{
     CompactAgentSignerResolutionEvidence, CurrentSignerEvidenceItem,
     CurrentSignerEvidenceQueryOutcome, CurrentSignerEvidenceQueryRequestBody,
     CurrentSignerEvidenceResponseCore, CurrentSignerEvidenceSelector,
+    SelfCurrentSignerEvidenceQueryOutcome, SelfCurrentSignerEvidenceQueryRequestBody,
+    SelfCurrentSignerEvidenceResult,
 };
 use arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector;
 use arkret_wire::DidCoreId;
@@ -35,15 +37,14 @@ pub(crate) fn peer_router() -> Router {
 )]
 async fn self_query(
     aa: AuthArgs,
-    body: JsonBody<CurrentSignerEvidenceQueryRequestBody>,
+    body: JsonBody<SelfCurrentSignerEvidenceQueryRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CurrentSignerEvidenceQueryOutcome> {
+) -> JsonResult<SelfCurrentSignerEvidenceQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    body.validate()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    body.validate().map_err(self_request_error)?;
     let actor = super::session_actor::validated_session_actor(state, &session).await?;
     if actor.as_account_id() != Some(&body.recipient_account_id)
         || body.recipient_account_id.station_id != state.service_core_id()
@@ -52,63 +53,283 @@ async fn self_query(
             "current signer evidence is unavailable",
         ));
     }
-    let target = body
-        .target_station_id()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?
-        .clone();
-    let outcome = if target == state.service_core_id() {
-        issue_authority_outcome(state, &body, state.service_core_id()).await?
-    } else {
-        proxy_peer_query(state, &body, &target).await?
-    };
-    outcome
-        .validate_transport_for_request(&body)
-        .map_err(|error| {
-            AppError::internal(format!("authority returned invalid evidence: {error}"))
-        })?;
-    if target != state.service_core_id() {
-        validate_remote_device_projections(state, &outcome).await?;
-    }
-    json_ok(outcome)
+    json_ok(resolve_self_current(state, &body).await?)
 }
 
-async fn validate_remote_device_projections(
+pub(crate) fn self_request_error(error: arkret_wire::WireError) -> AppError {
+    AppError::from_rejection(
+        match error.error_code() {
+            Some(arkret_wire::ErrorCode::PayloadTooLarge) => {
+                arkret_wire::ErrorCode::PayloadTooLarge
+            }
+            _ => arkret_wire::ErrorCode::SchemaViolation,
+        },
+        error.to_string(),
+    )
+}
+pub(crate) fn self_result_error(error: arkret_wire::WireError) -> AppError {
+    AppError::from_rejection(
+        match error.error_code() {
+            Some(arkret_wire::ErrorCode::LimitExceeded) => arkret_wire::ErrorCode::LimitExceeded,
+            _ => arkret_wire::ErrorCode::SchemaViolation,
+        },
+        error.to_string(),
+    )
+}
+
+pub(crate) async fn resolve_self_current(
     state: &AppState,
-    outcome: &CurrentSignerEvidenceQueryOutcome,
-) -> Result<(), AppError> {
-    for item in &outcome.response.evidences {
-        let CurrentSignerEvidenceItem::AccountDevice {
-            account_id,
-            device_id,
-            device_projection_attestation: attestation,
-            ..
-        } = item
-        else {
-            continue;
-        };
-        let unavailable = || AppError::not_found("current signer evidence is unavailable");
-        if &attestation.attestation.account_id != account_id
-            || &attestation.attestation.device_id != device_id
-        {
-            return Err(unavailable());
-        }
-        let method = &attestation.proof.verification_method;
-        let did =
-            arkret_identity::verification_method_did(method.as_str()).map_err(|_| unavailable())?;
-        if arkret_wire::project_did_to_core_id(&did).map_err(|_| unavailable())?
-            != account_id.station_id
-        {
-            return Err(unavailable());
-        }
-        let current = state
-            .dids()
-            .resolve_current_service_did(&did)
-            .await
-            .map_err(|_| unavailable())?;
-        verify_current_device_projection(attestation, &current.document, chrono::Utc::now())
-            .map_err(|_| unavailable())?;
+    body: &SelfCurrentSignerEvidenceQueryRequestBody,
+) -> Result<SelfCurrentSignerEvidenceQueryOutcome, AppError> {
+    body.validate().map_err(self_request_error)?;
+    let mut routed = BTreeMap::<DidCoreId, Vec<CurrentSignerEvidenceSelector>>::new();
+    for selector in &body.queries {
+        routed
+            .entry(selector.route_service_id().clone())
+            .or_default()
+            .push(selector.clone());
     }
-    Ok(())
+    let mut results = Vec::with_capacity(body.queries.len());
+    for (target, selectors) in routed {
+        for chunk in selectors.chunks(16) {
+            let peer_request = CurrentSignerEvidenceQueryRequestBody {
+                request_id: body.request_id.clone(),
+                realm_id: body.realm_id.clone(),
+                recipient_account_id: body.recipient_account_id.clone(),
+                queries: chunk.to_vec(),
+                known_agent_state_digests: Vec::new(),
+                known_signer_evidence_refs: Vec::new(),
+            };
+            let outcome = if target == state.service_core_id() {
+                issue_authority_outcome(state, &peer_request, state.service_core_id()).await
+            } else {
+                proxy_peer_query(state, &peer_request, &target).await
+            };
+            let outcome = outcome.ok().filter(|outcome| {
+                outcome
+                    .validate_transport_for_request(&peer_request)
+                    .is_ok()
+            });
+            for selector in chunk {
+                let mut resolved = None;
+                if let Some(outcome) = &outcome {
+                    for item in &outcome.response.evidences {
+                        let matches = match (selector, item) {
+                            (
+                                CurrentSignerEvidenceSelector::AccountDevice {
+                                    account_id: a,
+                                    device_id: d,
+                                },
+                                CurrentSignerEvidenceItem::AccountDevice {
+                                    account_id,
+                                    device_id,
+                                    ..
+                                },
+                            ) => a == account_id && d == device_id,
+                            (
+                                CurrentSignerEvidenceSelector::Agent {
+                                    actor: a,
+                                    verification_method: m,
+                                },
+                                CurrentSignerEvidenceItem::Agent {
+                                    actor,
+                                    verification_method,
+                                    ..
+                                },
+                            ) => a == actor && m == verification_method,
+                            _ => false,
+                        };
+                        if matches {
+                            resolved = self_key_from_peer_item(state, &peer_request, item)
+                                .await
+                                .ok();
+                            break;
+                        }
+                    }
+                }
+                results.push(match resolved {
+                    Some(key) => SelfCurrentSignerEvidenceResult::Resolved {
+                        selector: selector.clone(),
+                        key,
+                        checked_at: arkret_canonical::normalize_timestamp_canonical(
+                            chrono::Utc::now(),
+                        ),
+                    },
+                    None => SelfCurrentSignerEvidenceResult::Unavailable {
+                        selector: selector.clone(),
+                    },
+                });
+            }
+        }
+    }
+    let outcome = SelfCurrentSignerEvidenceQueryOutcome {
+        request_id: body.request_id.clone(),
+        realm_id: body.realm_id.clone(),
+        recipient_account_id: body.recipient_account_id.clone(),
+        results,
+    };
+    outcome
+        .validate_for_request(body)
+        .map_err(self_result_error)?;
+    Ok(outcome)
+}
+
+async fn self_key_from_peer_item(
+    state: &AppState,
+    request: &CurrentSignerEvidenceQueryRequestBody,
+    item: &CurrentSignerEvidenceItem,
+) -> Result<arkret_models_identity::StationSigningKey, AppError> {
+    let invalid = || AppError::not_found("current signer evidence unavailable");
+    match item {
+        CurrentSignerEvidenceItem::Agent {
+            actor,
+            verification_method,
+            ..
+        } => {
+            let (root, dependencies) = item
+                .hydrate_agent(request, &BTreeMap::new(), &[])
+                .map_err(|_| invalid())?;
+            super::agents::evidence::verified_station_agent_key(
+                state,
+                &AgentSignerEvidenceQuerySelector::CurrentAdmission {
+                    actor: actor.clone(),
+                    verification_method: verification_method.clone(),
+                },
+                &root,
+                &dependencies,
+                chrono::Utc::now(),
+            )
+            .await
+        }
+        CurrentSignerEvidenceItem::AccountDevice {
+            account_id,
+            device_id: _,
+            device_projection_attestation,
+            signer_evidence_ref,
+        } => {
+            let document =
+                current_device_projection_document(state, device_projection_attestation).await?;
+            use arkret_models_collaboration::governance_dependencies::{
+                GovernanceDependency, GovernanceDependencySelector,
+                PeerGovernanceDependencyResolveRequestBody,
+            };
+            let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                content_digest: signer_evidence_ref
+                    .content_digest()
+                    .map_err(|_| invalid())?,
+            };
+            let store = state.persistence().governance_dependency_store();
+            let dependency = if let Some(item) = store
+                .get_unscoped_signer_evidence(&selector)
+                .await
+                .map_err(|_| invalid())?
+            {
+                item
+            } else {
+                let query = PeerGovernanceDependencyResolveRequestBody {
+                    realm_id: request.realm_id.clone(),
+                    selectors: vec![selector],
+                    byte_limit: 1024 * 1024,
+                    history_traversal_access: None,
+                };
+                let response = crate::routing::federation::rhrk_acquisition::fetch_peer_governance_dependencies(state, &account_id.station_id, &query).await.map_err(|_| invalid())?;
+                response
+                    .validate_for_peer_request(&query)
+                    .map_err(|_| invalid())?;
+                response.items.into_iter().next().ok_or_else(invalid)?
+            };
+            let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                authenticated_signer_resolution_evidence: root,
+                ..
+            } = dependency
+            else {
+                return Err(invalid());
+            };
+            device_self_result_key(item, &root, &document, chrono::Utc::now())
+                .map_err(|_| invalid())
+        }
+    }
+}
+
+async fn current_device_projection_document(
+    state: &AppState,
+    attestation: &arkret_models_crypto::DeviceProjectionAttestation,
+) -> Result<arkret_identity::DidDocument, AppError> {
+    let unavailable = || AppError::not_found("current signer evidence is unavailable");
+    let did =
+        arkret_identity::verification_method_did(attestation.proof.verification_method.as_str())
+            .map_err(|_| unavailable())?;
+    if arkret_wire::project_did_to_core_id(&did).map_err(|_| unavailable())?
+        != attestation.attestation.account_id.station_id
+    {
+        return Err(unavailable());
+    }
+    let current = state
+        .dids()
+        .resolve_current_service_did(&did)
+        .await
+        .map_err(|_| unavailable())?;
+    Ok(current.document)
+}
+
+/// The self handler reduces a peer device item only after signature and exact
+/// reference/Account/device bindings have all passed together.
+fn device_self_result_key(
+    item: &CurrentSignerEvidenceItem,
+    root: &arkret_models_identity::AuthenticatedSignerResolutionEvidence,
+    document: &arkret_identity::DidDocument,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<arkret_models_identity::StationSigningKey, String> {
+    let CurrentSignerEvidenceItem::AccountDevice {
+        account_id,
+        device_id,
+        device_projection_attestation: attestation,
+        signer_evidence_ref,
+    } = item
+    else {
+        return Err("not a device item".to_owned());
+    };
+    if &attestation.attestation.account_id != account_id
+        || &attestation.attestation.device_id != device_id
+    {
+        return Err("device item identity mismatch".to_owned());
+    }
+    verify_current_device_projection(attestation, document, now)?;
+    root.validate_attester_binding()
+        .map_err(|e| e.to_string())?;
+    if root.evidence_ref().map_err(|e| e.to_string())? != *signer_evidence_ref {
+        return Err("device root reference mismatch".to_owned());
+    }
+    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
+        signer_id,
+        verification_method,
+        device_projection_attestation: projected,
+        ..
+    } = root
+    else {
+        return Err("not a device root".to_owned());
+    };
+    if signer_id != &account_id.principal_id || projected != attestation {
+        return Err("device root identity mismatch".to_owned());
+    }
+    let public = attestation
+        .attestation
+        .device_signing_key_did
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or("device public key is not did:key")?;
+    let bytes = arkret_canonical::decode_ed25519_multibase(public).map_err(|e| e.to_string())?;
+    let key = arkret_models_identity::StationSigningKey {
+        actor: arkret_wire::ActorId::account(account_id.clone()),
+        verification_method: verification_method.clone(),
+        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            bytes,
+        ))
+        .map_err(|e| e.to_string())?,
+        authorization_ref: attestation.attestation.device_authorize_event_id.clone(),
+    };
+    key.validate().map_err(|e| e.to_string())?;
+    Ok(key)
 }
 
 fn verify_current_device_projection(
@@ -285,7 +506,7 @@ async fn issue_selector(
             verification_method,
         } => {
             let selector = AgentSignerEvidenceQuerySelector::CurrentAdmission {
-                agent_id: actor.signing_principal_id().clone(),
+                actor: actor.clone(),
                 verification_method: verification_method.clone(),
             };
             match super::agents::evidence::current_authenticated_agent_signer_evidence(
@@ -395,14 +616,20 @@ async fn proxy_peer_query(
             "current signer evidence is unavailable",
         ));
     }
-    let bytes = response
-        .bytes()
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|_| AppError::not_found("current signer evidence is unavailable"))?;
-    if bytes.len() > 1024 * 1024 {
-        return Err(AppError::not_found(
-            "current signer evidence is unavailable",
-        ));
+        .map_err(|_| AppError::not_found("current signer evidence unavailable"))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > 1024 * 1024 {
+            return Err(AppError::from_rejection(
+                arkret_wire::ErrorCode::LimitExceeded,
+                "peer signer response exceeds budget",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes)
         .map_err(|_| AppError::not_found("current signer evidence is unavailable"))
@@ -410,8 +637,12 @@ async fn proxy_peer_query(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn current_device_projection_requires_origin_assertion_key_and_valid_signature() {
+    fn signed_device_projection() -> (
+        arkret_models_crypto::DeviceProjectionAttestation,
+        arkret_identity::DidDocument,
+        chrono::DateTime<chrono::Utc>,
+        [u8; 32],
+    ) {
         let station_did = arkret_wire::Did::new("did:web:projection-station.example").unwrap();
         let method = arkret_wire::DidUrl::new(format!("{station_did}#assertion")).unwrap();
         let account = arkret_wire::AccountId::new(
@@ -445,17 +676,136 @@ mod tests {
             &signing_key,
         )
         .unwrap();
-        let mut document: arkret_identity::DidDocument =
-            serde_json::from_value(serde_json::json!({
-                "id": station_did,
-                "verificationMethod": [{
-                    "id": method,
-                    "controller": station_did,
-                    "type": "Multikey",
-                    "publicKeyMultibase": public_key
-                }]
-            }))
-            .unwrap();
+        let document: arkret_identity::DidDocument = serde_json::from_value(serde_json::json!({
+            "id": station_did,
+            "verificationMethod": [{
+                "id": method,
+                "controller": station_did,
+                "type": "Multikey",
+                "publicKeyMultibase": public_key
+            }]
+        }))
+        .unwrap();
+        (
+            attestation,
+            document,
+            now,
+            signing_key.verifying_key().to_bytes(),
+        )
+    }
+
+    fn self_device_fixture() -> (
+        super::CurrentSignerEvidenceItem,
+        arkret_models_identity::AuthenticatedSignerResolutionEvidence,
+        arkret_identity::DidDocument,
+        chrono::DateTime<chrono::Utc>,
+        [u8; 32],
+    ) {
+        let (attestation, mut document, now, bytes) = signed_device_projection();
+        document.raw_properties.insert(
+            "assertionMethod".to_owned(),
+            serde_json::json!(["#assertion"]),
+        );
+        let core = &attestation.attestation;
+        let root = arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
+            signer_id: core.account_id.principal_id.clone(),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "did:web:projection-principal.example#{}",
+                core.device_id
+            ))
+            .unwrap(),
+            device_projection_attestation: attestation.clone(),
+            attester_signer_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+                "ak:signer_evidence:sha256:{}",
+                "a".repeat(64)
+            ))
+            .unwrap(),
+        };
+        let item = super::CurrentSignerEvidenceItem::AccountDevice {
+            account_id: core.account_id.clone(),
+            device_id: core.device_id.clone(),
+            device_projection_attestation: attestation,
+            signer_evidence_ref: root.evidence_ref().unwrap(),
+        };
+        (item, root, document, now, bytes)
+    }
+
+    #[test]
+    fn self_device_result_verifies_real_signature_before_extracting_exact_key() {
+        let (item, root, document, now, expected) = self_device_fixture();
+        let key = super::device_self_result_key(&item, &root, &document, now).unwrap();
+        assert_eq!(
+            arkret_canonical::base64url_decode(key.public_key_b64u.as_str()).unwrap(),
+            expected
+        );
+        assert_eq!(&key.verification_method, root.verification_method());
+        assert!(
+            super::device_self_result_key(
+                &item,
+                &root,
+                &document,
+                now + chrono::Duration::minutes(5)
+            )
+            .is_err()
+        );
+        let mut wrong_document = document.clone();
+        let another_key = ed25519_dalek::SigningKey::from_bytes(&[57u8; 32]);
+        let encoded = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            another_key.verifying_key().as_bytes(),
+        );
+        let mut json = serde_json::to_value(&wrong_document).unwrap();
+        json["verificationMethod"][0]["publicKeyMultibase"] = serde_json::json!(encoded);
+        wrong_document = serde_json::from_value(json).unwrap();
+        assert!(super::device_self_result_key(&item, &root, &wrong_document, now).is_err());
+    }
+
+    #[test]
+    fn self_device_result_rejects_forged_projection_and_cross_station_root() {
+        let (mut item, mut root, document, now, _) = self_device_fixture();
+        if let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
+            device_projection_attestation,
+            ..
+        } = &mut root
+        {
+            device_projection_attestation
+                .attestation
+                .authorized_generation_ref += 1;
+        }
+        if let super::CurrentSignerEvidenceItem::AccountDevice {
+            device_projection_attestation,
+            signer_evidence_ref,
+            ..
+        } = &mut item
+        {
+            device_projection_attestation
+                .attestation
+                .authorized_generation_ref += 1;
+            *signer_evidence_ref = root.evidence_ref().unwrap();
+        }
+        // The modified root reference matches: rejection must still reach the
+        // original real signature instead of treating a hash as authority.
+        assert!(super::device_self_result_key(&item, &root, &document, now).is_err());
+        let (mut item, root, document, now, _) = self_device_fixture();
+        if let super::CurrentSignerEvidenceItem::AccountDevice { account_id, .. } = &mut item {
+            account_id.station_id =
+                arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap();
+        }
+        assert!(super::device_self_result_key(&item, &root, &document, now).is_err());
+        let (item, mut root, document, now, _) = self_device_fixture();
+        if let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
+            verification_method,
+            ..
+        } = &mut root
+        {
+            *verification_method =
+                arkret_wire::DidUrl::new("did:web:other.example#wrong-device").unwrap();
+        }
+        assert!(super::device_self_result_key(&item, &root, &document, now).is_err());
+    }
+
+    #[test]
+    fn current_device_projection_requires_origin_assertion_key_and_valid_signature() {
+        let (attestation, mut document, now, _) = signed_device_projection();
         assert!(super::verify_current_device_projection(&attestation, &document, now).is_err());
         document.raw_properties.insert(
             "assertionMethod".to_owned(),

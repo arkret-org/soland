@@ -15,7 +15,7 @@ use super::{
     QueryableByName, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
     sql_query, sql_types,
 };
-#[derive(QueryableByName)]
+#[derive(QueryableByName, serde::Deserialize)]
 struct NotificationRow {
     #[diesel(sql_type = sql_types::Uuid)]
     notification_id: Uuid,
@@ -480,4 +480,11 @@ where
                 "notification {field} did not serialize as a string"
             ))
         })
+}
+
+pub(crate) fn global_notification_payload(value: Value) -> PersistenceResult<Value> {
+    let row: NotificationRow = serde_json::from_value(value)
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+    serde_json::to_value(row.into_account_record()?.record.delta)
+        .map_err(|error| PersistenceError::Internal(error.to_string()))
 }

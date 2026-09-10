@@ -678,7 +678,7 @@ pub(super) async fn seed_agent_grant_session(
         })
         .collect::<std::collections::BTreeSet<_>>();
     let availability_request =
-        arkret_models_collaboration::governance_dependencies::SealPrepareRequest {
+        arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody {
             realm_id: agent_pcr_realm.clone(),
             predecessor_refs: vec![genesis_seal.id.clone()],
             event_digests: target.difference(&predecessor_covered).cloned().collect(),

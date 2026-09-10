@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use arkret_models_collaboration::history_key::{
     HistoryKeyRequest, HistoryKeyRequestReceipt, HistoryKeyRequestReplica,
-    HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord, HistoryKeyResponseRecord,
-    HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest, HistoryManifestAdmission,
+    HistoryKeyResponseAckRequestBody, HistoryKeyResponseLostRecord, HistoryKeyResponseRecord,
+    HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequestBody, HistoryManifestAdmission,
     HistoryReleaseAttestation, HistoryResponseAckEntry, HistoryResponseAckTokenClaims,
     HistoryResponseId, HistoryResponsePageEntry, SealedHistoryResponseCapability,
 };
@@ -231,6 +231,10 @@ struct ResponseRow {
     source_record_digest: String,
     #[diesel(sql_type = Jsonb)]
     source_record_json: Value,
+    #[diesel(sql_type = Jsonb)]
+    source_signer_result_json: Value,
+    #[diesel(sql_type = Text)]
+    cipher_suite: String,
     #[diesel(sql_type = Nullable<Jsonb>)]
     manifest_admission_json: Option<Value>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -275,6 +279,221 @@ struct ResponseStreamRow {
     expires_at: DateTime<Utc>,
     #[diesel(sql_type = Nullable<BigInt>)]
     acked_sequence: Option<i64>,
+}
+
+const HISTORY_RESPONSE_PAGE_SQL: &str = "WITH pending AS MATERIALIZED (
+                SELECT sequence FROM history_key_responses
+                WHERE request_id=$1 AND state='reserved' ORDER BY sequence LIMIT 1
+             ), candidates AS MATERIALIZED (
+                SELECT response_id,sequence,active_bytes FROM history_key_responses r
+                WHERE request_id=$1 AND sequence>$2 AND state IN ('accepted','lost')
+                  AND NOT EXISTS (SELECT 1 FROM pending p WHERE p.sequence<=r.sequence)
+                ORDER BY sequence LIMIT $3
+             ), bounded AS (
+                SELECT response_id,sequence,
+                       row_number() OVER (ORDER BY sequence) AS ordinal,
+                       sum(active_bytes) OVER (ORDER BY sequence) AS total_bytes,
+                       max(sequence) OVER () AS last_sequence
+                FROM candidates
+             )
+             SELECT r.state,r.record_json,r.lost_record_json,
+                    CASE WHEN r.state='accepted' THEN r.source_signer_result_json END AS source_signer_result_json,
+                    CASE WHEN r.state='accepted' THEN r.cipher_suite END AS cipher_suite,
+                    b.sequence < b.last_sequence AS has_more
+             FROM bounded b JOIN history_key_responses r USING (response_id)
+             WHERE b.ordinal < $3 AND (b.total_bytes <= $4 OR b.ordinal=1)
+             ORDER BY b.sequence";
+
+const HISTORY_RESPONSE_CURSOR_SQL: &str =
+    "SELECT r.sequence FROM history_key_responses r WHERE r.request_id=$1 AND r.cursor=$2
+     AND NOT EXISTS (SELECT 1 FROM history_key_responses p
+         WHERE p.request_id=$1 AND p.state='reserved' AND p.sequence<=r.sequence)";
+
+const HISTORY_RESPONSE_PENDING_PREFIX_SQL: &str = "SELECT sequence FROM history_key_responses
+     WHERE request_id=$1 AND state='reserved' AND sequence<=$2 ORDER BY sequence LIMIT 1";
+
+#[derive(QueryableByName)]
+struct ResponsePageRow {
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    record_json: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    lost_record_json: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    source_signer_result_json: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    cipher_suite: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    has_more: bool,
+}
+
+#[cfg(test)]
+mod response_page_query_tests {
+    use diesel_async::SimpleAsyncConnection;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn payload_selection_is_byte_bounded_and_preserves_metadata_lookahead() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pg_conn(&pool).await.unwrap();
+        conn.transaction::<(), diesel::result::Error, _>(async |conn| {
+            conn.batch_execute(
+                "CREATE TEMP TABLE history_key_responses (
+                    response_id text PRIMARY KEY, request_id text, sequence bigint,
+                    active_bytes bigint, state text, record_json jsonb, lost_record_json jsonb,
+                    source_signer_result_json jsonb, cipher_suite text
+                 ) ON COMMIT DROP;
+                 INSERT INTO history_key_responses (response_id,request_id,sequence,active_bytes,state,record_json,lost_record_json) VALUES
+                    ('a','stream',1,6,'accepted','\"first\"',NULL),
+                    ('b','stream',2,6,'accepted','\"second\"',NULL),
+                    ('c','stream',3,6,'lost',NULL,'\"third\"'),
+                    ('other','foreign',0,10000,'accepted','\"foreign\"',NULL);",
+            )
+            .await?;
+            for (after, limit, budget, expected, has_more) in [
+                (0_i64, 100_i64, 8_i64, "first", true),
+                (1, 100, 8, "second", true),
+                (2, 100, 8, "third", false),
+                (0, 1, 100, "first", true),
+                (0, 100, 1, "first", true),
+            ] {
+                let rows = sql_query(HISTORY_RESPONSE_PAGE_SQL)
+                    .bind::<Text, _>("stream")
+                    .bind::<BigInt, _>(after)
+                    .bind::<BigInt, _>(limit + 1)
+                    .bind::<BigInt, _>(budget)
+                    .load::<ResponsePageRow>(&mut *conn)
+                    .await?;
+                assert_eq!(rows.len(), 1);
+                let row = &rows[0];
+                assert_eq!(
+                    row.record_json.as_ref().or(row.lost_record_json.as_ref()),
+                    Some(&Value::String(expected.to_owned()))
+                );
+                assert_eq!(row.has_more, has_more);
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reserved_slot_blocks_page_cursor_and_ack_until_exact_completion() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pg_conn(&pool).await.unwrap();
+        conn.transaction::<(), diesel::result::Error, _>(async |conn| {
+            conn.batch_execute(
+                "CREATE TEMP TABLE history_key_responses (
+                    response_id text PRIMARY KEY, request_id text, sequence bigint,
+                    active_bytes bigint, state text, record_json jsonb, lost_record_json jsonb,
+                    source_signer_result_json jsonb, cipher_suite text,
+                    cursor text
+                 ) ON COMMIT DROP;
+                 INSERT INTO history_key_responses (response_id,request_id,sequence,active_bytes,state,record_json,lost_record_json,cursor) VALUES
+                    ('a','stream',1,6,'accepted','\"first\"',NULL,'cursor-1'),
+                    ('b','stream',2,0,'reserved',NULL,NULL,NULL),
+                    ('c','stream',3,6,'accepted','\"third\"',NULL,'cursor-3'),
+                    ('foreign','other',0,0,'reserved',NULL,NULL,NULL);",
+            )
+            .await?;
+            let prefix = sql_query(HISTORY_RESPONSE_PAGE_SQL)
+                .bind::<Text, _>("stream")
+                .bind::<BigInt, _>(0_i64)
+                .bind::<BigInt, _>(101_i64)
+                .bind::<BigInt, _>(100_i64)
+                .load::<ResponsePageRow>(&mut *conn)
+                .await?;
+            assert_eq!(prefix.len(), 1);
+            assert_eq!(
+                prefix[0].record_json,
+                Some(Value::String("first".to_owned()))
+            );
+            let pending_page = sql_query(HISTORY_RESPONSE_PAGE_SQL)
+                .bind::<Text, _>("stream")
+                .bind::<BigInt, _>(1_i64)
+                .bind::<BigInt, _>(101_i64)
+                .bind::<BigInt, _>(100_i64)
+                .load::<ResponsePageRow>(&mut *conn)
+                .await?;
+            assert!(pending_page.is_empty());
+            assert!(
+                sql_query(HISTORY_RESPONSE_CURSOR_SQL)
+                    .bind::<Text, _>("stream")
+                    .bind::<Text, _>("cursor-3")
+                    .get_result::<SequenceRow>(&mut *conn)
+                    .await
+                    .optional()?
+                    .is_none()
+            );
+            let pending = sql_query(HISTORY_RESPONSE_PENDING_PREFIX_SQL)
+                .bind::<Text, _>("stream")
+                .bind::<BigInt, _>(3_i64)
+                .get_result::<SequenceRow>(&mut *conn)
+                .await
+                .optional()?;
+            assert_eq!(pending.unwrap().sequence, 2);
+            assert!(
+                sql_query(HISTORY_RESPONSE_PENDING_PREFIX_SQL)
+                    .bind::<Text, _>("stream")
+                    .bind::<BigInt, _>(1_i64)
+                    .get_result::<SequenceRow>(&mut *conn)
+                    .await
+                    .optional()?
+                    .is_none()
+            );
+
+            // Completing the reserved slot retains its original sequence. Resuming
+            // at the last delivered cursor must reveal it before the later record.
+            conn.batch_execute(
+                "UPDATE history_key_responses SET state='accepted',active_bytes=6,
+                 record_json='\"second\"',cursor='cursor-2' WHERE response_id='b';",
+            )
+            .await?;
+            let completed = sql_query(HISTORY_RESPONSE_PAGE_SQL)
+                .bind::<Text, _>("stream")
+                .bind::<BigInt, _>(1_i64)
+                .bind::<BigInt, _>(101_i64)
+                .bind::<BigInt, _>(100_i64)
+                .load::<ResponsePageRow>(&mut *conn)
+                .await?;
+            assert_eq!(completed.len(), 2);
+            assert_eq!(
+                completed[0].record_json,
+                Some(Value::String("second".to_owned()))
+            );
+            assert_eq!(
+                completed[1].record_json,
+                Some(Value::String("third".to_owned()))
+            );
+            assert!(!completed[1].has_more);
+            assert_eq!(
+                sql_query(HISTORY_RESPONSE_CURSOR_SQL)
+                    .bind::<Text, _>("stream")
+                    .bind::<Text, _>("cursor-3")
+                    .get_result::<SequenceRow>(&mut *conn)
+                    .await?
+                    .sequence,
+                3
+            );
+            assert!(
+                sql_query(HISTORY_RESPONSE_PENDING_PREFIX_SQL)
+                    .bind::<Text, _>("stream")
+                    .bind::<BigInt, _>(3_i64)
+                    .get_result::<SequenceRow>(&mut *conn)
+                    .await
+                    .optional()?
+                    .is_none()
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
 }
 
 fn authorize_response_stream_row(
@@ -497,10 +716,15 @@ fn reservation(row: &ResponseRow) -> PersistenceResult<HistoryResponseReservatio
                 row.source_record_digest.clone(),
                 "source record digest",
             )?,
-            source_record: decode::<HistoryKeyResponseSendRequest>(
+            source_record: decode::<HistoryKeyResponseSendRequestBody>(
                 row.source_record_json.clone(),
                 "source record",
             )?,
+            source_signer_result: decode(
+                row.source_signer_result_json.clone(),
+                "source signer result",
+            )?,
+            cipher_suite: row.cipher_suite.clone(),
             manifest_admission,
             release_attestation: row
                 .release_attestation_json
@@ -585,7 +809,7 @@ async fn response_by(
 ) -> PersistenceResult<Option<ResponseRow>> {
     let lock = if lock { " FOR UPDATE" } else { "" };
     sql_query(format!(
-        "SELECT response_id,request_id,source_record_digest,source_record_json, \
+        "SELECT response_id,request_id,source_record_digest,source_record_json,source_signer_result_json,cipher_suite, \
          manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at, \
          state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes \
          FROM history_key_responses WHERE response_id=$1{lock}"
@@ -1013,12 +1237,14 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             let manifest_digest=input.manifest_admission.as_ref().map(|admission|admission.manifest_digest.as_str());
             let manifest_admission_digest=input.manifest_admission.as_ref().map(|admission|admission.manifest_admission_digest.as_str());
             let release = input.release_attestation.as_ref().map(encode).transpose()?;
-            sql_query("INSERT INTO history_key_responses (response_id,request_id,source_sender_domain,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,sent_at,reserved_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
+            sql_query("INSERT INTO history_key_responses (response_id,request_id,source_sender_domain,source_record_digest,source_record_json,source_signer_result_json,cipher_suite,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,sent_at,reserved_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)")
                 .bind::<Text,_>(input.source_record.response_id.as_str())
                 .bind::<Text,_>(request.write.request.request_id.as_str())
                 .bind::<Text,_>(&input.source_record.source_sender_domain)
                 .bind::<Text,_>(input.source_record_digest.as_str())
                 .bind::<Jsonb,_>(&encode(&input.source_record)?)
+                .bind::<Jsonb,_>(&encode(&input.source_signer_result)?)
+                .bind::<Text,_>(&input.cipher_suite)
                 .bind::<Nullable<Jsonb>,_>(manifest.as_ref())
                 .bind::<Nullable<Text>,_>(manifest_digest)
                 .bind::<Nullable<Text>,_>(manifest_admission_digest)
@@ -1052,9 +1278,10 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         )?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            let row = response_by(conn, write.record.source_record.response_id.as_str(), true).await?
-                .ok_or_else(|| PersistenceError::NotFound("response reservation unavailable".to_owned()))?;
-            let request_id = row.request_id.clone();
+            let request_id = sql_query("SELECT request_id AS value FROM history_key_responses WHERE response_id=$1")
+                .bind::<Text,_>(write.record.source_record.response_id.as_str())
+                .get_result::<TextValueRow>(&mut *conn).await.optional()?
+                .ok_or_else(|| PersistenceError::NotFound("response reservation unavailable".to_owned()))?.value;
             let authority=sql_query("SELECT r.requester_actor_id,r.release_id FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1")
                 .bind::<Text,_>(&request_id)
                 .get_result::<CompactReceiptAuthorityRow>(&mut *conn).await.optional()?
@@ -1073,6 +1300,12 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                 .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
             if stream_guard.release_id != authority.release_id {
                 return Err(PersistenceError::Internal("history response stream authority changed".to_owned()).into());
+            }
+            // ACK and loss transitions also lock the stream before its responses.
+            let row = response_by(conn, write.record.source_record.response_id.as_str(), true).await?
+                .ok_or_else(|| PersistenceError::NotFound("response reservation unavailable".to_owned()))?;
+            if row.request_id != request_id {
+                return Err(PersistenceError::Internal("history response stream binding changed".to_owned()).into());
             }
             let request = request_by(conn, "request_id", &request_id)
                 .await?.ok_or_else(||PersistenceError::NotFound("history response request is unavailable".to_owned()))?;
@@ -1095,6 +1328,15 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                 } else { Err(PersistenceError::Conflict("duplicate_conflict: completed response differs".to_owned()).into()) };
             }
             let reserved=reservation(&row)?;
+            soland_storage::validate_history_singleton_page(
+                HistoryResponsePageEntry::Record { record: Box::new(write.record.clone()) },
+                vec![reserved.input.source_signer_result.clone()],
+                Some(reserved.input.cipher_suite.clone()),
+            )?;
+            let bytes = bytes.checked_add(i64::try_from(arkret_canonical::canonical_json_bytes(&reserved.input.source_signer_result)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?.len())
+                .map_err(|_| PersistenceError::Internal("history signer result size overflow".to_owned()))?)
+                .ok_or_else(|| PersistenceError::Internal("history record charge overflow".to_owned()))?;
             if reserved.sequence!=write.record.sequence || reserved.input.source_record!=write.record.source_record
                 || reserved.input.sent_at!=write.record.sent_at || reserved.input.manifest_admission!=write.record.manifest_admission
                 || reserved.input.release_attestation!=write.record.release_attestation
@@ -1175,7 +1417,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let source_record: HistoryKeyResponseSendRequest =
+        let source_record: HistoryKeyResponseSendRequestBody =
             decode(row.source_record_json, "accepted manifest source record")?;
         let manifest_admission: HistoryManifestAdmission = decode(
             row.manifest_admission_json.ok_or_else(|| {
@@ -1270,31 +1512,96 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         let auth = authorize_response_stream_row(auth, response_capability_commitment, now)?;
         let stream = auth.request_id.as_str();
         let after_sequence = if let Some(cursor) = after {
-            sql_query(
-                "SELECT sequence FROM history_key_responses WHERE request_id=$1 AND cursor=$2",
-            )
-            .bind::<Text, _>(stream)
-            .bind::<Text, _>(cursor)
-            .get_result::<SequenceRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .ok_or_else(|| {
-                PersistenceError::NotFound("history stream cursor unavailable".to_owned())
-            })?
-            .sequence
+            sql_query(HISTORY_RESPONSE_CURSOR_SQL)
+                .bind::<Text, _>(stream)
+                .bind::<Text, _>(cursor)
+                .get_result::<SequenceRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?
+                .ok_or_else(|| {
+                    PersistenceError::NotFound("history stream cursor unavailable".to_owned())
+                })?
+                .sequence
         } else {
             -1
         };
-        let rows=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence>$2 AND state IN ('accepted','lost') ORDER BY sequence LIMIT $3")
-            .bind::<Text,_>(stream).bind::<BigInt,_>(after_sequence).bind::<BigInt,_>(i64::try_from(limit+1).unwrap_or(101))
-            .load::<ResponseRow>(&mut *conn).await.map_err(PersistenceError::database)?;
-        let mut entries = rows
-            .iter()
-            .map(page_entry)
+        // Select using the exact durable byte charge before loading payloads.
+        // The lookahead carries metadata only; a response's source ciphertext
+        // is not loaded again alongside its complete record.
+        let rows = sql_query(HISTORY_RESPONSE_PAGE_SQL)
+            .bind::<Text, _>(stream)
+            .bind::<BigInt, _>(after_sequence)
+            .bind::<BigInt, _>(i64::try_from(limit + 1).unwrap_or(101))
+            .bind::<BigInt, _>(soland_storage::HISTORY_RESPONSE_RECORD_BYTES_LIMIT as i64)
+            .load::<ResponsePageRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        let mut signer_results = std::collections::BTreeMap::new();
+        let mut cipher_suite = None;
+        for row in &rows {
+            if row.state != "accepted" {
+                continue;
+            }
+            let result: arkret_models_collaboration::history_key::HistorySourceSignerResult =
+                decode(
+                    row.source_signer_result_json.clone().ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "accepted history result missing signer".to_owned(),
+                        )
+                    })?,
+                    "source signer result",
+                )?;
+            let suite = row.cipher_suite.clone().ok_or_else(|| {
+                PersistenceError::Internal("accepted history result missing suite".to_owned())
+            })?;
+            if cipher_suite
+                .as_ref()
+                .is_some_and(|previous| previous != &suite)
+            {
+                return Err(PersistenceError::Internal(
+                    "history response stream changed suite".to_owned(),
+                ));
+            }
+            cipher_suite = Some(suite);
+            let key = result.evidence_ref().as_ref().to_owned();
+            if signer_results
+                .get(&key)
+                .is_some_and(|previous| previous != &result)
+            {
+                return Err(PersistenceError::Internal(
+                    "history signer result changed for one ref".to_owned(),
+                ));
+            }
+            signer_results.insert(key, result);
+        }
+        let limited = rows.last().is_some_and(|row| row.has_more);
+        let entries = rows
+            .into_iter()
+            .map(|row| match row.state.as_str() {
+                "accepted" => Ok(HistoryResponsePageEntry::Record {
+                    record: decode(
+                        row.record_json.ok_or_else(|| {
+                            PersistenceError::Internal(
+                                "accepted response lost record bytes".to_owned(),
+                            )
+                        })?,
+                        "response record",
+                    )?,
+                }),
+                "lost" => Ok(HistoryResponsePageEntry::Lost {
+                    lost_record: decode(
+                        row.lost_record_json.ok_or_else(|| {
+                            PersistenceError::Internal("lost response lacks descriptor".to_owned())
+                        })?,
+                        "lost descriptor",
+                    )?,
+                }),
+                _ => Err(PersistenceError::Internal(
+                    "response page state changed within one query".to_owned(),
+                )),
+            })
             .collect::<PersistenceResult<Vec<_>>>()?;
-        let limited = entries.len() > limit;
-        entries.truncate(limit);
         let high_water_sequence = entries.last().map(HistoryResponsePageEntry::sequence);
         let cursor = limited.then(|| match entries.last().expect("limited page") {
             HistoryResponsePageEntry::Record { record } => record.cursor.clone(),
@@ -1303,6 +1610,8 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         let _ = auth.acked_sequence;
         Ok(HistoryResponseReadPage {
             entries,
+            source_signer_results: signer_results.into_values().collect(),
+            cipher_suite,
             cursor,
             limited,
             high_water_sequence,
@@ -1341,6 +1650,17 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             if auth.release_id.as_str() != write.claims.release_id.as_str() {
                 return Err(PersistenceError::SchemaViolation("ack token release service mismatch".to_owned()).into());
             }
+            // Reservation and completion also acquire this stream row lock. A
+            // token may never acknowledge a prefix containing an unfinished slot.
+            if sql_query(HISTORY_RESPONSE_PENDING_PREFIX_SQL)
+                .bind::<Text, _>(auth.request_id.as_str())
+                .bind::<BigInt, _>(as_i64(high_water_sequence, "ack high water")?)
+                .get_result::<SequenceRow>(&mut *conn).await.optional()?.is_some()
+            {
+                return Err(PersistenceError::Conflict(
+                    "failed_precondition: ack token crosses a pending response".to_owned(),
+                ).into());
+            }
             if let Some(stored)=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_response_ack_tokens WHERE ack_token=$1 AND request_id=$2")
                 .bind::<Text,_>(&write.ack_token).bind::<Text,_>(write.claims.request_id.as_str())
                 .get_result::<TokenRow>(&mut *conn).await.optional()? {
@@ -1352,7 +1672,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             }
             for claim in &write.claims.ordered_ack_entries {
                 let sequence = as_i64(claim.sequence, "ack sequence")?;
-                let row = sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence=$2 AND state IN ('accepted','lost')")
+                let row = sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,source_signer_result_json,cipher_suite,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence=$2 AND state IN ('accepted','lost')")
                     .bind::<Text, _>(write.claims.request_id.as_str())
                     .bind::<BigInt, _>(sequence)
                     .get_result::<ResponseRow>(&mut *conn)
@@ -1393,7 +1713,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
     async fn ack_response_stream(
         &self,
         response_capability_commitment: &Hash,
-        request: &HistoryKeyResponseAckRequest,
+        request: &HistoryKeyResponseAckRequestBody,
         now: DateTime<Utc>,
     ) -> PersistenceResult<String> {
         request
@@ -1407,13 +1727,22 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             let mb = authorize_response_stream_row(mb, &response_capability_commitment, now)?;
             let stream = mb.request_id.clone();
             let token=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_response_ack_tokens WHERE ack_token=$1 AND request_id=$2 FOR UPDATE").bind::<Text,_>(&request.ack_token).bind::<Text,_>(&stream).get_result::<TokenRow>(&mut *conn).await.optional()?.ok_or_else(||PersistenceError::NotFound("ack token unavailable".to_owned()))?;
-            if let Some(value)=token.consumed_request_json.clone(){let prior:HistoryKeyResponseAckRequest=decode(value,"consumed ack")?;if prior==request{return Ok(request.high_water_cursor);}}
+            if let Some(value)=token.consumed_request_json.clone(){let prior:HistoryKeyResponseAckRequestBody=decode(value,"consumed ack")?;if prior==request{return Ok(request.high_water_cursor);}}
             let claims:HistoryResponseAckTokenClaims=decode(token.claims_json,"ack token claims")?;
             claims.validate().map_err(|error|PersistenceError::Internal(format!("stored ack token claims are invalid: {error}")))?;
             if token.consumed_at.is_some()||claims.token_expires_at<=now||claims.request_id.as_str()!=stream.as_str()||claims.release_id.as_str()!=mb.release_id.as_str()||claims.high_water_cursor!=request.high_water_cursor||claims.ordered_ack_entries.len()!=request.entries.len(){return Err(PersistenceError::Conflict("failed_precondition: ack token invalid".to_owned()).into());}
             let high_water_sequence=as_i64(claims.ordered_ack_entries.last().expect("validated claims").sequence,"ack high water")?;
+            if sql_query(HISTORY_RESPONSE_PENDING_PREFIX_SQL)
+                .bind::<Text, _>(&stream)
+                .bind::<BigInt, _>(high_water_sequence)
+                .get_result::<SequenceRow>(&mut *conn).await.optional()?.is_some()
+            {
+                return Err(PersistenceError::Conflict(
+                    "failed_precondition: ack crosses a pending response".to_owned(),
+                ).into());
+            }
             let mut expected_sequences=Vec::new(); for(claim,ack)in claims.ordered_ack_entries.iter().zip(&request.entries){let claim_kind=match claim.kind{arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Record=>"record",arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Lost=>"lost"}; let(ab_seq,ab_kind,ab_id,ab_digest,status)=match ack{HistoryResponseAckEntry::Record{sequence,response_id,record_digest,status}=>(sequence.to_owned(),"record",response_id.as_str(),record_digest,match status{arkret_models_collaboration::history_key::HistoryResponseRecordStatus::Installed=>"installed",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::CryptographicallyRejected=>"cryptographically_rejected",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::SupersededDuplicate=>"superseded_duplicate"}),HistoryResponseAckEntry::Lost{sequence,response_id,lost_record_digest,..}=>(sequence.to_owned(),"lost",response_id.as_str(),lost_record_digest,"service_record_lost")}; if(claim.sequence,claim_kind,claim.response_id.as_str(),claim.entry_digest.as_str())!=(ab_seq,ab_kind,ab_id,ab_digest.as_str()){return Err(PersistenceError::Conflict("duplicate_conflict: ack entry binding differs".to_owned()).into());} expected_sequences.push(as_i64(ab_seq,"ack sequence")?); sql_query("INSERT INTO history_key_response_dispositions (request_id,sequence,response_id,entry_kind,entry_digest,status,acked_at) VALUES ($1,$2,$3,$4,$5,$6,$7)").bind::<Text,_>(&stream).bind::<BigInt,_>(as_i64(ab_seq,"ack sequence")?).bind::<Text,_>(ab_id).bind::<Text,_>(ab_kind).bind::<Text,_>(ab_digest.as_str()).bind::<Text,_>(status).bind::<Timestamptz,_>(now).execute(&mut *conn).await?;}
-            let active=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence>$2 AND sequence<=$3 AND state IN ('accepted','lost') ORDER BY sequence FOR UPDATE").bind::<Text,_>(&stream).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).load::<ResponseRow>(&mut *conn).await?;
+            let active=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,source_signer_result_json,cipher_suite,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence>$2 AND sequence<=$3 AND state IN ('accepted','lost') ORDER BY sequence FOR UPDATE").bind::<Text,_>(&stream).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).load::<ResponseRow>(&mut *conn).await?;
             if active.iter().map(|row|row.sequence).collect::<Vec<_>>()!=expected_sequences{return Err(PersistenceError::Conflict("failed_precondition: ack crosses undisposed response".to_owned()).into());} let released: i64=active.iter().map(|row|row.active_bytes).sum();
             sql_query("UPDATE history_key_responses SET state='acked',record_json=NULL,lost_record_json=NULL,active_bytes=0,acked_at=$2 WHERE request_id=$1 AND sequence>$3 AND sequence<=$4 AND state IN ('accepted','lost')").bind::<Text,_>(&stream).bind::<Timestamptz,_>(now).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).execute(&mut *conn).await?;
             sql_query("UPDATE history_key_response_streams SET acked_sequence=$2,acked_cursor=$3,active_bytes=active_bytes-$4 WHERE request_id=$1").bind::<Text,_>(&stream).bind::<BigInt,_>(high_water_sequence).bind::<Text,_>(&request.high_water_cursor).bind::<BigInt,_>(released).execute(&mut *conn).await?;

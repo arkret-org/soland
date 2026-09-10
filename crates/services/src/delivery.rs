@@ -198,6 +198,7 @@ pub trait DeviceMessagePort: Send + Sync {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
+        limit: usize,
     ) -> ServiceResult<Vec<DeviceMessageState>>;
     async fn prune(&self, per_device_capacity: usize, now: DateTime<Utc>) -> ServiceResult<()>;
     async fn lost_watermark(&self, recipient: &str, device_id: &str) -> ServiceResult<Option<i64>>;
@@ -408,9 +409,10 @@ impl DeliveryService {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
+        limit: usize,
     ) -> ServiceResult<Vec<DeviceMessageState>> {
         self.device_messages
-            .messages_after(recipient, device_id, queue_position)
+            .messages_after(recipient, device_id, queue_position, limit)
             .await
     }
 
@@ -692,6 +694,7 @@ mod tests {
             _recipient: &str,
             _device_id: &str,
             _queue_position: i64,
+            limit: usize,
         ) -> ServiceResult<Vec<DeviceMessageState>> {
             Ok(Vec::new())
         }

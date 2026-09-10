@@ -692,6 +692,28 @@ pub trait MlsKeyPackageStore: Send + Sync {
 pub trait MlsWelcomeStore: Send + Sync {
     async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
+    async fn discover(
+        &self,
+        query: &MlsWelcomeDiscoveryQuery,
+    ) -> PersistenceResult<MlsWelcomeDiscoveryPage>;
+}
+
+#[derive(Clone, Debug)]
+pub struct MlsWelcomeDiscoveryQuery {
+    pub scope: Value,
+    pub group_id: String,
+    pub endpoint: Value,
+    pub authority_context: Value,
+    pub authorization_ref: String,
+    pub membership_cells: Vec<String>,
+    pub limit: u32,
+    pub cursor: Option<String>,
+    pub now: chrono::DateTime<chrono::Utc>,
+}
+#[derive(Clone, Debug)]
+pub struct MlsWelcomeDiscoveryPage {
+    pub welcome_refs: Vec<String>,
+    pub next_cursor: Option<String>,
 }
 /// G3.S1 — per-group MLS commit epoch store.
 pub struct MlsCommitEpochAdvance<'a> {
@@ -715,6 +737,12 @@ pub struct MlsCommitGenesis<'a> {
 
 #[async_trait]
 pub trait MlsCommitStore: Send + Sync {
+    /// Exact accepted public Genesis candidate, not a current membership result.
+    async fn public_genesis_candidate(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<crate::MlsPublicGenesisRecord>>;
+
     async fn get(
         &self,
         effective_scope: &Value,

@@ -5,7 +5,7 @@ use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateReadCursorUpdate, DeviceMessageSender,
 };
 use serde_json::Value;
-use soland_services::identity::{AccountDataCasOutcome, AccountDataState};
+use soland_services::identity::AccountDataState;
 use soland_services::operation_semantics as kinds;
 
 use crate::routing::identity::device_messages::fanout_actor_private_update;
@@ -208,24 +208,19 @@ pub(super) async fn project_account_data_set(
         tombstone,
         updated_at: operation.created_at,
     };
-    let applied = match state
-        .account_data()
-        .compare_and_set(record.clone(), expected_revision)
-        .await
-    {
-        Ok(AccountDataCasOutcome::Applied(applied)) => applied,
-        Ok(AccountDataCasOutcome::Conflict(current)) => {
-            tracing::warn!(
-                owner,
-                account_data_key,
-                expected_revision,
-                current_revision = current.as_ref().map_or(0, |value| value.revision),
-                "rejected stale account_data Event projection"
-            );
-            return;
+    // The Event commit already applied CAS and published its exact current
+    // source. This asynchronous projection only fans out that committed value.
+    let applied = match state.account_data().entry(&owner, account_data_key).await {
+        Ok(Some(applied))
+            if applied.revision == revision
+                && applied.payload == record.payload
+                && applied.tombstone == tombstone =>
+        {
+            applied
         }
+        Ok(_) => return,
         Err(error) => {
-            tracing::warn!(%error, owner, account_data_key, "failed to project account_data from event");
+            tracing::warn!(%error, "committed account data unavailable for fanout");
             return;
         }
     };
@@ -317,20 +312,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn account_data_projection_uses_the_exact_local_actor_cas_key() {
+    async fn asynchronous_account_data_projection_cannot_accept_or_replace_cas() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap();
         let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap(),
             state.service_core_id(),
-        ));
-        let actor_key = actor.to_string();
-        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal.clone(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         ));
         let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
@@ -338,68 +327,23 @@ mod tests {
             arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                 .unwrap(),
             arkret_wire::EventKind::AccountDataSet.as_str(),
-            json!({"key": "ak.dnd_schedule", "expected_revision": 0, "body": {"opaque": "first"}}),
+            json!({"key":"ak.dnd_schedule","expected_revision":0,"body":{"value":"uncommitted"}}),
         );
         operation.context.sender = actor.clone();
-        project_account_data_set(&state, principal.as_str(), "", &operation).await;
-        let first = state
-            .account_data()
-            .entry(&actor_key, "ak.dnd_schedule")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(first.revision, 1);
+        project_account_data_set(
+            &state,
+            actor.signing_principal_id().as_str(),
+            "",
+            &operation,
+        )
+        .await;
         assert!(
             state
                 .account_data()
-                .entry(principal.as_str(), "ak.dnd_schedule")
+                .entry(&actor.to_string(), "ak.dnd_schedule")
                 .await
                 .unwrap()
                 .is_none()
-        );
-
-        operation.payload["expected_revision"] = json!(1);
-        operation.payload["body"] = json!({"opaque": "foreign"});
-        operation.context.sender = foreign.clone();
-        project_account_data_set(&state, principal.as_str(), "", &operation).await;
-        assert!(
-            state
-                .account_data()
-                .entry(&foreign.to_string(), "ak.dnd_schedule")
-                .await
-                .unwrap()
-                .is_none()
-        );
-        operation.context.sender = actor;
-        operation.payload["body"] = json!({"opaque": "second"});
-        project_account_data_set(&state, principal.as_str(), "", &operation).await;
-        let second = state
-            .account_data()
-            .entry(&actor_key, "ak.dnd_schedule")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(second.revision, 2);
-        operation.payload["body"] = json!({"opaque": "stale"});
-        project_account_data_set(&state, principal.as_str(), "", &operation).await;
-        assert_eq!(
-            state
-                .account_data()
-                .entry(&actor_key, "ak.dnd_schedule")
-                .await
-                .unwrap()
-                .unwrap()
-                .payload,
-            second.payload
-        );
-        assert_eq!(
-            state
-                .account_data()
-                .entries_for_actor(&actor_key)
-                .await
-                .unwrap()
-                .len(),
-            1
         );
     }
 }

@@ -241,6 +241,7 @@ async fn reset(connection: &mut AsyncPgConnection) {
     let plan = reset_plan(connection).await;
     let dirty = non_empty_tables(connection, &plan.probe).await;
     if dirty.is_empty() {
+        restore_sync_singletons(connection).await;
         return;
     }
     // A dirty table whose triggers reject `DELETE` forces the whole reset onto
@@ -282,6 +283,15 @@ async fn reset(connection: &mut AsyncPgConnection) {
             .await;
         }
     }
+    restore_sync_singletons(connection).await;
+}
+
+async fn restore_sync_singletons(connection: &mut AsyncPgConnection) {
+    // Reset mutable counters rather than preserving a previous test's cuts.
+    // These empty-state roots are inserted by the production initial migration.
+    execute(connection, "DO $sync_roots$ BEGIN INSERT INTO account_summary_clock(singleton,revision) VALUES(TRUE,0) ON CONFLICT DO NOTHING;
+        INSERT INTO account_global_clock(singleton,revision) VALUES(TRUE,0) ON CONFLICT DO NOTHING;
+        INSERT INTO account_sync_retention(singleton,summary_floor,global_floor) VALUES(TRUE,0,0) ON CONFLICT DO NOTHING; END $sync_roots$").await;
 }
 
 /// The runtime that owns every lock connection for the life of the process.

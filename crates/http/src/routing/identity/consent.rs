@@ -1899,7 +1899,7 @@ mod tests {
 
         let queued = state
             .deliveries()
-            .device_messages_after(HOLDER, device_id, 0)
+            .device_messages_after(HOLDER, device_id, 0, 101)
             .await
             .expect("holder to-device queue");
         assert_eq!(queued.len(), 1);

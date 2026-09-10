@@ -1565,6 +1565,7 @@ async fn validate_reanchor_recovery_session(
         || session.principal_id != reanchor.account_id.principal_id
         || session.station_id != reanchor.account_id.station_id
         || session.requesting_device_id != authorize.device_id.as_str()
+        || session.requesting_device_public_key_did != authorize.device_public_key_did.as_str()
         || session.policy_id != reanchor.recovery_policy_id.as_str()
         || u64::from(session.policy_version) != reanchor.recovery_policy_version
         || session.current_device_generation_ref != reanchor.previous_device_generation

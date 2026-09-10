@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
-    PeerGovernanceDependencyResolveRequest,
+    PeerGovernanceDependencyResolveRequestBody,
     governance_runtime_dependency_selector_coordinates_for_acquisition,
 };
 use arkret_models_collaboration::history_key::{
@@ -390,7 +390,7 @@ impl RhrkAcquisitionWorker {
             if dependencies.len() + missing.len() > 1_024 {
                 return Err("governance_dependency_limit".to_owned());
             }
-            let request = PeerGovernanceDependencyResolveRequest {
+            let request = PeerGovernanceDependencyResolveRequestBody {
                 realm_id: realm_id.clone(),
                 selectors: missing,
                 byte_limit: MAX_RESPONSE_BYTES as u64,
@@ -513,7 +513,7 @@ struct VerifiedClosure {
 pub(crate) async fn fetch_peer_governance_dependencies(
     state: &AppState,
     source_id: &arkret_wire::DidCoreId,
-    request: &PeerGovernanceDependencyResolveRequest,
+    request: &PeerGovernanceDependencyResolveRequestBody,
 ) -> Result<GovernanceDependencyResolveOutcome, String> {
     let route = super::resolved_peer_target(state, source_id.as_str(), "station", false)
         .await

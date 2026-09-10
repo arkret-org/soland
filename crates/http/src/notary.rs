@@ -1256,7 +1256,7 @@ impl NotaryWorker {
     pub(crate) async fn prepare_pcr_seal_body(
         &self,
         state: &AppState,
-        request: &arkret_models_collaboration::governance_dependencies::SealPrepareRequest,
+        request: &arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody,
         events: Vec<(Hash, Event)>,
         sealed_at: chrono::DateTime<chrono::Utc>,
         availability_receipt_digests: Vec<Hash>,

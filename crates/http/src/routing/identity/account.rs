@@ -171,6 +171,7 @@ pub(crate) async fn local_account_primary_handle_claim(
 use crate::{JsonResult, json_ok};
 
 mod social;
+mod current_principal;
 pub(crate) use social::direct::{
     validate_direct_message_bootstrap, validate_direct_message_participant,
 };
@@ -201,6 +202,7 @@ pub(super) fn protocol_router() -> Router {
         .push(
             Router::with_path("account")
                 .push(Router::with_path("viewer").get(account_viewer))
+                .push(Router::with_path("current-principal").post(current_principal::resolve))
                 // spec `events_sync` surface group (core tier) binds
                 // `ak.self.account.command.update_profile.v1` to POST /_arkret/self/account/profile;
                 // describe advertises it, so it MUST resolve on the protocol surface.

@@ -1399,13 +1399,15 @@ async fn run_account_channel(
         .wait_for
         .as_ref()
         .map(|cursor| cursor.as_str().to_owned());
-    let body = SyncRequestBody {
+    let mut body = SyncRequestBody {
         after: parameters
             .after
             .as_ref()
             .map(|cursor| cursor.as_str().to_owned()),
         catchup: parameters.catchup,
-        filter: parameters.filter.map(websocket_account_filter),
+        filter: parameters.filter,
+        realm_list: parameters.realm_list,
+        replace_filter: parameters.replace_filter,
     };
     let filter_value = sync_filter_value(body.filter.as_ref());
     let mut notifications = state.subscribe_event_notifications();
@@ -1442,12 +1444,13 @@ async fn run_account_channel(
     }
     let mut cursor = match body.after.as_deref() {
         Some(after) => {
-            match parse_and_validate_sync_cursor(
+            match cursor::parse_account_cursor(
                 after,
                 &state,
                 Some(&session),
                 filter_value.as_ref(),
                 chrono::Utc::now().timestamp_millis(),
+                body.replace_filter == Some(true),
             )
             .await
             {
@@ -1471,6 +1474,15 @@ async fn run_account_channel(
     };
     loop {
         let snapshot = build_sync_snapshot(&state, Some(&session), &body, &cursor).await;
+        if snapshot.cursor.is_none() {
+            let payload = WebSocketChannelControlPayload::Account(Box::new(snapshot));
+            emit(
+                &sender,
+                WebSocketServerFrame::channel_control(channel_id.clone(), &payload),
+            )
+            .await;
+            return WebSocketClosedReason::Error;
+        }
         if delta_is_empty(&snapshot) {
             let payload = WebSocketChannelControlPayload::Account(Box::new(
                 account_frontier_frame(snapshot.cursor.clone()),
@@ -1517,6 +1529,9 @@ async fn run_account_channel(
                 .await
             {
                 cursor = parsed;
+                body.after = Some(next.to_owned());
+                body.realm_list = None;
+                body.replace_filter = None;
             }
         }
 
@@ -1539,20 +1554,6 @@ async fn run_account_channel(
             }
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(WS_ACCOUNT_DEBOUNCE_MS)).await;
-    }
-}
-
-fn websocket_account_filter(
-    filter: arkret_models_collaboration::sync_frames::websocket_binding::WebSocketAccountFilter,
-) -> arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
-    arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
-        realm_ids: filter.realm_ids.unwrap_or_default(),
-        timeline_limit: filter.timeline_limit,
-        lazy_load_members: filter.lazy_load_members.unwrap_or(false),
-        include_redundant_members: filter.include_redundant_members.unwrap_or(false),
-        event_types: filter.event_kinds.unwrap_or_default(),
-        not_event_types: filter.not_event_kinds.unwrap_or_default(),
-        extra: BTreeMap::new(),
     }
 }
 
@@ -2175,30 +2176,6 @@ mod tests {
     }
 
     #[test]
-    fn account_filter_maps_every_websocket_selector_to_http_semantics() {
-        let realm =
-            RealmId::new("ak:realm:AQVZRUJrSSC16EodjmqL6mBFC9TGwv6oxx-sQlJzlvxS".to_owned())
-                .expect("realm id");
-        let filter = websocket_account_filter(
-            arkret_models_collaboration::sync_frames::websocket_binding::WebSocketAccountFilter {
-                realm_ids: Some(vec![realm.clone()]),
-                timeline_limit: Some(42),
-                lazy_load_members: Some(true),
-                include_redundant_members: Some(true),
-                event_kinds: Some(vec!["ak.message.create".to_owned()]),
-                not_event_kinds: Some(vec!["ak.message.redact".to_owned()]),
-            },
-        );
-        assert_eq!(filter.realm_ids, vec![realm]);
-        assert_eq!(filter.timeline_limit, Some(42));
-        assert!(filter.lazy_load_members);
-        assert!(filter.include_redundant_members);
-        assert_eq!(filter.event_types, ["ak.message.create"]);
-        assert_eq!(filter.not_event_types, ["ak.message.redact"]);
-        assert!(filter.extra.is_empty());
-    }
-
-    #[test]
     fn actor_device_connection_count_is_bounded_and_released() {
         let session = SessionIdentityState {
             account_pk: None,
@@ -2277,6 +2254,10 @@ fn account_resync_required_frame()
         AccountSubscribeFrame, AccountSubscribeFrameKind,
     };
     AccountSubscribeFrame {
+        realm_list: None,
+        realm_list_changes: None,
+        realm_invalidations: None,
+        baseline: None,
         kind: AccountSubscribeFrameKind::ResyncRequired,
         cursor: None,
         realms: None,
@@ -2284,7 +2265,6 @@ fn account_resync_required_frame()
         device_lists: None,
         account_data: None,
         notifications: None,
-        agent_signer_evidence_bundle: None,
         partial: None,
         priority: None,
         reconnect_after_ms: Some(SUBSCRIBE_RECONNECT_AFTER_MS),

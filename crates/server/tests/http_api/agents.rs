@@ -1133,7 +1133,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         })
         .collect::<std::collections::BTreeSet<_>>();
     let availability_request =
-        arkret_models_collaboration::governance_dependencies::SealPrepareRequest {
+        arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody {
             realm_id: controller_realm_id.clone(),
             predecessor_refs: vec![predecessor.id.clone()],
             event_digests: target.difference(&predecessor_covered).cloned().collect(),
@@ -1154,7 +1154,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .take();
     assert!(projected_owner.is_some());
     let pending_request =
-        arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest {
+        arkret_models_collaboration::governance_dependencies::PcrPendingControlRequestBody {
             realm_id: controller_realm_id.clone(),
             predecessor_refs: availability_request.predecessor_refs.clone(),
             limit: 1024,
@@ -1338,7 +1338,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         "{controller_seal_response_body}; controller Events: {controller_event_inventory:?}"
     );
     let settled_request =
-        arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest {
+        arkret_models_collaboration::governance_dependencies::PcrPendingControlRequestBody {
             predecessor_refs: vec![controller_seal.id.clone()],
             ..pending_request
         };

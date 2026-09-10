@@ -2639,7 +2639,7 @@ mod invite_locator_security_tests {
         for device_id in [PRODUCTION_DEVICE_A, PRODUCTION_DEVICE_B] {
             let queued = state
                 .deliveries()
-                .device_messages_after(PRODUCTION_HOLDER, device_id, 0)
+                .device_messages_after(PRODUCTION_HOLDER, device_id, 0, 101)
                 .await
                 .expect("holder to-device queue");
             assert_eq!(

@@ -1,4 +1,32 @@
 use super::{CursorRevocation, PersistenceResult, Utc, Value, async_trait};
+/// Private durable account summary read position; never a wire cursor.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AccountSummaryKey {
+    pub activity_position: i64,
+    pub realm_id: String,
+    pub revision: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountSummaryVersion {
+    pub key: AccountSummaryKey,
+    pub membership: Option<String>,
+    pub title: Option<String>,
+    pub default_strand_id: Option<String>,
+    pub valid_until: Option<i64>,
+    pub current_membership: Option<String>,
+    pub current_available: bool,
+    pub invalidated: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountGlobalVersion {
+    pub item_key: String,
+    pub revision: i64,
+    pub deleted: bool,
+    pub payload: Value,
+}
+
 /// Stateful sync-cursor handle binding (`cursor.schema.json` `h`).
 ///
 /// One row per distinct cursor content: the handle is an HMAC digest of the
@@ -25,28 +53,52 @@ pub struct SyncCursorRecord {
 }
 /// Durable handle table behind the stateful sync cursor.
 ///
-/// `upsert` keeps the FIRST `issued_at_ms` on conflict (refreshing only the
-/// expiry): `issued_at_ms` is used for forward-progress pruning of older
-/// handles. Account subscribe freshness is represented by `positions.realms`
-/// plus `positions.account_realms`, so a projection-only delta must advance
-/// the relevant position instead of relying on a refreshed issue timestamp.
+/// Reminted handles retain their original identity and extend retention only.
+/// Presenting another cursor never revokes older immutable retry authorities.
 #[async_trait]
 pub trait SyncCursorStore: Send + Sync {
+    async fn current_detail_page(
+        &self,
+        request: &super::CurrentDetailRequest,
+        progress: Option<&super::CurrentDetailProgress>,
+        byte_budget: usize,
+        registry: &dyn arkret_state::state::CellRegistry,
+    ) -> PersistenceResult<super::CurrentDetailOutcome>;
+    async fn account_summary_has_join(
+        &self,
+        actor_key: &str,
+        realm_id: &str,
+    ) -> PersistenceResult<bool>;
+    async fn account_sync_watermarks(&self) -> PersistenceResult<(i64, i64)>;
+    async fn account_global_watermark(&self) -> PersistenceResult<i64>;
+    async fn account_global_page(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+        after_key: &str,
+        after_revision: Option<i64>,
+        limit: usize,
+    ) -> PersistenceResult<Vec<AccountGlobalVersion>>;
+    async fn account_summary_watermark(&self) -> PersistenceResult<i64>;
+    async fn account_summary_page(
+        &self,
+        actor_key: &str,
+        watermark: i64,
+        after: Option<&AccountSummaryKey>,
+        limit: usize,
+    ) -> PersistenceResult<Vec<AccountSummaryVersion>>;
+    async fn account_summary_changes(
+        &self,
+        actor_key: &str,
+        after_revision: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<AccountSummaryVersion>>;
     async fn get(&self, handle: &str) -> PersistenceResult<Option<SyncCursorRecord>>;
     async fn upsert(&self, record: &SyncCursorRecord) -> PersistenceResult<()>;
     /// Delete one handle (cursor revoke).
     async fn delete(&self, handle: &str) -> PersistenceResult<bool>;
-    /// Forward-progress cleanup: delete this stream's rows STRICTLY older
-    /// than the cursor the client just presented (presenting a cursor proves
-    /// everything older was persisted client-side). Never deletes the
-    /// presented row itself or anything newer.
-    async fn prune_stream_superseded(
-        &self,
-        binding_subject: &str,
-        device_id: &str,
-        filter_digest: &str,
-        presented_issued_at_ms: i64,
-    ) -> PersistenceResult<usize>;
+
     /// TTL sweep: drop every row whose `expires_at_ms` is at or before `now_ms`.
     async fn prune_expired(&self, now_ms: i64) -> PersistenceResult<usize>;
     /// Append a cursor-authority revocation (`ak.self.account.command.revoke_cursor.v1`)

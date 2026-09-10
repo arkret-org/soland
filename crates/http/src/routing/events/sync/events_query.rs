@@ -1027,6 +1027,8 @@ async fn events_query_impl(
                     after: None,
                     catchup: Some(true),
                     filter: None,
+                    realm_list: None,
+                    replace_filter: None,
                 },
                 &SyncCursor::default(),
             )

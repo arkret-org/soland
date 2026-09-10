@@ -278,6 +278,8 @@ struct RecoverySessionRow {
     #[diesel(sql_type = Text)]
     requesting_device_id: String,
     #[diesel(sql_type = Text)]
+    requesting_device_public_key_did: String,
+    #[diesel(sql_type = Text)]
     trust_domain: String,
     #[diesel(sql_type = sql_types::Uuid)]
     policy_id: Uuid,
@@ -396,6 +398,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             principal_id: row.principal_id,
             station_id: row.station_id,
             requesting_device_id: row.requesting_device_id,
+            requesting_device_public_key_did: row.requesting_device_public_key_did,
             trust_domain: row.trust_domain,
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             policy_version,
@@ -419,7 +422,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
         })
     }
 }
-const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, \
+const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, \
      trust_domain, policy_id, policy_version, identity_model, \
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
      policy_payload, publication_authority_context, publication_authority_context_digest, \
@@ -510,12 +513,12 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         };
         sql_query(
             "INSERT INTO recovery_sessions \
-             (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, trust_domain, policy_id, \
+             (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
               device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
               publication_authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -527,6 +530,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Text, _>(&record.principal_id)
         .bind::<Text, _>(&record.station_id)
         .bind::<Text, _>(&record.requesting_device_id)
+        .bind::<Text, _>(&record.requesting_device_public_key_did)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)

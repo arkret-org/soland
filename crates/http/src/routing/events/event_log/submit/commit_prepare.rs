@@ -129,7 +129,72 @@ pub(super) async fn prepare_accepted_event_command(
             })
         })
         .transpose()?;
+    let is_public_group =
+        envelope.pointer("/scope_ref/kind").and_then(Value::as_str) != Some("sidecar");
+    let mls_public_genesis = if is_public_group && parsed.kind == "ak.mls.genesis" {
+        let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+            serde_json::from_value(envelope.get("payload").cloned().unwrap_or(Value::Null))
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "schema_violation",
+                        error.to_string(),
+                    )
+                })?;
+        let limit = arkret_models_collaboration::mls_group_state_material::MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES as usize;
+        let group_info_bytes = crate::routing::governance_history::load_mls_public_blob(
+            state,
+            payload.group_info_ref.as_str(),
+            limit,
+        )
+        .await
+        .map_err(|error| SubmitOneError::Rejected {
+            error: Box::new(error),
+            details: None,
+        })?;
+        let ratchet_tree_bytes = crate::routing::governance_history::load_mls_public_blob(
+            state,
+            payload.ratchet_tree_ref.as_str(),
+            limit - group_info_bytes.len(),
+        )
+        .await
+        .map_err(|error| SubmitOneError::Rejected {
+            error: Box::new(error),
+            details: None,
+        })?;
+        Some(soland_storage::MlsPublicGenesisInput {
+            group_info_bytes,
+            ratchet_tree_bytes,
+            producer_signing_key: parsed.producer_signing_key.clone().ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    "MLS Genesis requires an exact verified producer key",
+                )
+            })?,
+            producer_device_id: parsed.device_id.clone(),
+        })
+    } else {
+        None
+    };
+    let mls_public_producer =
+        if is_public_group && matches!(parsed.kind.as_str(), "ak.mls.proposal" | "ak.mls.commit") {
+            Some(soland_storage::MlsPublicHandshakeProducer {
+                signing_key: parsed.producer_signing_key.clone().ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        "MLS public handshake requires a verified producer key",
+                    )
+                })?,
+                device_id: parsed.device_id.clone(),
+            })
+        } else {
+            None
+        };
     let command = soland_services::events::CommitAcceptedEventCommand {
+        mls_public_producer,
+        mls_public_genesis,
         mls_frontier_leaves: mls_frontier_leaves.map(<[_]>::to_vec),
         replicated: internal_admission.is_some_and(InternalEventAdmission::is_peer_replication),
         membership_compensation_evidence,

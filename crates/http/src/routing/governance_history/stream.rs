@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) async fn accepted_history_response_retry(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
 ) -> Result<Option<HistoryKeyResponseSendReceipt>, AppError> {
     match state
@@ -43,13 +43,13 @@ pub(super) async fn accepted_history_response_retry(
     }
 }
 
-fn history_response_relay_outbox_id(response: &HistoryKeyResponseSendRequest) -> String {
+fn history_response_relay_outbox_id(response: &HistoryKeyResponseSendRequestBody) -> String {
     format!("history-response-relay:{}", response.response_id.as_str())
 }
 
 pub(super) async fn accepted_remote_history_response_retry(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
 ) -> Result<Option<HistoryKeyResponseSendReceipt>, AppError> {
     let outbox_id = history_response_relay_outbox_id(response);
@@ -104,7 +104,7 @@ pub(super) async fn accepted_remote_history_response_retry(
 
 pub(super) async fn enqueue_remote_history_response(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_relay_attestation: SourceRelayAttestation,
 ) -> Result<(), AppError> {
     let destination = source_relay_attestation.destination_release_id.clone();
@@ -162,7 +162,7 @@ pub(super) async fn enqueue_remote_history_response(
 
 pub(crate) async fn validate_remote_history_response_receipt(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     destination_release_id: &arkret_wire::DidCoreId,
     receipt: &HistoryKeyResponseSendReceipt,
 ) -> Result<(), AppError> {
@@ -182,7 +182,7 @@ pub(crate) async fn validate_remote_history_response_receipt(
 
 async fn validate_remote_history_response_receipt_with_digest(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
     destination_release_id: &arkret_wire::DidCoreId,
     receipt: &HistoryKeyResponseSendReceipt,
@@ -202,7 +202,7 @@ async fn validate_remote_history_response_receipt_with_digest(
 
 async fn validate_remote_history_response_receipt_after_validation(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
     source_record_digest: &arkret_wire::Hash,
     destination_release_id: &arkret_wire::DidCoreId,
     receipt: &HistoryKeyResponseSendReceipt,
@@ -258,7 +258,7 @@ pub(crate) async fn validate_remote_history_request_replica_outcome(
 
 pub(super) async fn validate_remote_source_chunk_manifest(
     state: &AppState,
-    response: &HistoryKeyResponseSendRequest,
+    response: &HistoryKeyResponseSendRequestBody,
 ) -> Result<(), AppError> {
     let HistoryKeyResponseContent::Chunk(chunk) = &response.content else {
         return Ok(());
@@ -286,7 +286,7 @@ pub(super) async fn delivered_remote_source_manifest(
     state: &AppState,
     manifest_digest: &arkret_wire::Hash,
     manifest_admission_digest: &arkret_wire::Hash,
-) -> Result<Option<HistoryKeyResponseSendRequest>, AppError> {
+) -> Result<Option<HistoryKeyResponseSendRequestBody>, AppError> {
     let deliveries = state
         .federation()
         .deliveries()
@@ -416,6 +416,8 @@ pub(super) async fn read_history_key_responses(
         )
         .await
         .map_err(map_service_error)?;
+    let page =
+        bound_history_response_page(page, soland_storage::HISTORY_RESPONSE_RECORD_BYTES_LIMIT)?;
     let request = history
         .history_request_by_capability_commitment(&capability_commitment)
         .await
@@ -451,6 +453,8 @@ pub(super) async fn read_history_key_responses(
     };
     let outcome = HistoryKeyResponseListOutcome {
         entries: page.entries,
+        source_signer_results: page.source_signer_results,
+        cipher_suite: page.cipher_suite,
         ack_token,
         cursor: page.cursor,
         limited: page.limited,
@@ -461,13 +465,156 @@ pub(super) async fn read_history_key_responses(
     json_ok(outcome)
 }
 
+fn bound_history_response_page(
+    page: soland_storage::HistoryResponseReadPage,
+    max_bytes: usize,
+) -> Result<soland_storage::HistoryResponseReadPage, AppError> {
+    let mut outcome = HistoryKeyResponseListOutcome {
+        entries: page.entries,
+        source_signer_results: page.source_signer_results,
+        cipher_suite: page.cipher_suite,
+        // The service's SHA-256 HMAC always encodes to 43 unpadded base64url bytes.
+        ack_token: None,
+        cursor: page.cursor,
+        limited: page.limited,
+    };
+    if !outcome.entries.is_empty() {
+        outcome.ack_token = Some(URL_SAFE_NO_PAD.encode([0_u8; 32]));
+    }
+    loop {
+        let size = arkret_canonical::canonical_json_bytes(&outcome)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .len();
+        if size <= max_bytes {
+            break;
+        }
+        if outcome.entries.len() <= 1 {
+            return Err(crate::app_error!(
+                LimitExceeded,
+                "history response item cannot fit the complete response page",
+            ));
+        }
+        outcome.entries.pop();
+        outcome.source_signer_results.retain(|result| outcome.entries.iter().any(|entry| {
+            matches!(entry, HistoryResponsePageEntry::Record { record } if &record.source_record.source_signer_evidence_ref == result.evidence_ref())
+        }));
+        if outcome.source_signer_results.is_empty() {
+            outcome.cipher_suite = None;
+        }
+        outcome.limited = true;
+        outcome.cursor = outcome.entries.last().map(history_response_entry_cursor);
+    }
+    outcome
+        .validate()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(soland_storage::HistoryResponseReadPage {
+        high_water_sequence: outcome
+            .entries
+            .last()
+            .map(HistoryResponsePageEntry::sequence),
+        entries: outcome.entries,
+        source_signer_results: outcome.source_signer_results,
+        cipher_suite: outcome.cipher_suite,
+        cursor: outcome.cursor,
+        limited: outcome.limited,
+    })
+}
+
+#[cfg(test)]
+mod page_budget_tests {
+    use super::*;
+
+    fn entries() -> Vec<HistoryResponsePageEntry> {
+        let fixture = arkret_schema_conformance::spec_json_artifact(
+            "fixtures/history-key-recovery-fixture.json",
+        )
+        .unwrap();
+        let page: HistoryKeyResponseListOutcome = serde_json::from_value(
+            fixture["response_stream_cases"]["wire_instances"]["sequence_ordered_list"].clone(),
+        )
+        .unwrap();
+        let first = page.entries.into_iter().next().unwrap();
+        let mut second = first.clone();
+        let HistoryResponsePageEntry::Lost { lost_record } = &mut second else {
+            panic!("fixture must contain a loss descriptor");
+        };
+        lost_record.sequence += 1;
+        lost_record.cursor.push('x');
+        lost_record.record_digest = lost_record.lost_record_digest().unwrap();
+        vec![first, second]
+    }
+
+    #[test]
+    fn byte_limited_page_keeps_cursor_and_high_water_at_delivered_prefix() {
+        let entries = entries();
+        let expected = HistoryKeyResponseListOutcome {
+            source_signer_results: vec![],
+            cipher_suite: None,
+            entries: vec![entries[0].clone()],
+            ack_token: Some(URL_SAFE_NO_PAD.encode([0_u8; 32])),
+            cursor: Some(history_response_entry_cursor(&entries[0])),
+            limited: true,
+        };
+        let budget = arkret_canonical::canonical_json_bytes(&expected)
+            .unwrap()
+            .len();
+        let original_high_water = entries[1].sequence();
+        let page = bound_history_response_page(
+            soland_storage::HistoryResponseReadPage {
+                source_signer_results: vec![],
+                cipher_suite: None,
+                entries,
+                cursor: None,
+                limited: false,
+                high_water_sequence: Some(original_high_water),
+            },
+            budget,
+        )
+        .unwrap();
+        assert_eq!(page.entries, expected.entries);
+        assert_eq!(page.cursor, expected.cursor);
+        assert!(page.limited);
+        assert_eq!(
+            page.high_water_sequence,
+            Some(expected.entries[0].sequence())
+        );
+        assert!(page.high_water_sequence.unwrap() < original_high_water);
+    }
+
+    #[test]
+    fn an_oversized_single_item_fails_instead_of_advancing_an_empty_page() {
+        let entry = entries().remove(0);
+        let outcome = HistoryKeyResponseListOutcome {
+            source_signer_results: vec![],
+            cipher_suite: None,
+            entries: vec![entry.clone()],
+            ack_token: Some(URL_SAFE_NO_PAD.encode([0_u8; 32])),
+            cursor: None,
+            limited: false,
+        };
+        let size = arkret_canonical::canonical_json_bytes(&outcome)
+            .unwrap()
+            .len();
+        let page = soland_storage::HistoryResponseReadPage {
+            source_signer_results: vec![],
+            cipher_suite: None,
+            entries: vec![entry],
+            cursor: None,
+            limited: false,
+            high_water_sequence: Some(8),
+        };
+        assert!(bound_history_response_page(page.clone(), size).is_ok());
+        assert!(bound_history_response_page(page, size - 1).is_err());
+    }
+}
+
 #[salvo::oapi::endpoint(
     operation_id = "ak.self.history_key_responses.command.ack",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.command.ack.v1"))]
 pub(super) async fn ack_history_key_responses(
-    body: JsonBody<HistoryKeyResponseAckRequest>,
+    body: JsonBody<HistoryKeyResponseAckRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<HistoryKeyResponseAckOutcome> {

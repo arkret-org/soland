@@ -265,6 +265,7 @@ pub(in crate::routing::events) fn router() -> Router {
             Router::with_path("seals/mls-accepted-artifact")
                 .post(super::mls_accepted_artifact::read),
         )
+        .push(Router::with_path("seals/mls-welcome-refs").post(super::mls_welcome_refs::read))
         .push(
             Router::with_path("seals/membership-authority").post(super::membership_authority::read),
         )
@@ -312,7 +313,7 @@ async fn pcr_pending_control(
         &session,
         arkret_wire::ServiceOperationId::SELF_SEALS_READ_PENDING_CONTROL_V1,
     )?;
-    let request = req.parse_json::<arkret_models_collaboration::governance_dependencies::PcrPendingControlRequest>()
+    let request = req.parse_json::<arkret_models_collaboration::governance_dependencies::PcrPendingControlRequestBody>()
         .await.map_err(|error| AppError::json_invalid(format!("invalid pending PCR request: {error}")))?;
     request
         .validate()
@@ -374,7 +375,7 @@ const AVAILABILITY_RESERVATION_WAIT_ATTEMPTS: usize = 600;
 
 fn seal_prepare_idempotency_outcome(
     record: soland_storage::IdempotencyRecord,
-    request: &SealPrepareRequest,
+    request: &SealPrepareRequestBody,
     request_hash: &str,
 ) -> Result<Option<SealPrepareOutcome>, AppError> {
     if record.request_hash != request_hash {
@@ -408,7 +409,7 @@ async fn wait_for_seal_prepare_idempotency_outcome(
     state: &AppState,
     authenticated_actor: &arkret_wire::ActorId,
     idempotency_key: &str,
-    request: &SealPrepareRequest,
+    request: &SealPrepareRequestBody,
     request_hash: &str,
 ) -> Result<SealPrepareOutcome, AppError> {
     for _ in 0..AVAILABILITY_RESERVATION_WAIT_ATTEMPTS {
@@ -446,7 +447,7 @@ async fn prepare_pcr_seal(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SealPrepareRequest>,
+    body: JsonBody<SealPrepareRequestBody>,
 ) -> JsonResult<SealPrepareOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;

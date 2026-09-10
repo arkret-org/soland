@@ -41,7 +41,7 @@ pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
 pub(crate) use soland_domain::reducer::ProjectionState;
-pub(crate) use soland_services::events::{ProjectedEvent, RealmMetadata};
+pub(crate) use soland_services::events::ProjectedEvent;
 pub(crate) use soland_services::identity::SessionIdentityState;
 pub(crate) use soland_services::sync::CursorState;
 pub(crate) use tokio::sync::broadcast::error::RecvError;
@@ -50,19 +50,16 @@ use super::super::identity::device_messages::prune_device_messages_for_limits;
 #[cfg(test)]
 pub(crate) use super::strand::strand_id_from_realm_id;
 use super::{
-    TO_DEVICE_PAGE_LIMIT, authenticated_session, device_message_envelopes_after, is_realm_deleted,
-    now, projected_event_page_for_realms_through, projected_event_replay_upper_bound,
-    projection_event_json, query_param, realm_event_visible_to_session, realm_has_member,
-    realm_id_accessible, realm_state_snapshot_manifest_for_realm, render_error, sha256_hex,
+    authenticated_session, device_message_envelopes_after, is_realm_deleted, now,
+    projected_event_page_for_realms_through, projected_event_replay_upper_bound,
+    projection_event_json, query_param, realm_event_visible_to_session, realm_id_accessible,
+    realm_state_snapshot_manifest_for_realm, render_error, sha256_hex,
 };
 pub(crate) use crate::ids;
-pub(crate) use crate::state::{
-    AppState, HandleClaimDigestInput, HandleClaimEvidenceRecord, RealmDirectoryEntry,
-};
+pub(crate) use crate::state::{AppState, RealmDirectoryEntry};
 pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncRequestBody};
 
 pub(crate) const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
-pub(crate) const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 /// Default reconnect guard advertised on subscribe terminal control frames.
 /// Shared by `account_subscribe` (subscribe.rs) and `events_subscribe`
 /// (events_query.rs).
@@ -79,7 +76,10 @@ const ACCOUNT_DATA_CHANGE_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
 
 mod snapshot;
 pub(crate) use snapshot::*;
+mod current_details;
 mod cursor;
+mod demand_list;
+mod global_channels;
 pub(crate) mod signal;
 // `spawn_sync_cursor_ttl_sweeper` is `pub` (boot worker entry re-exported at
 // `crate::routing::spawn_sync_cursor_ttl_sweeper` for `main`); the explicit

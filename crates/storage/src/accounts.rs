@@ -64,6 +64,13 @@ pub trait AccountDataStore: Send + Sync {
         record: &AccountDataRecord,
         expected_revision: u64,
     ) -> PersistenceResult<AccountDataCasResult>;
+    /// Commit the holder CAS and its exact accepted source Event as one write.
+    async fn compare_and_set_holder_event(
+        &self,
+        record: &AccountDataRecord,
+        expected_revision: u64,
+        source_event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<AccountDataCasResult>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
     async fn changes_after(
         &self,

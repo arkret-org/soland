@@ -16,18 +16,12 @@ pub struct SyncCursor {
     /// it is intentionally separate from `positions.realms` so metadata-only
     /// deltas cannot mask later visible timeline events.
     pub account_positions: BTreeMap<String, i64>,
-    /// Device-list aggregate frontier per tracked principal.
-    pub device_list_positions: BTreeMap<String, i64>,
     pub to_device_position: i64,
-    /// Account-private notification projection high-water position.
-    pub notification_position: i64,
-    /// Station-CAS Account Data projection high-water position.
-    pub account_data_position: i64,
-    /// `ctx.issued_at_ms` from the stateful handle. Used for forward-progress
-    /// pruning of older handles after a client proves it persisted a cursor.
-    /// Per-Realm account projection freshness lives in `account_positions`,
-    /// not here.
-    pub issued_at_ms: Option<i64>,
+    pub account_summary_position: i64,
+    pub global_baseline: Option<Value>,
+    pub detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress>,
+    pub detail_turn: bool,
+    pub detail_next_realm: Option<String>,
 }
 
 #[derive(Debug)]
@@ -48,6 +42,8 @@ pub enum SyncCursorError {
     Revoked,
 }
 
+pub(crate) const ACCOUNT_STREAM_CURSOR_PURPOSE: &str = "ak.self.account.stream.subscribe.v1";
+pub(crate) const DEVICE_MESSAGES_CURSOR_PURPOSE: &str = "ak.self.device_messages.read.list.v1";
 pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
 pub(crate) const BARRIER_CURSOR_PURPOSE: &str = "barrier";
 
@@ -81,101 +77,120 @@ fn cursor_binding_subject(account_id: Option<&arkret_wire::AccountId>) -> String
     )
 }
 
-pub(crate) fn cursor_binding_subject_for_session(
-    state: &AppState,
-    session: &SessionIdentityState,
-) -> String {
-    let (account_id, _) = cursor_account_device(state, Some(session));
-    cursor_binding_subject(account_id.as_ref())
-}
-
+#[cfg(test)]
 pub async fn sync_token_for_client_sync(
     state: &AppState,
     session: Option<&SessionIdentityState>,
     filter: Option<&serde_json::Value>,
     realms_positions: BTreeMap<String, i64>,
     account_realms_positions: BTreeMap<String, i64>,
-    device_list_positions: BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> String {
-    sync_token_for_client_sync_frontiers(
+    sync_token_for_account_positions(
         state,
         session,
         filter,
         realms_positions,
         account_realms_positions,
-        device_list_positions,
         to_device_position,
         0,
-        0,
+        None,
+        BTreeMap::new(),
+        false,
+        None,
     )
     .await
+    .expect("test account cursor must persist")
 }
 
-pub async fn sync_token_for_client_sync_frontiers(
+pub(crate) async fn sync_token_for_account_positions(
     state: &AppState,
     session: Option<&SessionIdentityState>,
-    filter: Option<&serde_json::Value>,
+    filter: Option<&Value>,
     realms_positions: BTreeMap<String, i64>,
     account_realms_positions: BTreeMap<String, i64>,
-    device_list_positions: BTreeMap<String, i64>,
     to_device_position: i64,
-    notification_position: i64,
-    account_data_position: i64,
-) -> String {
+    account_summary_position: i64,
+    global_baseline: Option<Value>,
+    detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress>,
+    detail_turn: bool,
+    detail_next_realm: Option<String>,
+) -> Result<String, SyncCursorError> {
     let issued_at = chrono::Utc::now();
     let (account_id, device_id) = cursor_account_device(state, session);
     let binding_subject = cursor_binding_subject(account_id.as_ref());
-    let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
-    let filter_digest = sync_filter_digest(filter);
+    let filter_digest = account_filter_digest(filter);
     let positions = json!({
         "realms": realms_positions,
         "account_realms": account_realms_positions,
-        "device_lists": device_list_positions,
-        "devices": device_positions,
         "to_device": to_device_position,
-        "notifications": notification_position,
-        "account_data": account_data_position
+        "account_summary": account_summary_position,
+        "global_baseline": global_baseline,
+        "detail_positions": detail_positions,
+        "detail_turn": detail_turn,
+        "detail_next_realm": detail_next_realm,
+        "detail_filter": filter.cloned().unwrap_or_else(|| json!({}))
     });
     // Deterministic handle: HMAC over the binding content (positions
-    // included, per-mint `devices` wall-clock stamp excluded), so an
+    // included, with no per-mint wall-clock stamp), so an
     // unchanged frontier re-mints the SAME handle and the upsert only
     // refreshes the row's expiry instead of growing the table.
-    let binding = stream_cursor_handle_binding_with_notification_position(
+    let binding = account_cursor_handle_binding(
         account_id.as_ref(),
         &device_id,
         &filter_digest,
         &realms_positions,
         &account_realms_positions,
-        &device_list_positions,
         to_device_position,
-        notification_position,
-        account_data_position,
     );
+    let binding = arkret_canonical::canonical_json_bytes(&json!({
+        "purpose": ACCOUNT_STREAM_CURSOR_PURPOSE, "account_positions": binding, "account_summary": account_summary_position, "global_baseline": global_baseline,
+        "detail_positions":detail_positions,"detail_turn":detail_turn,"detail_next_realm":detail_next_realm
+    })).expect("account position binding is JSON");
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
-    let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
-        .expect("one-hour stream cursor is valid")
+    let global_deadline = global_baseline.as_ref().and_then(|progress| {
+        let completed = progress.get("completed")?.as_array()?;
+        (completed.len() < 4)
+            .then(|| progress.get("snapshot_expires_at_ms")?.as_i64())
+            .flatten()
+    });
+    let deadline = detail_positions
+        .values()
+        .filter(|progress| progress.phase != soland_storage::CurrentDetailPhase::Live)
+        .map(|progress| progress.expires_at_ms)
+        .chain(global_deadline)
+        .min();
+    let ttl = deadline.map_or(3_600_000, |deadline| {
+        (deadline - issued_at.timestamp_millis()).min(3_600_000)
+    });
+    if ttl <= 0 {
+        return Err(SyncCursorError::Expired);
+    }
+    let cursor = arkret_hlc::Cursor::new_at(issued_at, ttl)
+        .map_err(|_| SyncCursorError::Integrity("invalid account cursor expiry"))?
         .with_stateful_handle(handle.clone());
     let issued_at_ms = cursor.issued_at.timestamp_millis();
     let expires_at_ms = cursor.expires_at.timestamp_millis();
-    upsert_sync_cursor_record(
-        state,
-        CursorState {
+    state
+        .sync()
+        .upsert_cursor(&CursorState {
             handle: handle.clone(),
             binding_subject: Some(binding_subject),
             device_id: Some(device_id),
             service_id: DidCoreId::new(state.service_id().clone())
                 .expect("AppState service_id must be a validated DID core id"),
             filter_digest: Some(filter_digest),
-            purpose: STREAM_CURSOR_PURPOSE.to_owned(),
+            purpose: ACCOUNT_STREAM_CURSOR_PURPOSE.to_owned(),
             positions: Some(positions),
             target: None,
             issued_at_ms,
             expires_at_ms,
-        },
-    )
-    .await;
-    cursor.encode().expect("SDK cursor encoding cannot fail")
+        })
+        .await
+        .map_err(|_| SyncCursorError::Integrity("cannot persist account cursor"))?;
+    cursor
+        .encode()
+        .map_err(|_| SyncCursorError::Integrity("cannot encode account cursor"))
 }
 
 pub(crate) async fn sync_token_for_events_query(
@@ -283,7 +298,6 @@ async fn sync_token_for_state_positions(
             positions: Some(json!({
                 "realms": realms_positions,
                 "account_realms": {},
-                "device_lists": {},
                 "devices": {},
                 "to_device": 0
             })),
@@ -324,28 +338,22 @@ pub(crate) fn derive_cursor_handle(cursor_key: &[u8], canonical_binding: &[u8]) 
     URL_SAFE_NO_PAD.encode(&tag[..16])
 }
 
-pub(crate) fn stream_cursor_handle_binding_with_notification_position(
+pub(crate) fn account_cursor_handle_binding(
     account_id: Option<&arkret_wire::AccountId>,
     device_id: &str,
     filter_digest: &str,
     realms_positions: &BTreeMap<String, i64>,
     account_realms_positions: &BTreeMap<String, i64>,
-    device_list_positions: &BTreeMap<String, i64>,
     to_device_position: i64,
-    notification_position: i64,
-    account_data_position: i64,
 ) -> Vec<u8> {
     let binding = json!({
         "account_id": account_id,
         "device_id": device_id,
         "filter_digest": filter_digest,
-        "purpose": STREAM_CURSOR_PURPOSE,
+        "purpose": ACCOUNT_STREAM_CURSOR_PURPOSE,
         "realms": realms_positions,
         "account_realms": account_realms_positions,
-        "device_lists": device_list_positions,
         "to_device": to_device_position,
-        "notifications": notification_position,
-        "account_data": account_data_position,
     });
     arkret_canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
@@ -558,6 +566,17 @@ pub async fn parse_and_validate_sync_cursor(
     filter: Option<&serde_json::Value>,
     now_ms: i64,
 ) -> Result<SyncCursor, SyncCursorError> {
+    parse_account_cursor(token, state, session, filter, now_ms, false).await
+}
+
+pub(crate) async fn parse_account_cursor(
+    token: &str,
+    state: &AppState,
+    session: Option<&SessionIdentityState>,
+    filter: Option<&Value>,
+    now_ms: i64,
+    replace_filter: bool,
+) -> Result<SyncCursor, SyncCursorError> {
     let cursor = decode_sync_cursor(token, now_ms)?;
     if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
         return Err(SyncCursorError::Invalid(
@@ -592,7 +611,7 @@ pub async fn parse_and_validate_sync_cursor(
     if ctx
         .get("purpose")
         .and_then(|purpose| purpose.as_str())
-        .is_none_or(|purpose| purpose != STREAM_CURSOR_PURPOSE)
+        .is_none_or(|purpose| purpose != ACCOUNT_STREAM_CURSOR_PURPOSE)
     {
         return Err(SyncCursorError::Integrity(
             "cursor handle purpose does not match account stream",
@@ -625,11 +644,12 @@ pub async fn parse_and_validate_sync_cursor(
             "cursor service does not match this service DID",
         ));
     }
-    let expected_filter_digest = sync_filter_digest(filter);
-    if ctx
-        .get("filter_digest")
-        .and_then(|filter_digest| filter_digest.as_str())
-        .is_none_or(|filter_digest| filter_digest != expected_filter_digest)
+    let expected_filter_digest = account_filter_digest(filter);
+    if !replace_filter
+        && ctx
+            .get("filter_digest")
+            .and_then(|filter_digest| filter_digest.as_str())
+            .is_none_or(|filter_digest| filter_digest != expected_filter_digest)
     {
         return Err(SyncCursorError::Mismatch(
             "cursor filter digest does not match request filter",
@@ -638,39 +658,118 @@ pub async fn parse_and_validate_sync_cursor(
     let positions_value = stored.get("positions").ok_or(SyncCursorError::Integrity(
         "cursor handle is missing positions",
     ))?;
-    let positions = cursor_position_map(
+    validate_account_positions_shape(positions_value)?;
+    let mut positions = cursor_position_map(
         positions_value,
         "realms",
         Some("cursor handle is missing positions.realms"),
     )?;
-    let account_positions = cursor_position_map(
+    let mut account_positions = cursor_position_map(
         positions_value,
         "account_realms",
         Some("cursor handle is missing positions.account_realms"),
     )?;
-    let device_list_positions = cursor_position_map(positions_value, "device_lists", None)?;
+    let mut detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress> =
+        serde_json::from_value(positions_value["detail_positions"].clone())
+            .map_err(|_| SyncCursorError::Integrity("invalid current detail positions"))?;
+    let replaced = replace_filter && positions_value.get("detail_filter") != filter;
+    if replaced {
+        // The old handle is immutable. Only detail frontiers restart; account
+        // channels retain their installed positions across a window change.
+        positions.clear();
+        account_positions.clear();
+        detail_positions.clear();
+    }
     let to_device_position = positions_value
         .get("to_device")
         .and_then(|position| position.as_i64())
         .unwrap_or_default();
-    let notification_position = positions_value
-        .get("notifications")
-        .and_then(|position| position.as_i64())
-        .unwrap_or_default();
-    let account_data_position = positions_value
-        .get("account_data")
-        .and_then(|position| position.as_i64())
-        .unwrap_or_default();
-    let issued_at_ms = ctx.get("issued_at_ms").and_then(|value| value.as_i64());
     Ok(SyncCursor {
         positions,
         account_positions,
-        device_list_positions,
         to_device_position,
-        notification_position,
-        account_data_position,
-        issued_at_ms,
+        account_summary_position: positions_value
+            .get("account_summary")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        global_baseline: positions_value
+            .get("global_baseline")
+            .filter(|value| !value.is_null())
+            .cloned(),
+        detail_positions,
+        detail_turn: replaced || positions_value["detail_turn"].as_bool().unwrap_or(false),
+        detail_next_realm: if replaced {
+            None
+        } else {
+            positions_value["detail_next_realm"]
+                .as_str()
+                .map(str::to_owned)
+        },
     })
+}
+
+fn validate_account_positions_shape(value: &Value) -> Result<(), SyncCursorError> {
+    const KEYS: &[&str] = &[
+        "realms",
+        "account_realms",
+        "to_device",
+        "account_summary",
+        "global_baseline",
+        "detail_filter",
+        "detail_positions",
+        "detail_turn",
+        "detail_next_realm",
+    ];
+    let object = value
+        .as_object()
+        .ok_or(SyncCursorError::Integrity("invalid account positions"))?;
+    if object.len() != KEYS.len() || object.keys().any(|key| !KEYS.contains(&key.as_str())) {
+        return Err(SyncCursorError::Integrity(
+            "unsupported account positions layout",
+        ));
+    }
+    for key in ["to_device", "account_summary"] {
+        if object
+            .get(key)
+            .and_then(Value::as_i64)
+            .is_none_or(|position| position < 0)
+        {
+            return Err(SyncCursorError::Integrity("invalid account position"));
+        }
+    }
+    if !object["detail_filter"].is_object()
+        || !object["detail_positions"]
+            .as_object()
+            .is_some_and(|positions| positions.len() <= 16)
+        || !object["detail_turn"].is_boolean()
+        || !(object["detail_next_realm"].is_null() || object["detail_next_realm"].is_string())
+        || !(object["global_baseline"].is_null() || object["global_baseline"].is_object())
+    {
+        return Err(SyncCursorError::Integrity("invalid account progress"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod account_position_shape_tests {
+    use super::*;
+
+    #[test]
+    fn retired_global_coordinates_are_rejected_not_defaulted() {
+        let current = json!({"realms":{},"account_realms":{},"to_device":0,"account_summary":0,"global_baseline":null,"detail_filter":{},"detail_positions":{},"detail_turn":false,"detail_next_realm":null});
+        validate_account_positions_shape(&current).unwrap();
+        for key in ["device_lists", "notifications", "account_data", "devices"] {
+            let mut retired = current.clone();
+            retired
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), json!({}));
+            assert!(validate_account_positions_shape(&retired).is_err(), "{key}");
+        }
+        let mut missing = current;
+        missing.as_object_mut().unwrap().remove("account_summary");
+        assert!(validate_account_positions_shape(&missing).is_err());
+    }
 }
 
 pub(crate) async fn parse_and_validate_events_query_cursor(
@@ -892,6 +991,11 @@ fn normalize_filter_digest_string_collection(value: &Value) -> Value {
     )
 }
 
+pub(crate) fn account_filter_digest(filter: Option<&Value>) -> String {
+    arkret_canonical::canonical_sha256(&filter.cloned().unwrap_or_else(|| json!({})))
+        .expect("normalized account filter is canonical JSON")
+}
+
 pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     let filter = normalized_filter_digest_value(filter);
     let binding = json!({
@@ -1010,4 +1114,170 @@ fn cursor_authority_revoked(
         session.map(|session| session.device_id.as_str()),
         chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now),
     )
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RealmListPosition {
+    pub watermark: i64,
+    pub global_watermark: i64,
+    pub expires_at_ms: i64,
+    pub after: Option<soland_storage::AccountSummaryKey>,
+}
+
+pub(crate) async fn realm_list_token(
+    state: &AppState,
+    session: &SessionIdentityState,
+    position: &RealmListPosition,
+) -> Result<arkret_wire::Cursor, SyncCursorError> {
+    let (account, device) = cursor_account_device(state, Some(session));
+    let subject = cursor_binding_subject(account.as_ref());
+    let target = serde_json::to_value(position)
+        .map_err(|_| SyncCursorError::Integrity("invalid list position"))?;
+    let binding = arkret_canonical::canonical_json_bytes(&json!({
+        "purpose": "realm_list", "account": subject, "device": device,
+        "service": state.service_id(), "target": target,
+    }))
+    .map_err(|_| SyncCursorError::Integrity("invalid list binding"))?;
+    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
+    let now = chrono::Utc::now();
+    let ttl = position.expires_at_ms - now.timestamp_millis();
+    if ttl <= 0 {
+        return Err(SyncCursorError::Expired);
+    }
+    let issued_at = chrono::DateTime::from_timestamp_millis(position.expires_at_ms - 3_600_000)
+        .ok_or(SyncCursorError::Integrity("invalid list snapshot time"))?;
+    let cursor = arkret_hlc::Cursor::new_at(issued_at, 3_600_000)
+        .map_err(|_| SyncCursorError::Integrity("invalid list expiry"))?
+        .with_stateful_handle(handle.clone());
+    state
+        .sync()
+        .upsert_cursor(&CursorState {
+            handle,
+            binding_subject: Some(subject),
+            device_id: Some(device),
+            service_id: state.service_core_id(),
+            filter_digest: None,
+            purpose: "realm_list".to_owned(),
+            positions: None,
+            target: Some(target),
+            issued_at_ms: cursor.issued_at.timestamp_millis(),
+            expires_at_ms: cursor.expires_at.timestamp_millis(),
+        })
+        .await
+        .map_err(|_| SyncCursorError::Integrity("cannot persist list cursor"))?;
+    arkret_wire::Cursor::new(
+        cursor
+            .encode()
+            .map_err(|_| SyncCursorError::Integrity("cannot encode list cursor"))?,
+    )
+    .map_err(|_| SyncCursorError::Integrity("invalid encoded list cursor"))
+}
+
+pub(crate) async fn parse_realm_list_cursor(
+    state: &AppState,
+    session: &SessionIdentityState,
+    token: &str,
+) -> Result<RealmListPosition, SyncCursorError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let cursor = decode_sync_cursor(token, now)?;
+    if cursor_authority_revoked(state, token, Some(session), now) {
+        return Err(SyncCursorError::Revoked);
+    }
+    let stored = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
+    let (account, device) = cursor_account_device(state, Some(session));
+    if stored.purpose != "realm_list"
+        || stored.binding_subject.as_deref()
+            != Some(cursor_binding_subject(account.as_ref()).as_str())
+        || stored.device_id.as_deref() != Some(device.as_str())
+        || stored.service_id != state.service_core_id()
+    {
+        return Err(SyncCursorError::Mismatch(
+            "Realm list cursor binding mismatch",
+        ));
+    }
+    if stored.expires_at_ms <= now {
+        return Err(SyncCursorError::Expired);
+    }
+    serde_json::from_value(
+        stored
+            .target
+            .ok_or(SyncCursorError::Integrity("missing list position"))?,
+    )
+    .map_err(|_| SyncCursorError::Integrity("invalid list position"))
+}
+
+/// Queue continuation has its own operation binding and never advances an account stream.
+pub(crate) async fn device_messages_cursor(
+    state: &AppState,
+    session: &SessionIdentityState,
+    position: i64,
+) -> Result<String, SyncCursorError> {
+    let (account, device) = cursor_account_device(state, Some(session));
+    let subject = cursor_binding_subject(account.as_ref());
+    let target = json!({"queue_position":position});
+    let binding=arkret_canonical::canonical_json_bytes(&json!({"purpose":DEVICE_MESSAGES_CURSOR_PURPOSE,"account":subject,"device":device,"service":state.service_id(),"target":target})).map_err(|_|SyncCursorError::Integrity("invalid queue binding"))?;
+    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
+    let cursor = arkret_hlc::Cursor::new_at(chrono::Utc::now(), 3_600_000)
+        .map_err(|_| SyncCursorError::Integrity("invalid queue expiry"))?
+        .with_stateful_handle(handle.clone());
+    state
+        .sync()
+        .upsert_cursor(&CursorState {
+            handle,
+            binding_subject: Some(subject),
+            device_id: Some(device),
+            service_id: state.service_core_id(),
+            filter_digest: None,
+            purpose: DEVICE_MESSAGES_CURSOR_PURPOSE.to_owned(),
+            positions: None,
+            target: Some(target),
+            issued_at_ms: cursor.issued_at.timestamp_millis(),
+            expires_at_ms: cursor.expires_at.timestamp_millis(),
+        })
+        .await
+        .map_err(|_| SyncCursorError::Integrity("cannot persist queue cursor"))?;
+    cursor
+        .encode()
+        .map_err(|_| SyncCursorError::Integrity("cannot encode queue cursor"))
+}
+
+pub(crate) async fn parse_device_messages_cursor(
+    token: &str,
+    state: &AppState,
+    session: &SessionIdentityState,
+    now_ms: i64,
+) -> Result<i64, SyncCursorError> {
+    let cursor = decode_sync_cursor(token, now_ms)?;
+    if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
+        return Err(SyncCursorError::Mismatch(
+            "queue cursor outer purpose mismatch",
+        ));
+    }
+    if cursor_authority_revoked(state, token, Some(session), now_ms) {
+        return Err(SyncCursorError::Revoked);
+    }
+    let stored = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
+    let (account, device) = cursor_account_device(state, Some(session));
+    if stored.purpose != DEVICE_MESSAGES_CURSOR_PURPOSE
+        || stored.binding_subject.as_deref()
+            != Some(cursor_binding_subject(account.as_ref()).as_str())
+        || stored.device_id.as_deref() != Some(device.as_str())
+        || stored.service_id != state.service_core_id()
+        || stored.filter_digest.is_some()
+        || stored.positions.is_some()
+    {
+        return Err(SyncCursorError::Mismatch(
+            "device queue cursor binding mismatch",
+        ));
+    }
+    if stored.expires_at_ms <= now_ms {
+        return Err(SyncCursorError::Expired);
+    }
+    stored
+        .target
+        .as_ref()
+        .and_then(|target| target.get("queue_position"))
+        .and_then(Value::as_i64)
+        .filter(|position| *position >= 0)
+        .ok_or(SyncCursorError::Integrity("queue position absent"))
 }
