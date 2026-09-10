@@ -48,7 +48,7 @@ async fn current_principal_request_body() {
             .await;
         assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND));
         let error: Value = response.take_json().await.unwrap();
-        assert_eq!(error["error"]["code"], "not_found");
+        assert_eq!(problem_code(&error), "not_found");
     }
     let mut invalid = body;
     invalid["extra"] = serde_json::json!(true);
@@ -475,12 +475,44 @@ async fn resolution_audit_returns_unified_event_receipt_and_seal_evidence_body()
 }
 
 #[test]
+fn unresolved_identity_does_not_return_a_placeholder_document() {
+    run_on_deep_stack_multi_thread(
+        "unresolved_identity_does_not_return_a_placeholder_document",
+        unresolved_identity_body,
+    );
+}
+
+async fn unresolved_identity_body() {
+    let state = soland_test_support::app_state(test_config());
+    let app = app_from_state(state);
+    let mut response = TestClient::post("http://server/_arkret/root/identity/resolve")
+        .json(&serde_json::json!({"did": "did:web:unregistered-resolver-check.invalid"}))
+        .send(&app)
+        .await;
+    assert!(!response.status_code.unwrap().is_success());
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(problem_code(&body), "current_did_authority_unavailable");
+    assert!(body.get("did_document").is_none());
+
+    let mut response = TestClient::get("http://server/_arkret/root/identity/document?did=did:web:unregistered-resolver-check.invalid")
+        .send(&app)
+        .await;
+    assert!(!response.status_code.unwrap().is_success());
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(problem_code(&body), "current_did_authority_unavailable");
+    assert!(body.get("did_document").is_none());
+}
+
+#[test]
 fn identity_surface_works() {
     run_on_deep_stack_multi_thread("identity_surface_works", identity_surface_works_body);
 }
 
 async fn identity_surface_works_body() {
     let state = soland_test_support::app_state(test_config());
+    // Successful resolution must come from stored/resolved material, not an
+    // automatically manufactured document for an arbitrary DID.
+    seed_did_document_also_known_as(&state, "did:web:alice.example", &[]).await;
     let expected_service_id =
         arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .expect("service DID projects to a core id");
@@ -496,6 +528,23 @@ async fn identity_surface_works_body() {
     typed_describe
         .validate()
         .expect("identity describe satisfies the current closed contract");
+    // Resolution is discoverable on its own role surface. A client must not
+    // require the Station description to advertise the entire client profile.
+    assert!(typed_describe.supports_operation_binding(
+        arkret_wire::ServiceOperationId::RootIdentityReadResolveV1,
+        arkret_wire::BindingKind::HttpJson,
+    ));
+    let station: arkret_models_discovery::ServiceDescribe =
+        TestClient::get("http://server/_arkret/describe?service_kind=station")
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(!station.supports_operation_binding(
+        arkret_wire::ServiceOperationId::RootIdentityReadResolveV1,
+        arkret_wire::BindingKind::HttpJson,
+    ));
     assert_eq!(typed_describe.service_id, expected_service_id);
     assert_eq!(describe["protocol_version"], "1.0");
     let identity = &describe["x_soland_identity_registry"];

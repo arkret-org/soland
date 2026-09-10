@@ -435,7 +435,13 @@ pub(crate) async fn identity_resolve(
     depot: &mut Depot,
 ) -> JsonResult<IdentityResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    json_ok(resolve_identity(state, body.into_inner()).await?)
+}
+
+async fn resolve_identity(
+    state: &AppState,
+    body: IdentityResolveRequestBody,
+) -> Result<IdentityResolveOutcome, AppError> {
     let requires_webvh_evidence = body
         .requested_evidence_kinds
         .contains(&IdentityMethodEvidenceKind::DidWebvh);
@@ -460,7 +466,7 @@ pub(crate) async fn identity_resolve(
             None
         };
         require_requested_webvh_evidence(requires_webvh_evidence, method_evidence.as_ref())?;
-        return json_ok(identity_resolve_outcome(
+        return Ok(identity_resolve_outcome(
             body.did,
             record.did_document,
             key_log_head_hash(record.key_log_head)?,
@@ -470,38 +476,30 @@ pub(crate) async fn identity_resolve(
     }
     if let Some(document) = super::document::federation_peer_id_document(state, did) {
         require_requested_webvh_evidence(requires_webvh_evidence, None)?;
-        return json_ok(identity_resolve_outcome(
+        return Ok(identity_resolve_outcome(
             body.did, document, None, None, None,
         ));
     }
-    let sdk_document = state.dids().resolve_did(&body.did).await.ok();
-    if let Some(doc) = sdk_document {
-        require_requested_webvh_evidence(requires_webvh_evidence, None)?;
-        return json_ok(identity_resolve_outcome(
-            body.did,
-            json!({
-                "id": doc.id.as_str(),
-                "verificationMethod": doc.verification_methods,
-                "alsoKnownAs": doc.also_known_as,
-            }),
-            None,
-            None,
-            None,
-        ));
-    }
-    let record = identity_document_record(state, did).await;
-    let method_evidence = if did.starts_with("did:webvh:") {
-        run_webvh_resolution_checks(state, did).await?
-    } else {
-        None
-    };
-    require_requested_webvh_evidence(requires_webvh_evidence, method_evidence.as_ref())?;
-    json_ok(identity_resolve_outcome(
+    let document = state.dids().resolve_did(&body.did).await.map_err(|error| {
+        tracing::warn!(%error, %did, "DID resolution failed");
+        crate::app_error!(
+            CurrentDidAuthorityUnavailable,
+            "DID resolution did not produce a verified document",
+        )
+    })?;
+    // A missing/unresolvable DID is not an empty identity. In particular, never
+    // manufacture a development placeholder on this public read path.
+    require_requested_webvh_evidence(requires_webvh_evidence, None)?;
+    Ok(identity_resolve_outcome(
         body.did,
-        record.did_document,
-        key_log_head_hash(record.key_log_head)?,
-        Some(record.seq),
-        method_evidence,
+        serde_json::to_value(&document).map_err(|error| {
+            AppError::internal(format!(
+                "resolved DID document cannot be serialized: {error}"
+            ))
+        })?,
+        None,
+        None,
+        None,
     ))
 }
 
@@ -533,19 +531,18 @@ pub(crate) async fn identity_document(
         return Err(AppError::param_invalid("invalid did"));
     }
     let typed_did = Did::new(did.clone()).map_err(|_| AppError::param_invalid("invalid did"))?;
-    let record = identity_document_record(state, &did).await;
-    let head_event_digest = key_log_head_hash(record.key_log_head.clone())?;
-    let mut did_document = serde_json::from_value::<BTreeMap<String, Value>>(record.did_document)
-        .map_err(|error| {
-        AppError::internal(format!("stored DID document is invalid: {error}"))
-    })?;
-    did_document
-        .entry("id".to_owned())
-        .or_insert_with(|| Value::String(typed_did.as_str().to_owned()));
+    let resolved = resolve_identity(
+        state,
+        IdentityResolveRequestBody {
+            did: typed_did,
+            requested_evidence_kinds: Vec::new(),
+        },
+    )
+    .await?;
     json_ok(IdentityDocumentViewOutcome(IdentityDocumentView {
-        did_document,
-        head_event_digest,
-        seq: Some(record.seq),
+        did_document: resolved.did_document,
+        head_event_digest: resolved.key_log_head,
+        seq: resolved.seq,
         receipts: Vec::new(),
     }))
 }

@@ -28,7 +28,7 @@ pub(super) async fn run_webvh_resolution_checks(
     })?;
     if events.is_empty() {
         // No local log to validate — the resolver falls through to the
-        // SDK / default-document path higher up. We do not fail closed
+        // SDK resolver path higher up. We do not fail closed
         // here because the cached document may legitimately come from
         // an external resolver.
         return Ok(None);
@@ -116,32 +116,6 @@ pub(super) async fn run_webvh_resolution_checks(
     }))
 }
 
-pub(in crate::routing) async fn identity_document_record(
-    state: &AppState,
-    did: &str,
-) -> WebvhDocumentRecord {
-    let record = state
-        .dids()
-        .document(did)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| WebvhDocumentRecord {
-            did: did.to_owned(),
-            did_document: federation_peer_id_document(state, did)
-                .unwrap_or_else(|| default_did_document(Some(state), did)),
-            key_log_head: None,
-            seq: 0,
-            method_evidence: json!({"mode": "resolved_or_development_local"}),
-            // Local default document (dev fallback), treated as fresh.
-            fetched_at: now(),
-            expires_at: now()
-                + chrono::Duration::seconds(crate::jws_verify::HIGH_RISK_DID_FRESHNESS_MAX_SECS),
-            updated_at: now(),
-        });
-    with_default_also_known_as(record, state, did)
-}
-
 pub(super) fn federation_peer_id_document(state: &AppState, did: &str) -> Option<Value> {
     let verification_method = format!("{did}#notary-key");
     let key = state.federation_peer_verification_method_key(&verification_method)?;
@@ -159,97 +133,6 @@ pub(super) fn federation_peer_id_document(state: &AppState, did: &str) -> Option
     }))
 }
 
-pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value {
-    let mut verification_methods = Vec::new();
-    let mut authentication = Vec::new();
-    let mut assertion_method = Vec::new();
-    let also_known_as = default_also_known_as(state, did);
-    if let Some(state) = state
-        && did == state.service_id()
-    {
-        let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            state.notary_signing_key().verifying_key().as_bytes(),
-        );
-        for fragment in ["notary-key", "realm-state-snapshot-key-1"] {
-            let key_id = format!("{did}#{fragment}");
-            verification_methods.push(json!({
-                "id": key_id,
-                "type": "Multikey",
-                "controller": did,
-                "publicKeyMultibase": public_key.clone(),
-            }));
-            authentication.push(json!(key_id));
-            assertion_method.push(json!(key_id));
-        }
-    }
-    json!({
-        "id": did,
-        "alsoKnownAs": also_known_as,
-        "verificationMethod": verification_methods,
-        "authentication": authentication,
-        "assertionMethod": assertion_method,
-        "service": [{"id": "soland", "type": "ArkretStation", "serviceEndpoint": "/_arkret"}]
-    })
-}
-
-fn default_also_known_as(state: Option<&AppState>, did: &str) -> Vec<String> {
-    let Some(state) = state else {
-        return Vec::new();
-    };
-    if !state.config().development_mode || did != "did:web:alice.example" {
-        return Vec::new();
-    }
-    let domain = reqwest::Url::parse(&state.config().public_base_url)
-        .ok()
-        .and_then(|url| url.host_str().and_then(valid_handle_domain_candidate))
-        .or_else(|| {
-            state
-                .service_id()
-                .strip_prefix("did:web:")
-                .and_then(|value| valid_handle_domain_candidate(&value.replace(':', ".")))
-        })
-        .unwrap_or_else(|| "soland.local".to_owned());
-    vec![format!("acct:alice@{domain}")]
-}
-
-fn valid_handle_domain_candidate(value: &str) -> Option<String> {
-    let domain = value.trim().trim_end_matches('.').to_ascii_lowercase();
-    if domain.is_empty() {
-        return None;
-    }
-    arkret_wire::string_profiles::prepare_idna_domain(&domain).ok()
-}
-
-fn with_default_also_known_as(
-    mut record: WebvhDocumentRecord,
-    state: &AppState,
-    did: &str,
-) -> WebvhDocumentRecord {
-    let aliases = default_also_known_as(Some(state), did);
-    if aliases.is_empty() {
-        return record;
-    }
-    let Some(object) = record.did_document.as_object_mut() else {
-        return record;
-    };
-    let entry = object
-        .entry("alsoKnownAs".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let Some(array) = entry.as_array_mut() else {
-        return record;
-    };
-    for alias in aliases {
-        if !array
-            .iter()
-            .any(|value| value.as_str() == Some(alias.as_str()))
-        {
-            array.push(Value::String(alias));
-        }
-    }
-    record
-}
-
-#[cfg(test)]
 pub(in crate::routing) fn validate_did_document_services(
     did: &str,
     document: &Value,

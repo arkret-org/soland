@@ -48,8 +48,6 @@ mod endpoints;
 pub(crate) use endpoints::IDENTITY_REGISTRY_OPERATION_BUNDLES;
 mod webvh;
 
-// Used by routing::tests and directory handle verification.
-pub(in crate::routing) use document::identity_document_record;
 #[cfg(test)]
 pub(in crate::routing) use document::validate_did_document_services;
 use document::{render_json_bytes, run_webvh_resolution_checks};
