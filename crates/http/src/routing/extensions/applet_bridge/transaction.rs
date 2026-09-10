@@ -1,7 +1,7 @@
 use arkret_identifiers::EventId;
 use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
 use arkret_models_integration::{
-    AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionStatus, RejectedItem,
+    AppletEventRejection, AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionStatus,
     namespace_pattern_matches,
 };
 use arkret_wire::Event;
@@ -259,7 +259,7 @@ fn queue_full_outcome(transaction: &AppletTransactionRequestBody) -> AppletTrans
         rejections: transaction
             .events
             .iter()
-            .map(|event| RejectedItem {
+            .map(|event| AppletEventRejection {
                 event_id: Some(event.event_id.clone()),
                 reason_code: arkret_wire::ReasonCode::from_wire(
                     arkret_wire::ReasonCode::QUEUE_FULL,
@@ -271,8 +271,8 @@ fn queue_full_outcome(transaction: &AppletTransactionRequestBody) -> AppletTrans
     }
 }
 
-fn rejected_event(event_id: &str, reason_code: impl AsRef<str>) -> RejectedItem {
-    RejectedItem {
+fn rejected_event(event_id: &str, reason_code: impl AsRef<str>) -> AppletEventRejection {
+    AppletEventRejection {
         event_id: EventId::new(event_id.to_owned()).ok(),
         reason_code: arkret_wire::ReasonCode::from_wire(reason_code.as_ref()),
         retry_after_ms: None,
@@ -283,7 +283,7 @@ fn rejected_event_with_detail(
     event_id: &str,
     reason_code: impl AsRef<str>,
     detail: impl Into<String>,
-) -> RejectedItem {
+) -> AppletEventRejection {
     let _detail = detail.into();
     rejected_event(event_id, reason_code)
 }

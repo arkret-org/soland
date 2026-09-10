@@ -1615,7 +1615,7 @@ async fn verify_history_source_proof(
     response: &HistoryKeyResponseSendRequestBody,
     checkpoint: &MlsGovernanceVerificationCheckpoint,
     dependencies: &[GovernanceDependency],
-) -> Result<arkret_models_collaboration::history_key::HistorySourceSignerResult, AppError> {
+) -> Result<arkret_models_collaboration::history_key::HistorySourceSignerOutcome, AppError> {
     let trust_state = state.clone();
     arkret::verify_history_source_proof(response, checkpoint, dependencies, move |request| {
         let trust_state = trust_state.clone();
@@ -2596,7 +2596,7 @@ async fn accept_history_response_manifest(
     request_record: &soland_storage::HistoryRequestRecord,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
-    source_signer_result: arkret_models_collaboration::history_key::HistorySourceSignerResult,
+    source_signer_result: arkret_models_collaboration::history_key::HistorySourceSignerOutcome,
     cipher_suite: String,
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let history = state.persistence().governance_history_service();
@@ -2914,7 +2914,7 @@ async fn accept_history_response_chunk(
     source_record_digest: &arkret_wire::Hash,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
-    source_signer_result: arkret_models_collaboration::history_key::HistorySourceSignerResult,
+    source_signer_result: arkret_models_collaboration::history_key::HistorySourceSignerOutcome,
     cipher_suite: String,
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let history = state.persistence().governance_history_service();

@@ -4,14 +4,14 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use arkret_models_collaboration::{
-    CompactAgentSignerResolutionEvidence, CurrentSignerEvidenceItem,
-    CurrentSignerEvidenceQueryOutcome, CurrentSignerEvidenceQueryRequestBody,
-    CurrentSignerEvidenceResponseCore, CurrentSignerEvidenceSelector,
+    CompactAgentSignerResolutionEvidence, CurrentSignerEvidence, CurrentSignerEvidenceQueryOutcome,
+    CurrentSignerEvidenceQueryRequestBody, CurrentSignerEvidenceResponseCore,
+    CurrentSignerEvidenceSelector,
 };
 use arkret_models_identity::{
-    CurrentSignerKeyResult, SignerEvidenceResolvedStatus, SignerEvidenceUnavailableStatus,
-    SignerKeyQueryResult, SignerKeyQuerySelector, SignerKeysQueryOutcome,
-    SignerKeysQueryRequestBody, UnavailableSignerKeyResult,
+    CurrentSignerKeyOutcome, SignerEvidenceResolvedStatus, SignerEvidenceUnavailableStatus,
+    SignerKeyQueryOutcome, SignerKeyQuerySelector, SignerKeysQueryOutcome,
+    SignerKeysQueryRequestBody, UnavailableSignerKeyOutcome,
 };
 use arkret_wire::DidCoreId;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -173,8 +173,8 @@ pub(crate) async fn resolve_self_signer_keys(
     Ok(outcome)
 }
 
-fn unavailable_signer_key(selector: &SignerKeyQuerySelector) -> SignerKeyQueryResult {
-    SignerKeyQueryResult::Unavailable(UnavailableSignerKeyResult {
+fn unavailable_signer_key(selector: &SignerKeyQuerySelector) -> SignerKeyQueryOutcome {
+    SignerKeyQueryOutcome::Unavailable(UnavailableSignerKeyOutcome {
         selector: selector.clone(),
         status: SignerEvidenceUnavailableStatus::Unavailable,
     })
@@ -185,7 +185,7 @@ async fn current_key_result(
     body: &SignerKeysQueryRequestBody,
     selector: &SignerKeyQuerySelector,
     peer_selector: CurrentSignerEvidenceSelector,
-) -> Option<SignerKeyQueryResult> {
+) -> Option<SignerKeyQueryOutcome> {
     let target = peer_selector.route_service_id().clone();
     let peer_request = CurrentSignerEvidenceQueryRequestBody {
         request_id: body.request_id.clone(),
@@ -207,7 +207,7 @@ async fn current_key_result(
             let key = self_key_from_peer_item(state, &peer_request, item)
                 .await
                 .ok()?;
-            return Some(SignerKeyQueryResult::Current(CurrentSignerKeyResult {
+            return Some(SignerKeyQueryOutcome::Current(CurrentSignerKeyOutcome {
                 selector: selector.clone(),
                 status: SignerEvidenceResolvedStatus::Resolved,
                 key,
@@ -221,11 +221,11 @@ async fn current_key_result(
 async fn self_key_from_peer_item(
     state: &AppState,
     request: &CurrentSignerEvidenceQueryRequestBody,
-    item: &CurrentSignerEvidenceItem,
+    item: &CurrentSignerEvidence,
 ) -> Result<arkret_models_identity::StationSigningKey, AppError> {
     let invalid = || AppError::not_found("current signer evidence unavailable");
     match item {
-        CurrentSignerEvidenceItem::Agent {
+        CurrentSignerEvidence::Agent {
             actor,
             verification_method,
             ..
@@ -245,7 +245,7 @@ async fn self_key_from_peer_item(
             )
             .await
         }
-        CurrentSignerEvidenceItem::AccountDevice {
+        CurrentSignerEvidence::AccountDevice {
             account_id,
             device_id: _,
             device_projection_attestation,
@@ -319,12 +319,12 @@ pub(super) async fn current_device_projection_document(
 /// The self handler reduces a peer device item only after signature and exact
 /// reference/Account/device bindings have all passed together.
 fn device_self_result_key(
-    item: &CurrentSignerEvidenceItem,
+    item: &CurrentSignerEvidence,
     root: &arkret_models_identity::AuthenticatedSignerResolutionEvidence,
     document: &arkret_identity::DidDocument,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_models_identity::StationSigningKey, String> {
-    let CurrentSignerEvidenceItem::AccountDevice {
+    let CurrentSignerEvidence::AccountDevice {
         account_id,
         device_id,
         device_projection_attestation: attestation,
@@ -457,7 +457,7 @@ async fn issue_authority_outcome(
 
 fn query_outcome(
     request: &CurrentSignerEvidenceQueryRequestBody,
-    evidences: Vec<CurrentSignerEvidenceItem>,
+    evidences: Vec<CurrentSignerEvidence>,
 ) -> CurrentSignerEvidenceQueryOutcome {
     CurrentSignerEvidenceQueryOutcome {
         response: CurrentSignerEvidenceResponseCore {
@@ -516,7 +516,7 @@ async fn issue_selector(
     state: &AppState,
     request: &CurrentSignerEvidenceQueryRequestBody,
     selector: &CurrentSignerEvidenceSelector,
-) -> Result<Option<CurrentSignerEvidenceItem>, AppError> {
+) -> Result<Option<CurrentSignerEvidence>, AppError> {
     match selector {
         CurrentSignerEvidenceSelector::AccountDevice {
             account_id,
@@ -536,14 +536,12 @@ async fn issue_selector(
                 BTreeMap::new(),
             )
             .await?;
-            Ok(
-                record.map(|record| CurrentSignerEvidenceItem::AccountDevice {
-                    signer_evidence_ref: record.signer_evidence_ref,
-                    account_id: account_id.clone(),
-                    device_id: device_id.clone(),
-                    device_projection_attestation: record.device_projection_attestation,
-                }),
-            )
+            Ok(record.map(|record| CurrentSignerEvidence::AccountDevice {
+                signer_evidence_ref: record.signer_evidence_ref,
+                account_id: account_id.clone(),
+                device_id: device_id.clone(),
+                device_projection_attestation: record.device_projection_attestation,
+            }))
         }
         CurrentSignerEvidenceSelector::Agent {
             actor,
@@ -573,7 +571,7 @@ async fn issue_selector(
                             missing.push(dependency);
                         }
                     }
-                    Ok(Some(CurrentSignerEvidenceItem::Agent {
+                    Ok(Some(CurrentSignerEvidence::Agent {
                         actor: actor.clone(),
                         verification_method: verification_method.clone(),
                         authenticated_signer_evidence: compact,
@@ -739,7 +737,7 @@ mod tests {
     }
 
     fn self_device_fixture() -> (
-        super::CurrentSignerEvidenceItem,
+        super::CurrentSignerEvidence,
         arkret_models_identity::AuthenticatedSignerResolutionEvidence,
         arkret_identity::DidDocument,
         chrono::DateTime<chrono::Utc>,
@@ -765,7 +763,7 @@ mod tests {
             ))
             .unwrap(),
         };
-        let item = super::CurrentSignerEvidenceItem::AccountDevice {
+        let item = super::CurrentSignerEvidence::AccountDevice {
             account_id: core.account_id.clone(),
             device_id: core.device_id.clone(),
             device_projection_attestation: attestation,
@@ -815,7 +813,7 @@ mod tests {
                 .attestation
                 .authorized_generation_ref += 1;
         }
-        if let super::CurrentSignerEvidenceItem::AccountDevice {
+        if let super::CurrentSignerEvidence::AccountDevice {
             device_projection_attestation,
             signer_evidence_ref,
             ..
@@ -830,7 +828,7 @@ mod tests {
         // original real signature instead of treating a hash as authority.
         assert!(super::device_self_result_key(&item, &root, &document, now).is_err());
         let (mut item, root, document, now, _) = self_device_fixture();
-        if let super::CurrentSignerEvidenceItem::AccountDevice { account_id, .. } = &mut item {
+        if let super::CurrentSignerEvidence::AccountDevice { account_id, .. } = &mut item {
             account_id.station_id =
                 arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap();
         }

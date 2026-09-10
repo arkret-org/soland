@@ -372,7 +372,7 @@ async fn accept_rotation_step(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if next.is_none() {
         transaction.resource.terminal_result =
-            Some(arkret_wire::SecurityTransactionTerminalResult {
+            Some(arkret_wire::SecurityTransactionTerminalOutcome {
                 result: arkret_wire::SecurityTransactionResultKind::Completed,
                 completed_at: chrono::Utc::now(),
                 receipt_id: None,
@@ -645,7 +645,7 @@ fn initial_backup_erase_outcome(
     request: &arkret_models_crypto::BackupSeriesEraseRequestBody,
 ) -> Result<arkret_models_crypto::BackupSeriesEraseOutcome, AppError> {
     use arkret_models_crypto::{
-        BackupSeriesEraseOutcome, BackupSeriesEraseResult, BackupSeriesEraseResultStatus,
+        BackupSeriesEraseOutcome, BackupSeriesEraseRow, BackupSeriesEraseRowStatus,
         BackupSeriesEraseStatus,
     };
 
@@ -661,11 +661,11 @@ fn initial_backup_erase_outcome(
             let mut remaining_backups = rotation.old_backups.clone();
             remaining_backups
                 .sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
-            BackupSeriesEraseResult {
+            BackupSeriesEraseRow {
                 backup_kind: rotation.backup_kind,
                 previous_series_id: rotation.previous_series_id.clone(),
                 new_series_id: rotation.new_series_id.clone(),
-                status: BackupSeriesEraseResultStatus::Pending,
+                status: BackupSeriesEraseRowStatus::Pending,
                 erased_backups: Vec::new(),
                 remaining_backups,
                 reason_code: None,
@@ -740,7 +740,7 @@ pub(crate) async fn backup_series_erase_command(
     res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<arkret_models_crypto::BackupSeriesEraseOutcome> {
-    use arkret_models_crypto::{BackupSeriesEraseOutcome, BackupSeriesEraseResultStatus};
+    use arkret_models_crypto::{BackupSeriesEraseOutcome, BackupSeriesEraseRowStatus};
 
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -1094,9 +1094,9 @@ pub(crate) async fn backup_series_erase_command(
                     .sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
             }
             result.status = if result.remaining_backups.is_empty() {
-                BackupSeriesEraseResultStatus::Erased
+                BackupSeriesEraseRowStatus::Erased
             } else {
-                BackupSeriesEraseResultStatus::Pending
+                BackupSeriesEraseRowStatus::Pending
             };
             result.reason_code = None;
             refresh_backup_erase_completion(&mut progress.outcome, &request);
@@ -1108,7 +1108,7 @@ pub(crate) async fn backup_series_erase_command(
         }
         let result = &mut progress.outcome.series_results[result_index];
         if storage_failed && !result.remaining_backups.is_empty() {
-            result.status = BackupSeriesEraseResultStatus::FailedRetryable;
+            result.status = BackupSeriesEraseRowStatus::FailedRetryable;
             result.reason_code = Some(arkret_wire::ReasonCode::from_wire(
                 "storage_temporarily_unavailable",
             ));
@@ -1662,7 +1662,7 @@ async fn continue_issue_terminal_receipt(
         output_digest: receipt_digest,
         accepted_at: completed_at,
     });
-    transaction.resource.terminal_result = Some(arkret_wire::SecurityTransactionTerminalResult {
+    transaction.resource.terminal_result = Some(arkret_wire::SecurityTransactionTerminalOutcome {
         result: arkret_wire::SecurityTransactionResultKind::Completed,
         completed_at,
         receipt_id: Some(receipt.receipt_id.clone()),

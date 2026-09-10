@@ -4,7 +4,7 @@ use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
     AgentSidecarEncryptionProfile, AgentSidecarExchangeControlPayload, AgentSidecarList,
     AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState, AgentSidecarView,
-    PendingSidecarAccessReconciliationItem, PendingSidecarAccessReconciliationStage,
+    PendingSidecarAccessReconciliation, PendingSidecarAccessReconciliationStage,
     agent_sidecar_participant_authority_digest,
 };
 use arkret_models_collaboration::events_payloads::sidecar::{
@@ -248,7 +248,7 @@ fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppE
 }
 
 fn sidecar_access_readiness(
-    pending: &[PendingSidecarAccessReconciliationItem],
+    pending: &[PendingSidecarAccessReconciliation],
     has_group: bool,
     controller_device_ready: bool,
     frontier_contested: bool,
@@ -625,7 +625,7 @@ async fn sidecar_view(
             .iter()
             .cloned()
             .map(|agent_id| {
-                Ok(PendingSidecarAccessReconciliationItem {
+                Ok(PendingSidecarAccessReconciliation {
                     agent_id: arkret_wire::DidCoreId::new(agent_id)
                         .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
                     provisioning_phase: if epoch_row.is_some() {
@@ -1582,7 +1582,7 @@ mod tests {
 
     #[test]
     fn welcome_pending_takes_precedence_over_key_material() {
-        let pending = PendingSidecarAccessReconciliationItem {
+        let pending = PendingSidecarAccessReconciliation {
             agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
                 .unwrap(),
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsWelcome,
@@ -1605,7 +1605,7 @@ mod tests {
 
     #[test]
     fn pending_sidecar_removal_requires_epoch_update() {
-        let pending = PendingSidecarAccessReconciliationItem {
+        let pending = PendingSidecarAccessReconciliation {
             agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
                 .unwrap(),
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,

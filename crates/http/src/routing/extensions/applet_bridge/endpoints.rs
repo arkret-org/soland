@@ -757,7 +757,7 @@ async fn revoke_install_endpoint(
                     Some(arkret_wire::ReasonCode::from_wire(&error.code()));
                 outcome
                     .rejections
-                    .push(arkret_models_integration::AppletRejectedItem {
+                    .push(arkret_models_integration::AppletScopeRejection {
                         requested_scope: Some(outcome.steps[index].effect_ref.clone()),
                         reason_code: arkret_wire::ReasonCode::from_wire(&error.code()),
                     });

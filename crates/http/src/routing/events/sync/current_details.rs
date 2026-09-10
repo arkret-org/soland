@@ -168,7 +168,9 @@ fn roster_from_current(
     use arkret_models_collaboration::sync_frames::account_sync::{
         MemberRoster, MemberRosterEntry, MembershipState,
     };
-    use arkret_models_collaboration::sync_frames::current_results::{CurrentResult, CurrentTarget};
+    use arkret_models_collaboration::sync_frames::current_results::{
+        CurrentOutcome, CurrentTarget,
+    };
     let mut rows = BTreeMap::new();
     for entry in entries {
         if entry.selector().scope_ref
@@ -186,7 +188,7 @@ fn roster_from_current(
         let CurrentTarget::Member { actor_id } = entry.target() else {
             continue;
         };
-        let CurrentResult::Value { value } = entry.result() else {
+        let CurrentOutcome::Value { value } = entry.result() else {
             continue;
         };
         let membership = match value.as_json().as_str() {
