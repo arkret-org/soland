@@ -232,15 +232,19 @@ pub enum ConflictCode {
     OrganizationRegistrationStale,
     /// The value violates its registered schema.
     SchemaViolation,
+    /// A required signature or proof does not verify.
+    SignatureInvalid,
     /// A key-backup series sequence went backwards.
     SeriesSeqNotMonotonic,
     /// A time-bounded workflow was acted on after its deadline.
     TtlExpired,
+    /// A structurally valid wire feature has no admissible v1 form.
+    UnsupportedFeature,
 }
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 28] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
@@ -265,8 +269,10 @@ impl ConflictCode {
         Self::OrganizationRegistrationRevoked,
         Self::OrganizationRegistrationStale,
         Self::SchemaViolation,
+        Self::SignatureInvalid,
         Self::SeriesSeqNotMonotonic,
         Self::TtlExpired,
+        Self::UnsupportedFeature,
     ];
 
     #[must_use]
@@ -298,8 +304,10 @@ impl ConflictCode {
             Self::OrganizationRegistrationRevoked => "organization_registration_revoked",
             Self::OrganizationRegistrationStale => "organization_registration_stale",
             Self::SchemaViolation => "schema_violation",
+            Self::SignatureInvalid => "signature_invalid",
             Self::SeriesSeqNotMonotonic => "series_seq_not_monotonic",
             Self::TtlExpired => "ttl_expired",
+            Self::UnsupportedFeature => "unsupported_feature",
         }
     }
 

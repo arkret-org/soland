@@ -124,10 +124,24 @@ pub(crate) async fn read(
             if consumed >= 100 {
                 break;
             }
-            let bytes = arkret_canonical::canonical_json_bytes(&row.payload)
+            let mut payload = row.payload.clone();
+            let mut bytes = arkret_canonical::canonical_json_bytes(&payload)
                 .map_err(|error| error.to_string())?
                 .len()
                 + 256;
+            if bytes > remaining_bytes
+                && name == "notifications"
+                && payload.get("action").and_then(Value::as_str) == Some("upsert")
+                && payload
+                    .get_mut("data")
+                    .and_then(Value::as_object_mut)
+                    .is_some_and(|data| data.remove("preview").is_some())
+            {
+                bytes = arkret_canonical::canonical_json_bytes(&payload)
+                    .map_err(|error| error.to_string())?
+                    .len()
+                    + 256;
+            }
             if bytes > remaining_bytes {
                 if consumed == 0 && remaining_bytes == 6 * 1024 * 1024 {
                     return Err("account global item exceeds frame byte budget".to_owned());
@@ -143,7 +157,7 @@ pub(crate) async fn read(
             } else {
                 progress.positions.insert(name.to_owned(), row.revision);
             }
-            by_key.insert(row.item_key.clone(), row);
+            by_key.insert(row.item_key.clone(), (row.deleted, payload));
         }
         if baseline {
             channels.push(channel);
@@ -156,20 +170,20 @@ pub(crate) async fn read(
         } else if consumed == rows.len() && rows.len() < 101 {
             progress.positions.insert(name.to_owned(), cut);
         }
-        for row in by_key.into_values() {
-            if baseline && row.deleted {
+        for (deleted, payload) in by_key.into_values() {
+            if baseline && deleted {
                 continue;
             }
             match name {
                 "account_data_events" => {
-                    if row.payload["source"] == "invalidated" {
+                    if payload["source"] == "invalidated" {
                         return Err(
                             "account data source was withdrawn; establish a fresh baseline"
                                 .to_owned(),
                         );
                     }
                     let event: arkret_wire::Event =
-                        serde_json::from_value(row.payload["value"].clone())
+                        serde_json::from_value(payload["value"].clone())
                             .map_err(|error| error.to_string())?;
                     let key = event
                         .payload
@@ -181,19 +195,17 @@ pub(crate) async fn read(
                 }
 
                 "station_cas" => {
-                    let key = row.payload["account_data_key"]
+                    let key = payload["account_data_key"]
                         .as_str()
                         .ok_or("CAS key absent")?;
                     if !crate::routing::identity::account_data::is_station_cas_account_data_key(key)
                     {
                         continue;
                     }
-                    let revision = row.payload["revision"]
-                        .as_u64()
-                        .ok_or("CAS revision absent")?;
-                    let updated_at = serde_json::from_value(row.payload["updated_at"].clone())
+                    let revision = payload["revision"].as_u64().ok_or("CAS revision absent")?;
+                    let updated_at = serde_json::from_value(payload["updated_at"].clone())
                         .map_err(|error| error.to_string())?;
-                    if row.deleted {
+                    if deleted {
                         cas.removals.push(StationCasAccountDataRemoval {
                             account_data_key: key.to_owned(),
                             revision,
@@ -204,19 +216,18 @@ pub(crate) async fn read(
                             .push(arkret_models_identity::account::AccountDataRow {
                                 account_data_key: key.to_owned(),
                                 revision,
-                                content: row.payload["payload"].clone(),
+                                content: payload["payload"].clone(),
                                 updated_at,
                             });
                     }
                 }
-                "notifications" => notifications.items.push(
-                    serde_json::from_value(row.payload.clone())
-                        .map_err(|error| error.to_string())?,
-                ),
+                "notifications" => notifications
+                    .items
+                    .push(serde_json::from_value(payload).map_err(|error| error.to_string())?),
                 "device_lists" => {
-                    let owner = serde_json::from_value(row.payload.clone())
-                        .map_err(|error| error.to_string())?;
-                    if row.deleted {
+                    let owner =
+                        serde_json::from_value(payload).map_err(|error| error.to_string())?;
+                    if deleted {
                         device_lists.left_ids.push(owner);
                     } else {
                         device_lists.changed_ids.push(owner);

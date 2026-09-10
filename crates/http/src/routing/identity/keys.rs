@@ -28,6 +28,10 @@ use crate::wire::{
     KeysUploadRequestBody, KeysUploadUnsignedRequest, QueryDeviceRecord,
 };
 
+pub(crate) fn peer_router() -> Router {
+    Router::with_path("keys/query").post(peer_keys_query)
+}
+
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("keys/upload").post(keys_upload))
@@ -384,8 +388,25 @@ async fn keys_query(
     let body = body.into_inner();
     let mut result = Vec::new();
     let mut device_generations = Vec::new();
+    let mut failures = Vec::new();
     let requester = super::session_actor::validated_session_actor(state, &session).await?;
+    let requester_account = requester
+        .as_account_id()
+        .ok_or_else(|| AppError::capability_denied("keys query requires an Account requester"))?
+        .clone();
+    let mut local = Vec::new();
+    let mut remote = BTreeMap::<arkret_wire::DidCoreId, Vec<_>>::new();
     for selector in body.device_keys {
+        if selector.account_id.station_id == state.service_core_id() {
+            local.push(selector);
+        } else {
+            remote
+                .entry(selector.account_id.station_id.clone())
+                .or_default()
+                .push(selector);
+        }
+    }
+    for selector in local {
         let account_id = selector.account_id;
         // This directory only attests accounts owned by this Station. A foreign
         // selector must never borrow the local account's same-principal devices.
@@ -492,11 +513,406 @@ async fn keys_query(
             device_keys: actor_keys,
         });
     }
+    for (destination, selectors) in remote {
+        let mut by_basis =
+            BTreeMap::<String, (arkret_models_crypto::PeerKeysRelationshipBasis, Vec<_>)>::new();
+        for selector in selectors {
+            let target = arkret_wire::ActorId::account(selector.account_id.clone());
+            if let Some(basis) =
+                peer_relationship_basis_for_target(state, &requester, &target).await?
+            {
+                let key = serde_json::to_string(&basis)
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+                by_basis
+                    .entry(key)
+                    .or_insert_with(|| (basis, Vec::new()))
+                    .1
+                    .push(selector);
+            }
+        }
+        for (_, (relationship_basis, selectors)) in by_basis {
+            let peer_request = arkret_models_crypto::PeerKeysQueryRequestBody {
+                request_id: arkret_wire::RequestId::new(format!(
+                    "ak:request:{}",
+                    uuid::Uuid::now_v7()
+                ))
+                .map_err(|error| AppError::internal(error.to_string()))?,
+                requester_account_id: requester_account.clone(),
+                purpose: arkret_models_crypto::PeerKeysQueryPurpose::E2eeMessageEncryption,
+                relationship_basis,
+                device_keys: selectors.clone(),
+            };
+            match proxy_peer_keys_query(state, &peer_request, &destination).await {
+                Ok(outcome) => {
+                    let arkret_models_crypto::PeerKeysQueryOutcome {
+                        device_keys: peer_entries,
+                        device_generations: peer_generations,
+                        failures: peer_failures,
+                        ..
+                    } = outcome;
+                    failures.extend(peer_failures);
+                    for entry in peer_entries {
+                        let generation = peer_generations
+                            .iter()
+                            .find(|generation| generation.account_id == entry.account_id);
+                        let Some(generation) = generation else {
+                            failures.extend(entry.device_keys.keys().cloned().map(|device_id| {
+                                arkret_models_crypto::QueryFailure {
+                                    account_id: Some(entry.account_id.clone()),
+                                    device_id: Some(device_id),
+                                    reason_code: arkret_models_crypto::QueryFailureReason::DeviceDirectoryUnavailable,
+                                    retry_after_ms: None,
+                                }
+                            }));
+                            continue;
+                        };
+                        let mut verified = BTreeMap::new();
+                        for (device_id, record) in entry.device_keys {
+                            let valid = record
+                                .validate_attestation_binding(&entry.account_id, &device_id)
+                                .is_ok()
+                                && record
+                                    .device_projection_attestation
+                                    .attestation
+                                    .authorized_generation_ref
+                                    == generation.generation_state.current_device_generation_ref
+                                && generation.generation_state.device_generation_status
+                                    == arkret_models_crypto::keys::DeviceGenerationStatus::Active
+                                && record
+                                    .device_projection_attestation
+                                    .attestation
+                                    .device_status
+                                    == DeviceStatus::Active;
+                            let verified_origin = if valid {
+                                match super::current_signer_evidence::current_device_projection_document(state, &record.device_projection_attestation).await {
+                                    Ok(document) => super::current_signer_evidence::verify_current_device_projection(&record.device_projection_attestation, &document, chrono::Utc::now()).is_ok(),
+                                    Err(_) => false,
+                                }
+                            } else {
+                                false
+                            };
+                            if verified_origin {
+                                verified.insert(device_id, record);
+                            } else {
+                                failures.push(arkret_models_crypto::QueryFailure {
+                                    account_id: Some(entry.account_id.clone()),
+                                    device_id: Some(device_id),
+                                    reason_code: arkret_models_crypto::QueryFailureReason::DeviceDirectoryUnavailable,
+                                    retry_after_ms: None,
+                                });
+                            }
+                        }
+                        if !verified.is_empty() {
+                            result.push(arkret_models_crypto::QueryAccountDeviceEntry {
+                                account_id: entry.account_id,
+                                device_keys: verified,
+                            });
+                            device_generations.push(generation.clone());
+                        }
+                    }
+                }
+                Err(_) => {
+                    for selector in selectors {
+                        for device_id in selector.device_ids {
+                            failures.push(arkret_models_crypto::QueryFailure {
+                                account_id: Some(selector.account_id.clone()),
+                                device_id: Some(device_id),
+                                reason_code: arkret_models_crypto::QueryFailureReason::DeviceDirectoryUnavailable,
+                                retry_after_ms: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
     json_ok(KeysQueryOutcome {
         device_keys: result,
-        failures: Vec::new(),
+        failures,
         device_generations,
     })
+}
+
+async fn peer_relationship_basis_for_target(
+    state: &AppState,
+    requester: &arkret_wire::ActorId,
+    target: &arkret_wire::ActorId,
+) -> Result<Option<arkret_models_crypto::PeerKeysRelationshipBasis>, AppError> {
+    let projection = state.projections().snapshot();
+    if let Some(((realm_id, _), _)) =
+        projection
+            .members
+            .iter()
+            .find(|((realm_id, actor), membership)| {
+                actor == &requester.to_string()
+                    && membership.state == "join"
+                    && projection
+                        .member(realm_id, &target.to_string())
+                        .is_some_and(|row| row.state == "join")
+            })
+    {
+        return Ok(Some(
+            arkret_models_crypto::PeerKeysRelationshipBasis::RealmMembership {
+                realm_id: arkret_wire::RealmId::new(realm_id.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            },
+        ));
+    }
+    let contact = state
+        .contacts()
+        .contact_any(requester, target)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(contact
+        .filter(|contact| contact.status == "accepted")
+        .map(|_| arkret_models_crypto::PeerKeysRelationshipBasis::Contact {}))
+}
+
+async fn proxy_peer_keys_query(
+    state: &AppState,
+    request: &arkret_models_crypto::PeerKeysQueryRequestBody,
+    destination: &arkret_wire::DidCoreId,
+) -> Result<arkret_models_crypto::PeerKeysQueryOutcome, AppError> {
+    let route = crate::routing::federation::resolved_peer_target(
+        state,
+        destination.as_str(),
+        "station",
+        false,
+    )
+    .await
+    .map_err(|_| AppError::not_found("peer device directory is unavailable"))?;
+    let target = format!(
+        "{}/_arkret/peer/keys/query",
+        route.base_url.trim_end_matches('/')
+    );
+    let body = arkret_canonical::canonical_json_bytes(request)
+        .map_err(|error| AppError::internal(format!("canonical peer keys request: {error}")))?;
+    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        &target,
+        "peer keys query",
+        state.config().development_mode,
+        std::time::Duration::from_secs(10),
+    )
+    .map_err(|_| AppError::not_found("peer device directory is unavailable"))?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    for (name, value) in [
+        (
+            "content-digest",
+            crate::routing::federation::outbox::content_digest_header_value(&body),
+        ),
+        ("source-service-id", state.service_id().to_owned()),
+        ("destination-service-id", destination.to_string()),
+        (
+            "source-trust-domain",
+            state.config().trust_domain.to_string(),
+        ),
+        ("destination-trust-domain", route.trust_domain),
+        ("arkret-operation", "ak.peer.keys.read.lookup.v1".to_owned()),
+    ] {
+        crate::routing::federation::outbox::insert_header_if_valid(&mut headers, name, &value);
+    }
+    let headers = crate::routing::federation::outbox::rfc9421_sign(state, headers, "POST", &target);
+    let mut response = client
+        .post(url)
+        .headers(headers)
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| AppError::not_found("peer device directory is unavailable"))?;
+    if !response.status().is_success() {
+        return Err(AppError::not_found("peer device directory is unavailable"));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| AppError::not_found("peer device directory is unavailable"))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > 512 * 1024 {
+            return Err(AppError::from_rejection(
+                arkret_wire::ErrorCode::LimitExceeded,
+                "peer device directory response exceeds budget",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let outcome: arkret_models_crypto::PeerKeysQueryOutcome = serde_json::from_slice(&bytes)
+        .map_err(|_| AppError::not_found("peer device directory is unavailable"))?;
+    outcome
+        .validate_for_request(request)
+        .map_err(|_| AppError::not_found("peer device directory is unavailable"))?;
+    Ok(outcome)
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.peer.keys.read.lookup", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.keys.read.lookup.v1"))]
+async fn peer_keys_query(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<arkret_models_crypto::PeerKeysQueryOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    crate::routing::federation::verify_inbound_peer_http_signature(state, req, true).await?;
+    let source_service_id = req
+        .headers()
+        .get("source-service-id")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| AppError::unauthenticated("peer keys query source is missing"))?
+        .to_owned();
+    let body = req
+        .parse_json::<arkret_models_crypto::PeerKeysQueryRequestBody>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid peer keys query body"))?;
+    body.validate()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let destination = body
+        .destination_station_id()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if body.requester_account_id.station_id.as_str() != source_service_id
+        || destination != &state.service_core_id()
+    {
+        return Err(AppError::unauthenticated(
+            "peer keys query service binding is invalid",
+        ));
+    }
+    let requester = arkret_wire::ActorId::account(body.requester_account_id.clone());
+    let projection = state.projections().snapshot();
+    let mut device_keys = Vec::new();
+    let mut device_generations = Vec::new();
+    for selector in &body.device_keys {
+        let target = arkret_wire::ActorId::account(selector.account_id.clone());
+        if !peer_keys_relationship_authorized(state, &projection, &body, &requester, &target)
+            .await?
+        {
+            continue;
+        }
+        if state
+            .identities()
+            .account(&selector.account_id)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .is_none()
+        {
+            continue;
+        }
+        if let Some(generation) =
+            crate::routing::identity::device_generation::current_device_generation(
+                state,
+                selector.account_id.principal_id.as_str(),
+            )
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            device_generations.push(arkret_models_crypto::AccountDeviceGenerationEntry {
+                account_id: selector.account_id.clone(),
+                generation_state: arkret_models_crypto::keys::DeviceGenerationState {
+                    current_device_generation_ref: generation.current_ref,
+                    device_generation_status: match generation.status {
+                        crate::routing::identity::device_generation::DeviceGenerationStatus::Active => arkret_models_crypto::keys::DeviceGenerationStatus::Active,
+                        crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => arkret_models_crypto::keys::DeviceGenerationStatus::Conflicted,
+                    },
+                },
+            });
+        }
+        let mut rows = BTreeMap::new();
+        for device_id in &selector.device_ids {
+            let algorithms = state
+                .key_material()
+                .bundle(
+                    selector.account_id.principal_id.as_str(),
+                    device_id.as_str(),
+                )
+                .await
+                .ok()
+                .flatten()
+                .and_then(|value| value.get("one_time_keys").cloned())
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default();
+            let facet =
+                crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
+                    state,
+                    selector.account_id.principal_id.as_str(),
+                    device_id.as_str(),
+                )
+                .await;
+            if let Some(record) =
+                attested_device_record(state, &selector.account_id, device_id, facet, algorithms)
+                    .await?
+            {
+                rows.insert(device_id.clone(), record);
+            }
+        }
+        if !rows.is_empty() {
+            device_keys.push(arkret_models_crypto::QueryAccountDeviceEntry {
+                account_id: selector.account_id.clone(),
+                device_keys: rows,
+            });
+        }
+    }
+    let outcome = arkret_models_crypto::PeerKeysQueryOutcome {
+        request_id: body.request_id.clone(),
+        requester_account_id: body.requester_account_id.clone(),
+        device_keys,
+        device_generations,
+        failures: Vec::new(),
+    };
+    outcome
+        .validate_for_request(&body)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(outcome)
+}
+
+async fn peer_keys_relationship_authorized(
+    state: &AppState,
+    projection: &soland_domain::reducer::ProjectionState,
+    request: &arkret_models_crypto::PeerKeysQueryRequestBody,
+    requester: &arkret_wire::ActorId,
+    target: &arkret_wire::ActorId,
+) -> Result<bool, AppError> {
+    match &request.relationship_basis {
+        arkret_models_crypto::PeerKeysRelationshipBasis::RealmMembership { realm_id } => {
+            Ok(projection
+                .member(realm_id.as_str(), &requester.to_string())
+                .is_some_and(|row| row.state == "join")
+                && projection
+                    .member(realm_id.as_str(), &target.to_string())
+                    .is_some_and(|row| row.state == "join"))
+        }
+        arkret_models_crypto::PeerKeysRelationshipBasis::Contact {} => {
+            let Some(contact) = state
+                .contacts()
+                .contact_any(requester, target)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+            else {
+                return Ok(false);
+            };
+            if contact.status != "accepted" {
+                return Ok(false);
+            }
+            let scopes = if contact.requester_id == *requester {
+                &contact.granted_to_requester_scopes
+            } else if contact.target_id == *requester {
+                &contact.granted_to_target_scopes
+            } else {
+                return Ok(false);
+            };
+            Ok(match request.purpose {
+                arkret_models_crypto::PeerKeysQueryPurpose::E2eeMessageEncryption => {
+                    scopes.iter().any(|scope| scope == "direct_message")
+                }
+                arkret_models_crypto::PeerKeysQueryPurpose::MlsGroupAdmission => {
+                    scopes.iter().any(|scope| scope == "invite")
+                }
+                arkret_models_crypto::PeerKeysQueryPurpose::CallMedia => scopes
+                    .iter()
+                    .any(|scope| matches!(scope.as_str(), "voice_call" | "video_call")),
+            })
+        }
+    }
 }
 
 fn keys_query_actor_visible_to_requester(

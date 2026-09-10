@@ -90,7 +90,7 @@ mod discovery;
 mod handles;
 mod organization_resolution;
 mod preview_token;
-mod realm_resolution;
+pub(crate) mod realm_resolution;
 mod requester_proof;
 
 use actors_users::*;

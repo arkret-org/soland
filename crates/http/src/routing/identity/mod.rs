@@ -40,7 +40,7 @@ pub(crate) mod device_signing;
 pub(super) mod did;
 pub(in crate::routing) mod key_backup;
 mod keys;
-pub(crate) use keys::device_signature_kid_points_to_device_key;
+pub(crate) use keys::{device_signature_kid_points_to_device_key, peer_router as peer_keys_router};
 pub(crate) mod agent_pcr;
 mod organization_registration;
 // R3 spec-sync (arkret-spec b47ff6ec) — recovery policy / receipt

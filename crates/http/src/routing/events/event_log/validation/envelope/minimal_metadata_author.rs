@@ -243,6 +243,76 @@ async fn active_author_leaves(
         .collect())
 }
 
+/// Revalidate a pairwise SessionGrant holder against the current accepted MLS
+/// epoch. This is intentionally narrower than Event author verification: the
+/// issuer has already verified key possession, while the hosting Station must
+/// still prove that the exact actor and method name one unique active leaf.
+pub(in crate::routing::events::event_log) async fn validate_pairwise_session_holder(
+    state: &AppState,
+    effective_scope: &arkret_wire::ScopeRef,
+    group_id: &str,
+    actor_id: &arkret_wire::ActorId,
+    verification_method: &arkret_wire::DidUrl,
+) -> Result<(), String> {
+    let account_id = actor_id
+        .as_account_id()
+        .ok_or_else(|| "pairwise holder actor must use the account branch".to_owned())?;
+    if account_id.station_id != state.service_core_id() {
+        return Err("pairwise holder is not hosted by this Station".to_owned());
+    }
+    let multibase = account_id
+        .principal_id
+        .as_str()
+        .strip_prefix("ak:did_core:key:")
+        .ok_or_else(|| "pairwise holder actor is not an ak:did_core:key principal".to_owned())?;
+    let expected_method = format!("did:key:{multibase}#{multibase}");
+    if verification_method.as_str() != expected_method {
+        return Err("pairwise holder verification method differs from its actor".to_owned());
+    }
+    let fragment = verification_method
+        .as_str()
+        .split_once('#')
+        .map(|(_, fragment)| fragment)
+        .ok_or_else(|| "pairwise holder verification method has no key fragment".to_owned())?;
+    let proof_public_key = arkret_canonical::decode_ed25519_multibase(fragment)
+        .map_err(|error| format!("pairwise holder key decode failed: {error}"))?;
+    let current = state
+        .mls_commits()
+        .commit(effective_scope, group_id)
+        .await
+        .map_err(|error| format!("pairwise holder MLS state lookup failed: {error}"))?
+        .ok_or_else(|| "pairwise holder MLS state is unavailable".to_owned())?;
+    if current.frontier_contested {
+        return Err("pairwise holder MLS frontier is contested".to_owned());
+    }
+    let coordinates = MinimalMetadataAuthorCoordinates {
+        group_id: group_id.to_owned(),
+        epoch: current.epoch,
+        group_state_ref: current
+            .accepted_commit_ref
+            .unwrap_or(current.genesis_event_ref),
+    };
+    let view = AuthorGroupStateView {
+        group_id: group_id.to_owned(),
+        epoch: current.epoch,
+        group_state_ref: coordinates.group_state_ref.clone(),
+        active_leaves: active_author_leaves(state, &coordinates)
+            .await
+            .map_err(|error| format!("pairwise holder active-leaf lookup failed: {error:?}"))?,
+    };
+    let claim = MinimalMetadataAuthorClaim {
+        group_id,
+        epoch: current.epoch,
+        group_state_ref: &coordinates.group_state_ref,
+        actor_id: &account_id.principal_id,
+        proof_verification_method: verification_method,
+        proof_public_key: &proof_public_key,
+    };
+    verify_minimal_metadata_author(&view, &claim)
+        .map(|_| ())
+        .map_err(|error| format!("pairwise holder leaf admission failed: {error}"))
+}
+
 /// Full production admission for one proof on a minimal-metadata content
 /// Event. Replaces the DID-freshness + resolver path of
 /// `validate_event_proofs` — no directory, no DID document service, no

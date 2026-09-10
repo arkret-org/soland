@@ -193,6 +193,8 @@ async fn put_notification(
         let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
         let source_event =
             EventId::new(source_event_id.to_owned()).map_err(|error| error.to_string())?;
+        let ordinary_kind = arkret_wire::OrdinaryNotificationKind::try_from(&notification_kind)
+            .map_err(|error| error.to_string())?;
         let id =
             arkret_models_collaboration::objects::read_receipts::derive_notification_projection_id(
                 actor_id
@@ -200,7 +202,7 @@ async fn put_notification(
                     .ok_or("notification recipient must be an account")?,
                 &realm,
                 &source_event,
-                &notification_kind,
+                ordinary_kind,
             )
             .map_err(|error| error.to_string())?;
         let notification = Notification {

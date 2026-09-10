@@ -38,9 +38,7 @@ use arkret_models_collaboration::mls_group_state_material::{
     MlsGroupStateMaterialRequestBody, material_digest_from_ref,
 };
 use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
-use arkret_models_identity::agent_signer_evidence::{
-    AgentSignerEvidence, AgentSignerEvidenceQuerySelector,
-};
+use arkret_models_identity::agent_signer_evidence::AgentSignerEvidence;
 use arkret_state::mls_governance_proof::MlsGovernanceVerificationCheckpoint;
 use arkret_wire::{Base64UrlString, BlobRef, EventKind, Hash, HistoryEffectiveScope};
 use base64::Engine as _;
@@ -58,6 +56,7 @@ use super::events::peer::{
 use super::system::extract::AuthArgs;
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::identity::agents::evidence::AgentSignerEvidenceQuerySelector;
 use crate::state::AppState;
 
 mod pagination;

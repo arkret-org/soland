@@ -1,10 +1,15 @@
 use arkret_models_collaboration::objects::read_receipts::{
-    Notification, NotificationEventSource, NotificationSchema, NotificationSource,
-    NotificationSourceRef,
+    Notification, NotificationEventSource, NotificationIdentity, NotificationSchema,
+    NotificationSource, NotificationSourceRef, OrdinaryProjectionContent,
 };
-use arkret_models_collaboration::sync_frames::account_sync::{NotificationData, NotificationDelta};
+use arkret_models_collaboration::sync_frames::account_sync::{
+    AgentRuntimeApprovalNotificationData, AgentRuntimeApprovalNotificationRemovalData,
+    NotificationData, NotificationDelta, NotificationDeltaAction, OrdinaryNotificationRemovalData,
+};
 use arkret_wire::events::EventKind;
-use arkret_wire::{ActorId, DidCoreId, EventId, NotificationId, RealmId, StrandId};
+use arkret_wire::{
+    ActorId, DidCoreId, EventId, NotificationId, NotificationKind, RealmId, StrandId,
+};
 use soland_storage::{
     AccountNotificationDeltaWrite, AccountPk, RecipientNotificationRecord,
     StoredAccountNotificationDelta,
@@ -19,6 +24,8 @@ use super::{
 struct NotificationRow {
     #[diesel(sql_type = sql_types::Uuid)]
     notification_id: Uuid,
+    #[diesel(sql_type = Nullable<Text>)]
+    projection_id: Option<String>,
     #[diesel(sql_type = Text)]
     recipient_actor_id: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -64,7 +71,7 @@ struct NotificationRow {
 }
 impl NotificationRow {
     fn into_recipient_record(self) -> PersistenceResult<RecipientNotificationRecord> {
-        let notification_kind = self
+        let notification_kind: NotificationKind = self
             .notification_kind
             .ok_or_else(|| {
                 PersistenceError::Internal(
@@ -132,7 +139,8 @@ impl NotificationRow {
                     PersistenceError::Internal("notification source Realm is missing".to_owned())
                 })?,
                 &source_event_id,
-                &notification_kind,
+                arkret_wire::OrdinaryNotificationKind::try_from(&notification_kind)
+                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             )
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;
         let notification = Notification {
@@ -191,41 +199,92 @@ impl NotificationRow {
         })
     }
 
+    fn into_delta(&self) -> PersistenceResult<NotificationDelta> {
+        let action = self.projection_action.as_ref().ok_or_else(|| {
+            PersistenceError::Internal(
+                "account notification is missing projection_action".to_owned(),
+            )
+        })?;
+        let action: NotificationDeltaAction = decode_enum("projection_action", action.clone())?;
+        let id = if let Some(projection_id) = self.projection_id.as_ref() {
+            NotificationIdentity::new(projection_id.clone()).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "ordinary notification projection id is invalid: {error}"
+                ))
+            })?
+        } else {
+            NotificationId::new(ids::format_typed_uuid(
+                "notification",
+                &self.notification_id,
+            ))
+            .map(NotificationIdentity::from)
+            .map_err(|error| {
+                PersistenceError::Internal(format!("account notification id is invalid: {error}"))
+            })?
+        };
+        let data = match (&id, action, self.projection_data.clone()) {
+            (NotificationIdentity::Projection(_), NotificationDeltaAction::Upsert, Some(value)) => {
+                Some(NotificationData::OrdinaryProjection(Box::new(
+                    serde_json::from_value::<OrdinaryProjectionContent>(value).map_err(
+                        |error| {
+                            PersistenceError::Internal(format!(
+                                "ordinary notification projection_data is invalid: {error}"
+                            ))
+                        },
+                    )?,
+                )))
+            }
+            (NotificationIdentity::Projection(_), NotificationDeltaAction::Remove, Some(value)) => {
+                Some(NotificationData::OrdinaryRemoval(
+                    serde_json::from_value::<OrdinaryNotificationRemovalData>(value).map_err(
+                        |error| {
+                            PersistenceError::Internal(format!(
+                                "ordinary notification removal data is invalid: {error}"
+                            ))
+                        },
+                    )?,
+                ))
+            }
+            (
+                NotificationIdentity::AgentApproval(_),
+                NotificationDeltaAction::Upsert,
+                Some(value),
+            ) => Some(NotificationData::AgentRuntimeApproval(
+                serde_json::from_value::<AgentRuntimeApprovalNotificationData>(value).map_err(
+                    |error| {
+                        PersistenceError::Internal(format!(
+                            "account notification projection_data is invalid: {error}"
+                        ))
+                    },
+                )?,
+            )),
+            (
+                NotificationIdentity::AgentApproval(_),
+                NotificationDeltaAction::Remove,
+                Some(value),
+            ) => Some(NotificationData::AgentRuntimeApprovalRemoval(
+                serde_json::from_value::<AgentRuntimeApprovalNotificationRemovalData>(value)
+                    .map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "account notification removal data is invalid: {error}"
+                        ))
+                    })?,
+            )),
+            (_, _, None) => None,
+        };
+        let delta = NotificationDelta::try_new(id, action, data).map_err(|error| {
+            PersistenceError::Internal(format!("account notification delta is invalid: {error}"))
+        })?;
+        Ok(delta)
+    }
+
     fn into_account_record(self) -> PersistenceResult<StoredAccountNotificationDelta> {
         if self.source_account_artifact_kind.as_deref() != Some("agent_runtime_approval") {
             return Err(PersistenceError::Internal(
                 "account notification artifact kind is invalid".to_owned(),
             ));
         }
-        let action = self.projection_action.ok_or_else(|| {
-            PersistenceError::Internal(
-                "account notification is missing projection_action".to_owned(),
-            )
-        })?;
-        let action = decode_enum("projection_action", action)?;
-        let data = self
-            .projection_data
-            .map(serde_json::from_value::<NotificationData>)
-            .transpose()
-            .map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "account notification projection_data is invalid: {error}"
-                ))
-            })?;
-        let delta = NotificationDelta::try_new(
-            NotificationId::new(ids::format_typed_uuid(
-                "notification",
-                &self.notification_id,
-            ))
-            .map_err(|error| {
-                PersistenceError::Internal(format!("account notification id is invalid: {error}"))
-            })?,
-            action,
-            data,
-        )
-        .map_err(|error| {
-            PersistenceError::Internal(format!("account notification delta is invalid: {error}"))
-        })?;
+        let delta = self.into_delta()?;
         let controller_account_pk = self.controller_account_pk.ok_or_else(|| {
             PersistenceError::Internal(
                 "account notification is missing controller_account_pk".to_owned(),
@@ -300,14 +359,46 @@ impl NotificationStore for PgNotificationStore {
             encode_enum("notification_kind", &record.notification.notification_kind)?;
         let priority = encode_enum("priority", &record.notification.priority)?;
         let state = encode_enum("state", &record.notification.state)?;
+        let ordinary = OrdinaryProjectionContent {
+            realm_id: source.realm_id.clone().ok_or_else(|| {
+                PersistenceError::Internal("notification source Realm is missing".to_owned())
+            })?,
+            source_event_id: source.source_event_id.clone(),
+            source_ref: source.source_ref.clone(),
+            strand_id: source.strand_id.clone(),
+            track_name: source.track_name.clone(),
+            notification_kind: arkret_wire::OrdinaryNotificationKind::try_from(
+                &record.notification.notification_kind,
+            )
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            priority: record.notification.priority,
+            preview: record.notification.preview.clone(),
+            created_at: record.notification.created_at,
+            updated_at: record.notification.updated_at,
+        };
+        ordinary
+            .validate()
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        let projection_id = record.notification.id.as_str().to_owned();
+        if !matches!(record.notification.id, NotificationIdentity::Projection(_)) {
+            return Err(PersistenceError::Internal(
+                "ordinary notification requires a projection identity".to_owned(),
+            ));
+        }
+        let projection_data = serde_json::to_value(&ordinary).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "ordinary notification projection serialization failed: {error}"
+            ))
+        })?;
         sql_query(
-            "INSERT INTO notifications \
-             (id, recipient_actor_id, realm_id, source_event_id, source_ref, strand_id, track_name, \
+            "WITH written AS (INSERT INTO notifications \
+             (id, projection_id, recipient_actor_id, realm_id, source_event_id, source_ref, strand_id, track_name, \
               notification_kind, event_kind, source_actor_id, priority, state, preview, \
-              created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+              projection_action, projection_data, ordinary_projection_data, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'upsert', $15, $15, $16, $17) \
              ON CONFLICT (recipient_actor_id, realm_id, source_event_id, notification_kind) \
               WHERE source_event_id IS NOT NULL DO UPDATE SET \
+              projection_id = EXCLUDED.projection_id, \
               source_ref = EXCLUDED.source_ref, \
               strand_id = EXCLUDED.strand_id, \
               track_name = EXCLUDED.track_name, \
@@ -316,12 +407,26 @@ impl NotificationStore for PgNotificationStore {
               priority = EXCLUDED.priority, \
               state = EXCLUDED.state, \
               preview = EXCLUDED.preview, \
+              projection_action = EXCLUDED.projection_action, \
+              projection_data = EXCLUDED.projection_data, \
+              ordinary_projection_data = EXCLUDED.ordinary_projection_data, \
               projection_position = nextval('notification_projection_position_seq'), \
-              updated_at = NOW()",
+              updated_at = NOW() \
+             RETURNING recipient_actor_id) \
+             UPDATE notifications SET \
+              projection_action = 'remove', \
+              projection_data = jsonb_build_object('reason','expired'), \
+              projection_position = nextval('notification_projection_position_seq'), \
+              updated_at = NOW() \
+             WHERE id IN (SELECT id FROM notifications \
+              WHERE recipient_actor_id=(SELECT recipient_actor_id FROM written LIMIT 1) \
+                AND projection_id IS NOT NULL AND projection_action='upsert' \
+              ORDER BY created_at DESC, projection_id OFFSET 100)",
         )
         // This UUID is only the cache row key. The public identity is derived
         // from the complete source tuple when reading the row.
         .bind::<sql_types::Uuid, _>(Uuid::now_v7())
+        .bind::<Text, _>(&projection_id)
         .bind::<Text, _>(record.notification.actor_id.to_string())
         .bind::<Nullable<Text>, _>(realm_id)
         .bind::<Text, _>(source.source_event_id.as_str())
@@ -339,6 +444,7 @@ impl NotificationStore for PgNotificationStore {
         .bind::<Text, _>(&priority)
         .bind::<Text, _>(&state)
         .bind::<Nullable<Jsonb>, _>(preview.as_ref())
+        .bind::<Jsonb, _>(&projection_data)
         .bind::<Timestamptz, _>(record.notification.created_at)
         .bind::<Nullable<Timestamptz>, _>(record.notification.updated_at)
         .execute(&mut *conn)
@@ -412,7 +518,7 @@ impl NotificationStore for PgNotificationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS notification_id, recipient_actor_id, realm_id, source_event_id, \
+            "SELECT id AS notification_id, projection_id, recipient_actor_id, realm_id, source_event_id, \
              controller_account_pk, recipient_id, source_account_artifact_kind, \
              source_account_artifact_id, source_ref, \
              strand_id, track_name, notification_kind, event_kind, source_actor_id, priority, \
@@ -441,7 +547,7 @@ impl NotificationStore for PgNotificationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS notification_id, recipient_actor_id, realm_id, source_event_id, \
+            "SELECT id AS notification_id, projection_id, recipient_actor_id, realm_id, source_event_id, \
              controller_account_pk, recipient_id, source_account_artifact_kind, \
              source_account_artifact_id, source_ref, strand_id, track_name, notification_kind, \
              event_kind, source_actor_id, priority, state, preview, projection_action, \
@@ -485,6 +591,91 @@ where
 pub(crate) fn global_notification_payload(value: Value) -> PersistenceResult<Value> {
     let row: NotificationRow = serde_json::from_value(value)
         .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-    serde_json::to_value(row.into_account_record()?.record.delta)
+    serde_json::to_value(row.into_delta()?)
         .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn ordinary_row() -> NotificationRow {
+        let account = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
+        );
+        let content = OrdinaryProjectionContent {
+            realm_id: RealmId::new(
+                "ak:realm:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-".to_owned(),
+            )
+            .unwrap(),
+            source_event_id: EventId::new(
+                "ak:event:AQM8rE4gp8l4axkSbbb9_dkqwWE8ZPYHwFsC24o2mrIL".to_owned(),
+            )
+            .unwrap(),
+            source_ref: None,
+            strand_id: None,
+            track_name: None,
+            notification_kind: arkret_wire::OrdinaryNotificationKind::Message,
+            priority: arkret_wire::NotificationPriority::Normal,
+            preview: Some(BTreeMap::from([(
+                "body".to_owned(),
+                serde_json::json!("hello"),
+            )])),
+            created_at: "2026-09-10T00:00:00Z".parse().unwrap(),
+            updated_at: None,
+        };
+        let projection_id = content.derive_id(&account).unwrap().to_string();
+        NotificationRow {
+            notification_id: Uuid::nil(),
+            projection_id: Some(projection_id),
+            recipient_actor_id: ActorId::account(account).to_string(),
+            realm_id: Some(content.realm_id.to_string()),
+            source_event_id: Some(content.source_event_id.to_string()),
+            controller_account_pk: None,
+            recipient_id: None,
+            source_account_artifact_kind: None,
+            source_account_artifact_id: None,
+            source_ref: None,
+            strand_id: None,
+            track_name: None,
+            notification_kind: Some("message".to_owned()),
+            event_kind: Some("ak.message.create".to_owned()),
+            source_actor_id: None,
+            priority: "normal".to_owned(),
+            state: "unread".to_owned(),
+            preview: None,
+            projection_action: Some("upsert".to_owned()),
+            projection_data: Some(serde_json::to_value(content).unwrap()),
+            projection_position: 1,
+            created_at: "2026-09-10T00:00:00Z".parse().unwrap(),
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn ordinary_projection_row_decodes_by_projection_id_branch() {
+        let row = ordinary_row();
+        let delta = row.into_delta().unwrap();
+        assert!(matches!(
+            delta.data,
+            Some(NotificationData::OrdinaryProjection(_))
+        ));
+    }
+
+    #[test]
+    fn ordinary_removal_row_requires_the_ordinary_reason_vocabulary() {
+        let mut row = ordinary_row();
+        row.projection_action = Some("remove".to_owned());
+        row.projection_data = Some(serde_json::json!({"reason":"access_revoked"}));
+        let delta = row.into_delta().unwrap();
+        assert_eq!(
+            delta.ordinary_removal_reason(),
+            Some(
+                arkret_models_collaboration::sync_frames::account_sync::OrdinaryNotificationRemovalReason::AccessRevoked
+            )
+        );
+    }
 }

@@ -117,10 +117,6 @@ pub(super) fn protocol_router() -> Router {
                         .put(set_agent_participation),
                 ),
         )
-        .push(
-            Router::with_path("agent-signer-evidence/query")
-                .post(evidence::query_agent_signer_evidence),
-        )
         .push(Router::with_path("agent-sidecars:ensure").post(ensure_sidecar))
         .push(
             Router::with_path("agent-sidecars")

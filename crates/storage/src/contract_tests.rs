@@ -1208,6 +1208,76 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
         Some(completed),
         "reservation completion must replace the pending row exactly once"
     );
+
+    let realm_id = RealmId::new(contract_realm_id(&format!("{namespace}:seal-prepare")))
+        .expect("Seal preparation fence Realm id");
+    let first_fence = super::SealPreparationFenceRecord {
+        realm_id: realm_id.clone(),
+        signer_slot: format!("{principal_id}#device-1@1"),
+        predecessor_basis: "sha256:predecessor-one".to_owned(),
+        request_hash: "sha256:prepare-one".to_owned(),
+        response_body: serde_json::json!({"seal_body": {"frozen": "first"}}),
+        body_digest: "sha256:body-one".to_owned(),
+        created_at: now,
+    };
+    assert_eq!(
+        store
+            .freeze_seal_preparation(&first_fence)
+            .await
+            .expect("freeze first Seal preparation"),
+        super::SealPreparationFenceOutcome::Frozen(first_fence.clone())
+    );
+    let mut exact_retry = first_fence.clone();
+    exact_retry.response_body = serde_json::json!({"seal_body": {"frozen": "racer"}});
+    exact_retry.body_digest = "sha256:racer-body".to_owned();
+    assert_eq!(
+        store
+            .freeze_seal_preparation(&exact_retry)
+            .await
+            .expect("replay exact Seal preparation request"),
+        super::SealPreparationFenceOutcome::Replay(first_fence.clone()),
+        "an exact request must replay the complete first body"
+    );
+    let mut conflicting = first_fence.clone();
+    conflicting.request_hash = "sha256:prepare-conflict".to_owned();
+    conflicting.response_body = serde_json::json!({"seal_body": {"frozen": "conflict"}});
+    assert_eq!(
+        store
+            .freeze_seal_preparation(&conflicting)
+            .await
+            .expect("fence conflicting Seal preparation request"),
+        super::SealPreparationFenceOutcome::Fenced
+    );
+    assert_eq!(
+        store
+            .seal_preparation_fence(
+                &realm_id,
+                &first_fence.signer_slot,
+                &first_fence.predecessor_basis,
+            )
+            .await
+            .expect("read immutable Seal preparation fence"),
+        Some(first_fence.clone()),
+        "a conflicting request must not mutate the frozen record"
+    );
+    let mut next_basis = conflicting.clone();
+    next_basis.predecessor_basis = "sha256:predecessor-two".to_owned();
+    assert!(matches!(
+        store
+            .freeze_seal_preparation(&next_basis)
+            .await
+            .expect("freeze advanced predecessor basis"),
+        super::SealPreparationFenceOutcome::Frozen(_)
+    ));
+    let mut next_generation = conflicting;
+    next_generation.signer_slot = format!("{principal_id}#device-1@2");
+    assert!(matches!(
+        store
+            .freeze_seal_preparation(&next_generation)
+            .await
+            .expect("freeze advanced signer generation"),
+        super::SealPreparationFenceOutcome::Frozen(_)
+    ));
 }
 
 pub async fn assert_mimi_consent_correlation_store_contract(

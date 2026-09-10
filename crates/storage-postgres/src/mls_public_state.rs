@@ -167,7 +167,12 @@ pub(crate) async fn commit_genesis(
         0,
         Some(&payload.governance_binding),
     )
-    .map_err(|error| PersistenceError::Conflict(format!("failed_precondition: {error}")))?;
+    .map_err(|error| match error {
+        arkret_mls::MlsError::UnsupportedFeature(message) => {
+            PersistenceError::Conflict(format!("unsupported_feature: {message}"))
+        }
+        error => PersistenceError::Conflict(format!("failed_precondition: {error}")),
+    })?;
     if tracker.ciphersuite_name() != payload.cipher_suite.as_str() {
         return Err(fail(
             "MLS Genesis cipher suite does not match its public GroupContext",

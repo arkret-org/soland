@@ -131,7 +131,6 @@ pub(super) async fn resolve_realm(
                     &realm,
                     effective_alias,
                 )?,
-                stripped_state_entries: Vec::new(),
                 join_rule: Some(join_rule_enum(&join_rule)),
                 join_candidates: join_candidates_for_resolved_realm(
                     state,
@@ -426,7 +425,7 @@ pub(super) fn default_join_rule() -> &'static str {
     "invite"
 }
 
-pub(super) fn realm_join_rule(state: &AppState, realm_id: &str) -> String {
+pub(crate) fn realm_join_rule(state: &AppState, realm_id: &str) -> String {
     let projection = state.projections().snapshot();
     projection
         .realm_join_policy_cell_value(realm_id)

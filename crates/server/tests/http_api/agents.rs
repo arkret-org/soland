@@ -1213,6 +1213,24 @@ async fn provision_agent_sdk_commit_attempt_inner(
         availability_body,
         "canonical-hash retry must return the exact first availability preparation"
     );
+    let mut conflicting_prepare = availability_request.clone();
+    conflicting_prepare.hlc =
+        arkret_wire::Hlc::new(format!("{timestamp_hex}-0003-a13f9c2e")).unwrap();
+    let mut conflicting_response = TestClient::post("http://server/_arkret/self/seals/prepare")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&conflicting_prepare).unwrap())
+        .send(&app)
+        .await;
+    assert_eq!(conflicting_response.status_code, Some(StatusCode::CONFLICT));
+    assert!(
+        conflicting_response
+            .take_string()
+            .await
+            .unwrap()
+            .contains("seal_signer_slot_fenced"),
+        "a different canonical request at the frozen signer slot must use the registered conflict"
+    );
     let controller_seal = availability.sign(&availability_request, &signer).unwrap();
     let mut receiptless_controller_seal = controller_seal.clone();
     receiptless_controller_seal

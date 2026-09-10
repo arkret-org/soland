@@ -369,76 +369,39 @@ async fn pcr_pending_control(
     json_ok(outcome)
 }
 
-const AVAILABILITY_RESERVATION_STATUS: i32 = 102;
-const AVAILABILITY_RESERVATION_LEASE_SECONDS: i64 = 30;
-const AVAILABILITY_RESERVATION_WAIT_ATTEMPTS: usize = 600;
-
-fn seal_prepare_idempotency_outcome(
-    record: soland_storage::IdempotencyRecord,
+fn seal_prepare_fence_outcome(
+    record: soland_storage::SealPreparationFenceRecord,
     request: &SealPrepareRequestBody,
     request_hash: &str,
-) -> Result<Option<SealPrepareOutcome>, AppError> {
+) -> Result<SealPrepareOutcome, AppError> {
     if record.request_hash != request_hash {
-        return Err(AppError::internal(
-            "availability idempotency record binding mismatch",
-        ));
-    }
-    if record.response_status == AVAILABILITY_RESERVATION_STATUS {
-        return Ok(None);
-    }
-    if record.response_status != StatusCode::OK.as_u16() as i32 {
-        return Err(AppError::internal(
-            "availability idempotency record has an invalid terminal status",
+        return Err(crate::app_error!(
+            SealSignerSlotFenced,
+            "this PCR signing position is already frozen for a different canonical request",
         ));
     }
     let cached =
         serde_json::from_value::<SealPrepareOutcome>(record.response_body).map_err(|error| {
             AppError::internal(format!(
-                "availability idempotency outcome is invalid: {error}"
+                "Seal preparation fence outcome is invalid: {error}"
             ))
         })?;
-    cached.validate_for_request(request).map_err(|error| {
+    let body_digest = canonical::canonical_sha256(&cached.seal_body).map_err(|error| {
         AppError::internal(format!(
-            "availability idempotency outcome binding is invalid: {error}"
+            "Seal preparation fence body is not canonical-hashable: {error}"
         ))
     })?;
-    Ok(Some(cached))
-}
-
-async fn wait_for_seal_prepare_idempotency_outcome(
-    state: &AppState,
-    authenticated_actor: &arkret_wire::ActorId,
-    idempotency_key: &str,
-    request: &SealPrepareRequestBody,
-    request_hash: &str,
-) -> Result<SealPrepareOutcome, AppError> {
-    for _ in 0..AVAILABILITY_RESERVATION_WAIT_ATTEMPTS {
-        let record = state
-            .persistence()
-            .scoped_idempotency_record(
-                authenticated_actor,
-                "ak.self.seals.command.prepare",
-                idempotency_key,
-            )
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("availability idempotency lookup failed: {error}"))
-            })?
-            .ok_or_else(|| {
-                crate::app_error!(
-                    TemporarilyUnavailable,
-                    "availability preparation reservation expired before completion",
-                )
-            })?;
-        if let Some(outcome) = seal_prepare_idempotency_outcome(record, request, request_hash)? {
-            return Ok(outcome);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    if body_digest != record.body_digest {
+        return Err(AppError::internal(
+            "Seal preparation fence body digest does not match its stored response",
+        ));
     }
-    Err(crate::app_error!(
-        TemporarilyUnavailable,
-        "availability preparation is still being completed by the first writer",
-    ))
+    cached.validate_for_request(request).map_err(|error| {
+        AppError::internal(format!(
+            "Seal preparation fence outcome binding is invalid: {error}"
+        ))
+    })?;
+    Ok(cached)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.prepare", tags("events"))]
@@ -459,12 +422,6 @@ async fn prepare_pcr_seal(
     request
         .validate()
         .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
-    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-        crate::app_error!(
-            PolicyViolation,
-            format!("availability requester_id DID core id is invalid: {error}"),
-        )
-    })?;
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     require_pcr_controller(state, &session_actor, &request.realm_id).await?;
@@ -475,48 +432,34 @@ async fn prepare_pcr_seal(
             format!("availability request is not canonical-hashable: {error}"),
         )
     })?;
-    let idempotency_key = format!("ak.self.seals.command.prepare.v1:{request_hash}");
-    let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        session_core_id.clone(),
-        state.service_core_id(),
-    ));
-    state
-        .jobs()
-        .prune_expired_idempotency(Utc::now())
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("availability idempotency pruning failed: {error}"))
-        })?;
-    // The preparation signs a service-authored timestamp. Serialize local
-    // construction so concurrent byte-identical requests cannot manufacture
-    // sibling preparations before the durable first-response row lands.
-    let availability_lock = service_event_authoring_lock();
-    let _availability_guard = availability_lock.lock().await;
-    if let Some(record) = state
-        .persistence()
-        .scoped_idempotency_record(
-            &authenticated_actor,
-            "ak.self.seals.command.prepare",
-            &idempotency_key,
+    let signer_gate =
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state,
+            session_actor.signing_principal_id().as_str(),
+            &session.device_id,
         )
         .await
+        .map_err(|error| crate::app_error!(SealSignerUnauthorized, error.to_string()))?;
+    let signer_slot = format!(
+        "{}#{}@{}",
+        signer_gate.principal_id, signer_gate.device_id, signer_gate.target_device_generation_ref
+    );
+    let predecessor_basis =
+        canonical::canonical_sha256(&request.predecessor_refs).map_err(|error| {
+            crate::app_error!(
+                SchemaViolation,
+                format!("Seal preparation predecessor basis is not canonical-hashable: {error}"),
+            )
+        })?;
+    if let Some(record) = state
+        .persistence()
+        .seal_preparation_fence(&request.realm_id, &signer_slot, &predecessor_basis)
+        .await
         .map_err(|error| {
-            AppError::internal(format!("availability idempotency lookup failed: {error}"))
+            AppError::internal(format!("Seal preparation fence lookup failed: {error}"))
         })?
     {
-        if let Some(cached) = seal_prepare_idempotency_outcome(record, &request, &request_hash)? {
-            return json_ok(cached);
-        }
-        return json_ok(
-            wait_for_seal_prepare_idempotency_outcome(
-                state,
-                &authenticated_actor,
-                &idempotency_key,
-                &request,
-                &request_hash,
-            )
-            .await?,
-        );
+        return json_ok(seal_prepare_fence_outcome(record, &request, &request_hash)?);
     }
 
     let mut current = state
@@ -569,56 +512,6 @@ async fn prepare_pcr_seal(
         )
         .await
         .map_err(|error| crate::app_error!(StateMismatch, error.to_string()))?;
-    let reservation_at =
-        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
-            .ok_or_else(|| AppError::internal("availability reservation time is invalid"))?;
-    let reservation = soland_storage::IdempotencyRecord {
-        authenticated_actor: authenticated_actor.clone(),
-        operation_id: "ak.self.seals.command.prepare".to_owned(),
-        idempotency_key: idempotency_key.clone(),
-        request_hash: request_hash.clone(),
-        response_status: AVAILABILITY_RESERVATION_STATUS,
-        response_body: serde_json::json!({
-            "kind": "availability_preparation_reservation",
-            "reservation_id": uuid::Uuid::now_v7(),
-        }),
-        created_at: reservation_at,
-        expires_at: reservation_at + Duration::seconds(AVAILABILITY_RESERVATION_LEASE_SECONDS),
-    };
-    state
-        .persistence()
-        .record_idempotency(&reservation)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("persist availability reservation: {error}"))
-        })?;
-    let landed_reservation = state
-        .persistence()
-        .scoped_idempotency_record(
-            &authenticated_actor,
-            "ak.self.seals.command.prepare",
-            &idempotency_key,
-        )
-        .await
-        .map_err(|error| AppError::internal(format!("reload availability reservation: {error}")))?
-        .ok_or_else(|| AppError::internal("availability reservation did not persist"))?;
-    if landed_reservation != reservation {
-        if let Some(cached) =
-            seal_prepare_idempotency_outcome(landed_reservation, &request, &request_hash)?
-        {
-            return json_ok(cached);
-        }
-        return json_ok(
-            wait_for_seal_prepare_idempotency_outcome(
-                state,
-                &authenticated_actor,
-                &idempotency_key,
-                &request,
-                &request_hash,
-            )
-            .await?,
-        );
-    }
     // AvailabilityReceipt timestamps are canonicalized at millisecond
     // precision. Freeze the preparation time at that same precision so an
     // exact retention boundary cannot lose sub-millisecond time during wire
@@ -665,17 +558,6 @@ async fn prepare_pcr_seal(
         })
         .collect::<Vec<_>>();
     availability_receipt_digests.sort();
-    let expires_at = dependencies
-        .iter()
-        .filter_map(|dependency| match dependency {
-            GovernanceDependency::AvailabilityReceipt {
-                availability_receipt,
-                ..
-            } => Some(availability_receipt.retention_expires_at),
-            _ => None,
-        })
-        .min()
-        .unwrap_or(sealed_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS));
     let outcome = SealPrepareOutcome {
         seal_body: worker
             .prepare_pcr_seal_body(
@@ -693,54 +575,36 @@ async fn prepare_pcr_seal(
             "constructed PCR Seal preparation is invalid: {error}"
         ))
     })?;
-    let completed = soland_storage::IdempotencyRecord {
-        authenticated_actor: authenticated_actor.clone(),
-        operation_id: "ak.self.seals.command.prepare".to_owned(),
-        idempotency_key: idempotency_key.clone(),
+    let fence = soland_storage::SealPreparationFenceRecord {
+        realm_id: request.realm_id.clone(),
+        signer_slot,
+        predecessor_basis,
         request_hash: request_hash.clone(),
-        response_status: StatusCode::OK.as_u16() as i32,
         response_body: serde_json::to_value(&outcome).map_err(|error| {
-            AppError::internal(format!("encode availability idempotency outcome: {error}"))
+            AppError::internal(format!("encode Seal preparation fence outcome: {error}"))
+        })?,
+        body_digest: canonical::canonical_sha256(&outcome.seal_body).map_err(|error| {
+            AppError::internal(format!("hash Seal preparation fence body: {error}"))
         })?,
         created_at: sealed_at,
-        expires_at,
     };
-    let completed_by_owner = state
-        .persistence()
-        .complete_idempotency_reservation(&reservation, &completed)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("complete availability reservation: {error}"))
-        })?;
-    if !completed_by_owner {
-        return json_ok(
-            wait_for_seal_prepare_idempotency_outcome(
-                state,
-                &authenticated_actor,
-                &idempotency_key,
-                &request,
-                &request_hash,
-            )
-            .await?,
-        );
-    }
     let landed = state
         .persistence()
-        .scoped_idempotency_record(
-            &authenticated_actor,
-            "ak.self.seals.command.prepare",
-            &idempotency_key,
-        )
+        .freeze_seal_preparation(&fence)
         .await
         .map_err(|error| {
-            AppError::internal(format!("reload availability idempotency outcome: {error}"))
-        })?
-        .ok_or_else(|| AppError::internal("availability idempotency outcome did not persist"))?;
-    let landed =
-        seal_prepare_idempotency_outcome(landed, &request, &request_hash)?.ok_or_else(|| {
-            AppError::internal("availability reservation remained pending after completion")
+            AppError::internal(format!("freeze Seal preparation signing slot: {error}"))
         })?;
-    json_ok(landed)
+    match landed {
+        soland_storage::SealPreparationFenceOutcome::Frozen(record)
+        | soland_storage::SealPreparationFenceOutcome::Replay(record) => {
+            json_ok(seal_prepare_fence_outcome(record, &request, &request_hash)?)
+        }
+        soland_storage::SealPreparationFenceOutcome::Fenced => Err(crate::app_error!(
+            SealSignerSlotFenced,
+            "this PCR signing position was concurrently frozen for a different canonical request",
+        )),
+    }
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit", tags("events"))]

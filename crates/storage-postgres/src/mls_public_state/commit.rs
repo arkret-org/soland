@@ -2,7 +2,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_mls::{MlsPublicGroupTracker, MlsPublicHandshakeTransition};
-use arkret_models_collaboration::events_payloads::MlsProposalPayload;
+use arkret_models_collaboration::events_payloads::{
+    MlsDecodedProposalType, MlsProposalMemberBinding, MlsProposalPayload,
+    admit_durable_mls_proposal,
+};
 use diesel::sql_types::{Array, BigInt, Binary, Jsonb};
 use diesel::{OptionalExtension, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -11,6 +14,19 @@ use soland_storage::{PersistenceError, PersistenceResult};
 
 fn fail(message: impl ToString) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {}", message.to_string()))
+}
+
+fn fail_with_code(code: arkret_wire::ErrorCode, message: impl ToString) -> PersistenceError {
+    PersistenceError::Conflict(format!("{}: {}", code.as_str(), message.to_string()))
+}
+
+fn fail_mls(error: arkret_mls::MlsError) -> PersistenceError {
+    match error {
+        arkret_mls::MlsError::UnsupportedFeature(message) => {
+            fail_with_code(arkret_wire::ErrorCode::UnsupportedFeature, message)
+        }
+        error => fail(error),
+    }
 }
 
 #[derive(diesel::QueryableByName)]
@@ -245,28 +261,15 @@ async fn commit_candidate(
         let MlsPublicHandshakeTransition::Proposal {
             proposal_ref,
             proposal_type,
+            sender_class,
             sender_leaf,
             ..
-        } = tracker.process_public_handshake(&bytes).map_err(fail)?
+        } = tracker.process_public_handshake(&bytes).map_err(fail_mls)?
         else {
             return Err(fail(
                 "durable MLS Proposal bytes contain a non-Proposal message",
             ));
         };
-        let expected_type=match value.proposal_type {
-            arkret_models_collaboration::events_payloads::MlsProposalType::Add=>1,
-            arkret_models_collaboration::events_payloads::MlsProposalType::Update=>2,
-            arkret_models_collaboration::events_payloads::MlsProposalType::Remove=>3,
-            arkret_models_collaboration::events_payloads::MlsProposalType::Psk=>4,
-            arkret_models_collaboration::events_payloads::MlsProposalType::Reinit=>5,
-            arkret_models_collaboration::events_payloads::MlsProposalType::GroupContextExtensions=>7,
-            arkret_models_collaboration::events_payloads::MlsProposalType::AppCustom=>return Err(fail("MLS custom Proposal needs an explicit supported registry binding")),
-        };
-        if expected_type != proposal_type {
-            return Err(fail(
-                "MLS declared Proposal type differs from its signed message",
-            ));
-        }
         let producer_row =
             sql_query("SELECT p.producer FROM mls_public_proposal_sources p JOIN canonical_events e ON e.pk=p.event_pk WHERE p.event_pk=$1 AND p.source_available AND p.source_canonical_bytes=e.canonical_bytes")
                 .bind::<BigInt, _>(pk)
@@ -276,7 +279,19 @@ async fn commit_candidate(
                 .map_err(PersistenceError::database)?
                 .ok_or_else(|| fail("accepted MLS Proposal producer evidence is unavailable"))?;
         let proposal_producer = serde_json::from_value(producer_row.producer).map_err(fail)?;
-        validate_sender(&proposal, &proposal_producer, sender_leaf.as_ref())?;
+        let member_binding = MlsProposalMemberBinding {
+            leaf_occupied_in_exact_base: sender_leaf.is_some(),
+            leaf_binds_verified_producer: sender_leaf.as_ref().is_some_and(|leaf| {
+                validate_sender(&proposal, &proposal_producer, Some(leaf)).is_ok()
+            }),
+        };
+        admit_durable_mls_proposal(
+            sender_class,
+            MlsDecodedProposalType::from_codepoint(proposal_type),
+            value.proposal_type,
+            member_binding,
+        )
+        .map_err(|rejection| fail_with_code(rejection.error_code, rejection.reason))?;
         if proposals.insert(proposal_ref, (proposal, value)).is_some() {
             return Err(fail(
                 "multiple durable Events identify the same MLS Proposal",
@@ -286,6 +301,7 @@ async fn commit_candidate(
     }
     let bytes = arkret_canonical::base64url_decode(payload.commit_bytes_b64()).map_err(fail)?;
     let MlsPublicHandshakeTransition::Commit {
+        sender_class,
         sender_leaf,
         epoch,
         referenced_proposal_refs,
@@ -294,10 +310,16 @@ async fn commit_candidate(
         removed_leaf_indices,
         updated_leaf_indices,
         ..
-    } = tracker.process_public_handshake(&bytes).map_err(fail)?
+    } = tracker.process_public_handshake(&bytes).map_err(fail_mls)?
     else {
         return Err(fail("MLS Commit bytes contain a non-Commit message"));
     };
+    if !sender_class.is_supported() {
+        return Err(fail_with_code(
+            arkret_wire::ErrorCode::UnsupportedFeature,
+            "v1 durable Commits accept only a Member sender of the exact base group",
+        ));
+    }
     validate_sender(event, producer, sender_leaf.as_ref())?;
     let consumed = referenced_proposal_refs
         .into_iter()
@@ -364,4 +386,69 @@ async fn commit_candidate(
         .bind::<BigInt,_>(event_pk).bind::<Array<BigInt>,_>(dependencies.into_iter().collect::<Vec<_>>())
         .execute(conn).await.map_err(PersistenceError::database)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_sender_and_group_extension_keep_the_registered_conflict_code() {
+        let rejection = admit_durable_mls_proposal(
+            arkret_models_collaboration::events_payloads::MlsProposalSenderClass::External,
+            MlsDecodedProposalType::Remove,
+            arkret_models_collaboration::events_payloads::MlsProposalType::Remove,
+            MlsProposalMemberBinding {
+                leaf_occupied_in_exact_base: false,
+                leaf_binds_verified_producer: false,
+            },
+        )
+        .unwrap_err();
+        let error = fail_with_code(rejection.error_code, rejection.reason);
+        assert_eq!(
+            error.conflict_code(),
+            Some(soland_storage::ConflictCode::UnsupportedFeature)
+        );
+
+        let error = fail_mls(arkret_mls::MlsError::UnsupportedFeature(
+            "external_senders is forbidden".to_owned(),
+        ));
+        assert_eq!(
+            error.conflict_code(),
+            Some(soland_storage::ConflictCode::UnsupportedFeature)
+        );
+    }
+
+    #[test]
+    fn producer_binding_errors_keep_distinct_wire_codes() {
+        let missing = admit_durable_mls_proposal(
+            arkret_models_collaboration::events_payloads::MlsProposalSenderClass::Member,
+            MlsDecodedProposalType::Remove,
+            arkret_models_collaboration::events_payloads::MlsProposalType::Remove,
+            MlsProposalMemberBinding {
+                leaf_occupied_in_exact_base: false,
+                leaf_binds_verified_producer: false,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            fail_with_code(missing.error_code, missing.reason).conflict_code(),
+            Some(soland_storage::ConflictCode::FailedPrecondition)
+        );
+
+        let wrong_producer = admit_durable_mls_proposal(
+            arkret_models_collaboration::events_payloads::MlsProposalSenderClass::Member,
+            MlsDecodedProposalType::Remove,
+            arkret_models_collaboration::events_payloads::MlsProposalType::Remove,
+            MlsProposalMemberBinding {
+                leaf_occupied_in_exact_base: true,
+                leaf_binds_verified_producer: false,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            fail_with_code(wrong_producer.error_code, wrong_producer.reason).conflict_code(),
+            Some(soland_storage::ConflictCode::SignatureInvalid)
+        );
+    }
 }

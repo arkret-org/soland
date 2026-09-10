@@ -120,6 +120,15 @@ pub(super) fn validate_initial_publication_session_context(
                     "recovery candidate session cannot submit ordinary Events",
                 ));
             }
+            arkret_models_identity::SessionGrantHolderBinding::MinimalMetadataPairwise {
+                ..
+            } => {
+                return Err(SubmitOneError::new(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "pairwise endpoint session cannot submit ordinary Events",
+                ));
+            }
         }
     }
     Ok(())

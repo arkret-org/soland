@@ -15,181 +15,57 @@ use arkret_models_identity::agent_signer_evidence::{
     AgentAuthorityStateEvidence, AgentAuthorityStateLease, AgentAuthorizationEvidence,
     AgentAuthorizationStateWitness, AgentAuthorizationStatus, AgentDetachedJws, AgentKeyCellEntry,
     AgentLifecycleProvenance, AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence,
-    AgentSignerEvidenceQueryOutcome, AgentSignerEvidenceQueryRequestBody,
-    AgentSignerEvidenceQueryResult, AgentSignerEvidenceQuerySelector,
     ControllerAccountGateAttestation, ControllerAccountGateAttestationIssueOutcome,
     ControllerAccountGateAttestationIssueRequestBody, CurrentAgentSignerEvidence,
-    SignerEvidenceResolvedStatus, SignerEvidenceUnavailableStatus, StationSigningKey,
+    StationSigningKey,
 };
 use arkret_signatures::proof::PublicKeyMaterial;
 use arkret_wire::{
     CellRef, DidCoreId, Event, EventId, Hash, NonEmptyString, RealmId, RequestId, SchemaId, Seal,
 };
-use salvo::oapi::extract::JsonBody;
 
 use super::*;
+
+#[derive(Clone, Debug)]
+pub(crate) enum AgentSignerEvidenceQuerySelector {
+    CurrentAdmission {
+        actor: arkret_wire::ActorId,
+        verification_method: arkret_wire::DidUrl,
+    },
+    HistoricalEvent {
+        actor: arkret_wire::ActorId,
+        verification_method: arkret_wire::DidUrl,
+        event_id: arkret_wire::EventId,
+        receiver_id: arkret_wire::DidCoreId,
+    },
+}
+
+impl AgentSignerEvidenceQuerySelector {
+    pub(crate) fn actor(&self) -> &arkret_wire::ActorId {
+        match self {
+            Self::CurrentAdmission { actor, .. } | Self::HistoricalEvent { actor, .. } => actor,
+        }
+    }
+
+    pub(crate) fn verification_method(&self) -> &arkret_wire::DidUrl {
+        match self {
+            Self::CurrentAdmission {
+                verification_method,
+                ..
+            }
+            | Self::HistoricalEvent {
+                verification_method,
+                ..
+            } => verification_method,
+        }
+    }
+}
 
 /// Internal acquisition diagnostics; self APIs expose only uniform unavailable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgentEvidenceAcquisitionFailure {
     AgentSignerEvidenceMissing,
     AgentAuthorizationInactive,
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.agent_signer_evidence.read.resolve",
-    tags("identity")
-)]
-pub(super) async fn query_agent_signer_evidence(
-    aa: AuthArgs,
-    body: JsonBody<AgentSignerEvidenceQueryRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AgentSignerEvidenceQueryOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    body.validate()
-        .map_err(super::super::current_signer_evidence::self_request_error)?;
-    let requester =
-        crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
-    if requester.as_account_id() != Some(&body.recipient_account_id)
-        || body.recipient_account_id.station_id != state.service_core_id()
-    {
-        return Err(AppError::not_found("Agent signer evidence is unavailable"));
-    }
-    let requester_is_member =
-        crate::routing::realm_has_member(state, body.realm_id.as_str(), &requester.to_string())
-            .await;
-    let ordinary = state
-        .realms()
-        .realm_metadata(body.realm_id.as_str())
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|realm| !realm.minimal_metadata_realm);
-    let mut results = Vec::with_capacity(body.queries.len());
-    for selector in &body.queries {
-        let visible = ordinary
-            && match selector {
-                AgentSignerEvidenceQuerySelector::CurrentAdmission { actor, .. } => {
-                    requester_is_member
-                        && crate::routing::realm_has_member(
-                            state,
-                            body.realm_id.as_str(),
-                            &actor.to_string(),
-                        )
-                        .await
-                }
-                AgentSignerEvidenceQuerySelector::HistoricalEvent { event_id, .. } => match state
-                    .event_queries()
-                    .canonical_event(event_id.as_str())
-                    .await
-                    .ok()
-                    .flatten()
-                {
-                    Some(record) if record.realm_id.as_deref() == Some(body.realm_id.as_str()) => {
-                        crate::routing::events::event_log::event_visible_to_session(
-                            state, &record, &session,
-                        )
-                        .await
-                    }
-                    _ => false,
-                },
-            };
-        let resolved = if visible {
-            match selector {
-                AgentSignerEvidenceQuerySelector::CurrentAdmission {
-                    actor,
-                    verification_method,
-                } => {
-                    let query =
-                        arkret_models_collaboration::SelfCurrentSignerEvidenceQueryRequestBody {
-                            request_id: body.request_id.clone(),
-                            realm_id: body.realm_id.clone(),
-                            recipient_account_id: body.recipient_account_id.clone(),
-                            queries: vec![
-                                arkret_models_collaboration::CurrentSignerEvidenceSelector::Agent {
-                                    actor: actor.clone(),
-                                    verification_method: verification_method.clone(),
-                                },
-                            ],
-                        };
-                    match super::super::current_signer_evidence::resolve_self_current(state, &query).await {
-                        Ok(outcome) => match outcome.results.into_iter().next() {
-                            Some(arkret_models_collaboration::SelfCurrentSignerEvidenceResult::Resolved { key, checked_at, .. }) => Some(AgentSignerEvidenceQueryResult::CurrentResolved { selector: selector.clone(), status: SignerEvidenceResolvedStatus::Resolved, key, checked_at }),
-                            _ => None,
-                        },
-                        Err(error) if error.code == arkret_wire::ErrorCode::LimitExceeded => return Err(error),
-                        Err(_) => None,
-                    }
-                }
-                AgentSignerEvidenceQuerySelector::HistoricalEvent { .. } => {
-                    resolve_self_historical_agent_selector(state, selector)
-                        .await
-                        .ok()
-                }
-            }
-        } else {
-            None
-        };
-        results.push(
-            resolved.unwrap_or_else(|| AgentSignerEvidenceQueryResult::Unavailable {
-                selector: selector.clone(),
-                status: SignerEvidenceUnavailableStatus::Unavailable,
-            }),
-        );
-    }
-    let outcome = AgentSignerEvidenceQueryOutcome {
-        request_id: body.request_id.clone(),
-        realm_id: body.realm_id.clone(),
-        recipient_account_id: body.recipient_account_id.clone(),
-        results,
-    };
-    outcome
-        .validate_for_request(&body)
-        .map_err(super::super::current_signer_evidence::self_result_error)?;
-    json_ok(outcome)
-}
-
-async fn resolve_self_historical_agent_selector(
-    state: &AppState,
-    selector: &AgentSignerEvidenceQuerySelector,
-) -> Result<AgentSignerEvidenceQueryResult, AppError> {
-    let invalid = || AppError::not_found("Agent historical signer evidence unavailable");
-    if !matches!(
-        selector,
-        AgentSignerEvidenceQuerySelector::HistoricalEvent { .. }
-    ) {
-        return Err(invalid());
-    }
-    let (root, dependencies) = current_authenticated_agent_signer_evidence(state, selector)
-        .await
-        .map_err(|_| invalid())?;
-    let key = verified_station_agent_key(state, selector, &root, &dependencies, chrono::Utc::now())
-        .await?;
-    let AuthenticatedSignerResolutionEvidence::Agent {
-        agent_signer_evidence,
-        ..
-    } = &root
-    else {
-        return Err(invalid());
-    };
-    let AgentSignerEvidence::HistoricalEvent {
-        event_admission, ..
-    } = agent_signer_evidence.as_ref()
-    else {
-        return Err(invalid());
-    };
-    Ok(AgentSignerEvidenceQueryResult::HistoricalResolved {
-        selector: selector.clone(),
-        status: SignerEvidenceResolvedStatus::Resolved,
-        key,
-        accepted_at: event_admission
-            .producer_accepted_at()
-            .map_err(|_| invalid())?,
-        signer_evidence_ref: root.evidence_ref().map_err(|_| invalid())?,
-    })
 }
 
 /// Verify portable roots on the Station before reducing them to a self result.

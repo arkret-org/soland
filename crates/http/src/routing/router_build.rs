@@ -361,6 +361,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 // self/realms/{realm_id}/links* + effective-policy
                 // (ak.self.realm_link.*).
                 .push(realms::router())
+                .push(realm_join::self_router())
                 .push(invites::self_router())
                 // self/realms/{realm_id}/organizations (ak.self.realm_organization.read.list.v1).
                 .push(realm_organization::router())
@@ -376,6 +377,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(invites::peer_router())
                 .push(identity::contact_federation::peer_router())
                 .push(identity::current_signer_evidence::peer_router())
+                .push(identity::peer_keys_router())
                 .push(federation::erasure_receipts::router())
                 .push(governance_history::peer_router())
                 .push(mls::peer_router()),

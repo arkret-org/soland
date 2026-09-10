@@ -1743,7 +1743,7 @@ pub(super) async fn accepted_event_envelope(
             .as_ref()
             .unwrap_or(&event.actor_id)
             .clone();
-        let selector = arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
+        let selector = crate::routing::identity::agents::evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
             actor: signer_id.clone(),
             verification_method: producer.verification_method.clone(),
         };

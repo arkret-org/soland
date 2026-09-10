@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use arkret_models_collaboration::objects::relation::{
-    RelationCardinality, RelationConflictCandidate, RelationConflictDiagnostic, RelationEndpoint,
+    RelationCardinality, RelationConflictCandidate, RelationConflictDiagnostic,
+    RelationConflictDomain, RelationConflictDomainKind, RelationEndpoint,
 };
 
 use super::*;
@@ -203,39 +204,47 @@ impl ProjectionState {
         &self,
         is_visible: impl Fn(&SolandRelationState) -> bool,
     ) -> Result<Vec<RelationConflictDiagnostic>, RelationConflictProjectionError> {
-        let mut groups = std::collections::BTreeMap::<String, BTreeSet<String>>::new();
+        let mut groups =
+            std::collections::BTreeMap::<String, (RelationConflictDomain, BTreeSet<String>)>::new();
         for relation in self
             .relations
             .values()
             .filter(|relation| relation.state != "tombstoned")
         {
             let cardinality = registered_relation_cardinality(&relation.relation_kind);
-            let mut keys = Vec::new();
-            if matches!(cardinality, RelationCardinality::ManyToMany) {
-                keys.push(relation_conflict_key(relation, "tuple", true, true)?);
-            }
-            if matches!(
-                cardinality,
-                RelationCardinality::OneToOne | RelationCardinality::ManyToOne
-            ) {
-                keys.push(relation_conflict_key(relation, "from", true, false)?);
-            }
-            if matches!(
-                cardinality,
-                RelationCardinality::OneToOne | RelationCardinality::OneToMany
-            ) {
-                keys.push(relation_conflict_key(relation, "to", false, true)?);
-            }
-            for key in keys {
-                groups
-                    .entry(key)
-                    .or_default()
-                    .insert(relation.relation_id.clone());
-            }
+            let domain_kind = match cardinality {
+                RelationCardinality::ManyToMany => RelationConflictDomainKind::Tuple,
+                RelationCardinality::ManyToOne => RelationConflictDomainKind::From,
+                RelationCardinality::OneToOne | RelationCardinality::OneToMany => continue,
+            };
+            let from_ref = relation.from_ref.clone().ok_or_else(|| {
+                arkret_wire::WireError::Protocol(
+                    "relation conflict projection is missing from_ref".to_owned(),
+                )
+            })?;
+            let to_ref = matches!(domain_kind, RelationConflictDomainKind::Tuple)
+                .then(|| relation.to_ref.clone())
+                .flatten();
+            let domain = RelationConflictDomain::try_new(
+                domain_kind,
+                arkret_wire::RelationKind::from_wire(&relation.relation_kind),
+                from_ref,
+                to_ref,
+            )?;
+            let key = arkret_canonical::canonical_json_string(&domain).map_err(|error| {
+                arkret_wire::WireError::Protocol(format!(
+                    "failed to canonicalize relation conflict domain: {error}"
+                ))
+            })?;
+            groups
+                .entry(key)
+                .or_insert_with(|| (domain, BTreeSet::new()))
+                .1
+                .insert(relation.relation_id.clone());
         }
 
         let mut diagnostics = Vec::new();
-        for (dedupe_key, relation_ids) in groups {
+        for (_, (conflict_domain, relation_ids)) in groups {
             if relation_ids.len() < 2 {
                 continue;
             }
@@ -273,7 +282,7 @@ impl ProjectionState {
             if heads.len() < 2 {
                 continue;
             }
-            diagnostics.push(RelationConflictDiagnostic::try_new(dedupe_key, heads)?);
+            diagnostics.push(RelationConflictDiagnostic::try_new(conflict_domain, heads)?);
         }
         Ok(diagnostics)
     }
@@ -740,26 +749,6 @@ impl ProjectionState {
             position_count,
         }
     }
-}
-
-fn relation_conflict_key(
-    relation: &SolandRelationState,
-    constraint: &str,
-    include_from: bool,
-    include_to: bool,
-) -> arkret_wire::Result<String> {
-    arkret_canonical::canonical_json_string(&serde_json::json!({
-        "constraint": constraint,
-        "from_ref": include_from.then_some(relation.from_ref.as_ref()).flatten(),
-        "realm_id": relation.realm_id,
-        "relation_kind": relation.relation_kind,
-        "to_ref": include_to.then_some(relation.to_ref.as_ref()).flatten(),
-    }))
-    .map_err(|error| {
-        arkret_wire::WireError::Protocol(format!(
-            "failed to canonicalize relation conflict key: {error}"
-        ))
-    })
 }
 
 fn container_position_cell_id(container_ref: &str, item_ref: &str) -> Option<CellRef> {

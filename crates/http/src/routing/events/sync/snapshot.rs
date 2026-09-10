@@ -454,10 +454,12 @@ mod account_notification_tests {
     fn typed_agent_approval_uses_discriminator_free_notification_delta() {
         let delta =
             arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
-                arkret_wire::NotificationId::new(
-                    "ak:notification:019fa1ef-00ee-77e0-9f06-2f2d36bf2475".to_owned(),
-                )
-                .expect("test notification id"),
+                arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
+                    arkret_wire::NotificationId::new(
+                        "ak:notification:019fa1ef-00ee-77e0-9f06-2f2d36bf2475".to_owned(),
+                    )
+                    .expect("test notification id"),
+                ),
                 arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
                 Some(
                     arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(

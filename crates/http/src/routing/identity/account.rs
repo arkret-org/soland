@@ -170,8 +170,8 @@ pub(crate) async fn local_account_primary_handle_claim(
 }
 use crate::{JsonResult, json_ok};
 
-mod social;
 mod current_principal;
+mod social;
 pub(crate) use social::direct::{
     validate_direct_message_bootstrap, validate_direct_message_participant,
 };

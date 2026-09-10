@@ -2325,7 +2325,9 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
 
     let upsert = |expires_at: &str| {
         arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
-            notification_id.clone(),
+            arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
+                notification_id.clone(),
+            ),
             arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
             Some(
                 arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
@@ -2416,7 +2418,9 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
 
     let removal =
         arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
-            notification_id,
+            arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
+                notification_id,
+            ),
             arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove,
             Some(
                 arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApprovalRemoval(

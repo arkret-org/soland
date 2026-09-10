@@ -2454,6 +2454,7 @@ CREATE SEQUENCE public.notification_projection_position_seq AS bigint;
 
 CREATE TABLE public.notifications (
     id uuid PRIMARY KEY,
+    projection_id text,
     recipient_actor_id text NOT NULL,
     realm_id text,
     -- Canonical Event identity, validated by the shared SDK on write/read.
@@ -2474,17 +2475,20 @@ CREATE TABLE public.notifications (
     preview jsonb,
     projection_action text,
     projection_data jsonb,
+    ordinary_projection_data jsonb,
     projection_position bigint DEFAULT nextval('public.notification_projection_position_seq'::regclass) NOT NULL,
     read_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
-    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_pk IS NULL) AND (recipient_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL) AND (notification_kind IS NOT NULL) AND (projection_action IS NULL) AND (projection_data IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_pk IS NOT NULL) AND (recipient_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL) AND (notification_kind IS NULL) AND (projection_action IS NOT NULL))),
+    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (projection_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_pk IS NULL) AND (recipient_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL) AND (notification_kind IS NOT NULL) AND (projection_action IS NOT NULL) AND (projection_data IS NOT NULL) AND (ordinary_projection_data IS NOT NULL)) OR ((source_event_id IS NULL) AND (projection_id IS NULL) AND (realm_id IS NULL) AND (controller_account_pk IS NOT NULL) AND (recipient_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL) AND (notification_kind IS NULL) AND (projection_action IS NOT NULL) AND (ordinary_projection_data IS NULL))),
     CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['upsert'::text, 'remove'::text])))
 );
 
 CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_actor_id, created_at DESC);
 
 CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_actor_id, realm_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
+
+CREATE UNIQUE INDEX notifications_projection_id_key ON public.notifications USING btree (projection_id) WHERE (projection_id IS NOT NULL);
 
 CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_pk, recipient_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_pk IS NOT NULL);
 
@@ -3126,6 +3130,17 @@ CREATE TABLE public.idempotency_keys (
 
 CREATE INDEX idempotency_keys_expiry_idx ON public.idempotency_keys USING btree (expires_at);
 
+CREATE TABLE public.seal_prepare_signing_fences (
+    realm_id text NOT NULL,
+    signer_slot text NOT NULL,
+    predecessor_basis text NOT NULL,
+    request_hash text NOT NULL,
+    response_body jsonb NOT NULL,
+    body_digest text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT seal_prepare_signing_fences_pkey PRIMARY KEY (realm_id, signer_slot, predecessor_basis)
+);
+
 CREATE TABLE public.moderation_franking_replay_nonces (
     realm_id text NOT NULL,
     received_by text NOT NULL CHECK (received_by LIKE 'ak:did_core:%'),
@@ -3540,13 +3555,65 @@ $$;
 CREATE TRIGGER account_global_cas AFTER INSERT OR UPDATE ON account_datas FOR EACH ROW EXECUTE FUNCTION project_account_global_cas();
 CREATE FUNCTION project_account_global_notification() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NEW.source_event_id IS NULL THEN
-        PERFORM project_account_global_value(NEW.recipient_actor_id,'notifications',NEW.id::TEXT,to_jsonb(NEW)||jsonb_build_object('notification_id',NEW.id),NEW.projection_action='remove');
-    END IF;
+    PERFORM project_account_global_value(
+        NEW.recipient_actor_id,
+        'notifications',
+        COALESCE(NEW.projection_id, NEW.id::TEXT),
+        to_jsonb(NEW)||jsonb_build_object('notification_id',NEW.id),
+        NEW.projection_action='remove'
+    );
     RETURN NEW;
 END;
 $$;
 CREATE TRIGGER account_global_notification AFTER INSERT OR UPDATE ON notifications FOR EACH ROW EXECUTE FUNCTION project_account_global_notification();
+CREATE FUNCTION project_notification_source_state() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.state='accepted' AND NEW.state<>'accepted' THEN
+        UPDATE notifications SET
+            projection_action='remove',
+            projection_data=jsonb_build_object('reason','source_removed'),
+            projection_position=nextval('notification_projection_position_seq'),
+            updated_at=now()
+        WHERE source_event_id=OLD.envelope->>'event_id'
+          AND projection_action<>'remove';
+    ELSIF OLD.state<>'accepted' AND NEW.state='accepted' THEN
+        UPDATE notifications SET
+            projection_action='upsert',
+            projection_data=ordinary_projection_data,
+            projection_position=nextval('notification_projection_position_seq'),
+            updated_at=now()
+        WHERE source_event_id=NEW.envelope->>'event_id'
+          AND projection_action='remove'
+          AND projection_data->>'reason'='source_removed';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER notification_source_state AFTER UPDATE OF state ON canonical_events FOR EACH ROW EXECUTE FUNCTION project_notification_source_state();
+CREATE FUNCTION project_notification_membership_visibility() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.membership IS DISTINCT FROM 'join' OR NOT NEW.available THEN
+        UPDATE notifications SET
+            projection_action='remove',
+            projection_data=jsonb_build_object('reason','access_revoked'),
+            projection_position=nextval('notification_projection_position_seq'),
+            updated_at=now()
+        WHERE recipient_actor_id=NEW.actor_key AND realm_id=NEW.realm_id
+          AND projection_action<>'remove';
+    ELSIF NEW.membership='join' AND NEW.available THEN
+        UPDATE notifications SET
+            projection_action='upsert',
+            projection_data=ordinary_projection_data,
+            projection_position=nextval('notification_projection_position_seq'),
+            updated_at=now()
+        WHERE recipient_actor_id=NEW.actor_key AND realm_id=NEW.realm_id
+          AND projection_action='remove'
+          AND projection_data->>'reason'='access_revoked';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER notification_membership_visibility AFTER INSERT OR UPDATE OF membership, available ON account_summary_current FOR EACH ROW EXECUTE FUNCTION project_notification_membership_visibility();
 -- Device interests are account-global and derive from membership, never the
 -- UI's detail filter. Each relationship emits an explicit change or removal.
 CREATE FUNCTION account_device_interest_visible(recipient TEXT, owner TEXT) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$

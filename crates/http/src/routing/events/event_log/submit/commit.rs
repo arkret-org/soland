@@ -169,8 +169,22 @@ pub(super) async fn commit_accepted_event_stage(
         }
         if conflict == Some(ConflictCode::SchemaViolation) {
             return Err(SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
+                message,
+            ));
+        }
+        if conflict == Some(ConflictCode::SignatureInvalid) {
+            return Err(SubmitOneError::new(
+                StatusCode::UNAUTHORIZED,
+                "signature_invalid",
+                message,
+            ));
+        }
+        if conflict == Some(ConflictCode::UnsupportedFeature) {
+            return Err(SubmitOneError::new(
+                StatusCode::NOT_IMPLEMENTED,
+                "unsupported_feature",
                 message,
             ));
         }

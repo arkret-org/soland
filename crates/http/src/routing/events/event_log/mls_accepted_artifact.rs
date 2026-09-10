@@ -126,8 +126,18 @@ fn welcome_matches_session(welcome: &MlsWelcomePayload, session: &SessionRecord)
         }
         MlsWelcomeRecipient::MinimalMetadataPairwise {
             recipient_pairwise_actor_id,
-            ..
-        } => recipient_pairwise_actor_id.as_str() == session.actor,
+            recipient_pairwise_verification_method,
+        } => session.session_grant.as_ref().is_some_and(|grant| {
+            matches!(
+                &grant.holder_binding,
+                arkret_models_identity::SessionGrantHolderBinding::MinimalMetadataPairwise {
+                    actor_id,
+                    verification_method,
+                    ..
+                } if actor_id.signing_principal_id() == recipient_pairwise_actor_id
+                    && verification_method == recipient_pairwise_verification_method
+            )
+        }),
     }
 }
 

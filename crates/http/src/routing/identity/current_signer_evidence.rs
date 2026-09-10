@@ -7,10 +7,12 @@ use arkret_models_collaboration::{
     CompactAgentSignerResolutionEvidence, CurrentSignerEvidenceItem,
     CurrentSignerEvidenceQueryOutcome, CurrentSignerEvidenceQueryRequestBody,
     CurrentSignerEvidenceResponseCore, CurrentSignerEvidenceSelector,
-    SelfCurrentSignerEvidenceQueryOutcome, SelfCurrentSignerEvidenceQueryRequestBody,
-    SelfCurrentSignerEvidenceResult,
 };
-use arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector;
+use arkret_models_identity::{
+    CurrentSignerKeyResult, SignerEvidenceResolvedStatus, SignerEvidenceUnavailableStatus,
+    SignerKeyQueryResult, SignerKeyQuerySelector, SignerKeysQueryOutcome,
+    SignerKeysQueryRequestBody, UnavailableSignerKeyResult,
+};
 use arkret_wire::DidCoreId;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use salvo::oapi::extract::JsonBody;
@@ -19,28 +21,26 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::AuthArgs;
+use super::agents::evidence::AgentSignerEvidenceQuerySelector;
 use crate::state::AppState;
 
 const PEER_PATH: &str = "/_arkret/peer/current-signer-evidence/query";
 
 pub(crate) fn self_router() -> Router {
-    Router::with_path("current-signer-evidence/query").post(self_query)
+    Router::with_path("signer-keys/query").post(self_query)
 }
 
 pub(crate) fn peer_router() -> Router {
     Router::with_path("current-signer-evidence/query").post(peer_query)
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.current_signer_evidence.read.resolve",
-    tags("identity")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.self.signer_keys.read.resolve", tags("identity"))]
 async fn self_query(
     aa: AuthArgs,
-    body: JsonBody<SelfCurrentSignerEvidenceQueryRequestBody>,
+    body: JsonBody<SignerKeysQueryRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SelfCurrentSignerEvidenceQueryOutcome> {
+) -> JsonResult<SignerKeysQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -53,7 +53,7 @@ async fn self_query(
             "current signer evidence is unavailable",
         ));
     }
-    json_ok(resolve_self_current(state, &body).await?)
+    json_ok(resolve_self_signer_keys(state, &session, &body).await?)
 }
 
 pub(crate) fn self_request_error(error: arkret_wire::WireError) -> AppError {
@@ -77,92 +77,91 @@ pub(crate) fn self_result_error(error: arkret_wire::WireError) -> AppError {
     )
 }
 
-pub(crate) async fn resolve_self_current(
+pub(crate) async fn resolve_self_signer_keys(
     state: &AppState,
-    body: &SelfCurrentSignerEvidenceQueryRequestBody,
-) -> Result<SelfCurrentSignerEvidenceQueryOutcome, AppError> {
+    session: &soland_services::identity::SessionIdentityState,
+    body: &SignerKeysQueryRequestBody,
+) -> Result<SignerKeysQueryOutcome, AppError> {
     body.validate().map_err(self_request_error)?;
-    let mut routed = BTreeMap::<DidCoreId, Vec<CurrentSignerEvidenceSelector>>::new();
-    for selector in &body.queries {
-        routed
-            .entry(selector.route_service_id().clone())
-            .or_default()
-            .push(selector.clone());
-    }
+    let requester = arkret_wire::ActorId::account(body.recipient_account_id.clone());
+    let requester_is_member =
+        crate::routing::realm_has_member(state, body.realm_id.as_str(), &requester.to_string())
+            .await;
+    let ordinary = state
+        .realms()
+        .realm_metadata(body.realm_id.as_str())
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|realm| !realm.minimal_metadata_realm);
     let mut results = Vec::with_capacity(body.queries.len());
-    for (target, selectors) in routed {
-        for chunk in selectors.chunks(16) {
-            let peer_request = CurrentSignerEvidenceQueryRequestBody {
-                request_id: body.request_id.clone(),
-                realm_id: body.realm_id.clone(),
-                recipient_account_id: body.recipient_account_id.clone(),
-                queries: chunk.to_vec(),
-                known_agent_state_digests: Vec::new(),
-                known_signer_evidence_refs: Vec::new(),
-            };
-            let outcome = if target == state.service_core_id() {
-                issue_authority_outcome(state, &peer_request, state.service_core_id()).await
-            } else {
-                proxy_peer_query(state, &peer_request, &target).await
-            };
-            let outcome = outcome.ok().filter(|outcome| {
-                outcome
-                    .validate_transport_for_request(&peer_request)
-                    .is_ok()
-            });
-            for selector in chunk {
-                let mut resolved = None;
-                if let Some(outcome) = &outcome {
-                    for item in &outcome.response.evidences {
-                        let matches = match (selector, item) {
-                            (
-                                CurrentSignerEvidenceSelector::AccountDevice {
-                                    account_id: a,
-                                    device_id: d,
-                                },
-                                CurrentSignerEvidenceItem::AccountDevice {
-                                    account_id,
-                                    device_id,
-                                    ..
-                                },
-                            ) => a == account_id && d == device_id,
-                            (
-                                CurrentSignerEvidenceSelector::Agent {
-                                    actor: a,
-                                    verification_method: m,
-                                },
-                                CurrentSignerEvidenceItem::Agent {
-                                    actor,
-                                    verification_method,
-                                    ..
-                                },
-                            ) => a == actor && m == verification_method,
-                            _ => false,
-                        };
-                        if matches {
-                            resolved = self_key_from_peer_item(state, &peer_request, item)
-                                .await
-                                .ok();
-                            break;
-                        }
+    for selector in &body.queries {
+        let visible = ordinary
+            && match selector.event_id() {
+                Some(event_id) => match state
+                    .event_queries()
+                    .canonical_event(event_id.as_str())
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    Some(record) if record.realm_id.as_deref() == Some(body.realm_id.as_str()) => {
+                        crate::routing::events::event_log::event_visible_to_session(
+                            state, &record, session,
+                        )
+                        .await
                     }
+                    _ => false,
+                },
+                None => {
+                    requester_is_member
+                        && crate::routing::realm_has_member(
+                            state,
+                            body.realm_id.as_str(),
+                            &selector.actor().to_string(),
+                        )
+                        .await
                 }
-                results.push(match resolved {
-                    Some(key) => SelfCurrentSignerEvidenceResult::Resolved {
-                        selector: selector.clone(),
-                        key,
-                        checked_at: arkret_canonical::normalize_timestamp_canonical(
-                            chrono::Utc::now(),
-                        ),
-                    },
-                    None => SelfCurrentSignerEvidenceResult::Unavailable {
-                        selector: selector.clone(),
-                    },
-                });
+            };
+        let resolved = if visible {
+            match selector {
+                SignerKeyQuerySelector::CurrentAccountDevice(current) => {
+                    let Some(account_id) = current.actor.as_account_id().cloned() else {
+                        results.push(unavailable_signer_key(selector));
+                        continue;
+                    };
+                    current_key_result(
+                        state,
+                        body,
+                        selector,
+                        CurrentSignerEvidenceSelector::AccountDevice {
+                            account_id,
+                            device_id: current.device_id.clone(),
+                        },
+                    )
+                    .await
+                }
+                SignerKeyQuerySelector::CurrentAgent(current) => {
+                    current_key_result(
+                        state,
+                        body,
+                        selector,
+                        CurrentSignerEvidenceSelector::Agent {
+                            actor: current.actor.clone(),
+                            verification_method: current.verification_method.clone(),
+                        },
+                    )
+                    .await
+                }
+                SignerKeyQuerySelector::HistoricalAccountDevice(_)
+                | SignerKeyQuerySelector::HistoricalAgent(_) => None,
             }
-        }
+        } else {
+            None
+        };
+        results.push(resolved.unwrap_or_else(|| unavailable_signer_key(selector)));
     }
-    let outcome = SelfCurrentSignerEvidenceQueryOutcome {
+    let outcome = SignerKeysQueryOutcome {
         request_id: body.request_id.clone(),
         realm_id: body.realm_id.clone(),
         recipient_account_id: body.recipient_account_id.clone(),
@@ -172,6 +171,51 @@ pub(crate) async fn resolve_self_current(
         .validate_for_request(body)
         .map_err(self_result_error)?;
     Ok(outcome)
+}
+
+fn unavailable_signer_key(selector: &SignerKeyQuerySelector) -> SignerKeyQueryResult {
+    SignerKeyQueryResult::Unavailable(UnavailableSignerKeyResult {
+        selector: selector.clone(),
+        status: SignerEvidenceUnavailableStatus::Unavailable,
+    })
+}
+
+async fn current_key_result(
+    state: &AppState,
+    body: &SignerKeysQueryRequestBody,
+    selector: &SignerKeyQuerySelector,
+    peer_selector: CurrentSignerEvidenceSelector,
+) -> Option<SignerKeyQueryResult> {
+    let target = peer_selector.route_service_id().clone();
+    let peer_request = CurrentSignerEvidenceQueryRequestBody {
+        request_id: body.request_id.clone(),
+        realm_id: body.realm_id.clone(),
+        recipient_account_id: body.recipient_account_id.clone(),
+        queries: vec![peer_selector.clone()],
+        known_agent_state_digests: Vec::new(),
+        known_signer_evidence_refs: Vec::new(),
+    };
+    let outcome = if target == state.service_core_id() {
+        issue_authority_outcome(state, &peer_request, state.service_core_id()).await
+    } else {
+        proxy_peer_query(state, &peer_request, &target).await
+    }
+    .ok()?;
+    outcome.validate_transport_for_request(&peer_request).ok()?;
+    for item in &outcome.response.evidences {
+        if item.selector() == peer_selector {
+            let key = self_key_from_peer_item(state, &peer_request, item)
+                .await
+                .ok()?;
+            return Some(SignerKeyQueryResult::Current(CurrentSignerKeyResult {
+                selector: selector.clone(),
+                status: SignerEvidenceResolvedStatus::Resolved,
+                key,
+                checked_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+            }));
+        }
+    }
+    None
 }
 
 async fn self_key_from_peer_item(
@@ -251,7 +295,7 @@ async fn self_key_from_peer_item(
     }
 }
 
-async fn current_device_projection_document(
+pub(super) async fn current_device_projection_document(
     state: &AppState,
     attestation: &arkret_models_crypto::DeviceProjectionAttestation,
 ) -> Result<arkret_identity::DidDocument, AppError> {
@@ -332,7 +376,7 @@ fn device_self_result_key(
     Ok(key)
 }
 
-fn verify_current_device_projection(
+pub(super) fn verify_current_device_projection(
     attestation: &arkret_models_crypto::DeviceProjectionAttestation,
     document: &arkret_identity::DidDocument,
     now: chrono::DateTime<chrono::Utc>,

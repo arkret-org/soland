@@ -223,4 +223,5 @@ pub(crate) use features_schema::{
     validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
 };
 pub(crate) use join_gate_proofs::validate_join_gate_proof_signatures;
+pub(in crate::routing::events::event_log) use minimal_metadata_author::validate_pairwise_session_holder;
 pub(crate) use proofs::validate_event_proofs;

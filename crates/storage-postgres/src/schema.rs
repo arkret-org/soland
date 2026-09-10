@@ -1873,6 +1873,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    seal_prepare_signing_fences (realm_id, signer_slot, predecessor_basis) {
+        realm_id -> Text,
+        signer_slot -> Text,
+        predecessor_basis -> Text,
+        request_hash -> Text,
+        response_body -> Jsonb,
+        body_digest -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     sync_cursor_handles (id) {
         id -> Text,
         principal_id -> Nullable<Text>,
@@ -1987,6 +1999,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     federation_outbox_dead_letter,
     handle_releases,
     idempotency_keys,
+    seal_prepare_signing_fences,
     invite_locators,
     invite_receive_policies,
     key_backups,

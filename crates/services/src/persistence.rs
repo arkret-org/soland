@@ -302,6 +302,30 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn seal_preparation_fence(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        signer_slot: &str,
+        predecessor_basis: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::SealPreparationFenceRecord>> {
+        Ok(self
+            .persistence
+            .idempotency_keys()
+            .seal_preparation_fence(realm_id, signer_slot, predecessor_basis)
+            .await?)
+    }
+
+    pub async fn freeze_seal_preparation(
+        &self,
+        record: &soland_storage::SealPreparationFenceRecord,
+    ) -> crate::ServiceResult<soland_storage::SealPreparationFenceOutcome> {
+        Ok(self
+            .persistence
+            .idempotency_keys()
+            .freeze_seal_preparation(record)
+            .await?)
+    }
+
     pub async fn stored_service_route_keys(
         &self,
         after: Option<&soland_storage::ServiceRouteStoredKey>,

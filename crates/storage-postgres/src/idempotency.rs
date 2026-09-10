@@ -1,7 +1,7 @@
 use super::{
     IdempotencyRecord, IdempotencyStore, Integer, Jsonb, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Value,
-    async_trait, pg_conn, sql_query,
+    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SealPreparationFenceOutcome,
+    SealPreparationFenceRecord, Text, Timestamptz, Utc, Value, async_trait, pg_conn, sql_query,
 };
 pub struct PgIdempotencyStore {
     pub pool: PgPool,
@@ -24,6 +24,44 @@ struct IdempotencyRow {
     created_at: chrono::DateTime<Utc>,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(QueryableByName)]
+struct SealPreparationFenceRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    signer_slot: String,
+    #[diesel(sql_type = Text)]
+    predecessor_basis: String,
+    #[diesel(sql_type = Text)]
+    request_hash: String,
+    #[diesel(sql_type = Jsonb)]
+    response_body: Value,
+    #[diesel(sql_type = Text)]
+    body_digest: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<Utc>,
+}
+
+impl TryFrom<SealPreparationFenceRow> for SealPreparationFenceRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: SealPreparationFenceRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            realm_id: arkret_wire::RealmId::new(row.realm_id).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "stored Seal preparation fence Realm id is invalid: {error}"
+                ))
+            })?,
+            signer_slot: row.signer_slot,
+            predecessor_basis: row.predecessor_basis,
+            request_hash: row.request_hash,
+            response_body: row.response_body,
+            body_digest: row.body_digest,
+            created_at: row.created_at,
+        })
+    }
 }
 impl TryFrom<IdempotencyRow> for IdempotencyRecord {
     type Error = PersistenceError;
@@ -167,5 +205,78 @@ impl IdempotencyStore for PgIdempotencyStore {
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)
+    }
+
+    async fn seal_preparation_fence(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        signer_slot: &str,
+        predecessor_basis: &str,
+    ) -> PersistenceResult<Option<SealPreparationFenceRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT realm_id, signer_slot, predecessor_basis, request_hash, response_body, \
+                    body_digest, created_at \
+             FROM seal_prepare_signing_fences \
+             WHERE realm_id = $1 AND signer_slot = $2 AND predecessor_basis = $3",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(signer_slot)
+        .bind::<Text, _>(predecessor_basis)
+        .get_result::<SealPreparationFenceRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(SealPreparationFenceRecord::try_from)
+        .transpose()
+    }
+
+    async fn freeze_seal_preparation(
+        &self,
+        record: &SealPreparationFenceRecord,
+    ) -> PersistenceResult<SealPreparationFenceOutcome> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let inserted = sql_query(
+            "INSERT INTO seal_prepare_signing_fences \
+             (realm_id, signer_slot, predecessor_basis, request_hash, response_body, body_digest, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (realm_id, signer_slot, predecessor_basis) DO NOTHING",
+        )
+        .bind::<Text, _>(record.realm_id.as_str())
+        .bind::<Text, _>(&record.signer_slot)
+        .bind::<Text, _>(&record.predecessor_basis)
+        .bind::<Text, _>(&record.request_hash)
+        .bind::<Jsonb, _>(&record.response_body)
+        .bind::<Text, _>(&record.body_digest)
+        .bind::<Timestamptz, _>(record.created_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+            == 1;
+        let landed = sql_query(
+            "SELECT realm_id, signer_slot, predecessor_basis, request_hash, response_body, \
+                    body_digest, created_at \
+             FROM seal_prepare_signing_fences \
+             WHERE realm_id = $1 AND signer_slot = $2 AND predecessor_basis = $3",
+        )
+        .bind::<Text, _>(record.realm_id.as_str())
+        .bind::<Text, _>(&record.signer_slot)
+        .bind::<Text, _>(&record.predecessor_basis)
+        .get_result::<SealPreparationFenceRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)
+        .and_then(SealPreparationFenceRecord::try_from)?;
+        if landed.request_hash != record.request_hash {
+            return Ok(SealPreparationFenceOutcome::Fenced);
+        }
+        if inserted {
+            Ok(SealPreparationFenceOutcome::Frozen(landed))
+        } else {
+            Ok(SealPreparationFenceOutcome::Replay(landed))
+        }
     }
 }

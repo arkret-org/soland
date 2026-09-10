@@ -23,6 +23,7 @@ pub(crate) mod realms;
 pub(crate) mod spaces;
 pub(crate) mod system;
 // SOL-ORG-06: realm organization-relationship read surface
+mod realm_join;
 pub(crate) mod realm_organization;
 
 use access::policy::policy_document_to_response;

@@ -31,30 +31,12 @@ pub(super) async fn read(
     if !super::governance_proof::scope_visible_to_session(state, &query.effective_scope, &session) {
         return Err(AppError::not_found("Welcome not found"));
     }
-    let mut membership_cells = Vec::new();
-    for circle in std::iter::once(None)
-        .filter(|_| !own_pcr)
-        .chain(query.effective_scope.circle_id().map(Some))
-    {
-        let mut coordinates = Vec::new();
-        if let Some(circle) = circle {
-            coordinates.push(serde_json::json!(circle));
-        }
-        coordinates.push(serde_json::json!(
-            actor.canonical_key().map_err(unavailable)?
-        ));
-        let subject = arkret_wire::cell::composite_subject(&coordinates).map_err(unavailable)?;
-        let family = if circle.is_some() {
-            arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1
-        } else {
-            arkret_wire::CellFamilyId::MEMBER_STATE_V1
-        };
-        membership_cells.push(arkret_wire::cell::subject_cell(family, &subject));
-    }
     let grant = session.session_grant.as_ref().ok_or_else(|| {
         AppError::unauthenticated("Welcome discovery requires an exact session endpoint")
     })?;
-    let (endpoint, authorization_ref) = match &grant.holder_binding {
+    let (recipient_actor, endpoint, authorization_ref, require_realm_membership) = match &grant
+        .holder_binding
+    {
         SessionGrantHolderBinding::HumanDevice { .. } => {
             let binding = grant.device_binding.as_ref().ok_or_else(|| {
                 AppError::unauthenticated("session device authorization is missing")
@@ -63,8 +45,10 @@ pub(super) async fn read(
                 return Err(AppError::unauthenticated("session device differs"));
             }
             (
+                actor.clone(),
                 serde_json::json!({"principal_id":account.principal_id,"station_id":account.station_id,"device_id":binding.device_id,"agent_id":null,"verification_method":null}),
                 binding.authorization_event_id.to_string(),
+                !own_pcr,
             )
         }
         SessionGrantHolderBinding::AgentRuntime {
@@ -82,12 +66,63 @@ pub(super) async fn read(
                 return Err(AppError::not_found("Welcome not found"));
             }
             (
+                actor.clone(),
                 serde_json::json!({"principal_id":agent_id,"station_id":account.station_id,"device_id":null,"agent_id":agent_id,"verification_method":verification_method}),
                 agent_key_authorization_ref.to_string(),
+                !own_pcr,
+            )
+        }
+        SessionGrantHolderBinding::MinimalMetadataPairwise {
+            realm_id,
+            actor_id,
+            verification_method,
+        } => {
+            if realm_id != realm {
+                return Err(AppError::not_found("Welcome not found"));
+            }
+            super::validation::validate_pairwise_session_holder(
+                state,
+                &query.effective_scope,
+                query.mls_group_id.as_str(),
+                actor_id,
+                verification_method,
+            )
+            .await
+            .map_err(|_| {
+                AppError::unauthenticated("pairwise endpoint authorization is no longer current")
+            })?;
+            let endpoint_account = actor_id
+                .as_account_id()
+                .ok_or_else(|| AppError::unauthenticated("pairwise endpoint actor is invalid"))?;
+            (
+                actor_id.clone(),
+                serde_json::json!({"principal_id":endpoint_account.principal_id,"station_id":endpoint_account.station_id,"device_id":null,"agent_id":null,"verification_method":verification_method}),
+                verification_method.to_string(),
+                true,
             )
         }
         _ => return Err(AppError::not_found("Welcome not found")),
     };
+    let mut membership_cells = Vec::new();
+    for circle in std::iter::once(None)
+        .filter(|_| require_realm_membership)
+        .chain(query.effective_scope.circle_id().map(Some))
+    {
+        let mut coordinates = Vec::new();
+        if let Some(circle) = circle {
+            coordinates.push(serde_json::json!(circle));
+        }
+        coordinates.push(serde_json::json!(
+            recipient_actor.canonical_key().map_err(unavailable)?
+        ));
+        let subject = arkret_wire::cell::composite_subject(&coordinates).map_err(unavailable)?;
+        let family = if circle.is_some() {
+            arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1
+        } else {
+            arkret_wire::CellFamilyId::MEMBER_STATE_V1
+        };
+        membership_cells.push(arkret_wire::cell::subject_cell(family, &subject));
+    }
     let page=state.persistence().discover_mls_welcome_refs(&soland_storage::MlsWelcomeDiscoveryQuery {
         scope:serde_json::to_value(&query.effective_scope).map_err(unavailable)?,group_id:query.mls_group_id.to_string(),endpoint,
         authority_context:serde_json::json!({"account_id":account,"device_id":session.device_id,"holder_binding":grant.holder_binding,"authorization_ref":authorization_ref,"own_pcr":own_pcr}),
