@@ -747,9 +747,14 @@ async fn verify_mimi_consent_requester_proof(
             return Err(mimi_consent_proof_invalid());
         };
         let key = record
-            .authorized_signing_key_binding
+            .authorized_key_event
             .as_ref()
             .ok_or_else(mimi_consent_proof_invalid)?;
+        let key =
+            arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+                key,
+            )
+            .map_err(|_| mimi_consent_proof_invalid())?;
         if actor.as_account_id() != Some(&grant.account_id)
             || agent_id != actor.signing_principal_id()
             || session.agent_session.as_ref().is_none_or(|agent| {
@@ -763,11 +768,11 @@ async fn verify_mimi_consent_requester_proof(
             || record.authorized_verification_method.as_deref()
                 != Some(proof.verification_method.as_str())
             || verification_method != &proof.verification_method
-            || key.core.agent_id != *agent_id
-            || key.core.verification_method != *verification_method
+            || key.agent_id != *agent_id
+            || key.verification_method != *verification_method
             || key.agent_key_authorize_event_id != *agent_key_authorization_ref
             || record.authorized_public_key_digest.as_deref()
-                != Some(key.core.public_key_digest.as_str())
+                != Some(key.public_key_digest.as_str())
         {
             return Err(mimi_consent_proof_invalid());
         }
@@ -785,19 +790,16 @@ async fn verify_mimi_consent_requester_proof(
             verification_method.as_str(),
         )
         .await
-            || arkret_signatures::agent_evidence::agent_signing_public_key_digest(
-                &key.core.public_key,
-            )
-            .map_err(|_| mimi_consent_proof_invalid())?
-                != key.core.public_key_digest
+            || arkret_signatures::agent_evidence::agent_signing_public_key_digest(&key.public_key)
+                .map_err(|_| mimi_consent_proof_invalid())?
+                != key.public_key_digest
         {
             return Err(mimi_consent_proof_invalid());
         }
-        let public_key: [u8; 32] =
-            arkret_canonical::base64url_decode(key.core.public_key.key.as_str())
-                .map_err(|_| mimi_consent_proof_invalid())?
-                .try_into()
-                .map_err(|_| mimi_consent_proof_invalid())?;
+        let public_key: [u8; 32] = arkret_canonical::base64url_decode(key.public_key.key.as_str())
+            .map_err(|_| mimi_consent_proof_invalid())?
+            .try_into()
+            .map_err(|_| mimi_consent_proof_invalid())?;
         return verify_mimi_operation_proof(
             state,
             binding,
@@ -1435,10 +1437,15 @@ async fn verify_mimi_reporter_authority(
             .authorized_event_ref
             .as_deref()
             .ok_or_else(mimi_reporter_resolution_required)?;
-        let signing_key_binding = record
-            .authorized_signing_key_binding
+        let key_authorization_event = record
+            .authorized_key_event
             .as_ref()
             .ok_or_else(mimi_reporter_resolution_required)?;
+        let key =
+            arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+                key_authorization_event,
+            )
+            .map_err(|_| mimi_reporter_resolution_required())?;
         if record.state
             != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
             || controller_principal_id != *authority.actor_id.signing_principal_id()
@@ -1451,10 +1458,10 @@ async fn verify_mimi_reporter_authority(
             || record.authorized_verification_method.as_deref()
                 != Some(authority.proof.verification_method.as_str())
             || record.authorized_public_key_digest.as_deref()
-                != Some(signing_key_binding.core.public_key_digest.as_str())
-            || signing_key_binding.agent_key_authorize_event_id.as_str() != authorization_ref
-            || signing_key_binding.core.agent_id != *executor.signing_principal_id()
-            || signing_key_binding.core.verification_method != authority.proof.verification_method
+                != Some(key.public_key_digest.as_str())
+            || key.agent_key_authorize_event_id.as_str() != authorization_ref
+            || key.agent_id != *executor.signing_principal_id()
+            || key.verification_method != authority.proof.verification_method
         {
             return Err(mimi_reporter_resolution_required());
         }
@@ -1475,15 +1482,14 @@ async fn verify_mimi_reporter_authority(
         {
             return Err(mimi_reporter_resolution_required());
         }
-        let public_key_digest = arkret_signatures::agent_evidence::agent_signing_public_key_digest(
-            &signing_key_binding.core.public_key,
-        )
-        .map_err(|_| mimi_reporter_resolution_required())?;
-        if public_key_digest != signing_key_binding.core.public_key_digest {
+        let public_key_digest =
+            arkret_signatures::agent_evidence::agent_signing_public_key_digest(&key.public_key)
+                .map_err(|_| mimi_reporter_resolution_required())?;
+        if public_key_digest != key.public_key_digest {
             return Err(mimi_reporter_resolution_required());
         }
         let raw_public_key: [u8; 32] =
-            arkret_canonical::base64url_decode(signing_key_binding.core.public_key.key.as_str())
+            arkret_canonical::base64url_decode(key.public_key.key.as_str())
                 .map_err(|_| mimi_reporter_resolution_required())?
                 .try_into()
                 .map_err(|_| mimi_reporter_resolution_required())?;

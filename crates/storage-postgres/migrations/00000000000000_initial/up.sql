@@ -234,7 +234,7 @@ CREATE TABLE public.agent_principals (
     authorized_event_ref text,
     authorized_verification_method text,
     authorized_public_key_digest text,
-    authorized_signing_key_binding jsonb,
+    authorized_key_event jsonb,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
@@ -1618,6 +1618,12 @@ CREATE INDEX device_revocation_cleanup_pending_idx
     ON public.device_revocation_cleanup_intents (created_at, proposal_digest)
     WHERE material_cleanup_completed_at IS NULL OR mls_obligation_completed_at IS NULL;
 
+CREATE TABLE public.device_pairing_outcomes (
+    request_id text PRIMARY KEY,
+    terminal_record jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
 CREATE TABLE public.device_pairings (
     device_pairing_request_id text NOT NULL,
     pairing_code text NOT NULL,
@@ -2529,6 +2535,9 @@ BEGIN
         );
     ELSIF TG_OP = 'UPDATE'
           AND OLD.approval_request_id IS NOT NULL
+          AND OLD.approval_notification_id IS NOT NULL
+          AND OLD.controller_account_pk IS NOT NULL
+          AND OLD.recipient_id IS NOT NULL
           AND NEW.approval_request_id IS NULL THEN
         terminal_reason := CASE
             WHEN NEW.state = 'deactivated' THEN 'deactivated'
@@ -2923,7 +2932,6 @@ CREATE TABLE public.recovery_policies (
     version integer NOT NULL,
     acceptance_basis jsonb NOT NULL,
     trust_domain text NOT NULL,
-    allowed_proof_kinds text[] NOT NULL,
     supersedes uuid,
     expires_at timestamp with time zone,
     issued_at timestamp with time zone NOT NULL,
@@ -3914,4 +3922,69 @@ CREATE TABLE governance_current_ready (
  realm_id TEXT PRIMARY KEY, ready BOOLEAN NOT NULL,
  revision BIGINT NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991),
  next_expiry TIMESTAMPTZ NULL
+);
+
+CREATE TABLE public.key_backup_unlock_authorities (
+ authority_id TEXT PRIMARY KEY, identity_key TEXT UNIQUE NOT NULL,
+ account_id TEXT NOT NULL, device_id TEXT NOT NULL, kind TEXT NOT NULL,
+ challenge JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+ remaining_bytes NUMERIC(20,0) NOT NULL CHECK (remaining_bytes >= 0),
+ verified_at TIMESTAMPTZ NOT NULL, rate_per_minute BIGINT NOT NULL CHECK (rate_per_minute > 0)
+);
+CREATE TABLE public.key_backup_unlock_entries (
+ authority_id TEXT NOT NULL REFERENCES public.key_backup_unlock_authorities(authority_id),
+ backup_id TEXT NOT NULL, object_digest TEXT NOT NULL, charge BIGINT NOT NULL CHECK (charge >= 0),
+ request_digest TEXT, holder TEXT, consumed_at TIMESTAMPTZ, ip TEXT,
+ PRIMARY KEY (authority_id, backup_id)
+);
+CREATE INDEX key_backup_unlock_consumption_idx ON public.key_backup_unlock_entries(consumed_at);
+
+-- Exact Agent authorize command outcomes survive handle renewal and restarts.
+CREATE TABLE agent_pairing_receipts (
+    authorize_event_ref TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL REFERENCES agent_principals(id) ON DELETE CASCADE,
+    controller_principal_id TEXT NOT NULL,
+    pairing_request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    raw_key_digest TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    activation_state TEXT NOT NULL CHECK (activation_state IN ('awaiting_accepted_frontier','active','cancelled')),
+    UNIQUE(agent_id, raw_key_digest)
+);
+CREATE FUNCTION preserve_agent_pairing_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE pending JSONB; old_pending JSONB;
+BEGIN
+    pending := NEW.pending_pairing_commit_intent;
+    IF TG_OP = 'UPDATE' THEN old_pending := OLD.pending_pairing_commit_intent; END IF;
+    IF pending IS NOT NULL AND (old_pending IS NULL OR pending IS DISTINCT FROM old_pending) THEN
+        INSERT INTO agent_pairing_receipts(authorize_event_ref,agent_id,controller_principal_id,pairing_request_id,request_digest,raw_key_digest,expires_at,activation_state)
+        VALUES(pending->>'authorize_event_id',NEW.id,NEW.controller_principal_id,NEW.pairing_request_id,pending->>'request_digest',NEW.runtime_key_material->>'public_key_digest',NEW.pairing_expires_at,'awaiting_accepted_frontier')
+        ON CONFLICT (authorize_event_ref) DO NOTHING;
+        IF NOT EXISTS (SELECT 1 FROM agent_pairing_receipts WHERE authorize_event_ref=pending->>'authorize_event_id' AND agent_id=NEW.id AND request_digest=pending->>'request_digest' AND activation_state='awaiting_accepted_frontier') THEN
+            RAISE EXCEPTION 'Agent authorize command is already terminal or conflicts';
+        END IF;
+    END IF;
+    IF old_pending IS NOT NULL THEN
+        IF NEW.authorized_event_ref = old_pending->>'authorize_event_id' AND pending IS NULL THEN
+            UPDATE agent_pairing_receipts SET activation_state='active'
+            WHERE authorize_event_ref=old_pending->>'authorize_event_id' AND activation_state='awaiting_accepted_frontier' AND expires_at > NOW();
+            IF NOT FOUND THEN RAISE EXCEPTION 'Agent authorize command was cancelled or expired'; END IF;
+        ELSIF pending IS DISTINCT FROM old_pending OR NEW.state='deactivated' OR NEW.approval_request_id IS NULL OR NEW.pairing_expires_at <= NOW() THEN
+            UPDATE agent_pairing_receipts SET activation_state='cancelled'
+            WHERE authorize_event_ref=old_pending->>'authorize_event_id' AND activation_state='awaiting_accepted_frontier';
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER preserve_agent_pairing_receipt AFTER INSERT OR UPDATE ON agent_principals FOR EACH ROW EXECUTE FUNCTION preserve_agent_pairing_receipt();
+
+-- Recovery proof attempts consume the session rate before signature verification,
+-- while a successful exact replay consumes neither rate nor byte allowance.
+CREATE TABLE key_backup_unlock_attempt_windows (
+ authority_id TEXT NOT NULL REFERENCES key_backup_unlock_authorities(authority_id) ON DELETE CASCADE,
+ window_start TIMESTAMPTZ NOT NULL,
+ attempts BIGINT NOT NULL CHECK(attempts > 0),
+ last_request_digest TEXT NOT NULL,
+ last_attempt_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(authority_id,window_start)
 );

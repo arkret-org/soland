@@ -18,8 +18,7 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use soland_storage::{
     AgentPairingCommitIntent, AgentPrincipalRecord, AgentRuntimeActivation,
-    AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome, AgentStore,
-    DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, EnqueueAgentRuntimeMessage,
+    AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome, AgentStore, EnqueueAgentRuntimeMessage,
     EventBatchCommitRequest, EventCommitOutcome, EventCommitRequest, EventCommitUnitOfWork,
     PersistenceError, PersistenceResult, PersistenceStore, ServiceRegistrationCommitOutcome,
     WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
@@ -160,16 +159,6 @@ impl EventCommitUnitOfWork for FaultInjectingStore {
     }
 }
 
-#[async_trait]
-impl DevicePairingCommitUnitOfWork for FaultInjectingStore {
-    async fn commit_device_pairing_authorization(
-        &self,
-        commit: DevicePairingAuthorizationCommit,
-    ) -> PersistenceResult<bool> {
-        self.inner.commit_device_pairing_authorization(commit).await
-    }
-}
-
 struct FaultWebvhStore {
     inner: Arc<dyn PersistenceStore>,
     injector: Arc<FaultInjector>,
@@ -244,6 +233,23 @@ struct FaultAgentStore {
 
 #[async_trait]
 impl AgentStore for FaultAgentStore {
+    async fn pairing_receipt(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<soland_storage::AgentPairingReceipt>> {
+        self.inner.agents().pairing_receipt(event_id).await
+    }
+    async fn pending_pairings_after(
+        &self,
+        after_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<AgentPrincipalRecord>> {
+        self.inner
+            .agents()
+            .pending_pairings_after(after_id, limit)
+            .await
+    }
+
     async fn put(&self, record: AgentPrincipalRecord) -> PersistenceResult<()> {
         self.injector
             .check(FaultPoint::AgentPut, FaultTiming::Before)?;

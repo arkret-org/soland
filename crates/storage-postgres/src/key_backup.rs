@@ -66,6 +66,51 @@ pub struct PgKeyBackupStore {
 }
 #[async_trait]
 impl KeyBackupStore for PgKeyBackupStore {
+    async fn issue_unlock_challenge(
+        &self,
+        challenge: Value,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Value> {
+        self.issue_unlock(challenge, now).await
+    }
+    async fn reserve_recovery_unlock_attempt(
+        &self,
+        authority_id: &str,
+        holder: &str,
+        request_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<bool> {
+        self.reserve_recovery_attempt(authority_id, holder, request_digest, now)
+            .await
+    }
+    async fn unlock_challenge(&self, authority_id: &str) -> PersistenceResult<Option<Value>> {
+        self.read_unlock(authority_id).await
+    }
+    async fn consume_unlock(
+        &self,
+        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+        active_basis: Value,
+        authority_id: &str,
+        backup: Value,
+        request_digest: &str,
+        holder: &str,
+        ip: &str,
+        now: chrono::DateTime<Utc>,
+        daily_limit: u32,
+    ) -> PersistenceResult<Value> {
+        self.consume_unlock_entry(
+            device_gate,
+            active_basis,
+            authority_id,
+            backup,
+            request_digest,
+            holder,
+            ip,
+            now,
+            daily_limit,
+        )
+        .await
+    }
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
         let typed: arkret_models_crypto::KeyBackup =
             serde_json::from_value(payload.clone()).map_err(PersistenceError::database)?;
@@ -319,23 +364,62 @@ impl KeyBackupStore for PgKeyBackupStore {
 
     async fn consume_delete_challenge(
         &self,
+        gate: &soland_storage::KeyBackupDeleteGate,
         challenge_id: &str,
+        backup: Value,
+        recovery_session_id: Option<&str>,
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        // `consumed_at IS NULL` in the predicate is the single-use guarantee:
-        // two concurrent DELETEs both reach here, exactly one updates a row.
-        sql_query(
-            "UPDATE key_backup_delete_challenges SET consumed_at = $2              WHERE challenge_id = $1 AND consumed_at IS NULL",
-        )
-        .bind::<Text, _>(challenge_id)
-        .bind::<Timestamptz, _>(now)
-        .execute(&mut *conn)
-        .await
-        .map(|rows| rows > 0)
-        .map_err(PersistenceError::database)
+        use diesel_async::AsyncConnection;
+        conn.transaction::<_,super::PgTransactionError,_>(async move |conn| {
+            super::key_backup_unlock::validate_active_basis(conn,&gate.active_basis).await?;
+            for selector in &gate.device_gates { crate::ensure_gate_allowed_in_transaction(conn,selector).await?; }
+            if recovery_session_id.is_none() {
+                let expected=gate.expected_policy.as_ref().ok_or_else(||PersistenceError::Conflict("device quorum policy gate required".into()))?;
+                if gate.device_gates.is_empty() {return Err(PersistenceError::Conflict("device quorum current gates required".into()).into());}
+                let account=&backup["actor_id"]["account_id"];
+                let canonical=arkret_canonical::canonical_json_string(account).map_err(PersistenceError::database)?;
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(format!("recovery-policy:{canonical}")).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                let current=sql_query("SELECT raw_payload AS payload FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 ORDER BY version DESC LIMIT 1 FOR SHARE")
+                    .bind::<Text,_>(account["principal_id"].as_str().unwrap_or_default()).bind::<Text,_>(account["station_id"].as_str().unwrap_or_default())
+                    .get_result::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?.payload;
+                let now=chrono::Utc::now();
+                if &current!=expected {return Err(PersistenceError::Conflict("device quorum policy changed".into()).into());}
+                let policy:arkret_models_crypto::RecoveryPolicy=serde_json::from_value(current).map_err(PersistenceError::database)?;
+                policy.validate_inflight_authority(&[],None,now).map_err(|e|PersistenceError::Conflict(e.to_string()))?;
+            }
+            if let Some(id)=recovery_session_id {
+                super::key_backup_unlock::lock_recovery_policy_for_session(conn,id,now).await?;
+                let now=chrono::Utc::now();
+                let session=sql_query("SELECT to_jsonb(s) AS payload FROM recovery_sessions s WHERE id=$1 AND state='verified' AND expires_at>$2 AND transaction_id IS NULL FOR SHARE")
+                    .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(id)).bind::<Timestamptz,_>(now)
+                    .get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+                    .ok_or_else(||PersistenceError::Conflict("recovery session is no longer available".into()))?.payload;
+                let account=&backup["actor_id"]["account_id"];
+                if session["principal_id"]!=account["principal_id"] || session["station_id"]!=account["station_id"] {
+                    return Err(PersistenceError::Conflict("recovery delete account mismatch".into()).into());
+                }
+            }
+            let now=chrono::Utc::now();
+            let row=sql_query(format!("SELECT {DELETE_CHALLENGE_COLUMNS} FROM key_backup_delete_challenges WHERE challenge_id=$1 AND consumed_at IS NULL AND expires_at>$2 FOR UPDATE"))
+                .bind::<Text,_>(challenge_id).bind::<Timestamptz,_>(now)
+                .get_result::<KeyBackupDeleteChallengeRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+            let Some(row)=row else{return Ok(false)};
+            if backup["backup_id"].as_str()!=Some(row.backup_id.as_str()) || backup["actor_id"]["account_id"]!=serde_json::json!({"principal_id":row.principal_id,"station_id":row.station_id}) {
+                return Err(PersistenceError::Conflict("delete challenge backup binding mismatch".into()).into());
+            }
+            let deleted=sql_query("DELETE FROM key_backups WHERE id=$1 AND payload=$2")
+                .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(&row.backup_id)).bind::<Jsonb,_>(&backup)
+                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            if deleted!=1 {return Err(PersistenceError::Conflict("backup changed before deletion".into()).into());}
+            sql_query("UPDATE key_backup_delete_challenges SET consumed_at=$2 WHERE challenge_id=$1")
+                .bind::<Text,_>(challenge_id).bind::<Timestamptz,_>(now)
+                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            Ok(true)
+        }).await.map_err(super::PgTransactionError::into_persistence)
     }
 
     async fn prune_expired_delete_challenges(

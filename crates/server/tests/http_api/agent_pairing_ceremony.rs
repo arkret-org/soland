@@ -3,18 +3,14 @@
 //! Walks the open pairing surface end to end with SDK-produced material:
 //! provisioning (real ceremony) → `POST /_arkret/open/agent-pairing/
 //! runtime-key-requests` → open status poll → `POST /_arkret/gate/account/
-//! agent-key-pair` → successor Agent PCR Seal → idempotent retry that
-//! activates the runtime. Unlike the storage-port fixture in `events.rs`
-//! (which seeds runtime activation directly to test session-grant semantics),
-//! every protocol step here goes over the HTTP surface.
+//! agent-key-pair` → successor Agent PCR Seal → background activation. Unlike the storage-port
+//! fixture in `events.rs` (which seeds runtime activation directly to test session-grant
+//! semantics), every protocol step here goes over the HTTP surface.
 //!
-//! The one direct-write fixture is the controller-side recovery material the
-//! ceremony presupposes but does not itself produce: the Agent PCR MLS group,
-//! the `mls_history` key backup binding the Agent to the current sealed
-//! frontier, and the controller-signed `ak.key_backup.active_series` pointer
-//! selecting that backup's series (`identity/key-management.md` §7.4.1 /
-//! §7.6). Its signature is real, so the recovery gate verifies it exactly as
-//! it would a client-published pointer.
+//! Controller bootstrap prerequisites are seeded through the test fixture helpers.
+//! The ceremony's own Control Events, Seal, cell effects and Agent command rows
+//! share one real PostgreSQL database; activation observes the Seal committed by
+//! the HTTP path rather than a second in-memory governance store.
 
 use super::common::*;
 
@@ -37,9 +33,7 @@ fn ceremony_requested_scope() -> Value {
     })
 }
 
-/// Seed the controller-side Agent PCR recovery material the pairing
-/// commit gate requires: the Agent PCR MLS group, an `mls_history` key backup
-/// The pairing ceremony drives the full Event admission state machine, whose
+// The pairing ceremony drives the full Event admission state machine, whose
 // debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
@@ -57,7 +51,7 @@ fn public_pairing_ceremony_activates_the_agent_runtime() {
 async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let mut config = test_config();
     let controller_gate = super::events::bind_controller_gate_mock(&mut config).await;
-    let state = soland_test_support::app_state(config);
+    let state = soland_test_support::app_state_with_postgres_governance(config);
     super::events::spawn_controller_gate_mock(controller_gate, &state);
     let app = app_from_state(state.clone());
     let controller = "did:web:alice.example";
@@ -153,6 +147,60 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         "{approval_body}"
     );
 
+    // Refresh a valid PoP without replacing the stable candidate or its approval.
+    let before_refresh = state
+        .test_persistence()
+        .agents()
+        .get(outcome.agent_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let builder = builder.proof_created_at(chrono::Utc::now());
+    let refreshed_request = builder.build_approval_request().unwrap();
+    assert_ne!(
+        refreshed_request.body.proof_of_possession.transcript_digest,
+        approval_request.body.proof_of_possession.transcript_digest
+    );
+    let mut refreshed_response =
+        TestClient::post("http://server/_arkret/open/agent-pairing/runtime-key-requests")
+            .json(&serde_json::to_value(&refreshed_request.body).unwrap())
+            .send(&app)
+            .await;
+    assert_eq!(refreshed_response.status_code, Some(StatusCode::OK));
+    let refreshed_body: Value = refreshed_response.take_json().await.unwrap();
+    assert_eq!(
+        refreshed_body["approval_request_id"],
+        approval_body["approval_request_id"]
+    );
+    let after_refresh = state
+        .test_persistence()
+        .agents()
+        .get(outcome.agent_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after_refresh.approval_requested_at,
+        before_refresh.approval_requested_at
+    );
+    assert_eq!(
+        after_refresh.runtime_key_binding_digest,
+        before_refresh.runtime_key_binding_digest
+    );
+    assert!(
+        after_refresh.runtime_proof_verified_at.unwrap()
+            >= refreshed_request.body.proof_of_possession.created_at
+    );
+    assert_eq!(
+        after_refresh
+            .runtime_key_request
+            .as_ref()
+            .unwrap()
+            .proof_of_possession
+            .transcript_digest,
+        refreshed_request.body.proof_of_possession.transcript_digest
+    );
+
     // ── 2/4 — the runtime polls the open status surface. ─────────────────────
     let status_request = serde_json::json!({
         "pairing_request_id": outcome.pairing_request_id,
@@ -212,7 +260,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         .expect("stored Agent PCR genesis Seal");
 
     let verification_method = approval_request.body.verification_method.clone();
-    let validated_runtime_key = arkret_signatures::agent::validate_agent_runtime_public_key(
+    let _validated_runtime_key = arkret_signatures::agent::validate_agent_runtime_public_key(
         &approval_request.body.public_key,
         &verification_method,
     )
@@ -223,41 +271,29 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     .unwrap();
     let agent_key_id =
         arkret_wire::NonEmptyString::new(verification_method.as_str().to_owned()).unwrap();
-    let binding_core = arkret_signatures::agent_evidence::prepare_agent_signing_key_binding_core(
-        outcome.agent_id.clone(),
-        agent_key_id.clone(),
-        verification_method.clone(),
-        &approval_request.body.public_key,
-        created_at,
-        None,
-        controller_core.clone(),
-    )
-    .expect("signing key binding core builds");
-    let signing_key_binding_digest =
-        arkret_signatures::agent_evidence::agent_signing_key_binding_core_digest(&binding_core)
-            .expect("signing key binding core digest");
+    let approval_request_id =
+        arkret_wire::OpaqueLocalId::new(approval_body["approval_request_id"].as_str().unwrap())
+            .unwrap();
     let pairing_digest =
         arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
             arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
             &controller_core,
             &outcome.agent_id,
             &outcome.pairing_request_id,
-            &pairing_code,
+            &approval_request_id,
             outcome.expires_at,
             &service_core,
             &approval_request
                 .body
                 .proof_of_possession
                 .runtime_key_binding_digest,
-            &approval_request.body.proof_of_possession,
         )
         .expect("pairing request binding digest");
     let payload = arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload {
         agent_id: outcome.agent_id.clone(),
         key_id: agent_key_id,
         verification_method: verification_method.clone(),
-        public_key_digest: validated_runtime_key.authorization_digest.clone(),
-        signing_key_binding_digest,
+        public_key: approval_request.body.public_key.clone(),
         accountable_principal_id: controller_core.clone(),
         agent_key_scope: serde_json::from_value(ceremony_requested_scope()).unwrap(),
         audience: vec![state.service_id().clone()],
@@ -363,25 +399,6 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             .unwrap(),
     );
 
-    let binding_to_sign = arkret_signatures::agent_evidence::materialize_agent_signing_key_binding(
-        binding_core,
-        authorize_submission.event.event_id.clone(),
-        controller_verification_method.clone(),
-    )
-    .expect("signing key binding materializes");
-    let binding_bytes = arkret_signatures::agent_evidence::agent_signing_key_binding_to_sign_bytes(
-        &binding_to_sign,
-    )
-    .expect("signing key binding transcript");
-    let controller_jws =
-        arkret_signatures::jws::sign_jws_ed25519(&binding_bytes, &controller_device_key)
-            .expect("controller proof JWS signs");
-    let signing_key_binding = arkret_signatures::agent_evidence::finish_agent_signing_key_binding(
-        binding_to_sign.clone(),
-        &controller_jws,
-    )
-    .expect("signing key binding finishes");
-
     let request_uuid = outcome
         .pairing_request_id
         .as_str()
@@ -430,7 +447,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             .unwrap();
 
     let key_pair_request = builder
-        .build_key_pair_request(disclosure, signing_key_binding, authorize_submission)
+        .build_key_pair_request(approval_request_id, disclosure, authorize_submission)
         .expect("key pair request builds");
     let key_pair_body = key_pair_request.body;
     let event_id = key_pair_body.authorize_event.event.event_id.clone();
@@ -440,9 +457,19 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     // everything, so only the combination of both outcomes below proves the
     // verification is live). ────────────────────────────────────────────────
     let mut forged_body = serde_json::to_value(&key_pair_body).unwrap();
-    forged_body["signing_key_binding"]["controller_proof"]["jws"] = Value::String(
+    let proof = key_pair_body
+        .authorize_event
+        .event
+        .proofs
+        .iter()
+        .find_map(arkret_wire::EventProof::as_producer)
+        .unwrap();
+    let proof_transcript = proof
+        .canonical_binding_bytes(&key_pair_body.authorize_event.event.actor_id)
+        .unwrap();
+    forged_body["authorize_event"]["event"]["proofs"][0]["jws"] = Value::String(
         arkret_signatures::jws::sign_jws_ed25519(
-            &binding_bytes,
+            &proof_transcript,
             &SigningKey::from_bytes(&[77u8; 32]),
         )
         .unwrap(),
@@ -460,8 +487,8 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         Some(StatusCode::BAD_REQUEST),
         "{forged_outcome}"
     );
-    assert_eq!(
-        forged_outcome["type"], "https://arkret.org/problems/agent_signing_key_mismatch",
+    assert!(
+        forged_outcome.to_string().contains("controller signature"),
         "{forged_outcome}"
     );
 
@@ -560,24 +587,26 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let seal_body = seal_response.take_string().await.unwrap_or_default();
     assert_eq!(seal_status, Some(StatusCode::OK), "{seal_body}");
 
-    let mut activated = TestClient::post("http://server/_arkret/gate/account/agent-key-pair")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("idempotency-key", event_id.as_str(), true)
-        .json(&serde_json::to_value(&key_pair_body).unwrap())
-        .send(&app)
-        .await;
-    let activated_status = activated.status_code;
-    let activated_outcome: Value = activated.take_json().await.unwrap();
-    assert_eq!(
-        activated_status,
-        Some(StatusCode::OK),
-        "{activated_outcome}"
-    );
-    assert_eq!(
-        activated_outcome["activation_state"], "active",
-        "the public pairing ceremony must terminate in an active Agent runtime: \
-         {activated_outcome}"
-    );
+    // Activation belongs to the durable worker, without another pair/get request.
+    let coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let record = state
+                .test_persistence()
+                .agents()
+                .get(outcome.agent_id.as_str())
+                .await
+                .unwrap()
+                .unwrap();
+            if record.authorized_event_ref.as_deref() == Some(event_id.as_str()) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("accepted Seal autonomously activates the runtime");
+    coordinator.abort();
     let activated_record = state
         .test_persistence()
         .agents()
@@ -658,161 +687,89 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         membership["ok"], true,
         "Agent disclosure membership: {membership}"
     );
-    let request = arkret_models_collaboration::SelfCurrentSignerEvidenceQueryRequestBody {
-        request_id: arkret_wire::RequestId::new("ak:request:019b0000-0000-7000-8000-000000000225")
-            .unwrap(),
-        realm_id: arkret_wire::RealmId::new(disclosure_realm).unwrap(),
-        recipient_account_id: controller_authority.clone(),
-        queries: vec![
-            arkret_models_collaboration::CurrentSignerEvidenceSelector::Agent {
-                actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    outcome.agent_id.clone(),
-                    service_core.clone(),
-                )),
-                verification_method: verification_method.clone(),
-            },
-        ],
-    };
-    let mut response = TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        outcome.agent_id.clone(),
+        service_core.clone(),
+    ));
+    let request = serde_json::json!({
+        "request_id":"ak:request:019b0000-0000-7000-8000-000000000225", "realm_id":disclosure_realm,
+        "recipient_account_id":controller_authority,
+        "queries":[{"verification_mode":"current_admission","sender_kind":"agent","actor":actor,"verification_method":verification_method}]
+    });
+    let mut response = TestClient::post("http://server/_arkret/self/signer-keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&request).unwrap())
-        .send(&app)
-        .await;
-    let status = response.status_code;
-    let body = response.take_string().await.unwrap();
-    assert_eq!(status, Some(StatusCode::OK), "{body}");
-    let resolved: arkret_models_collaboration::SelfCurrentSignerEvidenceQueryOutcome =
-        serde_json::from_str(&body).unwrap();
-    resolved.validate_for_request(&request).unwrap();
-    let [arkret_models_collaboration::SelfCurrentSignerEvidenceResult::Resolved { key, .. }] =
-        resolved.results.as_slice()
-    else {
-        panic!("own Station omitted verified current key: {body}");
-    };
-    assert_eq!(key.actor, request.queries[0].actor_id());
-    assert_eq!(key.verification_method, verification_method);
-    assert_eq!(key.authorization_ref.as_str(), event_id.as_str());
-    assert_eq!(
-        arkret_canonical::base64url_decode(key.public_key_b64u.as_str()).unwrap(),
-        runtime_key.verifying_key().to_bytes()
-    );
-    assert!(!body.contains("authenticated_signer_evidence"));
-    assert!(!body.contains("dependencies"));
-
-    let mut wrong_recipient = request.clone();
-    wrong_recipient.recipient_account_id.station_id =
-        arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
-    let response = TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&wrong_recipient).unwrap())
-        .send(&app)
-        .await;
-    assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND));
-
-    let mut wrong_method = request.clone();
-    if let arkret_models_collaboration::CurrentSignerEvidenceSelector::Agent {
-        verification_method,
-        ..
-    } = &mut wrong_method.queries[0]
-    {
-        *verification_method =
-            arkret_wire::DidUrl::new(format!("{}#not-the-paired-key", outcome.did)).unwrap();
-    }
-    let mut response = TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&wrong_method).unwrap())
+        .json(&request)
         .send(&app)
         .await;
     assert_eq!(response.status_code, Some(StatusCode::OK));
-    let missing: arkret_models_collaboration::SelfCurrentSignerEvidenceQueryOutcome =
-        response.take_json().await.unwrap();
-    missing.validate_for_request(&wrong_method).unwrap();
-    assert!(matches!(
-        missing.results.as_slice(),
-        [arkret_models_collaboration::SelfCurrentSignerEvidenceResult::Unavailable { .. }]
-    ));
-
-    let mut duplicate = request.clone();
-    duplicate.queries.push(duplicate.queries[0].clone());
-    let response = TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
+    let result: Value = response.take_json().await.unwrap();
+    let key = &result["results"][0]["key"];
+    assert_eq!(key["actor"], serde_json::to_value(&actor).unwrap());
+    assert_eq!(key["authorization_ref"], event_id.as_str());
+    assert_eq!(
+        arkret_canonical::base64url_decode(key["public_key_b64u"].as_str().unwrap()).unwrap(),
+        runtime_key.verifying_key().to_bytes()
+    );
+    assert!(!result.to_string().contains("authenticated_signer_evidence"));
+    assert!(!result.to_string().contains("dependencies"));
+    if let Some(path) = std::env::var_os("ARKRET_AGENT_CONTEXT_FIXTURE_OUT") {
+        let fixture = soland_http::test_verified_agent_context_fixture(
+            &state,
+            actor.clone(),
+            verification_method.clone(),
+            arkret_wire::RealmId::new(disclosure_realm.clone()).unwrap(),
+            controller_authority.clone(),
+        )
+        .await
+        .expect("real portable Agent context verifies");
+        std::fs::write(path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").unwrap();
+    }
+    let mut wrong_recipient = request.clone();
+    wrong_recipient["recipient_account_id"]["station_id"] =
+        serde_json::json!("ak:did_core:web:other-station.example");
+    let response = TestClient::post("http://server/_arkret/self/signer-keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&duplicate).unwrap())
+        .json(&wrong_recipient)
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND));
+    let mut wrong_method = request.clone();
+    wrong_method["queries"][0]["verification_method"] =
+        serde_json::json!(format!("{}#not-the-paired-key", outcome.did));
+    let mut response = TestClient::post("http://server/_arkret/self/signer-keys/query")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&wrong_method)
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let result: Value = response.take_json().await.unwrap();
+    assert_eq!(result["results"][0]["status"], "unavailable");
+    let mut duplicate = request.clone();
+    duplicate["queries"]
+        .as_array_mut()
+        .unwrap()
+        .push(request["queries"][0].clone());
+    let response = TestClient::post("http://server/_arkret/self/signer-keys/query")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&duplicate)
         .send(&app)
         .await;
     assert_eq!(response.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
-    let mut oversized = request.clone();
-    oversized.queries = vec![request.queries[0].clone(); 1000];
-    let response = TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
+    let mut historical = request.clone();
+    historical["realm_id"] = serde_json::to_value(agent_pcr_realm).unwrap();
+    historical["queries"][0]["verification_mode"] = serde_json::json!("historical_event");
+    historical["queries"][0]["event_id"] = serde_json::to_value(event_id).unwrap();
+    let mut response = TestClient::post("http://server/_arkret/self/signer-keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&oversized).unwrap())
+        .json(&historical)
         .send(&app)
         .await;
-    assert_eq!(response.status_code, Some(StatusCode::PAYLOAD_TOO_LARGE));
-
-    let agent_request = arkret_models_identity::AgentSignerEvidenceQueryRequestBody {
-        request_id: request.request_id.clone(),
-        realm_id: request.realm_id.clone(),
-        recipient_account_id: controller_authority,
-        queries: vec![
-            arkret_models_identity::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-                actor: key.actor.clone(),
-                verification_method: verification_method.clone(),
-            },
-        ],
-    };
-    let mut response = TestClient::post("http://server/_arkret/self/agent-signer-evidence/query")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&agent_request).unwrap())
-        .send(&app)
-        .await;
-    let status = response.status_code;
-    let body = response.take_string().await.unwrap();
-    assert_eq!(status, Some(StatusCode::OK), "{body}");
-    let agent_result: arkret_models_identity::AgentSignerEvidenceQueryOutcome =
-        serde_json::from_str(&body).unwrap();
-    agent_result.validate_for_request(&agent_request).unwrap();
-    assert!(
-        matches!(agent_result.results.as_slice(), [arkret_models_identity::AgentSignerEvidenceQueryResult::CurrentResolved { key: returned, .. }] if returned == key)
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let result: Value = response.take_json().await.unwrap();
+    assert_eq!(
+        result["results"][0]["status"], "unavailable",
+        "controller Event cannot become an Agent-signed historical Event"
     );
-    // This Event was signed by the controller, not the now-authorized Agent.
-    // Current authorization must not repair an unrelated historical signer,
-    // even when a different receiver is explicitly requested.
-    let mut history = agent_request;
-    history.realm_id = agent_pcr_realm;
-    for receiver_id in [
-        service_core,
-        arkret_wire::DidCoreId::new("ak:did_core:web:other-receiver.example").unwrap(),
-    ] {
-        history.queries = vec![
-            arkret_models_identity::AgentSignerEvidenceQuerySelector::HistoricalEvent {
-                actor: key.actor.clone(),
-                verification_method: verification_method.clone(),
-                event_id: event_id.clone(),
-                receiver_id,
-            },
-        ];
-        let mut response =
-            TestClient::post("http://server/_arkret/self/agent-signer-evidence/query")
-                .add_header("authorization", format!("Bearer {token}"), true)
-                .add_header("content-type", "application/json", true)
-                .body(arkret_canonical::canonical_json_bytes(&history).unwrap())
-                .send(&app)
-                .await;
-        assert_eq!(response.status_code, Some(StatusCode::OK));
-        let historical: arkret_models_identity::AgentSignerEvidenceQueryOutcome =
-            response.take_json().await.unwrap();
-        historical.validate_for_request(&history).unwrap();
-        assert!(matches!(
-            historical.results.as_slice(),
-            [arkret_models_identity::AgentSignerEvidenceQueryResult::Unavailable { .. }]
-        ));
-    }
 }
 
 async fn verify_owned_agent_direct_founding(

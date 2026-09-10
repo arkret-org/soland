@@ -137,7 +137,7 @@ pub struct RecoveryPolicyRecord {
     pub version: u32,
     pub acceptance_basis: LeaseBasisRef,
     pub trust_domain: String,
-    pub allowed_proof_kinds: Vec<String>,
+
     pub supersedes: Option<String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub issued_at: chrono::DateTime<chrono::Utc>,

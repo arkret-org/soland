@@ -578,11 +578,6 @@ struct SemanticResubmission {
     coalescing_position: Option<i64>,
 }
 
-enum KeyPackageClaimRecovery {
-    Unknown,
-    Terminal(Box<arkret_models_crypto::PeerKeyPackagesClaimQueryOutcome>),
-}
-
 /// `sync/federation.md` §8.5 — once a response has been received the old
 /// `Idempotency-Key` is spent; re-evaluation MUST use a new one. The key is a
 /// pure function of `(previous key, resubmission ordinal, new canonical body)`
@@ -1151,74 +1146,8 @@ impl FederationDispatcher {
                 }
             };
 
-        // A claim command whose response was lost is never blindly replayed.
-        // Query the original `(claim_request_id, request_digest)` first; only
-        // a durable `unknown` permits the exact original command to continue.
-        if row.delivery.endpoint == "/_arkret/peer/keys/keypackages/claim" && row.attempts > 0 {
-            match self
-                .query_uncertain_keypackage_claim(
-                    &row,
-                    &peer_target.base_url,
-                    &peer_target.trust_domain,
-                )
-                .await
-            {
-                Ok(KeyPackageClaimRecovery::Unknown) => {}
-                Ok(KeyPackageClaimRecovery::Terminal(outcome)) => {
-                    let body = serde_json::to_string(&outcome).unwrap_or_default();
-                    let recovered = crate::routing::mls::capture_relayed_keypackage_claim_query(
-                        &self.state,
-                        row.delivery.peer_id.as_str(),
-                        &row.delivery.payload_json,
-                        &outcome,
-                    )
-                    .await;
-                    let command = if let Err(error) = recovered {
-                        self.transport_retry(
-                            &row,
-                            &lease_token,
-                            row.attempts.saturating_add(1),
-                            Some(200),
-                            error_code::TRANSPORT_ERROR,
-                            excerpt(&format!("keypackage_claim_query_persistence: {error}")),
-                            None,
-                            now_unix_secs(),
-                        )
-                    } else {
-                        RecordFederationAttemptCommand {
-                            id: row.delivery.id.clone(),
-                            lease_token: lease_token.clone(),
-                            attempts: row.attempts.saturating_add(1),
-                            semantic_attempts: row.semantic_attempts,
-                            last_http_status: Some(200),
-                            last_error_code: None,
-                            last_response_excerpt: Some(excerpt(&body)),
-                            observed_at: now_unix_secs(),
-                            outcome: FederationDeliveryOutcome::Delivered,
-                        }
-                    };
-                    self.commit(command).await;
-                    return;
-                }
-                Err(error) => {
-                    let attempts = row.attempts.saturating_add(1);
-                    let now = now_unix_secs();
-                    let command = self.transport_retry(
-                        &row,
-                        &lease_token,
-                        attempts,
-                        None,
-                        error_code::TRANSPORT_ERROR,
-                        excerpt(&format!("keypackage_claim_query: {error}")),
-                        None,
-                        now,
-                    );
-                    self.commit(command).await;
-                    return;
-                }
-            }
-        }
-
+        // Exact command replay reads the destination's durable ledger first;
+        // no query-before-retry round trip or replacement request identity.
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::CONTENT_TYPE,
@@ -1656,93 +1585,6 @@ impl FederationDispatcher {
         }
     }
 
-    async fn query_uncertain_keypackage_claim(
-        &self,
-        row: &PendingFederationDelivery,
-        peer_base_url: &str,
-        destination_trust_domain: &str,
-    ) -> Result<KeyPackageClaimRecovery, String> {
-        let request: arkret_models_crypto::KeyPackagesClaimRequestBody =
-            serde_json::from_str(&row.delivery.payload_json).map_err(|error| error.to_string())?;
-        let request_digest = arkret_wire::Hash::new(
-            arkret_canonical::canonical_sha256(&request).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
-        let query = arkret_models_crypto::PeerKeyPackagesClaimQueryRequestBody {
-            claim_request_id: request.claim_request_id.clone(),
-            request_digest,
-        };
-        let body =
-            arkret_canonical::canonical_json_bytes(&query).map_err(|error| error.to_string())?;
-        let target = format!(
-            "{}{}",
-            peer_base_url.trim_end_matches('/'),
-            "/_arkret/peer/keys/keypackages/claims/query"
-        );
-        let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
-            &target,
-            "KeyPackage claim outcome query",
-            self.state.config().development_mode,
-            REQUEST_TIMEOUT,
-        )?;
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-        insert_header_if_valid(
-            &mut headers,
-            "content-digest",
-            &content_digest_header_value(&body),
-        );
-        insert_header_if_valid(&mut headers, "source-service-id", self.state.service_id());
-        insert_header_if_valid(
-            &mut headers,
-            "destination-service-id",
-            row.delivery.peer_id.as_str(),
-        );
-        insert_header_if_valid(
-            &mut headers,
-            "source-trust-domain",
-            self.state.config().trust_domain.as_str(),
-        );
-        insert_header_if_valid(
-            &mut headers,
-            "destination-trust-domain",
-            destination_trust_domain,
-        );
-        let headers = rfc9421_sign(&self.state, headers, "POST", &target);
-        let response = client
-            .post(url)
-            .headers(headers)
-            .body(body)
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
-        if !response.status().is_success() {
-            return Err(format!("query returned HTTP {}", response.status()));
-        }
-        let outcome = response
-            .json::<arkret_models_crypto::PeerKeyPackagesClaimQueryOutcome>()
-            .await
-            .map_err(|error| error.to_string())?;
-        outcome
-            .validate_shape()
-            .map_err(|error| error.to_string())?;
-        if outcome.claim_request_id != request.claim_request_id {
-            return Err("query returned another claim_request_id".to_owned());
-        }
-        match outcome.state {
-            arkret_models_crypto::PeerKeyPackagesClaimQueryState::Unknown => {
-                Ok(KeyPackageClaimRecovery::Unknown)
-            }
-            arkret_models_crypto::PeerKeyPackagesClaimQueryState::Pending => {
-                Err("destination still reports pending".to_owned())
-            }
-            _ => Ok(KeyPackageClaimRecovery::Terminal(Box::new(outcome))),
-        }
-    }
-
     async fn capture_keypackage_claim_outcome(
         &self,
         row: &PendingFederationDelivery,
@@ -1751,11 +1593,19 @@ impl FederationDispatcher {
         if row.delivery.endpoint != "/_arkret/peer/keys/keypackages/claim" {
             return Ok(());
         }
-        crate::routing::mls::capture_relayed_keypackage_claim_outcome(
+        let outcome: arkret_models_crypto::PeerKeyPackagesClaimQueryOutcome =
+            serde_json::from_str(response_body).map_err(|error| error.to_string())?;
+        outcome
+            .validate_command_shape()
+            .map_err(|error| error.to_string())?;
+        if outcome.state == arkret_models_crypto::PeerKeyPackagesClaimQueryState::Pending {
+            return Err("destination claim reservation is pending".to_owned());
+        }
+        crate::routing::mls::capture_relayed_keypackage_claim_query(
             &self.state,
             row.delivery.peer_id.as_str(),
             &row.delivery.payload_json,
-            response_body,
+            &outcome,
         )
         .await
     }

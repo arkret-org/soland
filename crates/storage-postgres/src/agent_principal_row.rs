@@ -48,7 +48,7 @@ pub(crate) struct AgentPrincipalRow {
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
-    pub authorized_signing_key_binding: Option<Value>,
+    pub authorized_key_event: Option<Value>,
     pub state_changed_at: Option<DateTime<Utc>>,
     #[diesel(skip_update)]
     pub created_at: DateTime<Utc>,
@@ -75,6 +75,7 @@ struct RuntimeKeyMaterial {
     public_key_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     attestation_digest: Option<String>,
+    proof_verified_at: Option<DateTime<Utc>>,
 }
 
 /// Packs the runtime key request and its digests into the single stored column.
@@ -85,6 +86,7 @@ pub(crate) fn pack_runtime_key_material(
     request: Option<Value>,
     public_key_digest: Option<String>,
     attestation_digest: Option<String>,
+    proof_verified_at: Option<DateTime<Utc>>,
 ) -> Result<Option<Value>, PersistenceError> {
     if request.is_none() && public_key_digest.is_none() && attestation_digest.is_none() {
         return Ok(None);
@@ -93,6 +95,7 @@ pub(crate) fn pack_runtime_key_material(
         request,
         public_key_digest,
         attestation_digest,
+        proof_verified_at,
     })
     .map(Some)
     .map_err(|error| {
@@ -181,18 +184,19 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
                     })?,
                 record.runtime_public_key_digest,
                 record.runtime_attestation_digest,
+                record.runtime_proof_verified_at,
             )?,
             approval_requested_at: record.approval_requested_at,
             authorized_event_ref: record.authorized_event_ref,
             authorized_verification_method: record.authorized_verification_method,
             authorized_public_key_digest: record.authorized_public_key_digest,
-            authorized_signing_key_binding: record
-                .authorized_signing_key_binding
+            authorized_key_event: record
+                .authorized_key_event
                 .map(serde_json::to_value)
                 .transpose()
                 .map_err(|error| {
                     PersistenceError::Internal(format!(
-                        "encode typed Agent signing-key binding: {error}"
+                        "encode typed Agent authorize Event: {error}"
                     ))
                 })?,
             state_changed_at: record.state_changed_at,
@@ -286,6 +290,7 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
             runtime_key_binding_digest: row.runtime_key_binding_digest,
             runtime_public_key_digest: material.public_key_digest,
             runtime_attestation_digest: material.attestation_digest,
+            runtime_proof_verified_at: material.proof_verified_at,
             approval_notification_id: row.approval_notification_id,
             runtime_key_request: material
                 .request
@@ -300,13 +305,13 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
             authorized_event_ref: row.authorized_event_ref,
             authorized_verification_method: row.authorized_verification_method,
             authorized_public_key_digest: row.authorized_public_key_digest,
-            authorized_signing_key_binding: row
-                .authorized_signing_key_binding
+            authorized_key_event: row
+                .authorized_key_event
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(|error| {
                     PersistenceError::SchemaViolation(format!(
-                        "stored Agent signing-key binding is invalid: {error}"
+                        "stored Agent authorize Event is invalid: {error}"
                     ))
                 })?,
             state_changed_at: row.state_changed_at,

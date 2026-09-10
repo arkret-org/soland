@@ -114,8 +114,8 @@ pub(super) fn fold(
         let event = arkret_wire::EventId::new(event.to_owned()).map_err(invalid)?;
         authorizations.push((event, authorization));
     }
-    // A later replacement observes and removes old revoke dots. A revoke dot
-    // surviving concurrently with an authorization remains a revocation gate.
+    // Replacement removes only the exact superseded authorization dot.
+    // Revoke dots remain in their old key cell and keep that raw key revoked.
     if revoked {
         return Ok((inactive("revoked"), None));
     }
@@ -137,8 +137,7 @@ pub(super) fn fold(
         if first.agent_id != next.agent_id
             || first.key_id != next.key_id
             || first.verification_method != next.verification_method
-            || first.public_key_digest != next.public_key_digest
-            || first.signing_key_binding_digest != next.signing_key_binding_digest
+            || first.public_key != next.public_key
             || first.accountable_principal_id != next.accountable_principal_id
         {
             return Ok((bottom(), None));
@@ -163,7 +162,7 @@ pub(super) fn fold(
     events.sort_by_key(|event| event.token_bytes());
     events.dedup();
     let mut value = serde_json::json!({"status":"active","agent_id":first.agent_id,"key_id":first.key_id,
-        "verification_method":first.verification_method,"public_key_digest":first.public_key_digest,
+        "verification_method":first.verification_method,"public_key":first.public_key,
         "accountable_principal_id":first.accountable_principal_id,"agent_key_scope":scope,
         "audience":audience,"authorization_event_ids":events});
     if let Some(expiry) = expiry {
@@ -189,8 +188,7 @@ pub(super) mod tests {
         serde_json::json!({"tag":format!("{event}:1"),"value":{
             "agent_id":"ak:did_core:web:agent.example","key_id":"runtime-key",
             "verification_method":"did:web:agent.example#runtime-key",
-            "public_key_digest":format!("sha256:{}","00".repeat(32)),
-            "signing_key_binding_digest":format!("sha256:{}","11".repeat(32)),
+            "public_key":{"kty":"OKP","kid":"did:web:agent.example#key-1","algorithm":"Ed25519","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
             "accountable_principal_id":"ak:did_core:web:controller.example",
             "agent_key_scope":{"actions":actions,"resources":[{"kind":"operation","operation":"ak.self.account.stream.subscribe.v1"}]},
             "audience":audience,"issued_at":"2026-09-10T00:00:00.000Z","expires_at":expiry,

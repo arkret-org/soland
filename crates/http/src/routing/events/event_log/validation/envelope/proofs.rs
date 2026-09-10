@@ -917,12 +917,39 @@ async fn verify_with_active_agent_session(
             "Agent Event proof does not match its typed session-grant key binding",
         ));
     }
-    let Some((_, authorization_ref)) = state
-        .projections()
-        .snapshot()
-        .active_agent_key_authorizations(signer_id)
+    let agent_record = state
+        .agent_pairings()
+        .agent(signer_id)
+        .await
+        .map_err(|_| {
+            event_validation_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "Agent state is unavailable",
+            )
+        })?
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "Agent is unavailable",
+            )
+        })?;
+    let Some((_, authorization_ref)) =
+        crate::routing::identity::agents::accepted_active_agent_key_authorizations(
+            state,
+            &agent_record,
+        )
+        .await
+        .map_err(|_| {
+            event_validation_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "Agent accepted key state is unavailable",
+            )
+        })?
         .into_iter()
-        .find(|(key_id, _)| key_id == verification_method)
+        .find(|(_, event_ref)| event_ref == agent_key_authorization_ref.as_str())
     else {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -976,69 +1003,38 @@ async fn verify_with_active_agent_session(
             "Agent key authorization does not match the Event signer",
         ));
     }
-    let public_key: Value =
-        serde_json::from_str(session.session_public_key.as_deref().ok_or_else(|| {
+    let event: arkret_wire::Event =
+        serde_json::from_value(authorization.envelope).map_err(|_| {
             event_validation_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_proof",
-                "Agent session omitted its authorized public key",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "Agent authorization Event is invalid",
             )
-        })?)
+        })?;
+    let authorized_key =
+        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+            &event,
+        )
         .map_err(|_| {
             event_validation_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_proof",
-                "Agent session public key is not valid JSON",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "Agent authorization raw key is invalid",
             )
         })?;
-    let encoded_key = public_key
-        .get("key")
-        .or_else(|| public_key.get("x"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
+    let key_bytes = URL_SAFE_NO_PAD
+        .decode(authorized_key.public_key.key.as_str())
+        .map_err(|_| {
             event_validation_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_proof",
-                "Agent session public key omitted Ed25519 key material",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "Agent authorization key encoding is invalid",
             )
         })?;
-    // Session grants carry the RFC 7638 JWK form, while the durable
-    // `ak.agent.key.authorize` binding hashes Arkret's runtime-key form.
-    let authorized_public_key = serde_json::json!({
-        "kty": "OKP",
-        "kid": verification_method,
-        "algorithm": "Ed25519",
-        "key": encoded_key,
-    });
-    let public_key_digest = arkret_signatures::agent::agent_runtime_public_key_digest(
-        &authorized_public_key,
-    )
-    .map_err(|_| {
-        event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent session public key is invalid",
-        )
-    })?;
-    if payload.get("public_key_digest").and_then(Value::as_str) != Some(public_key_digest.as_str())
-    {
-        return Err(event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent session public key does not match its active authorization",
-        ));
-    }
-    let key_bytes = URL_SAFE_NO_PAD.decode(encoded_key).map_err(|_| {
-        event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent session public key is not valid base64url",
-        )
-    })?;
     let signing_key = did_key_from_ed25519_bytes(&key_bytes)?;
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes: key_bytes };
-    // §3 — key material comes from the active Agent session grant; zero
-    // resolver calls.
+    // The session grant selects an accepted authorization; Event signatures
+    // use its inline runtime key, independently of the HTTP session DPoP key.
     let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
         jws,
         canonical_bytes,

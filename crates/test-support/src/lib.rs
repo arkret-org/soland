@@ -58,13 +58,17 @@ pub fn app_config() -> AppConfig {
 /// Soland stores through one adapter, so a fixture takes a real database
 /// rather than a second in-memory implementation. The lease is owned by the
 /// store, so the slot returns when the last holder drops.
-fn leased_fixture_persistence(
+fn leased_fixture_persistence_with_pool(
     config: &AppConfig,
     identity: &DidCoreIdentityState,
     signing_seed: [u8; 32],
     seed_webvh_log: bool,
-) -> Arc<dyn PersistenceStore> {
+) -> (Arc<dyn PersistenceStore>, soland_storage_postgres::PgPool) {
     let leased = Arc::new(TestDatabase::lease_blocking());
+    let pool = leased
+        .db()
+        .pool
+        .expect("leased fixture requires PostgreSQL");
     let persistence: Arc<dyn PersistenceStore> = Arc::new(PgPersistenceStore::leased(leased));
     let stored = fixture_stored_service_identity(config, identity, signing_seed);
     let webvh_log = seed_webvh_log.then(|| fixture_service_webvh_log(config, signing_seed));
@@ -87,7 +91,16 @@ fn leased_fixture_persistence(
             seed_demo_data(store.as_ref()).await;
         }
     });
-    persistence
+    (persistence, pool)
+}
+
+fn leased_fixture_persistence(
+    config: &AppConfig,
+    identity: &DidCoreIdentityState,
+    signing_seed: [u8; 32],
+    seed_webvh_log: bool,
+) -> Arc<dyn PersistenceStore> {
+    leased_fixture_persistence_with_pool(config, identity, signing_seed, seed_webvh_log).0
 }
 
 /// The demo Realm the development projection reads. The Realm id the directory
@@ -144,6 +157,21 @@ pub fn app_state(config: AppConfig) -> AppState {
     let signing_seed = fixture_signing_seed(&config, &identity);
     let persistence = leased_fixture_persistence(&config, &identity, signing_seed, true);
     app_state_with_identity(config, persistence, identity, signing_seed)
+}
+
+/// Build the same PostgreSQL governance stores used by production over the
+/// exact database lease that owns the identity, Agent and command rows.
+/// Ceremony tests use this when a commit gate must see an accepted Seal in SQL.
+pub fn app_state_with_postgres_governance(config: AppConfig) -> AppState {
+    let identity = fixture_service_identity(&config);
+    let signing_seed = fixture_signing_seed(&config, &identity);
+    let (persistence, pool) =
+        leased_fixture_persistence_with_pool(&config, &identity, signing_seed, true);
+    let stores = soland_storage_postgres::build_state_resolution_stores(
+        Some(pool),
+        ProjectionService::sdk_cell_registry(),
+    );
+    app_state_with_identity_and_stores(config, persistence, identity, signing_seed, Some(stores))
 }
 
 pub fn app_state_with_service_did(config: AppConfig, did: Did) -> AppState {
@@ -293,24 +321,68 @@ pub fn app_state_with_identity(
     service_identity: DidCoreIdentityState,
     resolved_signing_seed: [u8; 32],
 ) -> AppState {
-    let cell_registry = ProjectionService::sdk_cell_registry();
-    let control_event_store: Arc<dyn ControlEventStore> =
-        Arc::new(MemoryControlEventStore::default());
-    // Mirror production bootstrap: the memory device-revocation adapter
-    // derives seal-settled state from this Control Event store.
+    app_state_with_identity_and_stores(
+        config,
+        persistence,
+        service_identity,
+        resolved_signing_seed,
+        None,
+    )
+}
+
+fn app_state_with_identity_and_stores(
+    config: AppConfig,
+    persistence: Arc<dyn PersistenceStore>,
+    service_identity: DidCoreIdentityState,
+    resolved_signing_seed: [u8; 32],
+    postgres_stores: Option<soland_storage_postgres::StateResolutionStores>,
+) -> AppState {
+    let storage_mode = if postgres_stores.is_some() {
+        "postgres"
+    } else {
+        "memory"
+    };
+    let (control_event_store, seal_store, cell_store, cell_registry, event_seal_committer): (
+        Arc<dyn ControlEventStore>,
+        Arc<dyn SealStore>,
+        Arc<dyn CellStore>,
+        Arc<dyn CellRegistry>,
+        Arc<dyn EventSealCommitPort>,
+    ) = if let Some(stores) = postgres_stores {
+        (
+            stores.control_event_store,
+            stores.seal_store,
+            stores.cell_store,
+            stores.cell_registry,
+            Arc::new(PostgresFixtureEventSealCommitter(
+                stores.event_seal_committer,
+            )),
+        )
+    } else {
+        let cell_registry = ProjectionService::sdk_cell_registry();
+        let control_event_store: Arc<dyn ControlEventStore> =
+            Arc::new(MemoryControlEventStore::default());
+        let seal_store = Arc::new(MemorySealStore::default());
+        let cell_store = Arc::new(MemoryCellStore::default());
+        let event_seal_committer = Arc::new(MemoryEventSealCommitter {
+            lock: Mutex::new(()),
+            data_event_leaf_manifests: Mutex::new(BTreeMap::new()),
+            seal_store: seal_store.clone(),
+            cell_store: cell_store.clone(),
+            cell_registry: cell_registry.clone(),
+            control_event_store: control_event_store.clone(),
+        });
+        (
+            control_event_store,
+            seal_store,
+            cell_store,
+            cell_registry,
+            event_seal_committer,
+        )
+    };
     persistence
         .device_revocations()
         .bind_control_event_store(control_event_store.clone());
-    let seal_store = Arc::new(MemorySealStore::default());
-    let cell_store = Arc::new(MemoryCellStore::default());
-    let event_seal_committer = Arc::new(MemoryEventSealCommitter {
-        lock: Mutex::new(()),
-        data_event_leaf_manifests: Mutex::new(BTreeMap::new()),
-        seal_store: seal_store.clone(),
-        cell_store: cell_store.clone(),
-        cell_registry: cell_registry.clone(),
-        control_event_store: control_event_store.clone(),
-    });
     let serving_identity = service_identity
         .identity()
         .expect("fixture has a serving identity");
@@ -337,7 +409,7 @@ pub fn app_state_with_identity(
         seal_store.clone(),
         cell_store.clone(),
         cell_registry,
-        event_seal_committer,
+        event_seal_committer.clone(),
         &service_id,
     );
     let projection = Box::leak(Box::new(projections.test_state().clone()));
@@ -358,7 +430,7 @@ pub fn app_state_with_identity(
             settings_persistence: Arc::new(NoRuntimeSettings),
             runtime_health: Arc::new(MemoryRuntimeHealth),
             event_broadcast: EventBroadcast::new(1024),
-            storage_mode: "memory",
+            storage_mode,
         },
         service_identity,
         service_resolution_commitment,
@@ -373,9 +445,64 @@ pub fn app_state_with_identity(
             control_event_store: Some(control_event_store),
             seal_store: Some(seal_store),
             cell_store: Some(cell_store),
+            event_seal_committer: Some(event_seal_committer),
         },
     );
     state
+}
+
+struct PostgresFixtureEventSealCommitter(Arc<dyn soland_storage_postgres::EventSealCommitStore>);
+
+#[async_trait]
+impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
+    async fn commit_if_frontier(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+        expected_store_frontier: &[SealId],
+        new_ops: &[(CellRef, IssuedOp)],
+        covered: &BTreeSet<Hash>,
+        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
+        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+    ) -> StoreResult<bool> {
+        self.0
+            .commit_if_frontier(
+                seal,
+                digest_suite,
+                expected_store_frontier,
+                new_ops,
+                covered,
+                data_event_leaf_manifest,
+                governance_dependencies,
+            )
+            .await
+    }
+    async fn data_event_leaf_manifest(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<BTreeSet<Hash>>> {
+        self.0.data_event_leaf_manifest(seal_id).await
+    }
+    async fn effective_state_checkpoint(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<soland_services::projection::SealEffectiveStateCheckpoint>> {
+        self.0
+            .effective_state_checkpoint(seal_id)
+            .await
+            .map(|checkpoint| {
+                checkpoint.map(|checkpoint| {
+                    soland_services::projection::SealEffectiveStateCheckpoint {
+                        realm_id: checkpoint.realm_id,
+                        seal_id: checkpoint.seal_id,
+                        covered_event_digests: checkpoint.covered_event_digests,
+                        covered_seal_ids: checkpoint.covered_seal_ids,
+                        state: checkpoint.state,
+                        cas_heads: checkpoint.cas_heads,
+                    }
+                })
+            })
+    }
 }
 
 /// Record one fixture's resources, dropping entries whose `AppState` is gone.
@@ -422,6 +549,14 @@ pub trait AppStateTestExt {
         seal_id: &SealId,
         ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()>;
+    /// Commit a signed, validated genesis unit through the real atomic store,
+    /// including its effective-state checkpoint and sealed Control Event markers.
+    async fn test_commit_bootstrap_seal(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+        ops: &[(CellRef, IssuedOp)],
+    ) -> StoreResult<()>;
 }
 
 pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceStore>) {
@@ -434,6 +569,7 @@ pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceS
             control_event_store: None,
             seal_store: None,
             cell_store: None,
+            event_seal_committer: None,
         },
     );
 }
@@ -612,6 +748,33 @@ impl AppStateTestExt for AppState {
             .expect("test cell store is unavailable for this AppState");
         store.append_sealed_effects(realm_id, seal_id, ops).await
     }
+    async fn test_commit_bootstrap_seal(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+        ops: &[(CellRef, IssuedOp)],
+    ) -> StoreResult<()> {
+        if !seal.predecessor_refs.is_empty() {
+            return Err(StoreError::Conflict(
+                "bootstrap fixture must have no predecessors".to_owned(),
+            ));
+        }
+        let committer = state_test_registry()
+            .lock()
+            .get(&app_state_key(self))
+            .and_then(|resources| resources.event_seal_committer.clone())
+            .expect("test atomic Seal committer unavailable");
+        let covered = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
+        if !committer
+            .commit_if_frontier(seal, digest_suite, &[], ops, &covered, None, &[])
+            .await?
+        {
+            return Err(StoreError::Conflict(
+                "bootstrap fixture frontier changed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn app_state_key(state: &AppState) -> usize {
@@ -628,6 +791,7 @@ struct StateTestResources {
     control_event_store: Option<Arc<dyn ControlEventStore>>,
     seal_store: Option<Arc<dyn SealStore>>,
     cell_store: Option<Arc<dyn CellStore>>,
+    event_seal_committer: Option<Arc<dyn EventSealCommitPort>>,
 }
 
 fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> {

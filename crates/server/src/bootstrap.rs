@@ -2769,7 +2769,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn keystore_backed_signing_key_binding_survives_restart() {
+    async fn keystore_backed_key_authorization_event_survives_restart() {
         let config = AppConfig {
             public_base_url: "https://soland.example/".to_owned(),
             notary_signing_key_seed: None,

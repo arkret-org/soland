@@ -397,9 +397,40 @@ struct OutboundFrame {
     encoded: String,
     /// Signal frames may be dropped under pressure; durable frames may not.
     droppable: bool,
+    signal: Option<QueuedSignal>,
     /// Pending frame/byte permits are released only after the writer removes
     /// this frame from the queue (or the queue is dropped).
     _permits: PendingPermits,
+}
+
+/// An admission result is not a lease: retain the original session binding and
+/// raw envelope so the socket writer can re-run current authorization at dequeue.
+struct QueuedSignal {
+    channel_id: String,
+    recipient_account_id: arkret_wire::AccountId,
+    binding: SignalSessionBinding,
+    envelope: arkret_wire::SignalEnvelope,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SignalSessionBinding {
+    token_hash: String,
+    actor: String,
+    device_id: String,
+    audience: String,
+}
+impl SignalSessionBinding {
+    fn new(session: &SessionIdentityState) -> Self {
+        Self {
+            token_hash: session.token_hash.clone(),
+            actor: session.actor.clone(),
+            device_id: session.device_id.clone(),
+            audience: session.audience.clone(),
+        }
+    }
+    fn matches(&self, session: &SessionIdentityState) -> bool {
+        self == &Self::new(session)
+    }
 }
 
 struct PendingPermits {
@@ -461,6 +492,7 @@ impl ChannelSender {
                     .send(OutboundFrame {
                         encoded,
                         droppable: false,
+                        signal: None,
                         _permits: permits,
                     })
                     .await
@@ -473,7 +505,7 @@ impl ChannelSender {
 
     /// §7 — at the Signal queue limit the Signal is dropped rather than
     /// evicting a durable account / events frame.
-    fn try_send_signal(&self, frame: WebSocketServerFrame) -> bool {
+    fn try_send_signal(&self, frame: WebSocketServerFrame, signal: QueuedSignal) -> bool {
         let Ok(encoded) = self.codec.encode(&frame) else {
             return false;
         };
@@ -484,6 +516,7 @@ impl ChannelSender {
             .try_send(OutboundFrame {
                 encoded,
                 droppable: true,
+                signal: Some(signal),
                 _permits: permits,
             })
             .is_ok()
@@ -959,7 +992,19 @@ async fn run_multiplex(
             }
             Some(outbound) = signal_rx.recv() => {
                 debug_assert!(outbound.droppable);
-                if timed_send(&mut sink, Message::text(outbound.encoded)).await.is_err() {
+                let Some(pending) = outbound.signal else { continue; };
+                if !pending.binding.matches(&session) || connection.operation_for(&pending.channel_id)!=Some(WebSocketOperationId::SignalStreamSubscribe) { continue; }
+                let Ok(Ok(current)) = tokio::time::timeout(
+                    tokio::time::Duration::from_millis(WS_WRITE_TIMEOUT_MS),
+                    super::signal::admitted_signal_frame(&state, &session, pending.envelope),
+                ).await else { continue; };
+                let arkret_wire::SignalStreamFrame::Signal { delivery_authority, .. } = &current else { continue; };
+                if delivery_authority.recipient_account_id != pending.recipient_account_id { continue; }
+                let Ok(frame) = WebSocketServerFrame::data(pending.channel_id, &WebSocketDataPayload::Signal(Box::new(current))) else { continue; };
+                let Ok(encoded) = codec.encode(&frame) else { continue; };
+                // A changed authorization cannot bypass the already-reserved queue byte limit.
+                if encoded.len() > outbound.encoded.len() { continue; }
+                if timed_send(&mut sink, Message::text(encoded)).await.is_err() {
                     break;
                 }
             }
@@ -1167,6 +1212,23 @@ async fn run_multiplex(
                             session = refreshed;
                             session_grant = refreshed_grant;
                             reauth_deadline = None;
+                            // Signal producers hold the old session; drain their channels so
+                            // no queued frame is rebound and the client reopens under the new grant.
+                            let signal_channels: Vec<String> = connection.open_channel_ids().into_iter()
+                                .filter(|id| connection.operation_for(id)==Some(WebSocketOperationId::SignalStreamSubscribe))
+                                .map(str::to_owned).collect();
+                            let mut signal_drain_failed = false;
+                            for channel_id in signal_channels {
+                                if let Some(producer)=producers.remove(&channel_id) { producer.abort(); }
+                                connection.close_channel(&channel_id);
+                                let drain = WebSocketChannelControlPayload::Signal(Box::new(arkret_wire::SignalStreamFrame::Drain {
+                                    reconnect_after_ms: Some(0), reason: None,
+                                }));
+                                let Ok(control)=WebSocketServerFrame::channel_control(channel_id.clone(),&drain) else { signal_drain_failed=true; break; };
+                                let closed=WebSocketServerFrame::Closed {channel_id,reason:WebSocketClosedReason::Drain};
+                                if !write_frame(&mut sink,&codec,&control).await || !write_frame(&mut sink,&codec,&closed).await { signal_drain_failed=true; break; }
+                            }
+                            if signal_drain_failed { close_code=Some(WebSocketCloseCode::InternalError); break; }
                         }
                         Ok(Err(reason)) => {
                             tracing::debug!(reason, "WebSocket reauth rejected");
@@ -2097,6 +2159,35 @@ mod tests {
     }
 
     #[test]
+    fn queued_signal_never_rebinds_after_session_or_recipient_change() {
+        let session = SessionIdentityState {
+            account_pk: None,
+            token_hash: "session-a".to_owned(),
+            actor: "ak:did_core:web:alice.example".to_owned(),
+            device_id: "device-a".to_owned(),
+            audience: "station-a".to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+            created_at: chrono::Utc::now(),
+            revoked_at: None,
+        };
+        let binding = SignalSessionBinding::new(&session);
+        assert!(binding.matches(&session));
+        for field in ["token", "actor", "device", "audience"] {
+            let mut changed = session.clone();
+            match field {
+                "token" => changed.token_hash.push('b'),
+                "actor" => changed.actor.push('b'),
+                "device" => changed.device_id.push('b'),
+                _ => changed.audience.push('b'),
+            }
+            assert!(!binding.matches(&changed));
+        }
+    }
+
+    #[test]
     fn arkret_subprotocol_must_be_explicitly_offered() {
         let mut req = secure_request("server.example", "https://client.example");
         assert!(requests_arkret_subprotocol(&req));
@@ -2133,7 +2224,9 @@ mod tests {
 
         assert!(sender.send_durable(test_ping()).await);
         assert!(
-            !sender.try_send_signal(test_ping()),
+            sender
+                .try_acquire_permits(sender.codec.encode(&test_ping()).unwrap().len())
+                .is_none(),
             "a Signal must be dropped instead of consuming a full durable window"
         );
 
@@ -2214,13 +2307,29 @@ async fn run_signal_channel(
     loop {
         poll.tick().await;
         for envelope in super::signal::pending_signals_for_subscriber(&state, &session).await {
-            let payload = WebSocketDataPayload::Signal(Box::new(
-                arkret_wire::SignalStreamFrame::signal(envelope),
-            ));
+            let Ok(signal_frame) =
+                super::signal::admitted_signal_frame(&state, &session, envelope).await
+            else {
+                continue;
+            };
+            let arkret_wire::SignalStreamFrame::Signal {
+                envelope,
+                delivery_authority,
+            } = &signal_frame
+            else {
+                continue;
+            };
+            let queued = QueuedSignal {
+                channel_id: channel_id.clone(),
+                recipient_account_id: delivery_authority.recipient_account_id.clone(),
+                binding: SignalSessionBinding::new(&session),
+                envelope: envelope.clone(),
+            };
+            let payload = WebSocketDataPayload::Signal(Box::new(signal_frame));
             let Ok(frame) = WebSocketServerFrame::data(channel_id.clone(), &payload) else {
                 continue;
             };
-            if !sender.try_send_signal(frame) {
+            if !sender.try_send_signal(frame, queued) {
                 // §7 — the Signal queue is full: drop it and tell the channel
                 // to reconnect. A durable frame is never evicted to make room.
                 let drain = WebSocketChannelControlPayload::Signal(Box::new(

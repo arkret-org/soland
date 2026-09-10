@@ -1,3 +1,10 @@
+DROP TABLE IF EXISTS key_backup_unlock_attempt_windows;
+DROP TRIGGER IF EXISTS preserve_agent_pairing_receipt ON agent_principals;
+DROP FUNCTION IF EXISTS preserve_agent_pairing_receipt();
+DROP TABLE IF EXISTS agent_pairing_receipts;
+DROP TABLE IF EXISTS key_backup_unlock_entries;
+DROP TABLE IF EXISTS key_backup_unlock_authorities;
+DROP TABLE IF EXISTS device_pairing_outcomes;
 DROP TABLE IF EXISTS governance_current_ready;
 DROP TABLE IF EXISTS current_selector_origins;
 DROP TABLE IF EXISTS current_result_versions;

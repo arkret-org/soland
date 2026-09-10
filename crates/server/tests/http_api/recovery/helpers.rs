@@ -508,15 +508,7 @@ pub(crate) async fn seed_recovery_policy(
         },
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
-        "allowed_proof_kinds": ["did_root"],
-        "publication_authorization_rules": [{
-            "rule_id": "did_root",
-            "proof_kind": "did_root",
-            "issuer_role": "identity_recovery",
-            "allowed_actions": ["ak.device.reanchor"],
-            "issuers": [{"verification_method": verification_method}],
-            "threshold": 1
-        }],
+        "methods": [{"kind": "did_root"}],
         "supersedes_id": supersedes,
         "issued_at": "2026-05-30T00:00:00.000Z",
         "expires_at": "2026-06-30T00:00:00.000Z",
@@ -538,7 +530,7 @@ pub(crate) async fn seed_recovery_policy(
             version,
             acceptance_basis: fixture_recovery_policy_basis(),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
-            allowed_proof_kinds: vec!["did_root".to_owned()],
+
             supersedes: supersedes.map(ToOwned::to_owned),
             expires_at: Some(expires_at),
             issued_at,
@@ -746,15 +738,7 @@ pub(crate) fn signed_recovery_policy(
         },
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
-        "allowed_proof_kinds": ["did_root"],
-        "publication_authorization_rules": [{
-            "rule_id": "did_root",
-            "proof_kind": "did_root",
-            "issuer_role": "identity_recovery",
-            "allowed_actions": ["ak.device.reanchor"],
-            "issuers": [{"verification_method": verification_method}],
-            "threshold": 1
-        }],
+        "methods": [{"kind": "did_root"}],
         "supersedes_id": supersedes,
         "issued_at": "2026-05-30T00:00:00.000Z",
         "expires_at": "2026-06-30T00:00:00.000Z",

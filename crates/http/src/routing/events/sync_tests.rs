@@ -945,10 +945,23 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
     );
     project_member_identity_update(&state, &first_op).await;
 
-    {
-        let snapshot = state.member_identity_snapshot(realm, &actor).unwrap();
-        assert_eq!(snapshot.identity_event_ids, vec![first_event_id.to_owned()]);
-    }
+    let expected_digest = |event_id: &str, payload_digest: &str| {
+        arkret_models_identity::member_identity_effective_set_digest(
+            &arkret_wire::RealmId::new(realm).unwrap(),
+            &roster_actor(ROSTER_ACTOR),
+            arkret_models_identity::MemberIdentitySegment::MemberIdentity,
+            &[arkret_models_identity::EffectiveIdentityEntry {
+                event_id: arkret_wire::EventId::new(event_id).unwrap(),
+                segment: arkret_models_identity::MemberIdentitySegment::MemberIdentity,
+                payload_digest: arkret_wire::Hash::new(payload_digest).unwrap(),
+            }],
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        state.member_identity_state_digest(realm, &actor),
+        Some(expected_digest(&first_event_id, &first_digest))
+    );
 
     // Second update replaces the first using the spec-compliant `ak:event:`
     // edge. Before the fix this never matched (projection stored `ak:operation:`).
@@ -958,6 +971,9 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
             "display_profile": { "display_name": "Alice 2" }
         }
     });
+    let second_digest = arkret_canonical::sha256_digest(
+        arkret_canonical::canonical_json_bytes(&second_identity).unwrap(),
+    );
     let second_payload = json!({"realm_id": realm, "actor_id": roster_actor(ROSTER_ACTOR), "segment": "member_identity", "identity_payload": second_identity,
         "replaces": [{"event_id": first_event_id, "payload_digest": first_digest}]});
     let second_record = canonical_event_record_received_at(
@@ -981,20 +997,12 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
     );
     project_member_identity_update(&state, &second_op).await;
 
-    let snapshot = state.member_identity_snapshot(realm, &actor).unwrap();
     // The `ak:event:` replaces edge drops the predecessor: only the second
-    // event remains effective, and the stored id is the typed event id.
+    // Event contributes to the actual accepted-state concurrency guard.
     assert_eq!(
-        snapshot.identity_event_ids,
-        vec![second_event_id.to_owned()],
+        state.member_identity_state_digest(realm, &actor),
+        Some(expected_digest(&second_event_id, &second_digest)),
         "replaces[].event_id (ak:event:) must match the stored typed event id"
-    );
-    assert!(
-        snapshot
-            .effective_entries
-            .iter()
-            .all(|entry| entry.event_id.as_str().starts_with("ak:event:")),
-        "effective entries must live in the ak:event: id space"
     );
 }
 

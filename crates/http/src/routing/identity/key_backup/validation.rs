@@ -16,7 +16,7 @@ pub(super) fn is_base64url_token(value: &str) -> bool {
 }
 
 pub(super) fn is_sha_digest(value: &str) -> bool {
-    // Critical key-backup digests (proof_digest / key_commitment) are restricted
+    // Key-backup ciphertext digests and key commitments are restricted
     // to sha256 per key-management.md: exactly the `sha256:` prefix followed by 64
     // lowercase hex characters. The SDK `Hash` type intentionally accepts the wider
     // multi-algorithm digest vocabulary (blake3 / sha3_256 / sha512), so this gate
@@ -399,9 +399,9 @@ pub(super) fn validate_series_genesis_shape_typed(backup: &KeyBackup) -> Result<
 
 /// `key-backup.schema.json` `encryption.recipient_key_ref`: for
 /// `recipient_method=recovery_public_key` it MUST resolve to a non-revoked
-/// `recovery_key_agreements[].key_agreement_ref` of the accepted recovery
+/// `methods[].keys[].backup_hpke.key_agreement_ref` of the accepted recovery
 /// policy, and the selected `hpke_suite` MUST appear in that entry's
-/// `hpke_suites`. A DID-Document-only agreement or a `recovery_keys[]`
+/// `hpke_suites`. A DID-Document-only agreement or a `methods[].keys[]`
 /// signing method is not an authorization source.
 pub(super) async fn validate_current_recovery_recipient(
     state: &AppState,
@@ -451,10 +451,7 @@ pub(super) async fn validate_current_recovery_recipient(
                 format!("key backup HPKE suite is unsupported: {suite_id}"),
             )
         })?;
-    let agreements = policy
-        .recovery_key_agreements
-        .as_deref()
-        .unwrap_or_default();
+    let agreements = policy.active_hpke_recipients(evaluated_at);
     let matching_recipient = agreements
         .iter()
         .find(|entry| current_backup_hpke_agreement(entry, recipient, evaluated_at));

@@ -253,6 +253,7 @@ fn fixture_pcr_founding_device_descriptor(
             .expect("fixture PCR algorithm"),
     ];
     let authorize = DeviceAuthorizePayload {
+        pairing_challenge_transcript_digest: None,
         device_id: device_id.clone(),
         device_public_key_did: device_public_key.clone(),
         hpke_key: hpke_key.clone(),

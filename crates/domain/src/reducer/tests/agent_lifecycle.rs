@@ -71,7 +71,7 @@ fn deactivate_agent() -> Operation {
 }
 
 #[test]
-fn pause_cancels_pending_action_requests() {
+fn pause_suspends_pending_requests_and_resume_restores_them() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
 
@@ -90,10 +90,21 @@ fn pause_cancels_pending_action_requests() {
         } if agent_id == AGENT
     ));
     let request = &state.agent_action_requests[REQUEST];
-    assert_eq!(request.status, AgentActionRequestStatus::Cancelled);
-    assert_eq!(request.cancel_reason.as_deref(), Some("agent_paused"));
-    assert!(request.resolved_at.is_some());
-    assert!(request.resolution_event_id.is_some());
+    assert_eq!(request.status, AgentActionRequestStatus::AwaitingResume);
+    assert!(request.cancel_reason.is_none());
+    assert!(request.resolved_at.is_none());
+    assert!(request.resolution_event_id.is_none());
+    state.apply(&resume_agent(), &hlc);
+    assert_eq!(
+        state.agent_action_requests[REQUEST].status,
+        AgentActionRequestStatus::Pending
+    );
+    state.apply(&pause_agent(), &hlc);
+    state.apply(&deactivate_agent(), &hlc);
+    assert_eq!(
+        state.agent_action_requests[REQUEST].status,
+        AgentActionRequestStatus::Cancelled
+    );
 }
 
 #[test]

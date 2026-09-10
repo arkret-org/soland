@@ -123,6 +123,7 @@ mod idempotency;
 mod invite_locators;
 mod invite_new_source_ledger;
 mod key_backup;
+mod key_backup_unlock;
 mod member_identity;
 mod mls;
 mod mls_public_state;

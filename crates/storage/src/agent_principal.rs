@@ -1,7 +1,6 @@
 use arkret_models_collaboration::agent_operations::{
-    AgentLifecycleState, AgentRuntimeApprovalControllerProjection,
+    AgentLifecycleState, AgentRuntimeApprovalRequestBody,
 };
-use arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding;
 use arkret_wire::{DidUrl, OpaqueLocalId};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -14,7 +13,7 @@ pub struct PendingAgentPairingCommitIntent {
     pub request_digest: String,
     pub authorize_event_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signing_key_binding: Option<AgentSigningKeyBinding>,
+    pub key_authorization_event: Option<arkret_wire::Event>,
 }
 
 /// Durable projection of a Agent principal.
@@ -46,13 +45,14 @@ pub struct AgentPrincipalRecord {
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
     pub runtime_attestation_digest: Option<String>,
+    pub runtime_proof_verified_at: Option<DateTime<Utc>>,
     pub approval_notification_id: Option<Uuid>,
-    pub runtime_key_request: Option<AgentRuntimeApprovalControllerProjection>,
+    pub runtime_key_request: Option<AgentRuntimeApprovalRequestBody>,
     pub approval_requested_at: Option<DateTime<Utc>>,
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
-    pub authorized_signing_key_binding: Option<AgentSigningKeyBinding>,
+    pub authorized_key_event: Option<arkret_wire::Event>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -91,13 +91,14 @@ impl AgentPrincipalRecord {
             runtime_key_binding_digest: None,
             runtime_public_key_digest: None,
             runtime_attestation_digest: None,
+            runtime_proof_verified_at: None,
             approval_notification_id: None,
             runtime_key_request: None,
             approval_requested_at: None,
             authorized_event_ref: None,
             authorized_verification_method: None,
             authorized_public_key_digest: None,
-            authorized_signing_key_binding: None,
+            authorized_key_event: None,
             state_changed_at: Some(created_at),
             created_at,
             updated_at: created_at,

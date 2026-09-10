@@ -824,6 +824,7 @@ pub struct AppletProjection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentActionRequestStatus {
     Pending,
+    AwaitingResume,
     Approved,
     Rejected,
     Cancelled,
@@ -833,7 +834,7 @@ pub enum AgentActionRequestStatus {
 ///
 /// Actor-private action events do not advance reducer input clocks, but the
 /// controller still needs a fail-closed projection so lifecycle revocation can
-/// cancel outstanding approvals before an agent resumes or re-registers a
+/// suspend outstanding requests until resume, or cancel them on terminal
 /// runtime endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentActionRequestProjection {

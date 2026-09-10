@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::Utc;
 use serde_json::Value;
 use soland_storage::*;
 
@@ -651,6 +652,27 @@ impl crate::identity::AgentDirectoryPort for PersistenceAgentDirectory {
 
 #[async_trait::async_trait]
 impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
+    async fn pairing_receipt(
+        &self,
+        event_id: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::AgentPairingReceipt>> {
+        Ok(self.0.agents().pairing_receipt(event_id).await?)
+    }
+    async fn pending_pairings_after(
+        &self,
+        after_id: &str,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<crate::identity::AgentPairingState>> {
+        Ok(self
+            .0
+            .agents()
+            .pending_pairings_after(after_id, limit)
+            .await?
+            .into_iter()
+            .map(application_agent_pairing)
+            .collect())
+    }
+
     async fn pairing_record(
         &self,
         pairing_request_id: &str,
@@ -710,6 +732,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             approval_request_id: command.approval_request_id.clone(),
             approval_notification_id: command.approval_notification_id.clone(),
             approval_requested_at: command.approval_requested_at,
+            proof_verified_at: command.proof_verified_at,
             controller_account_pk: command.controller_account_pk,
             recipient_id: command.recipient_id.clone(),
             runtime_key_binding_digest: command.runtime_key_binding_digest.clone(),
@@ -738,7 +761,10 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             authorized_event_ref: command.authorized_event_ref.clone(),
             authorized_verification_method: command.authorized_verification_method.clone(),
             authorized_public_key_digest: command.authorized_public_key_digest.clone(),
-            authorized_signing_key_binding: command.authorized_signing_key_binding.clone(),
+            frozen_authorize_event: command.frozen_authorize_event.clone(),
+            expected_accepted_basis: command.expected_accepted_basis.clone(),
+            outcome: command.outcome,
+            authorized_key_event: command.authorized_key_event.clone(),
             authorized_at: command.authorized_at,
         };
         Ok(self
@@ -759,7 +785,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             pairing_request_id: command.pairing_request_id.clone(),
             request_digest: command.request_digest.clone(),
             authorize_event_id: command.authorize_event_id.clone(),
-            signing_key_binding: command.signing_key_binding.clone(),
+            key_authorization_event: command.key_authorization_event.clone(),
         };
         Ok(self
             .0
@@ -795,6 +821,13 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
 
 #[async_trait::async_trait]
 impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
+    async fn get_terminal(
+        &self,
+        request_id: &str,
+    ) -> crate::ServiceResult<Option<serde_json::Value>> {
+        Ok(self.0.device_pairings().get_terminal(request_id).await?)
+    }
+
     async fn stage(&self, record: crate::identity::DevicePairingState) -> crate::ServiceResult<()> {
         self.0.device_pairings().put(record).await?;
         Ok(())
@@ -850,13 +883,14 @@ fn application_agent_pairing(
         runtime_key_binding_digest: record.runtime_key_binding_digest,
         runtime_public_key_digest: record.runtime_public_key_digest,
         runtime_attestation_digest: record.runtime_attestation_digest,
+        runtime_proof_verified_at: record.runtime_proof_verified_at,
         approval_notification_id: record.approval_notification_id,
         runtime_key_request: record.runtime_key_request,
         approval_requested_at: record.approval_requested_at,
         authorized_event_ref: record.authorized_event_ref,
         authorized_verification_method: record.authorized_verification_method,
         authorized_public_key_digest: record.authorized_public_key_digest,
-        authorized_signing_key_binding: record.authorized_signing_key_binding,
+        authorized_key_event: record.authorized_key_event,
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -890,13 +924,14 @@ fn persistence_agent_pairing(
         runtime_key_binding_digest: record.runtime_key_binding_digest,
         runtime_public_key_digest: record.runtime_public_key_digest,
         runtime_attestation_digest: record.runtime_attestation_digest,
+        runtime_proof_verified_at: record.runtime_proof_verified_at,
         approval_notification_id: record.approval_notification_id,
         runtime_key_request: record.runtime_key_request,
         approval_requested_at: record.approval_requested_at,
         authorized_event_ref: record.authorized_event_ref,
         authorized_verification_method: record.authorized_verification_method,
         authorized_public_key_digest: record.authorized_public_key_digest,
-        authorized_signing_key_binding: record.authorized_signing_key_binding,
+        authorized_key_event: record.authorized_key_event,
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -995,6 +1030,61 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
 
 #[async_trait::async_trait]
 impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
+    async fn issue_unlock_challenge(
+        &self,
+        challenge: Value,
+        now: chrono::DateTime<Utc>,
+    ) -> crate::ServiceResult<Value> {
+        Ok(self
+            .0
+            .key_backups()
+            .issue_unlock_challenge(challenge, now)
+            .await?)
+    }
+    async fn reserve_recovery_unlock_attempt(
+        &self,
+        authority_id: &str,
+        holder: &str,
+        request_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .key_backups()
+            .reserve_recovery_unlock_attempt(authority_id, holder, request_digest, now)
+            .await?)
+    }
+    async fn unlock_challenge(&self, authority_id: &str) -> crate::ServiceResult<Option<Value>> {
+        Ok(self.0.key_backups().unlock_challenge(authority_id).await?)
+    }
+    async fn consume_unlock(
+        &self,
+        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+        active_basis: Value,
+        authority_id: &str,
+        backup: Value,
+        request_digest: &str,
+        holder: &str,
+        ip: &str,
+        now: chrono::DateTime<Utc>,
+        daily_limit: u32,
+    ) -> crate::ServiceResult<Value> {
+        Ok(self
+            .0
+            .key_backups()
+            .consume_unlock(
+                device_gate,
+                active_basis,
+                authority_id,
+                backup,
+                request_digest,
+                holder,
+                ip,
+                now,
+                daily_limit,
+            )
+            .await?)
+    }
     async fn backup(&self, backup_id: &str) -> crate::ServiceResult<Option<serde_json::Value>> {
         Ok(self.0.key_backups().get(backup_id).await?)
     }
@@ -1047,13 +1137,16 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
 
     async fn consume_delete_challenge(
         &self,
+        gate: &soland_storage::KeyBackupDeleteGate,
         challenge_id: &str,
+        backup: Value,
+        recovery_session_id: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .key_backups()
-            .consume_delete_challenge(challenge_id, now)
+            .consume_delete_challenge(gate, challenge_id, backup, recovery_session_id, now)
             .await?)
     }
 
@@ -1289,6 +1382,17 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
         Ok(())
     }
 
+    async fn save_verified_with_unlock_manifest(
+        &self,
+        session: crate::identity::RecoverySessionState,
+        manifest: Value,
+    ) -> crate::ServiceResult<()> {
+        Ok(self
+            .0
+            .recovery_sessions()
+            .save_verified_with_unlock_manifest(session, manifest)
+            .await?)
+    }
     async fn update_session(
         &self,
         session: crate::identity::RecoverySessionState,

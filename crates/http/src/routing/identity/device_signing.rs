@@ -13,36 +13,14 @@ use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 use super::device_signature_kid_points_to_device_key;
 use crate::state::AppState;
 
-pub(crate) fn device_quorum_method_matches(
-    principal_id: &str,
-    device_id: &str,
-    device_public_key: &str,
-    verification_method: &str,
-) -> bool {
-    let Some(fragment) = device_public_key.strip_prefix("did:key:") else {
-        return false;
-    };
-    verification_method == format!("{principal_id}#{device_id}")
-        || verification_method == format!("{device_public_key}#{fragment}")
-}
-
 pub(crate) fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
-    [
-        "/device_quorum/k",
-        "/device_quorum/threshold",
-        "/device_quorum/quorum_participant_count",
-        "/proof_requirements/device_quorum/k",
-        "/proof_requirements/device_quorum/threshold",
-        "/proof_requirements/device_quorum/quorum_participant_count",
-    ]
-    .iter()
-    .find_map(|pointer| {
-        policy
-            .raw_payload
-            .pointer(pointer)
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-    })
+    let policy: arkret_models_crypto::RecoveryPolicy =
+        serde_json::from_value(policy.raw_payload.clone()).ok()?;
+    policy.validate().ok()?;
+    match policy.method(arkret_models_crypto::RecoveryProofKind::DeviceQuorum) {
+        Some(arkret_models_crypto::RecoveryMethod::DeviceQuorum { k, .. }) => Some(*k),
+        _ => None,
+    }
 }
 
 pub fn validate_device_authorize_binding(
@@ -50,24 +28,8 @@ pub fn validate_device_authorize_binding(
     payload: &DeviceAuthorizePayload,
     subject_account_id: &arkret_wire::AccountId,
 ) -> Result<(), &'static str> {
-    match &payload.authorization_binding_kind {
-        arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::RegistrationAnchor
-        | arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::PcrRecovery => {
-            arkret_signatures::verify_device_authorize_possession(payload, subject_account_id)
-                .map_err(|_| "device_authorize_device_signature_invalid")
-        }
-        arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice => {
-            // The accepted-device target proof is challenge-bound and is
-            // verified by the pair_device gate before this Event reaches
-            // ordinary admission.  Reinterpreting its signature as the
-            // root-anchored full-payload transcript would reject the formal
-            // pre-assembly protocol and, more importantly, would omit the
-            // pairing challenge from the possession proof.
-            payload
-                .validate_wire_constraints()
-                .map_err(|_| "device_authorize_device_signature_invalid")
-        }
-    }
+    arkret_signatures::verify_device_authorize_possession(payload, subject_account_id)
+        .map_err(|_| "device_authorize_device_signature_invalid")
 }
 
 pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
@@ -486,7 +448,7 @@ mod tests {
     use ed25519_dalek::Signer as _;
     use serde_json::json;
 
-    use super::{device_quorum_method_matches, *};
+    use super::*;
 
     #[test]
     fn device_authorization_time_window_has_exact_inclusive_start_and_exclusive_expiry() {
@@ -738,32 +700,5 @@ mod tests {
         verify_mls_welcome_claim_envelope_signature(&state, &envelope, &receipt, None, None)
             .await
             .unwrap();
-    }
-
-    #[test]
-    fn device_quorum_method_requires_a_concrete_verification_method() {
-        let principal = "did:webvh:z6mkfixture:alice.example";
-        let device = "ak:device:primary";
-        let key = "did:key:z6MkQuorum";
-
-        assert!(device_quorum_method_matches(
-            principal,
-            device,
-            key,
-            &format!("{principal}#{device}"),
-        ));
-        assert!(device_quorum_method_matches(
-            principal,
-            device,
-            key,
-            &format!("{key}#z6MkQuorum"),
-        ));
-        assert!(!device_quorum_method_matches(principal, device, key, key,));
-        assert!(!device_quorum_method_matches(
-            principal,
-            device,
-            "z6MkQuorum",
-            &format!("{principal}#{device}"),
-        ));
     }
 }

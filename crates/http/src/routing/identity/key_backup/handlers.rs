@@ -371,6 +371,44 @@ pub(super) async fn unlock_key_backup(
     let proof = serde_json::to_value(&body.proof).map_err(|error| {
         AppError::internal(format!("key backup unlock proof serialize: {error}"))
     })?;
+    let request_digest = arkret_canonical::canonical_sha256(&body)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let holder = session
+        .session_grant
+        .as_ref()
+        .map(|grant| format!("{}:{}", grant.grant_id, grant.cnf_jkt))
+        .unwrap_or_else(|| session.device_id.clone());
+    if let arkret_models_crypto::KeyBackupUnlockAuthority::RecoverySession {
+        recovery_session_id,
+    } = &body.proof.authority
+    {
+        let grant = session
+            .session_grant
+            .as_ref()
+            .ok_or_else(|| AppError::capability_denied("recovery grant required"))?;
+        if grant.credential_class
+            != arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+        {
+            return Err(AppError::capability_denied("recovery grant required"));
+        }
+        if !state
+            .key_backups()
+            .reserve_recovery_unlock_attempt(
+                recovery_session_id.as_str(),
+                &holder,
+                &request_digest,
+                Utc::now(),
+            )
+            .await
+            .map_err(|error| AppError::capability_denied(error.to_string()))?
+        {
+            tracing::warn!(recovery_session_id=%recovery_session_id, "recovery backup unlock attempt rate exceeded");
+            return Err(crate::app_error!(
+                RateLimited,
+                "recovery unlock attempt rate limit"
+            ));
+        }
+    }
     let Some(backup) = state
         .key_backups()
         .backup(&backup_id)
@@ -385,47 +423,66 @@ pub(super) async fn unlock_key_backup(
     // The path `backup_id` and `proof.backup_id` MUST match: the envelope is
     // looked up by the path id and the shape check below requires
     // `proof.backup_id` to equal the envelope's own `backup_id`.
-    verify_key_backup_unlock_proof(state, &proof, &session, &backup).await?;
+    if let Err(error) = verify_key_backup_unlock_proof(state, &proof, &session, &backup).await {
+        tracing::warn!(actor=%session.actor, device=%session.device_id, %backup_id, %request_digest, %error, "key backup unlock proof rejected");
+        return Err(error);
+    }
     // key-management.md §7.4.1 - anchor the released envelope's auth_data.signature
     // to the actor's current device trust root before returning the full ciphertext.
     // Without this, a malicious/compromised server could substitute an envelope
     // signed by a revoked old device key; such envelopes MUST be rejected as
     // `untrusted_backup_signature` even when series chain / ciphertext_digest match.
     anchor_key_backup_auth_data_trust_root(state, &session.actor, &backup).await?;
-    // Spec key-management.md §7.8 — per-principal rolling-24h download quota
-    // on full-ciphertext reads. The over-threshold download MUST be withheld
-    // (429) and MUST land in the audit log as a `key_backup_read` access
-    // record; encrypted backups are offline KDF-cracking ammunition, so bulk
-    // dumps are throttled even for the owner's own authenticated session.
-    let daily_limit = state.config().key_backup_daily_download_limit;
-    let quota = state.record_key_backup_download(&session.actor, daily_limit);
-    if quota.rate_limited {
-        append_audit_log(
-            state,
-            Some(&session.actor),
-            arkret_wire::event_kind_str::AUDIT_ACCESSED,
-            json!({
-                "access_kind": "key_backup_read",
-                "backup_id": backup_id.clone(),
-                "backup_kind": backup.get("backup_kind").cloned().unwrap_or(Value::Null),
-                "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
-                "device_id": session.device_id.clone(),
-                "download_count": quota.count,
-                "daily_limit": daily_limit,
-            }),
-            "rate_limited",
+    let active_basis = unlock_active_basis(state, &body.proof.account_id, &backup).await?;
+    let device_gate = if matches!(
+        &body.proof.authority,
+        arkret_models_crypto::KeyBackupUnlockAuthority::CurrentDevice { .. }
+    ) {
+        Some(
+            crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+                state,
+                &session.actor,
+                &session.device_id,
+            )
+            .await
+            .map_err(|error| AppError::capability_denied(error.to_string()))?,
         )
-        .await;
-        return Err(crate::app_error!(RateLimited,
-            format!(
-                "key backup download quota exceeded ({daily_limit} full-ciphertext reads per principal per 24h)"
-            ),
+    } else {
+        None
+    };
+    let authority_id = match &body.proof.authority {
+        arkret_models_crypto::KeyBackupUnlockAuthority::CurrentDevice { challenge_id, .. } => {
+            challenge_id.as_str()
+        }
+        arkret_models_crypto::KeyBackupUnlockAuthority::RecoverySession {
+            recovery_session_id,
+        } => recovery_session_id.as_str(),
+    };
+    let backup = state
+        .key_backups()
+        .consume_unlock(
+            device_gate.as_ref(),
+            active_basis,
+            authority_id,
+            backup,
+            &request_digest,
+            &holder,
+            &unlock_client_ip(req),
+            Utc::now(),
+            state
+                .config()
+                .key_backup_daily_download_limit
+                .try_into()
+                .unwrap_or(64),
         )
-        .with_reason_detail(format!(
-            "key-management.md §7.8 daily_principal_download_limit; retry_after_ms={}",
-            quota.retry_after_ms
-        )));
-    }
+        .await
+        .map_err(|error| {
+            if error.to_string().contains("rate_limited") {
+                crate::app_error!(RateLimited, "backup unlock rate limit")
+            } else {
+                AppError::conflict(error.to_string())
+            }
+        })?;
     let backup = serde_json::from_value(backup)
         .map_err(|error| AppError::internal(format!("stored key backup invalid: {error}")))?;
     json_ok(backup)
@@ -526,20 +583,9 @@ pub(super) async fn delete_key_backup(
     let authorized =
         authorize_key_backup_delete(state, &body, &backup_id, &session.actor, now).await?;
     ensure_key_backup_delete_allowed(state, &session.actor, &backup).await?;
-    // §7.8.1 step 3: consume the challenge in the same step as the delete it
-    // authorizes. Consuming first means a delete that then fails cannot be
-    // retried with the same challenge — which is the intended direction for a
-    // single-use high-risk authorization, and the idempotency ledger above is
-    // what makes an honest network retry still work.
-    consume_key_backup_delete_challenge(state, &authorized.challenge_id, now).await?;
-    let deleted = state
-        .key_backups()
-        .delete_backup(&backup_id)
-        .await
-        .map_err(|error| AppError::internal(format!("key backup delete failed: {error}")))?;
-    if !deleted {
-        return Err(AppError::not_found("key backup not found"));
-    }
+    // Policy/session validation, single-use challenge and exact backup deletion
+    // share one storage transaction, including rollback on a changed object.
+    consume_key_backup_delete_challenge(state, &authorized, backup.clone(), now).await?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -606,4 +652,18 @@ async fn record_delete_idempotency(
     if let Err(error) = state.jobs().store_idempotency_record(record).await {
         tracing::warn!(%error, idempotency_key, "key backup delete idempotency persist failed");
     }
+}
+
+fn unlock_client_ip(req: &Request) -> String {
+    crate::ratelimit::trusted_forwarded_client(req).unwrap_or_else(|| {
+        req.remote_addr()
+            .as_ipv4()
+            .map(|address| address.ip().to_string())
+            .or_else(|| {
+                req.remote_addr()
+                    .as_ipv6()
+                    .map(|address| address.ip().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_owned())
+    })
 }

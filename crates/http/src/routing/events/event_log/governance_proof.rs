@@ -164,7 +164,6 @@ async fn materialize_self_governance_frontier(
         query_digest: request
             .query_digest()
             .map_err(map_governance_frontier_error)?,
-        seal_basis: request.seal_basis.clone(),
         live_digest_suite,
         governance_binding,
         epoch_head,

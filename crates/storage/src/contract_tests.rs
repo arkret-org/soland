@@ -2552,8 +2552,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
     );
 
     // Accepted-device pairing is consumed in the exact Event unit of work.
-    // A response-loss replay reaches the already-consumed staged row and must
-    // fail without inserting a second Event/projection or reviving the row.
+    // A response-loss retry reads the durable terminal ledger. Bypassing that
+    // read and attempting a second stage consumption must fail atomically.
     let pairing_request_id = format!("device-pairing:{namespace}:{event_uuid}");
     let pairing_key_value = serde_json::json!({
         "algorithm": "Ed25519",
@@ -2604,6 +2604,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             authorized_by_actor_id: arkret_wire::DidCoreId::new(principal_id.clone()).unwrap(),
             authorized_event_ref: pairing_event_id.clone(),
             changed_at: now,
+            terminal_record: serde_json::json!({"test": "exact-terminal"}),
         }),
         contact_projection: None,
         consent_projection: None,
@@ -2630,13 +2631,43 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .commit_event(pairing_commit.clone())
         .await
         .expect("pairing Event and staged CAS commit together");
+    assert_eq!(
+        stores
+            .device_pairings
+            .get_terminal(&pairing_request_id)
+            .await
+            .unwrap(),
+        Some(serde_json::json!({"test": "exact-terminal"}))
+    );
+    stores
+        .device_pairings
+        .delete_expired_before(now + Duration::days(1))
+        .await
+        .unwrap();
+    assert!(
+        stores
+            .device_pairings
+            .get_by_request_id(&pairing_request_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        stores
+            .device_pairings
+            .get_terminal(&pairing_request_id)
+            .await
+            .unwrap(),
+        Some(serde_json::json!({"test": "exact-terminal"})),
+        "terminal replay survives anonymous-stage cleanup"
+    );
     assert!(
         stores
             .unit_of_work
             .commit_event(pairing_commit)
             .await
             .is_err(),
-        "response-loss replay must not accept an already-consumed pairing"
+        "direct second stage consumption must not be accepted"
     );
     assert!(
         stores

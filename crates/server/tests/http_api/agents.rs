@@ -33,6 +33,7 @@ fn controller_founding_authorize_payload(
     };
 
     let mut payload = DeviceAuthorizePayload {
+        pairing_challenge_transcript_digest: None,
         device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
         device_public_key_did: arkret_wire::NonEmptyString::new(format!(
             "did:key:{}",
@@ -452,13 +453,6 @@ pub(crate) async fn seed_active_controller_device_generation(
         &genesis_projector,
     )
     .unwrap();
-    seed_seal_with_direct_event_effects(
-        state,
-        &bootstrap_seal,
-        &[&bootstrap, &authorize],
-        &genesis_projector,
-    )
-    .await;
     let bootstrap_notary: arkret_wire::NotaryValue =
         serde_json::from_value(bootstrap.payload["object"]["notary"].clone())
             .expect("bootstrap notary");
@@ -486,16 +480,21 @@ pub(crate) async fn seed_active_controller_device_generation(
         ])
         .unwrap();
         state
-            .test_projections()
-            .test_mark_control_event_sealed(
+            .test_put_pending_control_event_with_ack(
                 event,
-                &bootstrap_seal,
-                &arkret_state::state::store::ControlProposalIngress::AckRequired(ack),
+                &ack,
                 arkret_canonical::DigestSuite::Sha256,
             )
             .await
-            .expect("bootstrap sealed Control Event");
+            .expect("bootstrap pending Control Event with actual authority Ack");
     }
+    seed_seal_with_direct_event_effects(
+        state,
+        &bootstrap_seal,
+        &[&bootstrap, &authorize],
+        &genesis_projector,
+    )
+    .await;
     let authorize_event_id = authorize.event_id.clone();
     for event in [bootstrap.clone(), authorize] {
         state
@@ -633,31 +632,25 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                     .unwrap(),
             ),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
-            allowed_proof_kinds: vec!["did_root".to_owned()],
+
             supersedes: None,
             expires_at: Some(now + chrono::Duration::days(30)),
             issued_at: now,
             raw_payload: serde_json::json!({
                 "schema": "ak.schema.recovery_policy.v1",
                 "policy_id": policy_id,
-                "principal_id": controller_principal_id,
+                "account_id": {"principal_id": controller_principal_id, "station_id": state.service_id()},
                 "version": 1,
                 "trust_domain": "ak:trust_domain:soland.local",
-                "allowed_proof_kinds": ["did_root"],
-                "publication_authorization_rules": [{
-                    "rule_id": "did_root",
-                    "proof_kind": "did_root",
-                    "issuer_role": "identity_recovery",
-                    "allowed_actions": ["ak.device.reanchor"],
-                    "issuers": [{
-                        "verification_method": format!("{controller}#controller-key")
-                    }],
-                    "threshold": 1
-                }],
-                "recovery_key_agreements": [
-                    serde_json::to_value(&backup_hpke_agreement).unwrap()
-                ],
-                "supersedes": null,
+                "methods": [{"kind": "did_root"}, {"kind": "recovery_unlock", "keys": [{
+                    "verification_method": format!("{controller}#recovery-proof"),
+                    "public_key_multibase": "z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu",
+                    "signature_algorithm": "Ed25519",
+                    "not_before": canonical_timestamp(now - chrono::Duration::minutes(1)),
+                    "expires_at": canonical_timestamp(now + chrono::Duration::days(30)),
+                    "backup_hpke": serde_json::to_value(&backup_hpke_agreement).unwrap()
+                }]}],
+                "supersedes_id": null,
                 "issued_at": canonical_timestamp(now),
                 "expires_at": canonical_timestamp(now + chrono::Duration::days(30)),
                 "auth_data": {

@@ -32,6 +32,7 @@ const MAX_DEVICE_REVOCATION_CLEANUPS_PER_PASS: usize = 512;
 const MAX_CONCURRENT_REALM_PASSES: usize = 16;
 
 pub fn spawn(state: AppState) -> tokio::task::JoinHandle<()> {
+    crate::routing::identity::agents::spawn_pairing_activation_worker(state.clone());
     tokio::spawn(async move {
         let holder = format!("{}:{}", state.service_id(), uuid::Uuid::new_v4());
         let mut reconciliation = tokio::time::interval(RECONCILIATION_INTERVAL);

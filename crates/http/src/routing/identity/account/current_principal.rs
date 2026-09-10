@@ -59,7 +59,7 @@ pub(super) async fn resolve(
     let CurrentPrincipalRead::Ready {
         pcr_realm_id,
         projection,
-        observed_at,
+        ..
     } = read
     else {
         // Authentication establishes that this own account exists; no creation
@@ -74,7 +74,6 @@ pub(super) async fn resolve(
         account_id: body.account_id.clone(),
         principal_control_realm_id: pcr_realm_id,
         resolution_projection: projection,
-        observed_at,
     };
     result.validate_for_request(&body).map_err(|error| {
         let code = if error.error_code() == Some(ErrorCode::LimitExceeded) {

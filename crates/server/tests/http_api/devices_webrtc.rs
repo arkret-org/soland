@@ -121,7 +121,7 @@ async fn account_device_pair_body(state: AppState, new_device_id: &str) -> Value
     use arkret_models_collaboration::events_payloads::device_identity::{
         DeviceAuthorizationBindingKind, DeviceOrPrincipalRef,
     };
-    use arkret_models_collaboration::http_bodies::UnsignedDevicePairingTargetAttestation;
+    use arkret_models_collaboration::http_bodies::UnsignedDevicePairingTargetProof;
 
     let public_key_value = pair_device_pubkey(new_device_id);
     let public_key = serde_json::from_value(public_key_value.clone()).unwrap();
@@ -142,40 +142,39 @@ async fn account_device_pair_body(state: AppState, new_device_id: &str) -> Value
     let stage: arkret_models_collaboration::http_bodies::DevicePairingStageOutcome =
         stage_response.take_json().await.unwrap();
     let challenge = arkret_signatures::device_pairing::ServerDevicePairingChallenge::from_stage(
-        client_nonce,
+        &serde_json::from_value(stage_request.clone()).unwrap(),
         &stage,
     );
-    let proof = arkret_signatures::device_pairing::sign_server_device_pairing_challenge(
-        &public_key,
-        &challenge,
-        &pair_device_signing_key(new_device_id),
-    )
-    .unwrap();
+    let (_, transcript_digest) =
+        arkret_signatures::device_pairing::server_device_pairing_transcript(
+            &public_key,
+            &challenge,
+        )
+        .unwrap();
     let hpke_key = arkret_wire::NonEmptyString::new("z6LSDevicePairingHpkeKey".to_owned()).unwrap();
     let algorithms = vec![
         arkret_wire::NonEmptyString::new("Ed25519".to_owned()).unwrap(),
         arkret_wire::NonEmptyString::new("HPKE-X25519-HKDF-SHA256".to_owned()).unwrap(),
     ];
     let target_key = &pair_device_signing_key(new_device_id);
-    let target_attestation =
-        arkret_signatures::device_pairing::sign_device_pairing_target_attestation(
-            UnsignedDevicePairingTargetAttestation::new(
-                arkret_wire::DeviceId::new(new_device_id.to_owned()).unwrap(),
-                arkret_wire::DidKey::new(format!(
-                    "did:key:{}",
-                    arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-                        target_key.verifying_key().as_bytes()
-                    )
-                ))
-                .unwrap(),
-                hpke_key.clone(),
-                algorithms.clone(),
-                proof.transcript_digest.clone(),
-            )
+    let target_proof = arkret_signatures::device_pairing::sign_device_pairing_target_proof(
+        UnsignedDevicePairingTargetProof::new(
+            arkret_wire::DeviceId::new(new_device_id.to_owned()).unwrap(),
+            arkret_wire::DidKey::new(format!(
+                "did:key:{}",
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    target_key.verifying_key().as_bytes()
+                )
+            ))
             .unwrap(),
-            target_key,
+            hpke_key.clone(),
+            algorithms.clone(),
+            transcript_digest.clone(),
         )
-        .unwrap();
+        .unwrap(),
+        target_key,
+    )
+    .unwrap();
     let actor = "did:web:alice.example";
     let authorizing_device =
         arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned())
@@ -184,14 +183,15 @@ async fn account_device_pair_body(state: AppState, new_device_id: &str) -> Value
     // mirror it.
     let authorize_payload = serde_json::json!({
         "device_id": new_device_id,
-        "device_public_key_did": target_attestation.device_public_key_did,
+        "device_public_key_did": target_proof.device_public_key_did,
         "hpke_key": hpke_key,
         "algorithms": algorithms,
         "device_key_algorithm": "Ed25519",
         "authorized_by": DeviceOrPrincipalRef::DeviceId(authorizing_device.clone()),
         "not_before": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
         "authorization_binding_kind": DeviceAuthorizationBindingKind::AcceptedDevice,
-        "device_signature": target_attestation.device_signature,
+        "device_signature": target_proof.device_signature,
+        "pairing_challenge_transcript_digest": transcript_digest,
     });
     let authorize_event: arkret_wire::Event = serde_json::from_value(signed_canonical_event(
         "device-pair-authorize-fixture",
@@ -207,7 +207,6 @@ async fn account_device_pair_body(state: AppState, new_device_id: &str) -> Value
     serde_json::json!({
         "pairing_code": stage.pairing_code,
         "new_device_pubkey": public_key_value,
-        "challenge_proof": proof,
         "device_pairing_request_id": stage.device_pairing_request_id,
         "authorize_event": arkret_wire::EventInitialSubmission::online(authorize_event),
     })
@@ -237,13 +236,16 @@ async fn post_account_device_pair(
     state: AppState,
     token: &str,
     new_device_id: &str,
-    challenge_signature: &str,
+    target_signature_override: Option<&str>,
     predecessor: &str,
 ) -> (StatusCode, Value) {
     let mut body = account_device_pair_body(state.clone(), new_device_id).await;
     bind_pair_authorize_predecessor(&state, "did:web:alice.example", &mut body, predecessor).await;
-    if challenge_signature == "!" {
-        body["challenge_proof"]["signature"] = Value::String("!".to_owned());
+    if let Some(signature) = target_signature_override {
+        body["authorize_event"]["event"]["payload"]["device_signature"] =
+            Value::String(signature.to_owned());
+        // Keep the outer authorization Event authentic, isolating the target proof failure.
+        resign_canonical_event(&mut body["authorize_event"]["event"]);
     }
     let mut response = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -350,7 +352,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body()
         state.clone(),
         &unverified_token,
         first_new_device,
-        "c2ln",
+        None,
         &predecessor,
     )
     .await;
@@ -361,18 +363,49 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body()
         state.clone(),
         &trusted_token,
         second_new_device,
-        "!",
+        Some("!"),
         &predecessor,
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    // signature_material permits nonempty strings; Ed25519 decoding is proof verification.
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(problem_code(&body), "failed_precondition", "{body}");
+    assert_eq!(body["reason_code"], "proof_invalid", "{body}");
+    assert!(
+        state
+            .test_persistence()
+            .devices()
+            .get(fixture_actor_core_id(actor).as_str(), second_new_device)
+            .await
+            .unwrap()
+            .is_none(),
+        "invalid target proof must not authorize a device"
+    );
+
+    // A missing required stage identity is a schema failure before proof verification.
+    let mut missing_stage = account_device_pair_body(state.clone(), second_new_device).await;
+    bind_pair_authorize_predecessor(&state, actor, &mut missing_stage, &predecessor).await;
+    missing_stage
+        .as_object_mut()
+        .unwrap()
+        .remove("device_pairing_request_id");
+    let mut response = post_authenticated_canonical(
+        state.clone(),
+        &trusted_token,
+        "http://server/_arkret/gate/account/device-pair",
+        &missing_stage,
+    )
+    .await;
+    let status = response.status_code;
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::UNPROCESSABLE_ENTITY), "{body}");
     assert_eq!(problem_code(&body), "schema_violation", "{body}");
 
     let (status, body) = post_account_device_pair(
         state.clone(),
         &trusted_token,
         trusted_device,
-        "c2ln",
+        None,
         &predecessor,
     )
     .await;
@@ -383,7 +416,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body()
         state.clone(),
         &trusted_token,
         first_new_device,
-        "c2ln",
+        None,
         &predecessor,
     )
     .await;

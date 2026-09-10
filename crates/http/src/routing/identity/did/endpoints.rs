@@ -339,7 +339,7 @@ pub(crate) async fn embedded_webvh_register(
             "local_id": local_id,
             "provider_id": "soland.embedded",
             "version_id": version_id,
-            "head_event_digest": event_digest,
+            "accepted_entry_digest": event_digest,
         }),
         "accepted",
     )
@@ -541,7 +541,6 @@ pub(crate) async fn identity_document(
     .await?;
     json_ok(IdentityDocumentViewOutcome(IdentityDocumentView {
         did_document: resolved.did_document,
-        head_event_digest: resolved.key_log_head,
         seq: resolved.seq,
         receipts: Vec::new(),
     }))
@@ -757,7 +756,6 @@ pub(crate) async fn identity_submit_did_operation(
                 typed_did,
                 next_seq,
                 &version_id,
-                &event_digest,
                 existing_event.created_at,
             );
         }
@@ -875,7 +873,6 @@ pub(crate) async fn identity_submit_did_operation(
                 typed_did,
                 next_seq,
                 &version_id,
-                &event_digest,
                 accepted_at,
             );
         }
@@ -891,7 +888,7 @@ pub(crate) async fn identity_submit_did_operation(
         json!({
             "did": did.clone(),
             "seq": next_seq,
-            "head_event_digest": event_digest.clone(),
+            "accepted_entry_digest": event_digest.clone(),
         }),
         "accepted",
     )
@@ -901,7 +898,6 @@ pub(crate) async fn identity_submit_did_operation(
         typed_did,
         next_seq,
         &version_id,
-        &event_digest,
         submitted_at,
     )
 }
@@ -911,22 +907,15 @@ fn did_operation_submit_outcome(
     did: Did,
     seq: u64,
     version_id: &str,
-    event_digest: &str,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> JsonResult<DidOperationSubmitOutcome> {
-    let head_event_digest = Hash::new(event_digest.to_owned()).map_err(|error| {
-        AppError::internal(format!(
-            "DID operation digest failed SDK type validation: {error}"
-        ))
-    })?;
     let operation_ref = format!("{did}?versionId={version_id}");
     json_ok(DidOperationSubmitOutcome {
         status,
         did,
         accepted_at,
         seq: Some(seq),
-        head_event_digest: Some(head_event_digest),
-        operation_ref: Some(operation_ref),
+        operation_ref,
         receipts: Vec::new(),
     })
 }

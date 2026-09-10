@@ -174,8 +174,8 @@ pub(crate) async fn verified_station_agent_key(
                 admission_evidence
                     .agent_authority_state_evidence
                     .state
-                    .signing_key_binding
-                    .agent_key_authorize_event_id
+                    .key_authorization_event
+                    .event_id
                     .clone(),
             )
         }
@@ -1429,14 +1429,18 @@ async fn produce_current_agent_signer_evidence(
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
         .active_binding
         .ok_or(AgentEvidenceAcquisitionFailure::AgentAuthorizationInactive)?;
+    let authorized_key =
+        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+            &runtime.key_authorization_event,
+        )
+        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     if runtime.verification_method != *verification_method
-        || runtime.signing_key_binding.agent_id != *agent_id
-        || runtime.signing_key_binding.agent_key_authorize_event_id != runtime.authorized_event_ref
+        || authorized_key.agent_id != *agent_id
+        || authorized_key.agent_key_authorize_event_id != runtime.authorized_event_ref
     {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
-    if runtime
-        .signing_key_binding
+    if authorized_key
         .expires_at
         .is_some_and(|expires_at| expires_at <= now)
     {
@@ -1451,10 +1455,6 @@ async fn produce_current_agent_signer_evidence(
             &authorize_event,
         )
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    let binding_digest = arkret_signatures::agent_evidence::agent_signing_key_binding_digest(
-        &runtime.signing_key_binding,
-    )
-    .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         agent_id.clone(),
         state.service_core_id().clone(),
@@ -1462,16 +1462,16 @@ async fn produce_current_agent_signer_evidence(
     if authorize_event.realm_id != realm_id
         || authorize_event.actor_id != agent_actor
         || payload.verification_method != *verification_method
-        || payload.public_key_digest != runtime.public_key_digest
-        || payload.signing_key_binding_digest != binding_digest
-        || payload.key_id != runtime.signing_key_binding.agent_key_id
+        || authorized_key.public_key_digest != runtime.public_key_digest
+        || authorize_event.payload != runtime.key_authorization_event.payload
+        || payload.key_id != authorized_key.agent_key_id
     {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
     let key_seal = covering_seal(state, &authorize_event).await?;
     let key_cell_ref = arkret_signatures::agent_evidence::agent_authorization_cell_ref(
         agent_id,
-        &runtime.signing_key_binding.agent_key_id,
+        &authorized_key.agent_key_id,
     )
     .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let (key_value, _key_heads, key_proof) =
@@ -1549,14 +1549,13 @@ async fn produce_current_agent_signer_evidence(
         key_authorization_event: authorize_event,
         frontier_seal_id: frontier.id.clone(),
         frontier_state_root: frontier.state_root.clone(),
-        signing_key_binding: runtime.signing_key_binding.clone(),
         authorization: AgentAuthorizationEvidence {
             status: AgentAuthorizationStatus::Active,
             authorized_event_id: runtime.authorized_event_ref.clone(),
             accepted_seal_id: key_seal.id.clone(),
             accepted_at: key_seal.sealed_at,
-            not_before: runtime.signing_key_binding.issued_at,
-            expires_at: runtime.signing_key_binding.expires_at,
+            not_before: authorized_key.issued_at,
+            expires_at: authorized_key.expires_at,
             transition_event_id: None,
             transition_seal_id: None,
         },
@@ -1611,7 +1610,7 @@ async fn produce_current_agent_signer_evidence(
     };
     let state_digest = canonical_digest(&core)?;
     let mut expires_at = now + chrono::Duration::seconds(300);
-    if let Some(binding_expiry) = core.signing_key_binding.expires_at {
+    if let Some(binding_expiry) = core.authorization.expires_at {
         expires_at = expires_at.min(binding_expiry);
     }
     let mut authority_state_evidence = AgentAuthorityStateEvidence {
@@ -1775,7 +1774,7 @@ async fn witnessed_cell(
     Ok((value, heads, proof))
 }
 
-fn lifecycle_cell_ref(
+pub(super) fn lifecycle_cell_ref(
     agent_actor_id: &arkret_wire::ActorId,
 ) -> Result<NonEmptyString, AgentEvidenceAcquisitionFailure> {
     if agent_actor_id.as_account_id().is_none() {

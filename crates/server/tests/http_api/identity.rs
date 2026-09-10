@@ -103,6 +103,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         .founding_device_descriptor
         .expect("fixture PCR founding device descriptor");
     let authorize_payload = DeviceAuthorizePayload {
+        pairing_challenge_transcript_digest: None,
         device_id: descriptor.device_id.clone(),
         device_public_key_did: descriptor.device_public_key_did.clone(),
         hpke_key: descriptor.hpke_key.clone(),
@@ -1212,10 +1213,7 @@ async fn submit_did_operation_webvh_serves_canonical_did_json_body() {
             .await
             .unwrap();
     assert_eq!(duplicate["status"], "duplicate");
-    assert_eq!(
-        duplicate["head_event_digest"],
-        submitted["head_event_digest"]
-    );
+    assert_eq!(duplicate["operation_ref"], submitted["operation_ref"]);
 
     let mut conflicting_request = request.clone();
     conflicting_request["operation"]["proof"][0]["proofValue"] =
@@ -1226,17 +1224,18 @@ async fn submit_did_operation_webvh_serves_canonical_did_json_body() {
         .await;
     assert_eq!(conflicting.status_code.unwrap(), StatusCode::CONFLICT);
 
-    let generic_replace =
-        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
-            .json(&serde_json::json!({
-                "did": did,
-                "did_method": "webvh",
-                "seq": 2,
-                "prev_event_digest": submitted["head_event_digest"],
-                "operation": {"type": "replace", "state": {"id": did}},
-            }))
-            .send(&app_from_state(state.clone()))
-            .await;
+    let generic_replace = TestClient::post(
+        "http://server/_arkret/root/identity/submit-did-operation",
+    )
+    .json(&serde_json::json!({
+        "did": did,
+        "did_method": "webvh",
+        "seq": 2,
+        "prev_event_digest": arkret_canonical::canonical_sha256(&request["operation"]).unwrap(),
+        "operation": {"type": "replace", "state": {"id": did}},
+    }))
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(
         generic_replace.status_code.unwrap(),
         StatusCode::BAD_REQUEST

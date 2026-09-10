@@ -1,15 +1,15 @@
 //! Authenticated Realm join preparation.
 //!
 //! This boundary turns holder-Station state into the exact governance facts
-//! and authoring core a not-yet-member device may sign. It never accepts a
+//! and complete unsigned Event a not-yet-member device may sign. It never accepts a
 //! Directory candidate, endpoint, or caller-supplied governance basis.
 
 use arkret_models_collaboration::governance::membership_invite::{
     InviteAcceptPayload, JoinGateProof, MembershipPayload, MembershipPayloadState,
 };
 use arkret_models_collaboration::governance::realm_join_intake::{
-    RealmJoinAuthoringCore, RealmJoinGovernanceFacts, RealmJoinIntent, RealmJoinPrepareOutcome,
-    RealmJoinPrepareRequestBody,
+    RealmJoinGovernanceFacts, RealmJoinIntent, RealmJoinPrepareOutcome,
+    RealmJoinPrepareRequestBody, RealmJoinTransition, RealmJoinUnsignedEvent,
 };
 use arkret_schema::InviteLiveTargetSlot;
 use arkret_wire::{
@@ -28,6 +28,20 @@ const PREPARE_TTL_MINUTES: i64 = 5;
 
 pub(super) fn self_router() -> Router {
     Router::new().push(Router::with_path("realm-joins/prepare").post(prepare))
+}
+
+async fn require_prepare_device_active(
+    state: &AppState,
+    selector: &soland_storage::DeviceRevocationGateSelector,
+) -> Result<(), AppError> {
+    let status = state
+        .persistence()
+        .device_revocation_gate_status(selector)
+        .await
+        .map_err(|e| AppError::internal(format!("join authoring device gate failed: {e}")))?;
+    status.ensure_allowed().map_err(|e| {
+        AppError::capability_denied(format!("join authoring device is no longer active: {e}"))
+    })
 }
 
 fn validation(error: arkret_wire::WireError) -> AppError {
@@ -54,18 +68,18 @@ fn rule_allows_intent(rule: &str, intent: &RealmJoinIntent) -> bool {
         RealmJoinIntent::MemberJoin { .. } => {
             matches!(rule, "public" | "restricted" | "knock_restricted")
         }
-        RealmJoinIntent::Knock => matches!(rule, "knock" | "knock_restricted"),
+        RealmJoinIntent::Knock {} => matches!(rule, "knock" | "knock_restricted"),
     }
 }
 
 fn invite_accept_core(
     invite_id: arkret_wire::InviteId,
     account_id: arkret_wire::AccountId,
-) -> Result<RealmJoinAuthoringCore, AppError> {
+) -> Result<RealmJoinTransition, AppError> {
     let precondition = InviteLiveTargetSlot::held_by_invite(&invite_id)
         .precondition(&account_id)
         .map_err(|error| AppError::internal(format!("invite live-target cell: {error}")))?;
-    Ok(RealmJoinAuthoringCore::InviteAccept {
+    Ok(RealmJoinTransition::InviteAccept {
         payload: InviteAcceptPayload::directed(invite_id, account_id),
         preconditions: vec![precondition],
     })
@@ -78,7 +92,7 @@ async fn member_state_core(
     member_id: ActorId,
     membership: MembershipPayloadState,
     gate_proofs: Vec<JoinGateProof>,
-) -> Result<RealmJoinAuthoringCore, AppError> {
+) -> Result<RealmJoinTransition, AppError> {
     let subject = arkret_wire::composite_subject(&[member_id
         .canonical_key()
         .map_err(|error| AppError::param_invalid(error.to_string()))?])
@@ -111,7 +125,7 @@ async fn member_state_core(
         agent_controller_binding: None,
         invite_ref: None,
     };
-    Ok(RealmJoinAuthoringCore::MemberState {
+    Ok(RealmJoinTransition::MemberState {
         payload,
         preconditions: vec![Precondition {
             cell_id,
@@ -151,6 +165,16 @@ async fn prepare(
         return Err(AppError::not_found("Realm join preparation not found"));
     }
 
+    let generation =
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state,
+            authenticated_account.principal_id.as_str(),
+            &session.device_id,
+        )
+        .await
+        .map_err(|error| {
+            AppError::conflict(format!("join authoring device unavailable: {error}"))
+        })?;
     let authenticated_actor = ActorId::account(authenticated_account.clone());
     let request_hash = arkret_canonical::canonical_sha256(&body).map_err(|error| {
         AppError::new(
@@ -158,7 +182,11 @@ async fn prepare(
             format!("Realm join preparation request cannot be canonicalized: {error}"),
         )
     })?;
-    let idempotency_key = body.request_id.as_str();
+    let scoped_request_id = format!(
+        "{}:{}:{}",
+        session.device_id, generation.target_device_generation_ref, body.request_id
+    );
+    let idempotency_key = scoped_request_id.as_str();
     let operation_id = arkret_wire::ServiceOperationId::SELF_REALM_JOIN_COMMAND_PREPARE_V1;
     match state
         .jobs()
@@ -170,6 +198,7 @@ async fn prepare(
             let outcome = serde_json::from_value(record.response_body).map_err(|error| {
                 AppError::internal(format!("stored Realm join preparation is invalid: {error}"))
             })?;
+            require_prepare_device_active(state, &generation).await?;
             return json_ok(outcome);
         }
         Some(_) => {
@@ -211,10 +240,10 @@ async fn prepare(
             intent_expiry = invite.expires_at;
         }
         RealmJoinIntent::MemberJoin { .. } if rule_allows_intent(rule.as_str(), &body.intent) => {}
-        RealmJoinIntent::Knock if rule_allows_intent(rule.as_str(), &body.intent) => {
+        RealmJoinIntent::Knock {} if rule_allows_intent(rule.as_str(), &body.intent) => {
             // The closed knock intent carries no user-authored content.
         }
-        RealmJoinIntent::MemberJoin { .. } | RealmJoinIntent::Knock => {
+        RealmJoinIntent::MemberJoin { .. } | RealmJoinIntent::Knock {} => {
             return Err(AppError::not_found("Realm join preparation not found"));
         }
     }
@@ -254,7 +283,7 @@ async fn prepare(
             _ => return Err(AppError::not_found("Realm join preparation not found")),
         }
     }
-    let authoring_core = match &body.intent {
+    let transition = match &body.intent {
         RealmJoinIntent::InviteAccept { invite_id, .. } => {
             invite_accept_core(invite_id.clone(), authenticated_account.clone())?
         }
@@ -269,7 +298,7 @@ async fn prepare(
             )
             .await?
         }
-        RealmJoinIntent::Knock => {
+        RealmJoinIntent::Knock {} => {
             member_state_core(
                 state,
                 &body.realm_id,
@@ -304,6 +333,20 @@ async fn prepare(
     let expires_at = intent_expiry
         .map(|expiry| expiry.min(observed_at + chrono::Duration::minutes(PREPARE_TTL_MINUTES)))
         .unwrap_or_else(|| observed_at + chrono::Duration::minutes(PREPARE_TTL_MINUTES));
+    let accepted_actor_frontier = crate::routing::events::event_log::load_realm_actor_frontier(
+        state,
+        body.realm_id.clone(),
+        authenticated_actor.clone(),
+    )
+    .await?;
+    let unsigned_event = RealmJoinUnsignedEvent::prepare(
+        &body,
+        &accepted_actor_frontier,
+        seal_basis.clone(),
+        transition,
+        digest_algorithm,
+    )
+    .map_err(validation)?;
     let outcome = RealmJoinPrepareOutcome {
         request_id: body.request_id.clone(),
         account_id: authenticated_account,
@@ -315,11 +358,14 @@ async fn prepare(
             digest_algorithm,
             encryption_profile,
         },
-        authoring_core,
+        unsigned_event,
+        accepted_actor_frontier,
+        authoring_device_generation_ref: generation.target_device_generation_ref,
         observed_at,
         expires_at,
     };
     outcome.validate_for_request(&body).map_err(validation)?;
+    require_prepare_device_active(state, &generation).await?;
     let response_body = serde_json::to_value(&outcome)
         .map_err(|error| AppError::internal(format!("Realm join preparation encode: {error}")))?;
     state
@@ -353,6 +399,7 @@ async fn prepare(
             "persisted Realm join preparation is invalid: {error}"
         ))
     })?;
+    require_prepare_device_active(state, &generation).await?;
     json_ok(landed_outcome)
 }
 
@@ -371,7 +418,7 @@ mod tests {
             arkret_wire::DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
         );
         let core = invite_accept_core(invite_id.clone(), account_id.clone()).unwrap();
-        let RealmJoinAuthoringCore::InviteAccept {
+        let RealmJoinTransition::InviteAccept {
             payload,
             preconditions,
         } = core
@@ -392,7 +439,7 @@ mod tests {
         let join = RealmJoinIntent::MemberJoin {
             gate_proofs: Vec::new(),
         };
-        let knock = RealmJoinIntent::Knock;
+        let knock = RealmJoinIntent::Knock {};
         assert!(rule_allows_intent("public", &join));
         assert!(rule_allows_intent("restricted", &join));
         assert!(rule_allows_intent("knock_restricted", &join));

@@ -50,6 +50,10 @@ pub(super) fn protocol_router() -> Router {
                 .post(issue_key_backup_delete_challenge),
         )
         .push(Router::with_path("keys/backups/{backup_id}/unlock").post(unlock_key_backup))
+        .push(
+            Router::with_path("keys/backups/{backup_id}/unlock-challenge")
+                .post(issue_key_backup_unlock_challenge),
+        )
         .push(Router::with_path("keys/backups").get(list_key_backups))
         .push(
             Router::with_path("keys/backup-series/erase")
@@ -620,4 +624,65 @@ mod tests {
         assert!(metadata.pointer("/encryption/aead").is_none());
         assert!(metadata.pointer("/auth_data/signature").is_none());
     }
+}
+
+pub(crate) async fn recovery_unlock_manifest(
+    state: &AppState,
+    account: &arkret_wire::AccountId,
+) -> Result<Value, AppError> {
+    use arkret_models_crypto::BackupActiveSeriesPointer;
+    let pointers = listing::active_pointers(state, account).await?;
+    let actor = arkret_wire::ActorId::account(account.clone()).to_string();
+    let query = soland_services::identity::KeyBackupListQuery {
+        actor_id: actor.clone(),
+        backup_kind: None,
+        series_id: None,
+        after: None,
+        limit: 1,
+    };
+    let revision = state
+        .key_backups()
+        .list_page(&query)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .revision;
+    let backups = state
+        .key_backups()
+        .backups_for_actor(&actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut manifest = Vec::new();
+    for backup in backups {
+        let typed: KeyBackup = serde_json::from_value(backup.clone())
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let pointer = match typed.backup_kind {
+            BackupKind::SecretStorage => &pointers.secret_storage,
+            BackupKind::MlsHistory => &pointers.mls_history,
+        };
+        if matches!(pointer,BackupActiveSeriesPointer::Active{active_series_id,..} if active_series_id==&typed.series_id)
+            && backup
+                .get("expires_at")
+                .and_then(Value::as_str)
+                .is_none_or(|time| {
+                    chrono::DateTime::parse_from_rfc3339(time).is_ok_and(|time| time > Utc::now())
+                })
+        {
+            manifest.push(backup);
+        }
+    }
+    if revision
+        != state
+            .key_backups()
+            .list_page(&query)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .revision
+    {
+        return Err(AppError::conflict(
+            "backup manifest changed during verification",
+        ));
+    }
+    Ok(
+        json!({"backups":manifest,"revision":revision,"actor_id":actor,"realm_id":pointers.control_realm_id,"seal_basis":pointers.seal_basis}),
+    )
 }

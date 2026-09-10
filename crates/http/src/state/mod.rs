@@ -17,7 +17,7 @@ pub use app_state::{
 };
 pub(crate) use member_identity::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
-    MemberIdentitySnapshot, MemberIdentitySubjectKey,
+    MemberIdentitySubjectKey,
 };
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,

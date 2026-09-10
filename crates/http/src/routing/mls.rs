@@ -616,10 +616,47 @@ async fn upload_keypackage(
 async fn peer_claim_keypackage(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PeerKeyPackagesClaimOutcome> {
+) -> JsonResult<PeerKeyPackagesClaimQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let (body, authorization) = verify_peer_claim_source_attestation(state, req).await?;
-    claim_keypackage_at_destination(state, &body, authorization).await
+    let digest = arkret_wire::Hash::new(
+        arkret_canonical::canonical_sha256(&body)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let source_id = body.service_binding.source_id.to_string();
+    let query = PeerKeyPackagesClaimQueryRequestBody {
+        claim_request_id: body.claim_request_id.clone(),
+        request_digest: digest,
+    };
+    // Source/transport and canonical bytes are authenticated above. Existing
+    // ledger identity is resolved before the original execution window.
+    if state
+        .mls_key_packages()
+        .peer_claim(&source_id, body.claim_request_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some()
+    {
+        return query_claim_ledger(state, query, source_id).await;
+    }
+    let execution = claim_keypackage_at_destination(state, &body, authorization).await;
+    match execution {
+        Ok(_) => query_claim_ledger(state, query, source_id).await,
+        Err(error) => {
+            if state
+                .mls_key_packages()
+                .peer_claim(&source_id, body.claim_request_id.as_str())
+                .await
+                .map_err(|failure| AppError::internal(failure.to_string()))?
+                .is_some()
+            {
+                query_claim_ledger(state, query, source_id).await
+            } else {
+                Err(error)
+            }
+        }
+    }
 }
 
 async fn claim_keypackage_at_destination(
@@ -664,6 +701,7 @@ async fn claim_keypackage_at_destination(
     {
         return replay_peer_claim(existing, &request_digest);
     }
+    validate_peer_claim_time_window(body)?;
     if state.peer_keypackage_claim_rate_limited(&source_id, &target_rate_limit_key) {
         tracing::warn!(
             %source_id,
@@ -902,6 +940,14 @@ async fn peer_query_keypackage_claim(
         .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
     let transport = peer_claim_transport_binding(state, req)?;
     let source_id = transport.source_id.as_str().to_owned();
+    query_claim_ledger(state, body, source_id).await
+}
+
+async fn query_claim_ledger(
+    state: &AppState,
+    body: PeerKeyPackagesClaimQueryRequestBody,
+    source_id: String,
+) -> JsonResult<PeerKeyPackagesClaimQueryOutcome> {
     revoke_expired_peer_claims(state).await?;
     let Some(record) = state
         .mls_key_packages()
@@ -1110,7 +1156,6 @@ async fn verify_peer_claim_source_attestation(
             "requester device verification method must bind requester AccountId principal and requester_device_id",
         ));
     }
-    validate_peer_claim_time_window(&body)?;
     // The authenticated canonical body is the attestation. This function does
     // not resolve a remote participant through a local principal-keyed facet.
     let authorization = VerifiedClaimAuthorization::for_verified_request(&body)?;
@@ -3965,16 +4010,13 @@ async fn verify_agent_keypackage_batch(
     {
         return Err("claim_generation_mismatch".to_owned());
     }
-    let payload =
-        serde_json::to_value(event.payload).map_err(|_| "claim_generation_mismatch".to_owned())?;
-    let verification_method = payload
-        .get("verification_method")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
-    let expected_public_key_digest = payload
-        .get("public_key_digest")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let authorized_key =
+        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+            &event,
+        )
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let verification_method = authorized_key.verification_method.as_str();
+    let expected_public_key_digest = authorized_key.public_key_digest.as_str();
     let agent = state
         .agent_pairings()
         .agent(principal.as_str())
@@ -3982,16 +4024,21 @@ async fn verify_agent_keypackage_batch(
         .map_err(|_| "claim_generation_mismatch".to_owned())?
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
     let binding = agent
-        .authorized_signing_key_binding
+        .authorized_key_event
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let binding =
+        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+            &binding,
+        )
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
     if binding.agent_key_authorize_event_id.as_str() != authorize_event_id
-        || binding.core.verification_method.as_str() != verification_method
-        || binding.core.public_key_digest.as_str() != expected_public_key_digest
+        || binding.verification_method.as_str() != verification_method
+        || binding.public_key_digest.as_str() != expected_public_key_digest
     {
         return Err("claim_generation_mismatch".to_owned());
     }
     let public_key: [u8; 32] = URL_SAFE_NO_PAD
-        .decode(binding.core.public_key.key.as_str())
+        .decode(binding.public_key.key.as_str())
         .map_err(|_| "claim_generation_mismatch".to_owned())?
         .as_slice()
         .try_into()
@@ -4030,13 +4077,18 @@ async fn validate_agent_keypackage_leaf(
         .map_err(|_| "claim_generation_mismatch".to_owned())?
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
     let binding = agent
-        .authorized_signing_key_binding
+        .authorized_key_event
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let binding =
+        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+            &binding,
+        )
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
     if binding.agent_key_authorize_event_id.as_str() != authorize_event_id {
         return Err("claim_generation_mismatch".to_owned());
     }
     let public_key = URL_SAFE_NO_PAD
-        .decode(binding.core.public_key.key.as_str())
+        .decode(binding.public_key.key.as_str())
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
     validate_actor_keypackage_leaf(principal, &public_key, key_package_bytes)
 }
@@ -4468,12 +4520,11 @@ async fn current_agent_keypackage_trust_binding(
             crate::app_error!(FailedPrecondition, "Agent key authorization is incomplete",)
                 .with_reason_code("claim_generation_mismatch")
         })?;
-    let active_event = state
-        .projections()
-        .snapshot()
-        .active_agent_key_authorizations(principal.as_str())
-        .into_iter()
-        .any(|(_, active_event_ref)| active_event_ref == event_ref);
+    let active_event =
+        crate::routing::identity::agents::accepted_active_agent_key_authorizations(state, &agent)
+            .await?
+            .into_iter()
+            .any(|(_, active_event_ref)| active_event_ref == event_ref);
     if !active_event {
         return Err(crate::app_error!(
             FailedPrecondition,
@@ -5666,7 +5717,7 @@ mod trust_binding_tests {
                 "agent_id": principal_core.as_str(),
                 "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
                 "verification_method": verification_method,
-                "public_key_digest": public_key_digest.as_str(),
+                "public_key": {"kty":"OKP","kid":verification_method,"algorithm":"Ed25519","key":URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())},
                 "accountable_principal_id": "ak:did_core:web:alice.example",
                 "agent_key_scope": {"actions": ["ak.message.create"]},
                 "audience": [state.service_id().as_str()],
@@ -5711,31 +5762,11 @@ mod trust_binding_tests {
             AgentLifecycleState::Active,
             now(),
         );
-        let signing_key_binding = serde_json::from_value(json!({
-            "schema": "ak.schema.agent_signing_key_binding.v1",
-            "agent_id": principal_core.as_str(),
-            "agent_key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
-            "verification_method": verification_method,
-            "public_key": {
-                "kty": "OKP",
-                "algorithm": "Ed25519",
-                "key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
-            },
-            "public_key_digest": public_key_digest.as_str(),
-            "agent_key_authorize_event_id": authorize_event_id,
-            "issued_at": "2026-01-01T00:00:00.000Z",
-            "controller_principal_id": "ak:did_core:web:alice.example",
-            "controller_proof": {
-                "kind": "controller_signature",
-                "verification_method": "did:webvh:z6mkfixtureagent:agent.example#managed-controller",
-                "jws": "proof"
-            }
-        }))
-        .unwrap();
+        let key_authorization_event = authorize_event.clone();
         agent.authorized_event_ref = Some(authorize_event_id.clone());
         agent.authorized_verification_method = Some(verification_method.to_owned());
         agent.authorized_public_key_digest = Some(public_key_digest.to_string());
-        agent.authorized_signing_key_binding = Some(signing_key_binding);
+        agent.authorized_key_event = Some(key_authorization_event);
         state.agent_pairings().save_agent(agent).await.unwrap();
 
         let mut authorize_projection = arkret_event_draft::test_support::raw_projected_operation(

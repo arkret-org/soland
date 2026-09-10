@@ -1040,8 +1040,11 @@ pub struct ActivateAgentRuntimeCommand {
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
-    pub authorized_signing_key_binding:
-        arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
+    /// Exact controller Event frozen before Station admission adds its proof.
+    pub frozen_authorize_event: arkret_wire::Event,
+    pub expected_accepted_basis: arkret_wire::SealBasis,
+    pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
+    pub authorized_key_event: arkret_wire::Event,
     pub authorized_at: DateTime<Utc>,
 }
 
@@ -1053,7 +1056,7 @@ pub struct RecordAgentPairingCommitIntentCommand {
     pub pairing_request_id: OpaqueLocalId,
     pub request_digest: String,
     pub authorize_event_id: String,
-    pub signing_key_binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
+    pub key_authorization_event: arkret_wire::Event,
 }
 
 pub use soland_storage::PendingAgentPairingCommitIntent as AgentPairingCommitIntentState;
@@ -1083,16 +1086,15 @@ pub struct AgentPairingState {
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
     pub runtime_attestation_digest: Option<String>,
+    pub runtime_proof_verified_at: Option<DateTime<Utc>>,
     pub approval_notification_id: Option<uuid::Uuid>,
-    pub runtime_key_request: Option<
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
-    >,
+    pub runtime_key_request:
+        Option<arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody>,
     pub approval_requested_at: Option<DateTime<Utc>>,
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
-    pub authorized_signing_key_binding:
-        Option<arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding>,
+    pub authorized_key_event: Option<arkret_wire::Event>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1103,9 +1105,8 @@ pub struct OpenAgentPairingHandle {
     pub pairing_request_id: OpaqueLocalId,
     pub pairing_code: String,
     pub expires_at: DateTime<Utc>,
-    pub pending_runtime_key_request: Option<
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
-    >,
+    pub pending_runtime_key_request:
+        Option<arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody>,
 }
 
 impl OpenAgentPairingHandle {
@@ -1114,13 +1115,13 @@ impl OpenAgentPairingHandle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ActiveAgentRuntimeBinding {
     pub completed_pairing_request_id: OpaqueLocalId,
     pub authorized_event_ref: EventId,
     pub verification_method: DidUrl,
     pub public_key_digest: Hash,
-    pub signing_key_binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
+    pub key_authorization_event: arkret_wire::Event,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1162,13 +1163,14 @@ impl AgentPairingState {
             runtime_key_binding_digest: None,
             runtime_public_key_digest: None,
             runtime_attestation_digest: None,
+            runtime_proof_verified_at: None,
             approval_notification_id: None,
             runtime_key_request: None,
             approval_requested_at: None,
             authorized_event_ref: None,
             authorized_verification_method: None,
             authorized_public_key_digest: None,
-            authorized_signing_key_binding: None,
+            authorized_key_event: None,
             state_changed_at: Some(created_at),
             created_at,
             updated_at: created_at,
@@ -1212,34 +1214,18 @@ impl AgentPairingState {
                             format!("active Agent runtime public_key_digest is invalid: {error}")
                         })
                     })?;
-                let signing_key_binding =
-                    self.authorized_signing_key_binding.clone().ok_or_else(|| {
-                        "active Agent runtime binding is missing signing_key_binding".to_owned()
+                let key_authorization_event =
+                    self.authorized_key_event.clone().ok_or_else(|| {
+                        "active Agent runtime binding is missing key_authorization_event".to_owned()
                     })?;
-                // `authorized_public_key_digest` belongs to the public
-                // authorization domain: it is the digest the controller-signed
-                // `ak.agent.key.authorize` payload binds, i.e. the hash of the
-                // raw 32-byte Ed25519 key. The private pairing-request JWK
-                // digest is a deliberately distinct domain and lives in
-                // `runtime_public_key_digest`; recomputing it here would never
-                // match the stored column.
-                let binding_authorization_public_key_digest =
-                    arkret_signatures::agent_evidence::agent_signing_public_key_digest(
-                        &signing_key_binding.public_key,
-                    )
-                    .map_err(|reason| {
-                        format!(
-                            "active Agent signing_key_binding public key is invalid: {reason:?}"
-                        )
-                    })?;
-                if signing_key_binding.agent_id.as_str() != self.id
-                    || signing_key_binding.agent_key_authorize_event_id != authorized_event_ref
-                    || signing_key_binding.verification_method != verification_method
-                    || signing_key_binding.public_key_digest != public_key_digest
-                    || binding_authorization_public_key_digest != public_key_digest
+                let key = arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(&key_authorization_event).map_err(|error| error.to_string())?;
+                if key.agent_id.as_str() != self.id
+                    || key.agent_key_authorize_event_id != authorized_event_ref
+                    || key.verification_method != verification_method
+                    || key.public_key_digest != public_key_digest
                 {
                     return Err(
-                        "active Agent runtime binding fields do not match signing_key_binding"
+                        "active Agent authorization Event does not match its indexed key"
                             .to_owned(),
                     );
                 }
@@ -1248,14 +1234,14 @@ impl AgentPairingState {
                     authorized_event_ref,
                     verification_method,
                     public_key_digest,
-                    signing_key_binding,
+                    key_authorization_event,
                 })
             }
             None => {
                 if self.paired_pairing_request_id.is_some()
                     || self.authorized_verification_method.is_some()
                     || self.authorized_public_key_digest.is_some()
-                    || self.authorized_signing_key_binding.is_some()
+                    || self.authorized_key_event.is_some()
                 {
                     return Err(
                         "Agent runtime authorization columns contain a partial active binding"
@@ -1317,6 +1303,7 @@ pub use soland_storage::DevicePairingRecord as DevicePairingState;
 
 #[async_trait]
 pub trait DevicePairingPort: Send + Sync {
+    async fn get_terminal(&self, request_id: &str) -> ServiceResult<Option<Value>>;
     async fn stage(&self, record: DevicePairingState) -> ServiceResult<()>;
     async fn get(
         &self,
@@ -1336,6 +1323,10 @@ pub struct DevicePairingService {
 impl DevicePairingService {
     pub fn new(pairing: Arc<dyn DevicePairingPort>) -> Self {
         Self { pairing }
+    }
+
+    pub async fn get_terminal(&self, request_id: &str) -> ServiceResult<Option<Value>> {
+        self.pairing.get_terminal(request_id).await
     }
 
     pub async fn stage(&self, record: DevicePairingState) -> ServiceResult<()> {
@@ -1361,17 +1352,27 @@ pub struct StoreAgentRuntimeApprovalCommand {
     pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: DateTime<Utc>,
+    pub proof_verified_at: DateTime<Utc>,
     pub controller_account_pk: AccountPk,
     pub recipient_id: String,
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,
     pub runtime_attestation_digest: String,
     pub runtime_key_request:
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
+        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody,
 }
 
 #[async_trait]
 pub trait AgentPairingPort: Send + Sync {
+    async fn pairing_receipt(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<soland_storage::AgentPairingReceipt>>;
+    async fn pending_pairings_after(
+        &self,
+        after_id: &str,
+        limit: usize,
+    ) -> ServiceResult<Vec<AgentPairingState>>;
     async fn pairing_record(
         &self,
         pairing_request_id: &str,
@@ -1548,6 +1549,11 @@ pub trait RecoverySessionPort: Send + Sync {
         request_id: &str,
     ) -> ServiceResult<Option<RecoverySessionState>>;
     async fn insert_session(&self, session: RecoverySessionState) -> ServiceResult<()>;
+    async fn save_verified_with_unlock_manifest(
+        &self,
+        session: RecoverySessionState,
+        manifest: Value,
+    ) -> ServiceResult<()>;
     async fn update_session(&self, session: RecoverySessionState) -> ServiceResult<()>;
 }
 
@@ -1589,6 +1595,15 @@ impl RecoverySessionService {
         self.sessions.insert_session(session).await
     }
 
+    pub async fn save_verified_with_unlock_manifest(
+        &self,
+        session: RecoverySessionState,
+        manifest: Value,
+    ) -> ServiceResult<()> {
+        self.sessions
+            .save_verified_with_unlock_manifest(session, manifest)
+            .await
+    }
     pub async fn save_session(&self, session: RecoverySessionState) -> ServiceResult<()> {
         self.sessions.update_session(session).await
     }
@@ -1781,6 +1796,31 @@ pub use soland_storage::{
 
 #[async_trait]
 pub trait KeyBackupPort: Send + Sync {
+    async fn issue_unlock_challenge(
+        &self,
+        challenge: Value,
+        now: chrono::DateTime<Utc>,
+    ) -> ServiceResult<Value>;
+    async fn reserve_recovery_unlock_attempt(
+        &self,
+        authority_id: &str,
+        holder: &str,
+        request_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> ServiceResult<bool>;
+    async fn unlock_challenge(&self, authority_id: &str) -> ServiceResult<Option<Value>>;
+    async fn consume_unlock(
+        &self,
+        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+        active_basis: Value,
+        authority_id: &str,
+        backup: Value,
+        request_digest: &str,
+        holder: &str,
+        ip: &str,
+        now: chrono::DateTime<Utc>,
+        daily_limit: u32,
+    ) -> ServiceResult<Value>;
     async fn backup(&self, backup_id: &str) -> ServiceResult<Option<Value>>;
     async fn backups_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>>;
     async fn list_page(&self, query: &KeyBackupListQuery) -> ServiceResult<KeyBackupListPage>;
@@ -1797,7 +1837,10 @@ pub trait KeyBackupPort: Send + Sync {
     ) -> ServiceResult<Option<soland_storage::KeyBackupDeleteChallengeRecord>>;
     async fn consume_delete_challenge(
         &self,
+        gate: &soland_storage::KeyBackupDeleteGate,
         challenge_id: &str,
+        backup: Value,
+        recovery_session_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> ServiceResult<bool>;
     async fn prune_expired_delete_challenges(&self, now: DateTime<Utc>) -> ServiceResult<usize>;
@@ -1964,6 +2007,53 @@ impl KeyBackupService {
 
     /// Issue, or re-issue verbatim, the delete challenge for one
     /// `(account_id, backup_id, request_id)` (`key-management.md` §7.8.1).
+    pub async fn issue_unlock_challenge(
+        &self,
+        challenge: Value,
+        now: chrono::DateTime<Utc>,
+    ) -> ServiceResult<Value> {
+        self.backups.issue_unlock_challenge(challenge, now).await
+    }
+    pub async fn reserve_recovery_unlock_attempt(
+        &self,
+        authority_id: &str,
+        holder: &str,
+        request_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> ServiceResult<bool> {
+        self.backups
+            .reserve_recovery_unlock_attempt(authority_id, holder, request_digest, now)
+            .await
+    }
+    pub async fn unlock_challenge(&self, authority_id: &str) -> ServiceResult<Option<Value>> {
+        self.backups.unlock_challenge(authority_id).await
+    }
+    pub async fn consume_unlock(
+        &self,
+        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+        active_basis: Value,
+        authority_id: &str,
+        backup: Value,
+        request_digest: &str,
+        holder: &str,
+        ip: &str,
+        now: chrono::DateTime<Utc>,
+        daily_limit: u32,
+    ) -> ServiceResult<Value> {
+        self.backups
+            .consume_unlock(
+                device_gate,
+                active_basis,
+                authority_id,
+                backup,
+                request_digest,
+                holder,
+                ip,
+                now,
+                daily_limit,
+            )
+            .await
+    }
     pub async fn issue_delete_challenge(
         &self,
         record: soland_storage::KeyBackupDeleteChallengeRecord,
@@ -1979,15 +2069,18 @@ impl KeyBackupService {
         self.backups.delete_challenge(challenge_id).await
     }
 
-    /// Consume a challenge exactly once. `false` means it was already consumed
-    /// or never existed.
+    /// Delete the exact authorized backup and consume its challenge atomically.
+    /// `false` means the challenge is no longer available.
     pub async fn consume_delete_challenge(
         &self,
+        gate: &soland_storage::KeyBackupDeleteGate,
         challenge_id: &str,
+        backup: Value,
+        recovery_session_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> ServiceResult<bool> {
         self.backups
-            .consume_delete_challenge(challenge_id, now)
+            .consume_delete_challenge(gate, challenge_id, backup, recovery_session_id, now)
             .await
     }
 
@@ -2004,6 +2097,19 @@ impl KeyBackupService {
 }
 
 impl AgentPairingService {
+    pub async fn pairing_receipt(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<soland_storage::AgentPairingReceipt>> {
+        self.pairing.pairing_receipt(event_id).await
+    }
+    pub async fn pending_pairings_after(
+        &self,
+        after_id: &str,
+        limit: usize,
+    ) -> ServiceResult<Vec<AgentPairingState>> {
+        self.pairing.pending_pairings_after(after_id, limit).await
+    }
     pub fn new(pairing: Arc<dyn AgentPairingPort>, sidecars: Arc<dyn SidecarPort>) -> Self {
         Self { pairing, sidecars }
     }
@@ -2890,38 +2996,21 @@ mod tests {
     const ACTIVE_BINDING_VERIFICATION_METHOD: &str = "did:web:agent.example#key-1";
     const ACTIVE_BINDING_EVENT_ID: &str = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 
-    fn active_signing_key_binding()
-    -> arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding {
-        let mut binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding =
-            serde_json::from_value(serde_json::json!({
-                "schema": "ak.schema.agent_signing_key_binding.v1",
-                "agent_id": ACTIVE_BINDING_AGENT_ID,
-                "agent_key_id": "runtime-1",
-                "verification_method": ACTIVE_BINDING_VERIFICATION_METHOD,
-                "public_key": {
-                    "kty": "OKP",
-                    "algorithm": "Ed25519",
-                    "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                },
-                "public_key_digest": format!("sha256:{}", "00".repeat(32)),
-                "agent_key_authorize_event_id": ACTIVE_BINDING_EVENT_ID,
-                "issued_at": "2026-07-27T00:00:00.000Z",
-                "controller_principal_id": "ak:did_core:web:alice.example",
-                "controller_proof": {
-                    "kind": "controller_signature",
-                    "verification_method": "did:web:alice.example#key-1",
-                    "jws": "proof"
-                }
-            }))
-            .expect("valid signing-key binding fixture");
-        binding.core.public_key_digest =
-            arkret_signatures::agent_evidence::agent_signing_public_key_digest(&binding.public_key)
-                .expect("authorization-domain digest");
-        binding
+    fn active_key_authorization_event() -> arkret_wire::Event {
+        serde_json::from_value(serde_json::json!({
+            "event_id":ACTIVE_BINDING_EVENT_ID,"kind":"ak.agent.key.authorize",
+            "realm_id":"ak:realm:Aa0HGvOq8Bsl1PLw19X-9sJ3Zdu6M7N-HDm-MebQoQcG",
+            "scope_ref":{"kind":"realm","realm_id":"ak:realm:Aa0HGvOq8Bsl1PLw19X-9sJ3Zdu6M7N-HDm-MebQoQcG"},
+            "actor_id":{"kind":"account","account_id":{"principal_id":ACTIVE_BINDING_AGENT_ID,"station_id":"ak:did_core:web:station.example"}},
+            "actor_seq":1,"created_at":"2026-07-27T00:00:00.000Z","hlc":"01970e589d21-0001-a13f9c2e","prev_refs":[],"proofs":[],
+            "payload":{"agent_id":ACTIVE_BINDING_AGENT_ID,"key_id":"runtime-1","verification_method":ACTIVE_BINDING_VERIFICATION_METHOD,
+                "public_key":{"kty":"OKP","kid":ACTIVE_BINDING_VERIFICATION_METHOD,"algorithm":"Ed25519","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+                "issued_at":"2026-07-27T00:00:00.000Z","accountable_principal_id":"ak:did_core:web:alice.example"}
+        })).unwrap()
     }
 
     fn active_agent_pairing_state(
-        binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
+        binding: arkret_wire::Event,
         authorized_public_key_digest: String,
     ) -> AgentPairingState {
         let mut record = AgentPairingState::new(
@@ -2938,40 +3027,42 @@ mod tests {
         record.authorized_event_ref = Some(ACTIVE_BINDING_EVENT_ID.to_owned());
         record.authorized_verification_method = Some(ACTIVE_BINDING_VERIFICATION_METHOD.to_owned());
         record.authorized_public_key_digest = Some(authorized_public_key_digest);
-        record.authorized_signing_key_binding = Some(binding);
+        record.authorized_key_event = Some(binding);
         record
     }
 
-    /// `authorized_public_key_digest` is the public authorization domain (the
-    /// raw Ed25519 key hash the authorize Event binds), not the private
-    /// pairing-request JWK domain. Reading back an activated Agent must
-    /// succeed instead of failing the consistency gate.
+    /// The persisted digest uses the same raw key domain as every proof.
     #[test]
     fn active_runtime_binding_reads_back_with_authorization_domain_digest() {
-        let binding = active_signing_key_binding();
-        let record =
-            active_agent_pairing_state(binding.clone(), binding.public_key_digest.to_string());
+        let binding = active_key_authorization_event();
+        let record = active_agent_pairing_state(
+            binding.clone(),
+            arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+                &binding,
+            )
+            .unwrap()
+            .public_key_digest
+            .to_string(),
+        );
         let bindings = record
             .runtime_bindings()
             .expect("active runtime binding is readable");
         let active = bindings
             .active_binding
             .expect("active binding is reconstructed");
-        assert_eq!(active.public_key_digest, binding.public_key_digest);
+        assert_eq!(
+            active.public_key_digest.as_str(),
+            arkret_canonical::sha256_digest(&[0u8; 32])
+        );
         assert!(bindings.open_handle.is_none());
     }
 
     #[test]
-    fn active_runtime_binding_rejects_runtime_request_domain_digest() {
-        let binding = active_signing_key_binding();
-        let runtime_request_digest =
-            arkret_signatures::agent_evidence::agent_signing_public_key_runtime_request_digest(
-                &binding.verification_method,
-                &binding.public_key,
-            )
-            .expect("runtime-request-domain digest");
-        assert_ne!(runtime_request_digest, binding.public_key_digest);
-        let record = active_agent_pairing_state(binding, runtime_request_digest.to_string());
+    fn active_runtime_binding_rejects_a_different_raw_key_digest() {
+        let record = active_agent_pairing_state(
+            active_key_authorization_event(),
+            arkret_canonical::sha256_digest(&[1u8; 32]),
+        );
         assert!(record.runtime_bindings().is_err());
     }
 
@@ -3471,6 +3562,19 @@ mod tests {
 
     #[async_trait]
     impl AgentPairingPort for AcceptPairing {
+        async fn pairing_receipt(
+            &self,
+            _: &str,
+        ) -> ServiceResult<Option<soland_storage::AgentPairingReceipt>> {
+            Ok(None)
+        }
+        async fn pending_pairings_after(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> ServiceResult<Vec<AgentPairingState>> {
+            Ok(Vec::new())
+        }
         async fn pairing_record(
             &self,
             _pairing_request_id: &str,
@@ -3542,7 +3646,7 @@ mod tests {
                 version: 2,
                 acceptance_basis: recovery_policy_basis(),
                 trust_domain: "ak:trust_domain:personal".to_owned(),
-                allowed_proof_kinds: vec!["did_root".to_owned()],
+
                 supersedes: Some("ak:policy:genesis".to_owned()),
                 expires_at: None,
                 issued_at: Utc::now(),
@@ -3613,28 +3717,11 @@ mod tests {
             authorized_event_ref: "ak:event:1".to_owned(),
             authorized_verification_method: "did:web:agent.example#key-1".to_owned(),
             authorized_public_key_digest: "sha256:key".to_owned(),
-            authorized_signing_key_binding: serde_json::from_value(serde_json::json!({
-                "schema": "ak.schema.agent_signing_key_binding.v1",
-                "agent_id": "ak:did_core:web:agent.example",
-                "agent_key_id": "runtime-1",
-                "verification_method": "did:web:agent.example#key-1",
-                "public_key": {
-                    "kty": "OKP",
-                    "algorithm": "Ed25519",
-                    "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                },
-                "public_key_digest": format!("sha256:{}", "00".repeat(32)),
-                "agent_key_authorize_event_id":
-                    "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
-                "issued_at": "2026-07-27T00:00:00.000Z",
-                "controller_principal_id": "ak:did_core:web:alice.example",
-                "controller_proof": {
-                    "kind": "controller_signature",
-                    "verification_method": "did:web:alice.example#key-1",
-                    "jws": "proof"
-                }
-            }))
-            .expect("valid signing-key binding fixture"),
+            frozen_authorize_event: active_key_authorization_event(),
+            expected_accepted_basis: arkret_wire::SealBasis { leaves: vec![] },
+            outcome:
+                arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active,
+            authorized_key_event: active_key_authorization_event(),
             authorized_at: Utc::now(),
         };
         assert!(
@@ -3661,7 +3748,7 @@ mod tests {
                     version: 2,
                     acceptance_basis: recovery_policy_basis(),
                     trust_domain: "ak:trust_domain:personal".to_owned(),
-                    allowed_proof_kinds: vec!["did_root".to_owned()],
+
                     supersedes: Some("ak:policy:current".to_owned()),
                     expires_at: None,
                     issued_at: Utc::now(),

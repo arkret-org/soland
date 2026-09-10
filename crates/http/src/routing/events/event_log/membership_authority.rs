@@ -119,7 +119,6 @@ pub(super) async fn current_membership(
     let outcome = MembershipAuthorityOutcome {
         account_id,
         query_digest: query.query_digest().map_err(unavailable)?,
-        seal_basis: query.seal_basis.clone(),
         authorization_incarnation: membership.incarnation().clone(),
     };
     outcome

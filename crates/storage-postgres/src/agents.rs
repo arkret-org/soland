@@ -296,6 +296,49 @@ pub struct PgAgentStore {
 
 #[async_trait]
 impl AgentStore for PgAgentStore {
+    async fn pairing_receipt(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<soland_storage::AgentPairingReceipt>> {
+        #[derive(QueryableByName)]
+        struct Receipt {
+            #[diesel(sql_type = Jsonb)]
+            receipt: Value,
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("UPDATE agent_pairing_receipts SET activation_state = 'cancelled' WHERE authorize_event_ref = $1 AND activation_state = 'awaiting_accepted_frontier' AND expires_at <= NOW()")
+            .bind::<Text,_>(event_id).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        let row = sql_query("SELECT jsonb_build_object('agent_id',agent_id,'controller_principal_id',controller_principal_id,'request_digest',request_digest,'authorize_event_ref',authorize_event_ref,'activation_state',activation_state) AS receipt FROM agent_pairing_receipts WHERE authorize_event_ref = $1")
+            .bind::<Text,_>(event_id).get_result::<Receipt>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+        row.map(|row| {
+            serde_json::from_value(row.receipt)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))
+        })
+        .transpose()
+    }
+
+    async fn pending_pairings_after(
+        &self,
+        after_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<AgentPrincipalRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = agent_principals::table
+            .filter(agent_principals::id.gt(after_id))
+            .filter(agent_principals::approval_request_id.is_not_null())
+            .order(agent_principals::id.asc())
+            .limit(limit.min(128) as i64)
+            .select(AgentPrincipalRow::as_select())
+            .load::<AgentPrincipalRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     async fn put(&self, principal: AgentPrincipalRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -408,63 +451,111 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let authorized_signing_key_binding =
-            serde_json::to_value(&activation.authorized_signing_key_binding).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "encode typed Agent signing-key binding: {error}"
-                ))
+        let authorized_key_event =
+            serde_json::to_value(&activation.authorized_key_event).map_err(|error| {
+                PersistenceError::Internal(format!("encode typed Agent authorize Event: {error}"))
             })?;
         let pending_intent = serde_json::to_value(PendingAgentPairingCommitIntent {
             request_digest: activation.paired_request_digest.clone(),
             authorize_event_id: activation.authorized_event_ref.clone(),
-            signing_key_binding: Some(activation.authorized_signing_key_binding.clone()),
+            key_authorization_event: Some(activation.frozen_authorize_event.clone()),
         })
         .map_err(|error| {
             PersistenceError::Internal(format!(
                 "encode pending Agent pairing commit intent: {error}"
             ))
         })?;
-        diesel::update(
-            agent_principals::table
-                .filter(agent_principals::id.eq(&activation.agent_id))
-                .filter(agent_principals::state.eq_any(["active", "paused"]))
-                .filter(
-                    agent_principals::approval_request_id
-                        .eq(activation.approval_request_id.as_str()),
-                )
-                .filter(
-                    agent_principals::runtime_key_binding_digest
-                        .eq(&activation.runtime_key_binding_digest),
-                )
-                .filter(
-                    agent_principals::pairing_request_id.eq(activation.pairing_request_id.as_str()),
-                )
-                .filter(agent_principals::pending_pairing_commit_intent.eq(&pending_intent)),
-        )
-        .set((
-            // Runtime key activation records the authorization; it is not a
-            // lifecycle transition, so the lifecycle `state` is left untouched
-            // (key-management.md §3.6.1). runtime_state derives to ready.
-            agent_principals::updated_at.eq(activation.authorized_at),
-            agent_principals::authorized_event_ref.eq(&activation.authorized_event_ref),
-            agent_principals::authorized_verification_method
-                .eq(&activation.authorized_verification_method),
-            agent_principals::authorized_public_key_digest
-                .eq(&activation.authorized_public_key_digest),
-            agent_principals::authorized_signing_key_binding.eq(&authorized_signing_key_binding),
-            agent_principals::paired_pairing_request_id.eq(activation.pairing_request_id.as_str()),
-            agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
-            agent_principals::pending_pairing_commit_intent.eq(None::<Value>),
-            agent_principals::approval_requested_at.eq(None::<chrono::DateTime<chrono::Utc>>),
-            agent_principals::runtime_key_binding_digest.eq(None::<String>),
-            // Clears the pending request together with its public-key and
-            // attestation digests; they share one column.
-            agent_principals::runtime_key_material.eq(None::<Value>),
-        ))
-        .execute(&mut *conn)
+        let active_basis = serde_json::json!({
+            "realm_id": activation.frozen_authorize_event.realm_id,
+            "seal_basis": activation.expected_accepted_basis,
+        });
+        let key_expires_at: Option<chrono::DateTime<Utc>> = activation
+            .authorized_key_event
+            .payload
+            .get("expires_at")
+            .filter(|value| !value.is_null())
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            // The same Realm advisory lock serializes accepted Seal publication.
+            // Validate the exact snapshot before acquiring the Agent row lock.
+            crate::key_backup_unlock::validate_active_basis(conn, &active_basis).await?;
+            if activation.outcome == arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Cancelled {
+                let rows = diesel::update(agent_principals::table
+                    .filter(agent_principals::id.eq(&activation.agent_id))
+                    .filter(agent_principals::approval_request_id.eq(activation.approval_request_id.as_str()))
+                    .filter(agent_principals::runtime_key_binding_digest.eq(&activation.runtime_key_binding_digest))
+                    .filter(agent_principals::pairing_request_id.eq(activation.pairing_request_id.as_str()))
+                    .filter(agent_principals::pending_pairing_commit_intent.eq(&pending_intent)))
+                    .set((agent_principals::pending_pairing_commit_intent.eq(None::<Value>),
+                        agent_principals::approval_request_id.eq(None::<String>),
+                        agent_principals::approval_requested_at.eq(None::<chrono::DateTime<Utc>>),
+                        agent_principals::runtime_key_binding_digest.eq(None::<String>),
+                        agent_principals::runtime_key_material.eq(None::<Value>)))
+                    .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                return Ok(rows == 1);
+            }
+            if activation.outcome != arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active {
+                return Err(PersistenceError::SchemaViolation("pairing reconciliation requires a terminal outcome".into()).into());
+            }
+            let rows = diesel::update(
+                agent_principals::table
+                    .filter(agent_principals::id.eq(&activation.agent_id))
+                    .filter(agent_principals::state.eq_any(["active", "paused"]))
+                    .filter(
+                        agent_principals::approval_request_id
+                            .eq(activation.approval_request_id.as_str()),
+                    )
+                    .filter(
+                        agent_principals::runtime_key_binding_digest
+                            .eq(&activation.runtime_key_binding_digest),
+                    )
+                    .filter(
+                        agent_principals::pairing_request_id
+                            .eq(activation.pairing_request_id.as_str()),
+                    )
+                    .filter(agent_principals::pending_pairing_commit_intent.eq(&pending_intent))
+                    .filter(
+                        agent_principals::pairing_expires_at
+                            .gt(diesel::dsl::sql::<Nullable<Timestamptz>>("clock_timestamp()")),
+                    )
+                    .filter(
+                        diesel::dsl::sql::<Bool>("(")
+                            .bind::<Nullable<Timestamptz>, _>(key_expires_at)
+                            .sql(" IS NULL OR clock_timestamp() < ")
+                            .bind::<Nullable<Timestamptz>, _>(key_expires_at)
+                            .sql(")"),
+                    ),
+            )
+            .set((
+                // Runtime key activation records the authorization; it is not a
+                // lifecycle transition, so the lifecycle `state` is left untouched
+                // (key-management.md §3.6.1). runtime_state derives to ready.
+                agent_principals::updated_at.eq(activation.authorized_at),
+                agent_principals::authorized_event_ref.eq(&activation.authorized_event_ref),
+                agent_principals::authorized_verification_method
+                    .eq(&activation.authorized_verification_method),
+                agent_principals::authorized_public_key_digest
+                    .eq(&activation.authorized_public_key_digest),
+                agent_principals::authorized_key_event.eq(&authorized_key_event),
+                agent_principals::paired_pairing_request_id
+                    .eq(activation.pairing_request_id.as_str()),
+                agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
+                agent_principals::pending_pairing_commit_intent.eq(None::<Value>),
+                agent_principals::approval_requested_at.eq(None::<chrono::DateTime<chrono::Utc>>),
+                agent_principals::runtime_key_binding_digest.eq(None::<String>),
+                // Clears the pending request together with its public-key and
+                // attestation digests; they share one column.
+                agent_principals::runtime_key_material.eq(None::<Value>),
+            ))
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            Ok(rows == 1)
+        })
         .await
-        .map(|rows| rows == 1)
-        .map_err(PersistenceError::database)
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn put_pairing_commit_intent_if_compatible(
@@ -477,7 +568,7 @@ impl AgentStore for PgAgentStore {
         let intent_value = serde_json::to_value(PendingAgentPairingCommitIntent {
             request_digest: intent.request_digest.clone(),
             authorize_event_id: intent.authorize_event_id.clone(),
-            signing_key_binding: Some(intent.signing_key_binding.clone()),
+            key_authorization_event: Some(intent.key_authorization_event.clone()),
         })
         .map_err(|error| {
             PersistenceError::Internal(format!(
@@ -562,6 +653,7 @@ impl AgentStore for PgAgentStore {
             Some(runtime_key_request),
             Some(write.runtime_public_key_digest.clone()),
             Some(write.runtime_attestation_digest.clone()),
+            Some(write.proof_verified_at),
         )?;
         let record = diesel::update(
             agent_principals::table
@@ -666,7 +758,7 @@ impl AgentStore for PgAgentStore {
                 || agent.authorized_event_ref.as_deref()
                     != Some(command.snapshot.authorized_event_ref.as_str())
                 || agent.updated_at != command.snapshot.updated_at
-                || agent.authorized_signing_key_binding.is_none()
+                || agent.authorized_key_event.is_none()
             {
                 return Ok(AgentRuntimeEnqueueOutcome::SnapshotConflict);
             }

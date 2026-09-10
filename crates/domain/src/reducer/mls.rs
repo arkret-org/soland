@@ -1008,15 +1008,10 @@ fn validate_welcome_trust_binding(
         .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_trust_binding = keypackage_claim_trust_binding_object(claim_ref)
         .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    if let Some(agent_authorize_event_id) =
-        claim_trust_binding.agent_key_authorize_event_id.as_deref()
-        && !state
-            .active_agent_key_authorizations(recipient_actor_id)
-            .into_iter()
-            .any(|(_, event_id)| event_id == agent_authorize_event_id)
-    {
-        return Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
-    }
+    // Current recipient authorization is checked before durable admission by
+    // validate_local_welcome_recipient_authorization against the accepted PCR
+    // frontier. Deterministic Welcome replay validates the retained claim below;
+    // a process-local Agent map is not a second authority (especially for peers).
     if claim_ref.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || claim_ref.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
         || claim_ref

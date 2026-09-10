@@ -251,11 +251,9 @@ async fn materialize(
         .ok_or_else(|| unavailable("accepted MLS transition leaf input is unavailable"))?;
     let outcome = MlsAcceptedArtifactOutcome {
         query_digest: query.query_digest().map_err(unavailable)?,
-        seal_basis: basis,
         transition_head,
         governance_binding: binding,
         mls_frontier_leaves: leaves,
-        current_epoch_head: current,
     };
     outcome
         .validate_for_request(query)

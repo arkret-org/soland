@@ -220,13 +220,16 @@ async fn agent_record_is_desired_sidecar_member(
             .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?,
         account.station_id,
     ));
+    let has_authorization = !accepted_agent_key_authorizations(state, record)
+        .await?
+        .is_empty();
     Ok(
         realm_member_joined(state, realm_id, &agent_actor.to_string()) && {
             let projection = state.projections().snapshot();
             !matches!(
                 projection.agent_lifecycles.get(&agent_actor.to_string()),
                 Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
-            ) && projection.agent_has_authorized_key(agent_id)
+            ) && has_authorization
         },
     )
 }

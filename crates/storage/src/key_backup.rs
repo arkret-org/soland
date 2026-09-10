@@ -50,10 +50,43 @@ pub struct KeyBackupDeleteChallengeRecord {
     pub consumed_at: Option<chrono::DateTime<Utc>>,
 }
 
+/// Frozen authorization inputs rechecked inside the destructive transaction.
+#[derive(Clone, Debug)]
+pub struct KeyBackupDeleteGate {
+    pub active_basis: Value,
+    pub device_gates: Vec<crate::DeviceRevocationGateSelector>,
+    pub expected_policy: Option<Value>,
+}
+
 /// Encrypted key-backup envelopes (one row per `backup_id`), plus the durable
 /// delete-challenge ledger the high-risk DELETE path consumes.
 #[async_trait]
 pub trait KeyBackupStore: Send + Sync {
+    async fn issue_unlock_challenge(
+        &self,
+        challenge: Value,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Value>;
+    async fn reserve_recovery_unlock_attempt(
+        &self,
+        authority_id: &str,
+        holder: &str,
+        request_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<bool>;
+    async fn unlock_challenge(&self, authority_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn consume_unlock(
+        &self,
+        device_gate: Option<&crate::DeviceRevocationGateSelector>,
+        active_basis: Value,
+        authority_id: &str,
+        backup: Value,
+        request_digest: &str,
+        holder: &str,
+        ip: &str,
+        now: chrono::DateTime<Utc>,
+        daily_limit: u32,
+    ) -> PersistenceResult<Value>;
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()>;
     async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>>;
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;
@@ -82,12 +115,15 @@ pub trait KeyBackupStore: Send + Sync {
         challenge_id: &str,
     ) -> PersistenceResult<Option<KeyBackupDeleteChallengeRecord>>;
 
-    /// Atomically mark a challenge consumed. Returns `false` when it was
-    /// already consumed or does not exist, which is what makes a concurrent
-    /// double-DELETE lose exactly once.
+    /// Recheck current authority, delete the exact backup snapshot and consume
+    /// its challenge in one transaction. Returns `false` for an unavailable
+    /// challenge; a changed backup rolls back without consuming authorization.
     async fn consume_delete_challenge(
         &self,
+        gate: &KeyBackupDeleteGate,
         challenge_id: &str,
+        backup: Value,
+        recovery_session_id: Option<&str>,
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<bool>;
 

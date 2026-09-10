@@ -79,6 +79,8 @@ pub struct DevicePairingAuthorizationCommit {
     pub authorized_by_actor_id: DidCoreId,
     pub authorized_event_ref: String,
     pub changed_at: DateTime<Utc>,
+    /// Closed holder/request digest/outcome committed with the accepted Event.
+    pub terminal_record: Value,
 }
 
 #[async_trait]
@@ -91,19 +93,9 @@ pub trait DevicePairingStore: Send + Sync {
         &self,
         device_pairing_request_id: &str,
     ) -> PersistenceResult<Option<DevicePairingRecord>>;
+    async fn get_terminal(&self, request_id: &str) -> PersistenceResult<Option<Value>>;
+
     /// Prune rows whose pairing window elapsed before the supplied retention
     /// cutoff. Returns the number removed.
     async fn delete_expired_before(&self, cutoff: DateTime<Utc>) -> PersistenceResult<u64>;
-}
-
-#[async_trait]
-pub trait DevicePairingCommitUnitOfWork: Send + Sync {
-    /// Atomically verifies and consumes a pending, unexpired staged pairing.
-    /// Returns `false` without side effects when the request id, code, public
-    /// key, state, or expiry does not match. The authorized device projection
-    /// must already exist as the result of ordinary Event admission.
-    async fn commit_device_pairing_authorization(
-        &self,
-        commit: DevicePairingAuthorizationCommit,
-    ) -> PersistenceResult<bool>;
 }

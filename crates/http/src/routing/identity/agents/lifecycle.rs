@@ -826,45 +826,10 @@ pub(super) async fn renew_agent_pairing(
                 .with_reason_detail("agent_deactivated"),
         );
     }
-    // Bootstrap re-open for a never-keyed agent; runtime replacement for one
-    // that already holds an active authorized key (key-management.md §3.6.1).
-    // Both active and paused agents replace in place with no forced pause — the
-    // lifecycle intent is preserved and completing the pairing atomically
-    // supersedes the old key.
-    let bootstrap_reopen = record.authorized_event_ref.is_none();
-    if !state.config().development_mode {
-        return Err(AppError::unsupported_feature(
-            "production agent pairing renewal requires protocol-valid delegated fan-out",
-        )
-        .with_wire_code("agent_provision_fanout_unavailable"));
-    }
     let now_utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
     )
     .ok_or_else(|| AppError::internal("current agent pairing timestamp is out of range"))?;
-    // A never-keyed agent whose bootstrap window lapsed does not reserve the
-    // slug, so a replacement agent may have claimed it since. Renewing would
-    // then produce two open agents with the same selector slug for one
-    // controller — reject like provision does.
-    let agent_slug = record.agent_slug.clone().unwrap_or_default();
-    if !agent_slug.is_empty() {
-        let siblings = state
-            .agent_pairings()
-            .agents_for_controller(&session.actor)
-            .await
-            .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?
-            .into_iter()
-            .collect::<Vec<_>>();
-        if siblings.iter().any(|sibling| {
-            sibling.id != agent_id
-                && sibling.agent_slug.as_deref() == Some(agent_slug.as_str())
-                && agent_record_reserves_selector_slug(sibling, &now_utc)
-        }) {
-            return Err(pairing_failed_precondition(
-                "slug is already bound to an active or open agent for this controller",
-            ));
-        }
-    }
     let pairing_request_id =
         arkret_wire::OpaqueLocalId::new(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
             .expect("generated pairing request id must be valid");
@@ -891,6 +856,7 @@ pub(super) async fn renew_agent_pairing(
     record.runtime_key_binding_digest = None;
     record.runtime_public_key_digest = None;
     record.runtime_attestation_digest = None;
+    record.runtime_proof_verified_at = None;
     record.pending_pairing_commit_intent = None;
     record.approval_notification_id = None;
     record.updated_at = now_utc;
@@ -914,9 +880,7 @@ pub(super) async fn renew_agent_pairing(
         json!({
             "agent_id": agent_id,
             "controller_principal_id": session.actor,
-            "slug": agent_slug,
             "pairing_request_id": pairing_request_id,
-            "mode": if bootstrap_reopen { "bootstrap_reopen" } else { "runtime_replacement" },
         }),
         "accepted",
     )
@@ -933,13 +897,8 @@ pub(super) async fn renew_agent_pairing(
         principal_control_realm_id,
         controller_authorization_ref,
         requested_scope_digest,
-        pairing_mode: if bootstrap_reopen {
-            AgentPairingMode::Bootstrap
-        } else {
-            AgentPairingMode::Replacement
-        },
         pairing_request_id,
-        pairing_code: Some(pairing_code),
+        pairing_code,
         expires_at,
     })
 }
@@ -973,12 +932,12 @@ pub(super) async fn list_agents(
             continue;
         }
         let record = reconcile_accepted_agent_authorization(state, record).await?;
-        let record = lazily_expire_pairing(state, record).await?;
-        let runtime_state = agent_runtime_state_from_record(
-            &record,
-            agent_has_active_authorization(state, &record.id),
-            chrono::Utc::now(),
-        );
+        let mut record = lazily_expire_pairing(state, record).await?;
+        let (keys, _, lifecycle) =
+            accepted_agent_key_authorization_snapshot(state, &record).await?;
+        record.state = projected_agent_lifecycle(record.state, lifecycle)?;
+        let runtime_state =
+            agent_runtime_state_from_record(&record, !keys.is_empty(), chrono::Utc::now());
         agents.push(agent_projection_from_record(&record, runtime_state));
     }
     // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
@@ -1038,6 +997,29 @@ pub(super) async fn get_agent(
     // reconstruct the runtime proof transcript during final approval. The
     // controller-facing pending approval projection remains secret-free.
     let mut view = agent_view_from_record(state, &record).await?;
+    if service_authorized {
+        if let (
+            Some(key_state),
+            Some(candidate),
+            Some(approval_request_id),
+            Some(proof_verified_at),
+        ) = (
+            view.key_state.as_mut(),
+            record.runtime_key_request.as_ref(),
+            record.approval_request_id.clone(),
+            record.runtime_proof_verified_at,
+        ) {
+            key_state.runtime_verifier_material = Some(
+                arkret_models_collaboration::agent_operations::AgentRuntimeVerifierMaterial {
+                    proof_verified_at,
+                    approval_request_id: approval_request_id.clone(),
+                    candidate: runtime_key_request_for_controller(candidate, approval_request_id),
+                    proof_of_possession: candidate.proof_of_possession.clone(),
+                },
+            );
+        }
+    }
+
     // Surface every durable, unrevoked grant so terminal deactivation can
     // author complete revocation coverage. The effective authz index supplies
     // optional display metadata, but pending or expired grants must not
@@ -1100,12 +1082,14 @@ pub(super) async fn lazily_expire_pairing(
     // the lifecycle intent is untouched, and the derived runtime_state falls to
     // pairing_expired (never-keyed) or ready (keyed) once the handle lapses.
     // Only the dead pending runtime-key request is cleaned up here.
+    record.pending_pairing_commit_intent = None;
     record.approval_request_id = None;
     record.runtime_key_request = None;
     record.approval_requested_at = None;
     record.runtime_key_binding_digest = None;
     record.runtime_public_key_digest = None;
     record.runtime_attestation_digest = None;
+    record.runtime_proof_verified_at = None;
     record.approval_notification_id = None;
     record.updated_at = now;
     state
@@ -1146,9 +1130,8 @@ pub(super) async fn lifecycle_transition(
         .then(|| account_notification_context(&record))
         .flatten();
     // Never synthesize an Agent-authored control Event from a session request.
-    // Pause/resume carry the exact SDK-authored envelope. Deactivate remains
-    // fail-closed until its request can carry the complete lifecycle + key +
-    // grant revocation Event bundle atomically.
+    // Pause/resume/deactivate carry the exact SDK-authored lifecycle envelope.
+    // Accepted terminal lifecycle is the parent gate for keys and grants.
     let Some(lifecycle_event) = lifecycle_event else {
         if state.config().development_mode {
             return Err(AppError::unsupported_feature(
@@ -1171,8 +1154,8 @@ pub(super) async fn lifecycle_transition(
     let previous_status = record.state;
     // Drive the FSM reducer with the exact durable
     // `ak.self.agent.{pause,resume,deactivate}` Event authored as the Agent and
-    // executed/signed by its controller. Deactivate revocations are admitted
-    // and rechecked by the endpoint before it calls this transition.
+    // executed/signed by its controller. Deactivation uses the same single
+    // lifecycle Event, without auxiliary key/grant revocation Events.
     let realm = record.principal_control_realm_id.clone();
     let authorization_ref = record.controller_authorization_ref.clone();
     submit_durable_agent_lifecycle(

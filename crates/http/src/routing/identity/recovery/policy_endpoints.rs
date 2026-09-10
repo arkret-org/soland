@@ -38,21 +38,11 @@ pub(super) async fn resolve_recovery_read_account(
 pub(super) fn typed_recovery_policy_summary(
     record: &soland_services::identity::RecoveryPolicyState,
 ) -> Result<RecoveryPolicySummary, AppError> {
-    let allowed_proof_kinds = record
-        .allowed_proof_kinds
-        .iter()
-        .map(|kind| match kind.as_str() {
-            "did_root" => Ok(RecoveryProofKind::DidRoot),
-            "recovery_unlock" => Ok(RecoveryProofKind::RecoveryUnlock),
-            "device_quorum" => Ok(RecoveryProofKind::DeviceQuorum),
-            "trusted_recovery_service" => Ok(RecoveryProofKind::TrustedRecoveryService),
-            "threshold_recovery" => Ok(RecoveryProofKind::ThresholdRecovery),
-            value => Err(stored_recovery_type_error(
-                "policy proof kind",
-                format_args!("unknown value `{value}`"),
-            )),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let policy: RecoveryPolicy = serde_json::from_value(record.raw_payload.clone())
+        .map_err(|error| stored_recovery_type_error("policy payload", error))?;
+    policy
+        .validate()
+        .map_err(|error| stored_recovery_type_error("policy methods", error))?;
     Ok(RecoveryPolicySummary {
         policy_id: PolicyId::new(record.policy_id.clone())
             .map_err(|error| stored_recovery_type_error("policy id", error))?,
@@ -62,7 +52,7 @@ pub(super) fn typed_recovery_policy_summary(
         recovery_policy_ref: None,
         trust_domain: TrustDomainId::new(record.trust_domain.clone())
             .map_err(|error| stored_recovery_type_error("policy trust domain", error))?,
-        allowed_proof_kinds,
+        methods: policy.methods.clone(),
         supersedes_id: record
             .supersedes
             .as_ref()
@@ -373,7 +363,6 @@ pub(super) async fn recovery_policy_put(
         version: validated.version,
         acceptance_basis,
         trust_domain: validated.trust_domain.into_string(),
-        allowed_proof_kinds: validated.allowed_proof_kinds,
         supersedes: validated.supersedes_id,
         expires_at: validated.expires_at,
         issued_at: validated.issued_at,

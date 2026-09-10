@@ -2,7 +2,6 @@ use sha2::{Digest as _, Sha256};
 use soland_services::identity::RecoverySessionState as RecoverySessionServiceState;
 
 use super::*;
-use crate::routing::identity::value_mentions_identifier;
 
 fn verify_recovery_device_possession(
     payload: &RecoverySessionCreateRequestBody,
@@ -134,9 +133,9 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 //   POST recovery-sessions/{id}/proofs      — verify a proof (pending -> verified)
 //
 // C-P3 — `/proofs` cryptographically verifies did_root, recovery_unlock, and
-// trusted_recovery_service over the canonical recovery-proof transcript and
+// device_quorum and trusted_recovery_service over the canonical recovery-proof transcript and
 // advances `pending -> verified` ONLY on success. Policy-permitted
-// device_quorum and threshold_recovery currently return 501
+// threshold_recovery currently returns 501
 // `recovery_proof_kind_unimplemented` rather than silently leaving the session
 // pending.
 //
@@ -200,6 +199,19 @@ fn recovery_proof_summary_transcript(
             )
             .ok()?;
             serde_json::to_value(transcript).ok()
+        }
+        "device_quorum" => {
+            let proof: arkret_models_crypto::RecoveryDeviceQuorumProof =
+                serde_json::from_value(Value::Object(proof.clone())).ok()?;
+            let body = proof.signature_independent_proof_body().ok()?;
+            serde_json::to_value(
+                generic_recovery_proof_transcript(
+                    record,
+                    GenericRecoveryProofBody::DeviceQuorum(body),
+                )
+                .ok()?,
+            )
+            .ok()
         }
         "did_root" => serde_json::to_value(did_root_recovery_proof_transcript(record).ok()?).ok(),
         _ => None,
@@ -278,7 +290,6 @@ pub(super) fn typed_recovery_session_state(
         identity_model: transcript.identity_model,
         current_device_generation_ref: transcript.model_generation_ref,
         device_generation_status: record.device_generation_status,
-        registry_head: record.registry_head.clone(),
         accepted_seal_frontier: record.accepted_seal_frontier.clone(),
         publication_authority_context: record.publication_authority_context.clone(),
         publication_authority_context_digest: record.publication_authority_context_digest.clone(),
@@ -328,49 +339,72 @@ fn recovery_policy_basis_leaves(
     }
 }
 
-async fn verify_device_quorum_rule_at_policy_basis(
+async fn current_recovery_root_authority(
+    state: &AppState,
+    account_id: &AccountId,
+) -> Result<(serde_json::Value, Vec<DidUrl>), AppError> {
+    let authority = state
+        .persistence()
+        .principal_resolution_by_account_id(account_id)
+        .await
+        .map_err(|e| AppError::internal(format!("principal authority lookup failed: {e}")))?
+        .ok_or_else(|| recovery_proof_authority_error("accepted principal resolution missing"))?;
+    let pinned = state
+        .dids()
+        .resolve_current_webvh_state(&authority.projection.did)
+        .await
+        .map_err(|e| {
+            recovery_proof_authority_error(format!("current root history unavailable: {e}"))
+        })?;
+    let methods = pinned
+        .document
+        .get("verificationMethod")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|method| {
+            method
+                .get("publicKeyMultibase")
+                .and_then(Value::as_str)
+                .is_some_and(|key| pinned.update_keys.iter().any(|root| root == key))
+        })
+        .filter_map(|method| method.get("id").and_then(Value::as_str))
+        .map(|id| {
+            DidUrl::new(id.to_owned()).map_err(|e| recovery_proof_authority_error(e.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if methods.len() != 1 {
+        return Err(recovery_proof_authority_error(
+            "accepted root history must identify exactly one root method",
+        ));
+    }
+    Ok((pinned.document, methods))
+}
+
+async fn device_quorum_methods_at_policy_basis(
     state: &AppState,
     active: &RecoveryPolicyState,
     policy: &RecoveryPolicy,
-) -> Result<(), AppError> {
-    let Some(quorum) = policy.device_quorum.as_ref() else {
-        return Ok(());
+) -> Result<std::collections::BTreeMap<DeviceId, DidUrl>, AppError> {
+    let mut methods = std::collections::BTreeMap::new();
+    let Some(arkret_models_crypto::RecoveryMethod::DeviceQuorum { member_ids, .. }) =
+        policy.method(RecoveryProofKind::DeviceQuorum)
+    else {
+        return Ok(methods);
     };
-    let rule = policy
-        .publication_authorization_rules
-        .iter()
-        .find(|rule| rule.proof_kind == RecoveryProofKind::DeviceQuorum)
-        .ok_or_else(|| {
-            AppError::conflict("device quorum policy has no publication authorization rule")
-                .with_internal_reason("recovery_publication_authority_invalid")
-        })?;
-    let expected_methods = quorum
-        .member_ids
-        .iter()
-        .map(|device_id| format!("{}#{}", active.account_id.principal_id, device_id))
-        .collect::<BTreeSet<_>>();
-    let declared_methods = rule
-        .issuers
-        .iter()
-        .map(|issuer| issuer.verification_method.to_string())
-        .collect::<BTreeSet<_>>();
-    if expected_methods != declared_methods {
-        return Err(AppError::conflict(
-            "device quorum publication issuers do not match the policy member devices",
-        )
-        .with_internal_reason("recovery_publication_authority_invalid"));
-    }
-
+    let authority = state
+        .persistence()
+        .principal_resolution_by_account_id(&active.account_id)
+        .await
+        .map_err(|e| AppError::internal(format!("principal authority lookup failed: {e}")))?
+        .ok_or_else(|| recovery_proof_authority_error("accepted principal resolution missing"))?;
     let leaves = recovery_policy_basis_leaves(&active.acceptance_basis)?;
     let covered = state
         .projections()
         .seal_leaf_union_proof(&leaves)
         .await
-        .map_err(|error| {
-            AppError::conflict(format!(
-                "recovery policy acceptance basis cannot be resolved: {error}"
-            ))
-            .with_internal_reason("recovery_publication_authority_invalid")
+        .map_err(|e| {
+            recovery_proof_authority_error(format!("policy acceptance basis unavailable: {e}"))
         })?
         .into_iter()
         .flat_map(|proof| proof.covered_event_digests)
@@ -381,36 +415,39 @@ async fn verify_device_quorum_rule_at_policy_basis(
         .accepted_events_for_actor(active.account_id.principal_id.as_str())
         .await
         .map_err(recovery_service_error)?;
-    for member in &quorum.member_ids {
-        let member = member.as_str();
-        let latest_authorize = events
+    for member in member_ids {
+        let relevant = events
             .iter()
             .filter(|event| {
                 covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
-                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
+                    && authorization_event_actor_matches_account(
+                        &event.actor_id,
+                        &active.account_id,
+                    )
+                    && event.realm_id.as_deref() == Some(authority.pcr_realm_id.as_str())
+                    && event.envelope["payload"]["device_id"].as_str() == Some(member.as_str())
             })
-            .map(|event| event.actor_seq)
-            .max();
-        let latest_revoke = events
+            .collect::<Vec<_>>();
+        // Device ids are never re-used across revoked generations. Sequence numbers
+        // from distinct Event authors cannot order authorization against revocation.
+        if !relevant
             .iter()
-            .filter(|event| {
-                covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DeviceRevoke.as_str()
-                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
-            })
-            .map(|event| event.actor_seq)
-            .max();
-        if latest_authorize.is_none()
-            || latest_revoke.is_some_and(|revoke| Some(revoke) >= latest_authorize)
+            .any(|e| e.kind == arkret_wire::EventKind::DeviceAuthorize.as_str())
+            || relevant
+                .iter()
+                .any(|e| e.kind == arkret_wire::EventKind::DeviceRevoke.as_str())
         {
-            return Err(AppError::conflict(format!(
-                "device quorum member `{member}` was not active at policy acceptance basis"
-            ))
-            .with_internal_reason("recovery_publication_authority_invalid"));
+            return Err(recovery_proof_authority_error(format!(
+                "quorum member {member} is not active at policy basis"
+            )));
         }
+        methods.insert(
+            member.clone(),
+            DidUrl::new(format!("{}#{member}", authority.projection.did))
+                .map_err(|e| recovery_proof_authority_error(e.to_string()))?,
+        );
     }
-    Ok(())
+    Ok(methods)
 }
 
 async fn pcr_policy_recovery_publication_authority_context(
@@ -428,7 +465,17 @@ async fn pcr_policy_recovery_publication_authority_context(
         ))
         .with_internal_reason("recovery_publication_authority_invalid")
     })?;
-    verify_device_quorum_rule_at_policy_basis(state, active, &policy).await?;
+    let device_methods = device_quorum_methods_at_policy_basis(state, active, &policy).await?;
+    let root_methods = if policy.method(RecoveryProofKind::DidRoot).is_some() {
+        current_recovery_root_authority(state, &active.account_id)
+            .await?
+            .1
+    } else {
+        Vec::new()
+    };
+    let derived_rules = policy
+        .publication_authorization_rules(chrono::Utc::now(), &root_methods, &device_methods)
+        .map_err(|e| recovery_proof_authority_error(e.to_string()))?;
 
     let authority_set_policy = AuthoritySetPolicy {
         schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
@@ -446,8 +493,7 @@ async fn pcr_policy_recovery_publication_authority_context(
             .map_err(|error| AppError::internal(format!("recovery policy digest: {error}")))?,
             generation_ref: active.version.to_string(),
         },
-        authorization_rules: policy
-            .publication_authorization_rules
+        authorization_rules: derived_rules
             .iter()
             .map(|rule| AuthoritySetAuthorizationRule {
                 rule_id: rule.rule_id.clone(),
@@ -483,8 +529,49 @@ async fn pcr_policy_recovery_publication_authority_context(
     Ok(context)
 }
 
-/// Load a session and enforce principal isolation: only the authenticated
-/// principal (== `session.actor`) may read or act on its own recovery sessions.
+/// Revalidate frozen authority against accepted expiry and explicit revocations.
+pub(crate) async fn validate_frozen_session_policy(
+    state: &AppState,
+    record: &RecoverySessionServiceState,
+    proof_payload: Option<&Value>,
+) -> Result<(), AppError> {
+    let frozen: RecoveryPolicy =
+        serde_json::from_value(record.policy_payload.clone()).map_err(|error| {
+            recovery_proof_authority_error(format!("bound policy invalid: {error}"))
+        })?;
+    let history = state
+        .recovery_policies()
+        .policy_history(&AccountId::new(
+            record.principal_id.clone(),
+            record.station_id.clone(),
+        ))
+        .await
+        .map_err(recovery_service_error)?;
+    let updates = history
+        .into_iter()
+        .map(|entry| serde_json::from_value(entry.raw_payload))
+        .collect::<Result<Vec<RecoveryPolicy>, _>>()
+        .map_err(|error| {
+            recovery_proof_authority_error(format!("accepted policy invalid: {error}"))
+        })?;
+    let proof = proof_payload
+        .or(record.proof_payload.as_ref())
+        .map(|value| {
+            serde_json::from_value::<arkret_models_crypto::RecoverySessionProofSubmitRequestBody>(
+                value.clone(),
+            )
+        })
+        .transpose()
+        .map_err(|error| recovery_proof_authority_error(format!("bound proof invalid: {error}")))?;
+    frozen
+        .validate_inflight_authority(
+            &updates,
+            proof.as_ref().map(|value| &value.proof),
+            chrono::Utc::now(),
+        )
+        .map_err(|error| recovery_proof_authority_error(error.to_string()))
+}
+
 pub(super) async fn load_owned_recovery_session(
     aa: &AuthArgs,
     state: &AppState,
@@ -515,6 +602,9 @@ pub(super) async fn load_owned_recovery_session(
             "recovery session belongs to a different principal",
         )
         .with_reason_code("recovery_principal_isolation"));
+    }
+    if matches!(record.state, SessionState::Pending | SessionState::Verified) {
+        validate_frozen_session_policy(state, &record, None).await?;
     }
     Ok(record)
 }
@@ -593,6 +683,13 @@ pub(super) async fn recovery_session_create(
         .map_err(recovery_session_store_error)?
     {
         if existing.create_intent_digest == create_intent_digest.as_str() {
+            let existing = expire_if_elapsed(state, existing).await?;
+            if matches!(
+                existing.state,
+                SessionState::Pending | SessionState::Verified
+            ) {
+                validate_frozen_session_policy(state, &existing, None).await?;
+            }
             return json_ok(typed_recovery_session_state(&existing)?);
         }
         return Err(AppError::conflict(
@@ -671,8 +768,13 @@ pub(super) async fn recovery_session_create(
         ))
         .with_wire_code("recovery_policy_trust_domain_mismatch"));
     }
-    if active.allowed_proof_kinds.is_empty() {
-        // An explicit-revocation policy (allowed_proof_kinds == []) cannot back a
+    if active
+        .raw_payload
+        .get("methods")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        // An explicit-revocation policy (methods == []) cannot back a
         // recovery session — there is no proof the requester_id could ever satisfy.
         return Err(AppError::conflict(format!(
             "active recovery policy `{}` permits no proof kinds (recovery disabled)",
@@ -681,6 +783,19 @@ pub(super) async fn recovery_session_create(
         .with_wire_code("recovery_policy_revoked"));
     }
 
+    let active_policy: RecoveryPolicy = serde_json::from_value(active.raw_payload.clone())
+        .map_err(|e| recovery_proof_authority_error(format!("accepted policy invalid: {e}")))?;
+    active_policy
+        .validate()
+        .map_err(|e| recovery_proof_authority_error(e.to_string()))?;
+    let now = chrono::Utc::now();
+    if active_policy.not_before.is_some_and(|time| now < time)
+        || active_policy.expires_at.is_some_and(|time| now >= time)
+    {
+        return Err(recovery_proof_authority_error(
+            "accepted recovery policy is outside its active interval",
+        ));
+    }
     // Optional client CAS hint: if `expected_recovery_policy_ref` is present it
     // MUST match the policy the server is about to snapshot, else the client is
     // racing a policy rotation → recovery_policy_mismatch.
@@ -805,7 +920,8 @@ pub(super) async fn recovery_session_create(
         created_at: now,
         updated_at: now,
         expires_at: (now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS))
-            .min(session.expires_at),
+            .min(session.expires_at)
+            .min(active_policy.expires_at.unwrap_or(session.expires_at)),
     };
     if let Err(error) = state
         .recovery_sessions()
@@ -934,15 +1050,40 @@ pub(super) async fn recovery_session_proof_submit(
     // The proof kind MUST be one the bound policy snapshot permits.
     let policy_allows = record
         .policy_payload
-        .get("allowed_proof_kinds")
+        .get("methods")
         .and_then(Value::as_array)
-        .map(|kinds| kinds.iter().any(|k| k.as_str() == Some(proof_kind)))
+        .map(|kinds| {
+            kinds
+                .iter()
+                .any(|k| k.get("kind").and_then(Value::as_str) == Some(proof_kind))
+        })
         .unwrap_or(false);
     if !policy_allows {
         return Err(AppError::conflict(format!(
             "proof.kind `{proof_kind}` is not permitted by the bound recovery policy",
         ))
         .with_wire_code("recovery_proof_kind_not_allowed"));
+    }
+    let bound_policy: RecoveryPolicy = serde_json::from_value(record.policy_payload.clone())
+        .map_err(|e| recovery_proof_authority_error(format!("bound policy invalid: {e}")))?;
+    if let Some(requirement) = &bound_policy.approval_requirement {
+        if requirement.min_approvals.unwrap_or(0) > 0
+            || requirement.announcement_required.unwrap_or(false)
+        {
+            return Err(recovery_proof_authority_error(
+                "policy requires additional independently verified approval or announcement",
+            ));
+        }
+        if requirement.cooldown_seconds.is_some_and(|seconds| {
+            chrono::Utc::now()
+                .signed_duration_since(record.created_at)
+                .num_seconds()
+                < i64::try_from(seconds).unwrap_or(i64::MAX)
+        }) {
+            return Err(recovery_proof_authority_error(
+                "policy recovery cooldown has not elapsed",
+            ));
+        }
     }
     // Anti-replay: the proof MUST echo the server-issued session challenge.
     let echoed = proof
@@ -957,10 +1098,8 @@ pub(super) async fn recovery_session_proof_submit(
         .with_reason_code("recovery_session_challenge_mismatch"));
     }
 
-    // C-P3 — verify the proof by kind. Only `did_root` is implemented;
-    // other (policy-permitted) kinds return 501 rather than silently leaving the
-    // session pending, so a caller is never misled into thinking the server
-    // accepted a proof it cannot actually check.
+    validate_frozen_session_policy(state, &record, Some(&payload_value)).await?;
+    // Each enabled method is verified independently against its frozen policy.
     match proof_kind {
         "did_root" => {
             verify_did_root_proof(state, &record, proof).await?;
@@ -970,6 +1109,9 @@ pub(super) async fn recovery_session_proof_submit(
         }
         "trusted_recovery_service" => {
             verify_trusted_recovery_service_proof(state, &record, proof).await?;
+        }
+        "device_quorum" => {
+            verify_device_quorum_recovery_proof(state, &record, proof).await?;
         }
         other => {
             return Err(AppError::unsupported_feature(format!(
@@ -988,9 +1130,14 @@ pub(super) async fn recovery_session_proof_submit(
         updated_at: now,
         ..record
     };
+    let manifest = crate::routing::identity::key_backup::recovery_unlock_manifest(
+        state,
+        &AccountId::new(updated.principal_id.clone(), updated.station_id.clone()),
+    )
+    .await?;
     state
         .recovery_sessions()
-        .save_session(updated.clone())
+        .save_verified_with_unlock_manifest(updated.clone(), manifest)
         .await
         .map_err(recovery_session_store_error)?;
 
@@ -1039,6 +1186,76 @@ pub(super) async fn recovery_session_proof_submit(
 /// any proof signed over a different binding (stale policy, replayed across
 /// principal/domain, different session) fails verification — this gives the
 /// `recovery_evidence_unbound` guarantee for free.
+async fn verify_device_quorum_recovery_proof(
+    state: &AppState,
+    record: &RecoverySessionServiceState,
+    proof: &Map<String, Value>,
+) -> Result<(), AppError> {
+    let proof: arkret_models_crypto::RecoveryDeviceQuorumProof =
+        serde_json::from_value(Value::Object(proof.clone()))
+            .map_err(|e| recovery_signature_error(format!("invalid device quorum proof: {e}")))?;
+    let policy: RecoveryPolicy = serde_json::from_value(record.policy_payload.clone())
+        .map_err(|e| recovery_proof_authority_error(format!("bound policy invalid: {e}")))?;
+    let Some(arkret_models_crypto::RecoveryMethod::DeviceQuorum { k, member_ids }) =
+        policy.method(RecoveryProofKind::DeviceQuorum)
+    else {
+        return Err(recovery_proof_authority_error(
+            "device quorum method is not enabled",
+        ));
+    };
+    let rule = record
+        .publication_authority_context
+        .authority_set_policy
+        .authorization_rules
+        .iter()
+        .find(|rule| rule.rule_id == "device_quorum")
+        .ok_or_else(|| recovery_proof_authority_error("frozen quorum authority missing"))?;
+    if proof.threshold != u64::from(*k) || rule.threshold != *k {
+        return Err(recovery_proof_authority_error(
+            "quorum threshold does not equal the accepted method",
+        ));
+    }
+    let body = proof
+        .signature_independent_proof_body()
+        .map_err(|e| recovery_signature_error(e.to_string()))?;
+    let transcript =
+        generic_recovery_proof_transcript(record, GenericRecoveryProofBody::DeviceQuorum(body))?;
+    let bytes = arkret_canonical::canonical_json_bytes(&transcript)
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let account = AccountId::new(record.principal_id.clone(), record.station_id.clone());
+    let mut seen = BTreeSet::new();
+    for signature in &proof.signatures {
+        if !seen.insert(signature.device_id.clone())
+            || !member_ids.contains(&signature.device_id)
+            || signature.signature_algorithm.as_str() != "Ed25519"
+            || !rule
+                .issuers
+                .iter()
+                .any(|issuer| issuer.verification_method == signature.verification_method)
+        {
+            return Err(recovery_proof_authority_error(
+                "quorum contains a duplicate, unlisted or differently bound signer",
+            ));
+        }
+        let key = crate::jws_verify::resolve_principal_authorized_device_key_with_account_authority_async(
+            signature.verification_method.as_str(), &account, &signature.device_id, state,
+        ).await.map_err(|e| recovery_proof_authority_error(e.to_string()))?;
+        let raw = URL_SAFE_NO_PAD
+            .decode(signature.signature.as_str())
+            .map_err(|_| recovery_signature_error("quorum signature is not canonical base64url"))?;
+        let decoded = Signature::from_slice(&raw)
+            .map_err(|_| recovery_signature_error("quorum signature must contain 64 bytes"))?;
+        key.verify(&bytes, &decoded)
+            .map_err(|_| recovery_signature_error("quorum signature is invalid"))?;
+    }
+    if seen.len() < *k as usize {
+        return Err(recovery_proof_authority_error(
+            "quorum has too few distinct valid members",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) async fn verify_did_root_proof(
     state: &AppState,
     record: &RecoverySessionServiceState,
@@ -1050,96 +1267,21 @@ pub(super) async fn verify_did_root_proof(
         ));
     }
     let verification_method = required_proof_string(proof, "verification_method")?;
-    let (method_did, device_fragment) = verification_method.rsplit_once('#').ok_or_else(|| {
-        recovery_signature_error("did-root verification_method has no device fragment")
-    })?;
-    let method_did = arkret_identifiers::Did::new(method_did.to_owned()).map_err(|error| {
-        recovery_signature_error(format!("did-root method DID is invalid: {error}"))
-    })?;
-    let method_principal = arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
-        recovery_signature_error(format!("did-root method DID cannot be projected: {error}"))
-    })?;
-    if method_principal != record.principal_id {
-        return Err(recovery_signature_error(
-            "did-root method does not belong to the recovery session authority pair",
-        ));
-    }
-    let device_id =
-        arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
-            recovery_signature_error(format!("did-root device fragment is invalid: {error}"))
-        })?;
-    let authority_key =
-        arkret_wire::AccountId::new(record.principal_id.clone(), record.station_id.clone());
-    let authority = state
-        .persistence()
-        .principal_resolution_by_account_id(&authority_key)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "recovery principal authority lookup failed: {error}"
-            ))
-        })?
-        .ok_or_else(|| {
-            recovery_signature_error("recovery principal authority pair is not durably accepted")
-        })?;
-    let device = state
-        .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: record.principal_id.to_string(),
-            device_id: device_id.to_string(),
-        })
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("recovery signing device lookup failed: {error}"))
-        })?
-        .ok_or_else(|| recovery_signature_error("recovery signing device is unavailable"))?;
-    if device.revoked_at.is_some() || device.verification_state != "verified" {
-        return Err(recovery_signature_error(
-            "recovery signing device is not active",
-        ));
-    }
-    let payload = serde_json::from_value::<
-        crate::routing::identity::device_signing::ProjectedDevicePayload,
-    >(device.payload)
-    .map_err(|error| {
-        AppError::internal(format!(
-            "recovery signing device evidence is invalid: {error}"
-        ))
-    })?;
-    let authorize_event_id = payload.device_authorize_event_id.ok_or_else(|| {
-        recovery_signature_error("recovery signing device has no accepted authorization Event")
-    })?;
-    let authorize_event = state
-        .event_queries()
-        .canonical_event(authorize_event_id.as_str())
-        .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "recovery device authorization lookup failed: {error}"
-            ))
-        })?
-        .ok_or_else(|| {
-            recovery_signature_error("recovery device authorization Event is unavailable")
-        })?;
-    if !authorization_event_actor_matches_account(&authorize_event.actor_id, &authority_key)
-        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
-        || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
+    let account_id = AccountId::new(record.principal_id.clone(), record.station_id.clone());
+    let (document, roots) = current_recovery_root_authority(state, &account_id).await?;
+    if !roots
+        .iter()
+        .any(|root| root.as_str() == verification_method)
     {
         return Err(recovery_signature_error(
-            "recovery signing device authorization is outside the selected account lineage",
+            "did_root proof requires the current DID history root, not a device key",
         ));
     }
-    let signing_key = payload
-        .device_public_key_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| recovery_signature_error("recovery signing device key is unavailable"))?;
+    let document = crate::jws_verify::decode_pinned_did_document(&document)
+        .map_err(recovery_signature_error)?;
     let key =
-        crate::routing::identity::device_signing::decode_ed25519_key(signing_key, "multibase")
-            .map_err(|error| {
-                recovery_signature_error(format!("recovery signing device key is invalid: {error}"))
-            })?;
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+            .map_err(|e| recovery_signature_error(e.to_string()))?;
     let transcript = did_root_recovery_proof_transcript(record)?;
     let transcript_bytes =
         arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
@@ -1171,40 +1313,40 @@ pub(super) async fn verify_trusted_recovery_service_proof(
     }
     let service_id = required_proof_string(proof, "service_id")?;
     let audience = required_proof_string(proof, "audience")?;
-    if audience != state.service_id() {
-        return Err(recovery_proof_authority_error(format!(
-            "proof.audience `{audience}` does not match this service"
-        )));
-    }
     let verification_method = required_proof_string(proof, "verification_method")?;
     let _service_id =
         arkret_identifiers::DidCoreId::new(service_id.to_owned()).map_err(|error| {
             recovery_proof_authority_error(format!("proof.service_id is invalid: {error}"))
         })?;
-    if !recovery_policy_mentions_identifier(
-        &record.policy_payload,
-        &[
-            "trusted_recovery_service",
-            "trusted_recovery_services",
-            "trusted_services",
-            "recovery_services",
-        ],
-        service_id,
-    ) {
-        return Err(recovery_proof_authority_error(format!(
-            "proof.service_id `{service_id}` is not trusted by the bound recovery policy"
-        )));
-    }
-    if recovery_policy_requires_trusted_service_attestation(&record.policy_payload)
-        && proof
-            .get("attestation_ref")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-    {
+    let policy: RecoveryPolicy = serde_json::from_value(record.policy_payload.clone())
+        .map_err(|e| recovery_proof_authority_error(format!("bound policy invalid: {e}")))?;
+    let Some(arkret_models_crypto::RecoveryMethod::TrustedRecoveryService { k, services }) =
+        policy.method(RecoveryProofKind::TrustedRecoveryService)
+    else {
         return Err(recovery_proof_authority_error(
-            "trusted recovery service proof is missing attestation_ref",
+            "trusted service method is not enabled",
+        ));
+    };
+    if *k != 1 {
+        return Err(recovery_proof_authority_error(
+            "single-service proof cannot satisfy the policy service threshold",
+        ));
+    }
+    let service = services
+        .iter()
+        .find(|entry| {
+            entry.service_id.as_str() == service_id
+                && entry.audience.as_str() == audience
+                && entry.authorization_verification_method.as_str() == verification_method
+        })
+        .ok_or_else(|| {
+            recovery_proof_authority_error(
+                "service, audience and signing method do not exactly match the accepted method",
+            )
+        })?;
+    if service.attestation_required.unwrap_or(false) {
+        return Err(recovery_proof_authority_error(
+            "required service attestation cannot be independently verified",
         ));
     }
     crate::jws_verify::validate_verification_method_controller(service_id, verification_method)
@@ -1245,10 +1387,10 @@ pub(super) async fn verify_trusted_recovery_service_proof(
 /// §15 step 2 — verify a `recovery_unlock` recovery proof.
 ///
 /// The 24-word Recovery Key (§3.3) unlock factor. Trust root is the principal's
-/// own published `recovery_policy.recovery_keys[]` (not the DID document):
+/// own published `recovery_policy.methods[kind=recovery_unlock].keys[]` (not the DID document):
 ///
-/// (a) `recovery_secret_ref` MUST resolve to a `recovery_keys[]` entry that was
-///     authoritative at the session `created_at` (not_before/expires_at window,
+/// (a) `recovery_secret_ref` MUST resolve to a `methods[kind=recovery_unlock].keys[]` entry that
+/// was     authoritative at the session `created_at` (not_before/expires_at window,
 ///     not revoked), and `verification_method` MUST equal that entry's
 ///     verification_method;
 /// (b) `signature` (under the entry's `signature_algorithm`, Ed25519) MUST verify over the
@@ -1350,7 +1492,7 @@ pub(super) async fn verify_recovery_unlock_proof(
         })
 }
 
-/// Resolve a non-revoked, in-window `recovery_keys[]` entry whose
+/// Resolve a non-revoked, in-window `methods[kind=recovery_unlock].keys[]` entry whose
 /// `verification_method` equals `recovery_secret_ref`, evaluated at `as_of`
 /// (the recovery session `created_at`).
 pub(super) fn resolve_recovery_key_entry(
@@ -1359,11 +1501,18 @@ pub(super) fn resolve_recovery_key_entry(
     as_of: chrono::DateTime<chrono::Utc>,
 ) -> Result<Map<String, Value>, AppError> {
     let entries = policy_payload
-        .get("recovery_keys")
+        .get("methods")
+        .and_then(Value::as_array)
+        .and_then(|methods| {
+            methods
+                .iter()
+                .find(|m| m.get("kind").and_then(Value::as_str) == Some("recovery_unlock"))
+        })
+        .and_then(|method| method.get("keys"))
         .and_then(Value::as_array)
         .ok_or_else(|| {
             recovery_evidence_unbound_error(
-                "bound recovery policy declares no recovery_keys[] for recovery_unlock",
+                "bound recovery policy declares no recovery_unlock keys for recovery_unlock",
             )
         })?;
     for entry in entries {
@@ -1381,7 +1530,7 @@ pub(super) fn resolve_recovery_key_entry(
         return Ok(object.clone());
     }
     Err(recovery_evidence_unbound_error(
-        "recovery_secret_ref does not resolve to a recovery_keys[] entry",
+        "recovery_secret_ref does not resolve to a recovery_unlock method key",
     ))
 }
 
@@ -1457,54 +1606,6 @@ fn trusted_recovery_service_proof_body(
     proof.signature_independent_proof_body().map_err(|error| {
         AppError::param_invalid(format!("invalid trusted_recovery_service proof: {error}"))
     })
-}
-
-fn recovery_policy_mentions_identifier(
-    policy_payload: &Value,
-    top_level_keys: &[&str],
-    identifier: &str,
-) -> bool {
-    top_level_keys.iter().any(|key| {
-        policy_payload
-            .get(*key)
-            .is_some_and(|value| value_mentions_identifier(value, identifier))
-    })
-}
-
-fn recovery_policy_requires_trusted_service_attestation(policy_payload: &Value) -> bool {
-    [
-        "/trusted_recovery_service/attestation_required",
-        "/trusted_recovery_services/attestation_required",
-        "/proof_requirements/trusted_recovery_service/attestation_required",
-        "/attestation_required",
-    ]
-    .iter()
-    .any(|pointer| {
-        policy_payload
-            .pointer(pointer)
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }) || ["trusted_recovery_service", "trusted_recovery_services"]
-        .iter()
-        .any(|key| {
-            policy_payload
-                .get(*key)
-                .is_some_and(value_requires_attestation)
-        })
-}
-
-fn value_requires_attestation(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => {
-            object
-                .get("attestation_required")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                || object.values().any(value_requires_attestation)
-        }
-        Value::Array(values) => values.iter().any(value_requires_attestation),
-        _ => false,
-    }
 }
 
 fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
@@ -1588,7 +1689,7 @@ pub(super) async fn expire_if_elapsed(
 ) -> Result<RecoverySessionServiceState, AppError> {
     let now = chrono::Utc::now();
     let is_open = matches!(record.state, SessionState::Pending | SessionState::Verified);
-    if is_open && now > record.expires_at {
+    if is_open && now >= record.expires_at {
         let expired = RecoverySessionServiceState {
             state: SessionState::Expired,
             updated_at: now,

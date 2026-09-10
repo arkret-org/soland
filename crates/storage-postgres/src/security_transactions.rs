@@ -358,6 +358,33 @@ struct RecoverySessionBindingRow {
     transaction_id: Option<Uuid>,
 }
 
+async fn lock_transaction_recovery_authority(
+    conn: &mut AsyncPgConnection,
+    record: &SecurityTransactionRecord,
+) -> Result<(), PgTransactionError> {
+    if record.resource.is_completed() {
+        return Ok(());
+    }
+    if let Some(binding) = record.resource.recovery_binding() {
+        let session = crate::recovery::lock_recovery_session_authority(
+            conn,
+            binding.recovery_session_id.as_str(),
+        )
+        .await?;
+        if session["principal_id"].as_str()
+            != Some(record.resource.account_id.principal_id.as_str())
+            || session["station_id"].as_str()
+                != Some(record.resource.account_id.station_id.as_str())
+        {
+            return Err(PersistenceError::Conflict(
+                "recovery transaction account mismatch".to_owned(),
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl SecurityTransactionStore for PgSecurityTransactionStore {
     async fn create(
@@ -381,6 +408,11 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         let principal_id = record.resource.account_id.principal_id.clone();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if let Some(existing)=load_one(conn,&transaction_id,false).await? {
+                lock_transaction_recovery_authority(conn,&existing).await?;
+            } else {
+                lock_transaction_recovery_authority(conn,&record).await?;
+            }
             let existing = load_one(conn, &transaction_id, true).await?;
             match super::classify_security_transaction_first_write(
                 existing
@@ -470,6 +502,9 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         let mut conn = pg_conn(&self.pool).await?;
         let transaction_id = record.resource.transaction_id.as_str().to_owned();
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if let Some(existing) = load_one(conn, &transaction_id, false).await? {
+                lock_transaction_recovery_authority(conn, &existing).await?;
+            }
             let existing = load_one(conn, &transaction_id, true)
                 .await?
                 .ok_or_else(|| {
@@ -510,6 +545,9 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         let transaction_id = attempt.transaction_id.clone();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if let Some(record) = load_one(conn, &transaction_id, false).await? {
+                lock_transaction_recovery_authority(conn, &record).await?;
+            }
             if load_one(conn, &transaction_id, true).await?.is_none() {
                 return Err(PersistenceError::NotFound(format!(
                     "transaction_id `{transaction_id}` not found"
@@ -561,6 +599,9 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         }
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if let Some(existing) = load_one(conn, &transaction_id, false).await? {
+                lock_transaction_recovery_authority(conn, &existing).await?;
+            }
             let existing = load_one(conn, &transaction_id, true)
                 .await?
                 .ok_or_else(|| {

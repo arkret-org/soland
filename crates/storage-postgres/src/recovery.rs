@@ -1,8 +1,9 @@
+use diesel_async::AsyncConnection;
 use soland_storage::ConflictCode;
 
 use super::{
-    Array, Integer, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, QueryableByName, RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord,
+    Integer, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    QueryableByName, RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord,
     RecoverySessionStore, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
     sql_query, sql_types,
 };
@@ -25,8 +26,7 @@ struct RecoveryPolicyRow {
     acceptance_basis: Value,
     #[diesel(sql_type = Text)]
     trust_domain: String,
-    #[diesel(sql_type = Array<Text>)]
-    allowed_proof_kinds: Vec<String>,
+
     #[diesel(sql_type = Nullable<sql_types::Uuid>)]
     supersedes: Option<Uuid>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -62,7 +62,6 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
             version,
             acceptance_basis,
             trust_domain: row.trust_domain,
-            allowed_proof_kinds: row.allowed_proof_kinds,
             supersedes: row.supersedes.map(|u| ids::format_typed_uuid("policy", &u)),
             expires_at: row.expires_at,
             issued_at: row.issued_at,
@@ -82,7 +81,7 @@ impl PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 AND version = $3",
         )
@@ -106,7 +105,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE id = $1",
         )
@@ -126,7 +125,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC LIMIT 1",
@@ -148,7 +147,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC",
@@ -220,18 +219,37 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
+        let canonical_account = arkret_canonical::canonical_json_string(&record.account_id).map_err(PersistenceError::database)?;
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind::<Text,_>(format!("recovery-policy:{canonical_account}"))
+            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        #[derive(QueryableByName)]
+        struct PolicyHead { #[diesel(sql_type=Integer)] version:i32, #[diesel(sql_type=sql_types::Uuid)] id:Uuid }
+        let head=sql_query("SELECT version,id FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 ORDER BY version DESC LIMIT 1 FOR SHARE")
+            .bind::<Text,_>(&record.account_id.principal_id).bind::<Text,_>(&record.account_id.station_id)
+            .get_result::<PolicyHead>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+        if let Some(head)=head {
+            if i64::from(record.version)<=i64::from(head.version)
+                || record.supersedes.as_deref()!=Some(ids::format_typed_uuid("policy",&head.id).as_str()) {
+                return Err(PersistenceError::Conflict("recovery policy publication raced".to_owned()).into());
+            }
+        } else if record.version!=1 {
+            return Err(PersistenceError::Conflict("recovery policy genesis version invalid".to_owned()).into());
+        }
+        let revoked = record.raw_payload.get("methods").and_then(Value::as_array)
+            .ok_or_else(||PersistenceError::Conflict("recovery policy methods missing".to_owned()))?.is_empty();
         sql_query(
             "INSERT INTO recovery_policies \
-             (id, principal_id, station_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+             (id, principal_id, station_id, version, trust_domain, supersedes, \
               acceptance_basis, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Text, _>(&record.account_id.principal_id)
         .bind::<Text, _>(&record.account_id.station_id)
         .bind::<Integer, _>(record.version as i32)
         .bind::<Text, _>(&record.trust_domain)
-        .bind::<Array<Text>, _>(&record.allowed_proof_kinds)
         .bind::<Nullable<sql_types::Uuid>, _>(
             record
                 .supersedes
@@ -251,9 +269,15 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         .bind::<Jsonb, _>(&record.raw_payload)
         .bind::<Timestamptz, _>(record.accepted_at)
         .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        .await.map_err(PersistenceError::database)?;
+        if revoked {
+            sql_query("UPDATE recovery_sessions SET state='rejected',updated_at=$3 WHERE principal_id=$1 AND station_id=$2 AND policy_version<$4 AND state IN ('pending','verified')")
+                .bind::<Text,_>(&record.account_id.principal_id).bind::<Text,_>(&record.account_id.station_id)
+                .bind::<Timestamptz,_>(chrono::Utc::now()).bind::<Integer,_>(record.version as i32)
+                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        }
+        Ok(())
+        }).await.map_err(crate::PgTransactionError::into_persistence)
     }
 }
 pub struct PgRecoverySessionStore {
@@ -511,6 +535,16 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             arkret_models_crypto::DeviceGenerationStatus::Active => "active",
             arkret_models_crypto::DeviceGenerationStatus::Conflicted => "conflicted",
         };
+        conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
+        crate::key_backup_unlock::validate_recovery_unlock_policy(conn, &recovery_policy_session_value(&record), chrono::Utc::now()).await?;
+        #[derive(QueryableByName)]
+        struct PolicyVersion { #[diesel(sql_type=Integer)] version:i32 }
+        let head=sql_query("SELECT version FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 ORDER BY version DESC LIMIT 1")
+            .bind::<Text,_>(&record.principal_id).bind::<Text,_>(&record.station_id)
+            .get_result::<PolicyVersion>(&mut *conn).await.map_err(PersistenceError::database)?;
+        if i64::from(head.version)!=i64::from(record.policy_version) {
+            return Err(PersistenceError::Conflict("recovery policy changed before session creation".to_owned()).into());
+        }
         sql_query(
             "INSERT INTO recovery_sessions \
              (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, trust_domain, policy_id, \
@@ -577,9 +611,102 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(record.expires_at)
         .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        .await.map_err(PersistenceError::database)?;
+        Ok(())
+        }).await.map_err(crate::PgTransactionError::into_persistence)
+    }
+
+    async fn save_verified_with_unlock_manifest(
+        &self,
+        record: RecoverySessionRecord,
+        manifest: Value,
+    ) -> PersistenceResult<()> {
+        if record.state != arkret_models_crypto::SessionState::Verified {
+            return Err(PersistenceError::Conflict(
+                "unlock manifest requires verified transition".to_owned(),
+            ));
+        }
+        let seconds = (record.expires_at - record.updated_at).num_seconds() - 60;
+        if seconds <= 0 {
+            return Err(PersistenceError::Conflict(
+                "insufficient recovery completion window".to_owned(),
+            ));
+        }
+        let mut total = 0u64;
+        let mut entries = Vec::new();
+        let snapshot = manifest.clone();
+        for backup in manifest
+            .get("backups")
+            .and_then(Value::as_array)
+            .ok_or_else(|| PersistenceError::Conflict("unlock manifest incomplete".to_owned()))?
+            .iter()
+            .cloned()
+        {
+            let (digest, charge) = crate::key_backup_unlock::object_charge(&backup)?;
+            total = total.checked_add(charge as u64).ok_or_else(|| {
+                PersistenceError::Conflict("recovery unlock budget overflow".to_owned())
+            })?;
+            entries.push((backup, digest, charge));
+        }
+        // Admission capacity bounds are conservative, and checked before verified is durable.
+        if total > (seconds as u64).saturating_mul(16 * 1024 * 1024)
+            || entries.len() as u64 > (seconds as u64).saturating_mul(4)
+        {
+            return Err(PersistenceError::Conflict(
+                "recovery manifest exceeds delivery capacity".to_owned(),
+            ));
+        }
+        let rate = ((entries.len() as u64)
+            .saturating_mul(60)
+            .div_ceil(seconds as u64))
+        .max(1) as i64;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_,crate::PgTransactionError,_>(async move |conn| {
+            #[derive(QueryableByName)]
+            struct SnapshotText { #[diesel(sql_type=Text)] value:String }
+            #[derive(QueryableByName)]
+            struct SnapshotRevision { #[diesel(sql_type=sql_types::BigInt)] revision:i64 }
+            crate::key_backup_unlock::validate_active_basis(conn,&snapshot).await?;
+            crate::key_backup_unlock::validate_recovery_unlock_policy(conn,&recovery_policy_session_value(&record),chrono::Utc::now()).await?;
+            let realm=snapshot["realm_id"].as_str().ok_or_else(||PersistenceError::Conflict("manifest Realm missing".to_owned()))?;
+            // The same Realm advisory lock is held by Seal acceptance; the table lock also
+            // excludes backup insert/delete phantoms while the frozen manifest commits.
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(realm).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            sql_query("LOCK TABLE key_backups IN SHARE MODE").execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_refs ? parent.id) ORDER BY parent.id ASC")
+                .bind::<Text,_>(realm).load::<SnapshotText>(&mut *conn).await.map_err(PersistenceError::database)?.into_iter().map(|row|Value::String(row.value)).collect::<Vec<_>>();
+            if Value::Array(leaves)!=snapshot["seal_basis"]["leaves"] {return Err(PersistenceError::Conflict("backup_frontier_stale".to_owned()).into());}
+            let revision=sql_query("SELECT COALESCE((SELECT revision FROM key_backup_list_revisions WHERE actor_id=$1),0)::bigint AS revision")
+                .bind::<Text,_>(snapshot["actor_id"].as_str().ok_or_else(||PersistenceError::Conflict("manifest actor missing".to_owned()))?).get_result::<SnapshotRevision>(&mut *conn).await.map_err(PersistenceError::database)?.revision;
+            if Some(revision)!=snapshot["revision"].as_i64(){return Err(PersistenceError::Conflict("backup manifest changed before verification".to_owned()).into());}
+            let updated=sql_query("UPDATE recovery_sessions SET state='verified',proof_payload=$2,updated_at=$3 WHERE id=$1 AND state='pending' AND expires_at>$3")
+                .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(&record.recovery_session_id))
+                .bind::<Nullable<Jsonb>,_>(record.proof_payload.as_ref()).bind::<Timestamptz,_>(record.updated_at)
+                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            if updated!=1 {return Err(PersistenceError::Conflict("recovery session verification raced or expired".to_owned()).into());}
+            let account=arkret_wire::AccountId::new(record.principal_id.clone(),record.station_id.clone());
+            let canonical_account=arkret_canonical::canonical_json_string(&account).map_err(PersistenceError::database)?;
+            let challenge=serde_json::json!({"account_id":account,"requesting_device_id":record.requesting_device_id,"challenge":record.challenge,"recovery_session_id":record.recovery_session_id});
+            sql_query("INSERT INTO key_backup_unlock_authorities(authority_id,identity_key,account_id,device_id,kind,challenge,expires_at,remaining_bytes,verified_at,rate_per_minute) VALUES($1,$1,$2,$3,'recovery_session',$4,$5,$6::numeric,$7,$8)")
+                .bind::<Text,_>(&record.recovery_session_id).bind::<Text,_>(&canonical_account).bind::<Text,_>(&record.requesting_device_id)
+                .bind::<Jsonb,_>(&challenge).bind::<Timestamptz,_>(record.expires_at).bind::<Text,_>(total.to_string())
+                .bind::<Timestamptz,_>(record.updated_at).bind::<sql_types::BigInt,_>(rate)
+                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            for (backup,digest,charge) in entries {
+                let backup_id=backup["backup_id"].as_str().ok_or_else(||PersistenceError::Conflict("backup id missing".to_owned()))?;
+                let current=sql_query("SELECT payload FROM key_backups WHERE id=$1 FOR SHARE")
+                    .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(backup_id)).get_result::<crate::JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?.payload;
+                if current!=backup || backup["actor_id"]["account_id"]!=serde_json::to_value(&account).map_err(PersistenceError::database)? {
+                    return Err(PersistenceError::Conflict("backup manifest changed before verification".to_owned()).into());
+                }
+                sql_query("INSERT INTO key_backup_unlock_entries(authority_id,backup_id,object_digest,charge) VALUES($1,$2,$3,$4)")
+                    .bind::<Text,_>(&record.recovery_session_id).bind::<Text,_>(backup_id).bind::<Text,_>(&digest).bind::<sql_types::BigInt,_>(charge)
+                    .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            }
+            Ok(())
+        }).await.map_err(crate::PgTransactionError::into_persistence)
     }
 
     async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
@@ -615,4 +742,45 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         }
         Ok(())
     }
+}
+
+fn recovery_policy_session_value(record: &RecoverySessionRecord) -> Value {
+    serde_json::json!({
+        "principal_id": record.principal_id,
+        "station_id": record.station_id,
+        "policy_payload": record.policy_payload,
+        "proof_payload": record.proof_payload,
+    })
+}
+
+/// Lock policy authority before the session row, shared by every recovery consumer.
+pub(crate) async fn lock_recovery_session_authority(
+    conn: &mut crate::AsyncPgConnection,
+    session_id: &str,
+) -> Result<Value, crate::PgTransactionError> {
+    let id = ids::parse_typed_uuid(session_id, "recovery_session").ok_or_else(|| {
+        PersistenceError::SchemaViolation("invalid recovery session id".to_owned())
+    })?;
+    let before = sql_query("SELECT to_jsonb(s) AS payload FROM recovery_sessions s WHERE id=$1")
+        .bind::<sql_types::Uuid, _>(id)
+        .get_result::<crate::JsonPayloadRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(|| PersistenceError::Conflict("recovery session missing".to_owned()))?
+        .payload;
+    crate::key_backup_unlock::validate_recovery_unlock_policy(conn, &before, chrono::Utc::now())
+        .await?;
+    let locked = sql_query("SELECT to_jsonb(s) AS payload FROM recovery_sessions s WHERE id=$1 AND state='verified' AND expires_at>clock_timestamp() FOR SHARE")
+        .bind::<sql_types::Uuid,_>(id).get_result::<crate::JsonPayloadRow>(&mut *conn)
+        .await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(|| PersistenceError::Conflict("recovery session no longer verified or current".to_owned()))?.payload;
+    if locked["policy_payload"] != before["policy_payload"]
+        || locked["proof_payload"] != before["proof_payload"]
+    {
+        return Err(
+            PersistenceError::Conflict("recovery session authority changed".to_owned()).into(),
+        );
+    }
+    Ok(locked)
 }

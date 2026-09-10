@@ -165,12 +165,12 @@ fn key_authorize_envelope(
     controller: &str,
     agent_id: &str,
     verification_method: &str,
-    public_key_digest: &str,
+    _public_key_digest: &str,
     service_id: &str,
     scope: Value,
 ) -> Value {
     let runtime_request =
-        key_pair_request_body(&web_did(agent_id), verification_method, service_id);
+        runtime_approval_request_body(&web_did(agent_id), verification_method, service_id);
     record.runtime_key_binding_digest = Some(
         runtime_request
             .proof_of_possession
@@ -190,16 +190,8 @@ fn key_authorize_envelope(
             .as_str()
             .to_owned(),
     );
-    record.runtime_key_request = Some(
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
-            pairing_request_id: runtime_request.pairing_request_id,
-            agent_id: runtime_request.agent_id,
-            verification_method: runtime_request.verification_method,
-            public_key: runtime_request.public_key,
-            proof_of_possession: runtime_request.proof_of_possession,
-            runtime_attestation: runtime_request.runtime_attestation,
-        },
-    );
+    record.runtime_proof_verified_at = Some(runtime_request.proof_of_possession.created_at);
+    record.runtime_key_request = Some(runtime_request);
     let request_canonical_digest = pairing_request_binding_digest(
         record,
         controller,
@@ -225,7 +217,7 @@ fn key_authorize_envelope(
             "agent_id": agent_id,
             "key_id": "ak:agent_key:01999999000070008000000000000001",
             "verification_method": verification_method,
-            "public_key_digest": public_key_digest,
+            "public_key": record.runtime_key_request.as_ref().unwrap().public_key,
             "accountable_principal_id": controller,
             "agent_key_scope": scope,
             "audience": [service_id],
@@ -241,11 +233,11 @@ fn key_authorize_envelope(
     })
 }
 
-fn key_pair_request_body(
+fn runtime_approval_request_body(
     agent: &str,
     verification_method: &str,
     service_id: &str,
-) -> AgentKeyPairRequestBody {
+) -> AgentRuntimeApprovalRequestBody {
     use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
 
@@ -291,7 +283,7 @@ fn key_pair_request_body(
             signature: arkret_wire::Base64UrlString::new("AA").unwrap(),
         };
     let transcript = proof_of_possession
-        .canonical_transcript_bytes("12345678")
+        .canonical_transcript_bytes("AAAAAAAAAAAAAAAAAAAAAA")
         .unwrap();
     proof_of_possession.transcript_digest =
         arkret_wire::Hash::new(arkret_canonical::sha256_digest(&transcript)).unwrap();
@@ -300,6 +292,28 @@ fn key_pair_request_body(
             .encode(signing_key.sign(&transcript).to_bytes()),
     )
     .unwrap();
+    AgentRuntimeApprovalRequestBody {
+        pairing_code: arkret_wire::NonEmptyString::new("AAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+        pairing_request_id,
+        agent_id,
+        verification_method,
+        public_key,
+        proof_of_possession,
+        runtime_attestation: None,
+    }
+}
+
+fn key_pair_request_body(
+    agent: &str,
+    verification_method: &str,
+    service_id: &str,
+) -> AgentKeyPairRequestBody {
+    let request = runtime_approval_request_body(agent, verification_method, service_id);
+    let agent_id = request.agent_id.clone();
+    let agent_did = Did::new(agent).unwrap();
+    let public_key = request.public_key.clone();
+    let pairing_request_id = request.pairing_request_id.clone();
+    let verification_method = request.verification_method.clone();
     let controller_principal_id =
         DidCoreId::new("ak:did_core:web:controller.example".to_owned()).unwrap();
     let requested_scope: AgentKeyScope = serde_json::from_value(requested_agent_scope()).unwrap();
@@ -334,46 +348,18 @@ fn key_pair_request_body(
         crate::test_actor_id(&agent_did),
         1,
         arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
-        json!({}),
+        json!({"agent_id":agent_id,"key_id":"ak:agent_key:01999999000070008000000000000001","verification_method":verification_method,
+            "public_key":public_key,"accountable_principal_id":controller_principal_id,
+            "agent_key_scope":requested_agent_scope(),"audience":[service_id],"issued_at":"2026-07-06T00:00:00.000Z",
+            "approval_evidence":{"kind":"pairing_request","pairing_request_id":pairing_request_id,"approved_by":controller_principal_id,"request_canonical_digest":format!("sha256:{}","0".repeat(64))}}),
     )
-    .unwrap();
-    let authorize_event_id = authorize_event.event_id.clone();
-    let authorize_event = initial_submission(authorize_event, agent_id.clone());
-    let signing_public_key_digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-        signing_key.verifying_key().as_bytes(),
-    ))
-    .unwrap();
-    let signing_key_binding = serde_json::from_value(json!({
-        "schema": "ak.schema.agent_signing_key_binding.v1",
-        "agent_id": agent_id,
-        "agent_key_id": "ak:agent_key:01999999000070008000000000000001",
-        "verification_method": verification_method,
-        "public_key": {
-            "kty": "OKP",
-            "algorithm": "Ed25519",
-            "key": public_key.key
-        },
-        "public_key_digest": signing_public_key_digest,
-        "agent_key_authorize_event_id": authorize_event_id,
-        "issued_at": "2026-07-06T00:00:00.000Z",
-        "controller_principal_id": controller_principal_id,
-        "controller_proof": {
-            "kind": "detached_jws",
-            "verification_method": "did:web:controller.example#key-1",
-            "jws": "eyJhbGciOiJFZDI1NTE5In0..c2ln"
-        }
-    }))
     .unwrap();
     AgentKeyPairRequestBody {
         pairing_request_id,
-        agent_id,
-        verification_method,
-        public_key,
-        proof_of_possession,
+        approval_request_id: arkret_wire::OpaqueLocalId::new("agent_runtime_approval:01999999")
+            .unwrap(),
         requested_scope_disclosure,
-        runtime_attestation: None,
-        authorize_event,
-        signing_key_binding,
+        authorize_event: initial_submission(authorize_event, agent_id),
     }
 }
 
@@ -532,7 +518,7 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2026-07-08T00:00:00.000Z",
     );
     assert!(agent_record_reserves_selector_slug(&pending_future, &now));
@@ -541,7 +527,7 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2026-07-06T00:00:00.000Z",
     );
     assert!(!agent_record_reserves_selector_slug(&pending_expired, &now));
@@ -563,13 +549,14 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
 
 #[test]
 fn agent_pairing_token_decodes_compact_request_and_code() {
-    let token = URL_SAFE_NO_PAD.encode(br#"{"r":"agent_pairing_request:0193","c":"12345678"}"#);
+    let token = URL_SAFE_NO_PAD
+        .encode(br#"{"r":"agent_pairing_request:0193","c":"AAAAAAAAAAAAAAAAAAAAAA"}"#);
 
     assert!(is_agent_pairing_token_shape(&token));
     let decoded = decode_agent_pairing_token(&token).expect("decode token");
 
     assert_eq!(decoded["r"], json!("agent_pairing_request:0193"));
-    assert_eq!(decoded["c"], json!("12345678"));
+    assert_eq!(decoded["c"], json!("AAAAAAAAAAAAAAAAAAAAAA"));
 }
 
 #[test]
@@ -599,13 +586,13 @@ fn key_authorize_event_binds_pairing_transcript_and_scope() {
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
     let public_key_digest =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        "sha256:b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092";
     let scope = requested_agent_scope();
     let mut record = pending_pairing_record(
         agent,
         controller,
         scope.clone(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     let envelope = key_authorize_envelope(
@@ -664,14 +651,17 @@ fn key_pair_proof_of_possession_verifies_runtime_key() {
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
     let body = key_pair_request_body(AGENT_DID, verification_method, service_id);
-    let record = pending_pairing_record(
+    let mut record = pending_pairing_record(
         agent,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
 
+    let request = runtime_approval_request_body(AGENT_DID, verification_method, service_id);
+    record.runtime_proof_verified_at = Some(request.proof_of_possession.created_at);
+    record.runtime_key_request = Some(request);
     verify_runtime_key_pair_proof_of_possession(&body, &record, agent, service_id)
         .expect("runtime PoP must verify");
 }
@@ -680,9 +670,9 @@ fn key_pair_proof_of_possession_verifies_runtime_key() {
 fn runtime_approval_request_for_controller_omits_pairing_code() {
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
-    let key_pair = key_pair_request_body(AGENT_DID, verification_method, service_id);
+    let key_pair = runtime_approval_request_body(AGENT_DID, verification_method, service_id);
     let request = AgentRuntimeApprovalRequestBody {
-        pairing_code: arkret_wire::NonEmptyString::new("12345678").unwrap(),
+        pairing_code: arkret_wire::NonEmptyString::new("AAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         pairing_request_id: key_pair.pairing_request_id.clone(),
         agent_id: key_pair.agent_id.clone(),
         verification_method: key_pair.verification_method.clone(),
@@ -691,7 +681,10 @@ fn runtime_approval_request_for_controller_omits_pairing_code() {
         runtime_attestation: None,
     };
 
-    let controller_request = runtime_key_request_for_controller(&request);
+    let controller_request = runtime_key_request_for_controller(
+        &request,
+        arkret_wire::OpaqueLocalId::new("agent_runtime_approval:01999999").unwrap(),
+    );
 
     assert_eq!(
         controller_request.pairing_request_id,
@@ -709,7 +702,7 @@ fn agent_key_state_projects_pending_runtime_approval() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     record.approval_request_id =
@@ -719,21 +712,13 @@ fn agent_key_state_projects_pending_runtime_approval() {
             .unwrap()
             .with_timezone(&chrono::Utc),
     );
-    let runtime_request = key_pair_request_body(
+    let runtime_request = runtime_approval_request_body(
         AGENT_DID,
         "did:web:agent.example#runtime-key-1",
         SERVICE_CORE,
     );
-    record.runtime_key_request = Some(
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
-            pairing_request_id: runtime_request.pairing_request_id,
-            agent_id: runtime_request.agent_id,
-            verification_method: runtime_request.verification_method,
-            public_key: runtime_request.public_key,
-            proof_of_possession: runtime_request.proof_of_possession,
-            runtime_attestation: runtime_request.runtime_attestation,
-        },
-    );
+    record.runtime_proof_verified_at = Some(runtime_request.proof_of_possession.created_at);
+    record.runtime_key_request = Some(runtime_request);
 
     let key_state = agent_key_state_from_record(
         &record,
@@ -761,7 +746,10 @@ fn agent_key_state_projects_pending_runtime_approval() {
         key_state.approval_requested_at,
         record.approval_requested_at
     );
-    assert_eq!(key_state.pairing_code.as_deref(), Some("12345678"));
+    assert_eq!(
+        key_state.pairing_code.as_deref(),
+        Some("AAAAAAAAAAAAAAAAAAAAAA")
+    );
 }
 
 fn status_request_body(
@@ -790,7 +778,7 @@ fn runtime_approval_status_reports_pending_request() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     record.approval_request_id =
@@ -798,7 +786,7 @@ fn runtime_approval_status_reports_pending_request() {
 
     let outcome = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("12345678", AGENT_CORE),
+        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
         status_now(),
     )
     .expect("pending status must resolve");
@@ -819,26 +807,29 @@ fn runtime_approval_status_reports_authorized_key_binding_after_approval() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     record.state = AgentLifecycleState::Active;
     // Approval consumes the pairing handle (activation stamps
     // paired_pairing_request_id), so runtime_state derives to ready.
     record.paired_pairing_request_id = record.pairing_request_id.clone();
-    let signing_key_binding =
+    let key_authorization_event =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-1", SERVICE_CORE)
-            .signing_key_binding;
-    record.authorized_event_ref =
-        Some(signing_key_binding.agent_key_authorize_event_id.to_string());
-    record.authorized_verification_method =
-        Some(signing_key_binding.verification_method.to_string());
-    record.authorized_public_key_digest = Some(signing_key_binding.public_key_digest.to_string());
-    record.authorized_signing_key_binding = Some(signing_key_binding.clone());
+            .authorize_event
+            .event;
+    let key = arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+        &key_authorization_event,
+    )
+    .unwrap();
+    record.authorized_event_ref = Some(key_authorization_event.event_id.to_string());
+    record.authorized_verification_method = Some(key.verification_method.to_string());
+    record.authorized_public_key_digest = Some(key.public_key_digest.to_string());
+    record.authorized_key_event = Some(key_authorization_event.clone());
 
     let outcome = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("12345678", AGENT_CORE),
+        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
         status_now(),
     )
     .expect("approved status must resolve");
@@ -848,7 +839,7 @@ fn runtime_approval_status_reports_authorized_key_binding_after_approval() {
     assert!(outcome.approval_request_id.is_none());
     assert_eq!(
         outcome.authorized_event_ref.as_ref().map(|id| id.as_str()),
-        Some(signing_key_binding.agent_key_authorize_event_id.as_str())
+        Some(key_authorization_event.event_id.as_str())
     );
     assert_eq!(
         outcome.authorized_verification_method.as_deref(),
@@ -856,11 +847,7 @@ fn runtime_approval_status_reports_authorized_key_binding_after_approval() {
     );
     assert_eq!(
         outcome.authorized_public_key_digest.as_deref(),
-        Some(signing_key_binding.public_key_digest.as_str())
-    );
-    assert_eq!(
-        outcome.authorized_signing_key_binding,
-        Some(signing_key_binding)
+        Some(key.public_key_digest.as_str())
     );
 }
 
@@ -870,7 +857,7 @@ fn runtime_approval_status_does_not_report_previous_binding_for_replacement() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     record.state = AgentLifecycleState::Active;
@@ -882,15 +869,20 @@ fn runtime_approval_status_does_not_report_previous_binding_for_replacement() {
     );
     let previous_binding =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-1", SERVICE_CORE)
-            .signing_key_binding;
-    record.authorized_event_ref = Some(previous_binding.agent_key_authorize_event_id.to_string());
-    record.authorized_verification_method = Some(previous_binding.verification_method.to_string());
-    record.authorized_public_key_digest = Some(previous_binding.public_key_digest.to_string());
-    record.authorized_signing_key_binding = Some(previous_binding);
+            .authorize_event
+            .event;
+    let key = arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+        &previous_binding,
+    )
+    .unwrap();
+    record.authorized_event_ref = Some(previous_binding.event_id.to_string());
+    record.authorized_verification_method = Some(key.verification_method.to_string());
+    record.authorized_public_key_digest = Some(key.public_key_digest.to_string());
+    record.authorized_key_event = Some(previous_binding);
 
     let outcome = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("12345678", AGENT_CORE),
+        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
         status_now(),
     )
     .expect("replacement status must resolve");
@@ -900,7 +892,6 @@ fn runtime_approval_status_does_not_report_previous_binding_for_replacement() {
     assert!(outcome.authorized_event_ref.is_none());
     assert!(outcome.authorized_verification_method.is_none());
     assert!(outcome.authorized_public_key_digest.is_none());
-    assert!(outcome.authorized_signing_key_binding.is_none());
 }
 
 #[test]
@@ -909,7 +900,7 @@ fn runtime_approval_status_lazily_reports_expired_open_pairing() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2026-07-09T00:00:00.000Z",
     );
     record.approval_request_id =
@@ -917,7 +908,7 @@ fn runtime_approval_status_lazily_reports_expired_open_pairing() {
 
     let outcome = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("12345678", AGENT_CORE),
+        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
         status_now(),
     )
     .expect("expired status must resolve");
@@ -934,7 +925,7 @@ fn runtime_approval_status_mismatch_is_indistinguishable_from_missing_record() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     let missing = agent_pairing_not_found();
@@ -947,7 +938,7 @@ fn runtime_approval_status_mismatch_is_indistinguishable_from_missing_record() {
     .expect_err("wrong pairing code must fail closed");
     let wrong_principal = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("12345678", "ak:did_core:web:intruder.example"),
+        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", "ak:did_core:web:intruder.example"),
         status_now(),
     )
     .expect_err("wrong principal must fail closed");
@@ -964,7 +955,7 @@ fn key_pair_rejects_wrong_pairing_request_id() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
 
@@ -978,19 +969,19 @@ fn key_pair_rejects_wrong_pairing_request_id() {
 }
 
 #[test]
-fn key_authorize_event_rejects_wrong_pairing_code_digest() {
+fn key_authorize_event_rejects_wrong_stable_approval_identity() {
     let controller = CONTROLLER_CORE;
     let agent = AGENT_CORE;
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
     let public_key_digest =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        "sha256:b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092";
     let scope = requested_agent_scope();
     let mut record = pending_pairing_record(
         agent,
         controller,
         scope.clone(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     let envelope = key_authorize_envelope(
@@ -1003,7 +994,12 @@ fn key_authorize_event_rejects_wrong_pairing_code_digest() {
         scope,
     );
     let mut mismatched_record = record.clone();
-    mismatched_record.pairing_code = Some("87654321".to_owned());
+    mismatched_record.approval_request_id = Some(
+        arkret_wire::OpaqueLocalId::new(
+            "agent_runtime_approval:01904100-0000-7000-8000-000000000099",
+        )
+        .unwrap(),
+    );
 
     let err = ensure_key_authorize_event_matches_request(
         &envelope,
@@ -1014,7 +1010,7 @@ fn key_authorize_event_rejects_wrong_pairing_code_digest() {
         public_key_digest,
         service_id,
     )
-    .expect_err("wrong pairing code must change the expected digest");
+    .expect_err("a different stable approval identity must change the expected digest");
 
     assert_eq!(err.wire_code(), "param_invalid");
     assert!(err.message.contains("request_canonical_digest"));
@@ -1027,13 +1023,13 @@ fn key_authorize_event_rejects_wrong_controller_executor() {
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
     let public_key_digest =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        "sha256:b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092";
     let scope = requested_agent_scope();
     let mut record = pending_pairing_record(
         agent,
         controller,
         scope.clone(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     let envelope = key_authorize_envelope(
@@ -1068,13 +1064,13 @@ fn key_authorize_event_rejects_wrong_approval_principal() {
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
     let public_key_digest =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        "sha256:b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092";
     let scope = requested_agent_scope();
     let mut record = pending_pairing_record(
         agent,
         controller,
         scope.clone(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     let mut envelope = key_authorize_envelope(
@@ -1110,7 +1106,7 @@ fn key_authorize_event_rejects_expired_pairing() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2000-01-01T00:00:00.000Z",
     );
 
@@ -1131,13 +1127,13 @@ fn key_authorize_event_accepts_narrower_scope_and_rejects_widening() {
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
     let public_key_digest =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        "sha256:b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092";
     let expected_scope = requested_agent_scope();
     let mut record = pending_pairing_record(
         agent,
         controller,
         expected_scope,
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     let weaker_scope = json!({
@@ -1193,19 +1189,19 @@ fn key_authorize_event_accepts_narrower_scope_and_rejects_widening() {
 }
 
 #[test]
-fn key_authorize_event_rejects_wrong_authorization_public_key_digest() {
+fn key_authorize_event_rejects_substituted_raw_authorization_key() {
     let controller = CONTROLLER_CORE;
     let agent = AGENT_CORE;
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
     let public_key_digest =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        "sha256:b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092";
     let scope = requested_agent_scope();
     let mut record = pending_pairing_record(
         agent,
         controller,
         scope.clone(),
-        "12345678",
+        "AAAAAAAAAAAAAAAAAAAAAA",
         "2999-01-01T00:00:00.000Z",
     );
     let mut envelope = key_authorize_envelope(
@@ -1217,8 +1213,7 @@ fn key_authorize_event_rejects_wrong_authorization_public_key_digest() {
         service_id,
         scope,
     );
-    envelope["payload"]["public_key_digest"] =
-        json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    envelope["payload"]["public_key"]["key"] = json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
 
     let err = ensure_key_authorize_event_matches_request(
         &envelope,
@@ -1232,5 +1227,107 @@ fn key_authorize_event_rejects_wrong_authorization_public_key_digest() {
     .expect_err("authorize_event public key digest must bind the raw authorization key");
 
     assert_eq!(err.wire_code(), "param_invalid");
-    assert!(err.message.contains("public_key_digest"));
+    assert!(
+        err.message
+            .contains("raw key differs from frozen candidate")
+    );
+}
+
+#[test]
+fn pairing_terminal_decision_requires_coverage_and_exact_post_state() {
+    let expected = ("key-new".to_owned(), "event-new".to_owned());
+    let old = ("key-old".to_owned(), "event-old".to_owned());
+    let empty = BTreeSet::new();
+    let prior = [old.clone()].into_iter().collect();
+    assert_eq!(
+        pairing_outcome_for_accepted_snapshot(false, &empty, &expected),
+        None
+    );
+    assert_eq!(
+        pairing_outcome_for_accepted_snapshot(false, &prior, &expected),
+        None
+    );
+    let exact = [expected.clone()].into_iter().collect();
+    assert_eq!(
+        pairing_outcome_for_accepted_snapshot(true, &exact, &expected),
+        Some(AgentKeyPairActivationState::Active)
+    );
+    assert_eq!(
+        pairing_outcome_for_accepted_snapshot(true, &empty, &expected),
+        Some(AgentKeyPairActivationState::Cancelled),
+        "covered then revoked"
+    );
+    assert_eq!(
+        pairing_outcome_for_accepted_snapshot(true, &prior, &expected),
+        Some(AgentKeyPairActivationState::Cancelled),
+        "covered then replaced"
+    );
+    let concurrent = [expected.clone(), old].into_iter().collect();
+    assert_eq!(
+        pairing_outcome_for_accepted_snapshot(true, &concurrent, &expected),
+        Some(AgentKeyPairActivationState::Cancelled),
+        "an additional accepted key changes the approved authority basis"
+    );
+}
+
+#[test]
+fn accepted_lifecycle_rejects_stale_active_row_without_interlocking_pairing() {
+    use arkret_models_identity::agent_signer_evidence::AgentLifecycleStatus;
+    for accepted in [
+        Some(AgentLifecycleStatus::Paused),
+        Some(AgentLifecycleStatus::Deactivated),
+        None,
+    ] {
+        assert!(
+            validate_accepted_agent_action_lifecycle(AgentLifecycleState::Active, accepted)
+                .is_err(),
+            "a stale active local row cannot override accepted pause/terminal/missing state"
+        );
+    }
+    assert!(
+        validate_accepted_agent_action_lifecycle(
+            AgentLifecycleState::Active,
+            Some(AgentLifecycleStatus::Active)
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_accepted_agent_action_lifecycle(
+            AgentLifecycleState::Paused,
+            Some(AgentLifecycleStatus::Active)
+        )
+        .is_err(),
+        "pending local pause intent remains a conservative deny"
+    );
+    let key = ("key".to_owned(), "event".to_owned());
+    assert_eq!(
+        projected_agent_lifecycle(
+            AgentLifecycleState::Active,
+            Some(AgentLifecycleStatus::Paused)
+        )
+        .unwrap(),
+        AgentLifecycleState::Paused
+    );
+    assert_eq!(
+        projected_agent_lifecycle(
+            AgentLifecycleState::Active,
+            Some(AgentLifecycleStatus::Deactivated)
+        )
+        .unwrap(),
+        AgentLifecycleState::Deactivated
+    );
+    assert_eq!(
+        projected_agent_lifecycle(
+            AgentLifecycleState::Paused,
+            Some(AgentLifecycleStatus::Active)
+        )
+        .unwrap(),
+        AgentLifecycleState::Paused
+    );
+    let keys = [key.clone()].into_iter().collect();
+    assert_eq!(
+        pairing_outcome_for_accepted_snapshot(true, &keys, &key),
+        Some(AgentKeyPairActivationState::Active),
+        "pairing's accepted-key decision is independent of the active-action gate; paused may be ready"
+    );
 }

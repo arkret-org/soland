@@ -1039,11 +1039,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                             "cannot encode device pairing authorization public key: {error}"
                         ))
                     })?;
-                // Lock, compare, and consume the short-link inside this Event
-                // transaction. Every CAS miss, including an exact response-
-                // loss replay of an already-authorized row, aborts all Event/
-                // projection/receipt/outbox writes; the caller reconciles via
-                // the registered pairing-status query.
+                // Stage consumption and terminal replay ledger share this Event transaction.
                 let cas = sql_query(
                     "WITH candidate AS ( \
                          SELECT state, pairing_code, new_device_pubkey, device_id, \
@@ -1079,6 +1075,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     )
                     .into());
                 }
+                sql_query("INSERT INTO device_pairing_outcomes (request_id, terminal_record, created_at) VALUES ($1,$2,$3)")
+                    .bind::<Text,_>(&commit.device_pairing_request_id)
+                    .bind::<Jsonb,_>(&commit.terminal_record)
+                    .bind::<Timestamptz,_>(commit.changed_at)
+                    .execute(conn).await.map_err(PersistenceError::database)?;
+
             }
             let identity = ids::validated_event_identity_parts_for_suite(
                 &request.event.event_id,

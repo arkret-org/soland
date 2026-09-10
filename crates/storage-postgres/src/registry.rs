@@ -286,47 +286,6 @@ impl IdentityStoreRegistry for PgPersistenceStore {
     }
 }
 
-#[async_trait]
-impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
-    async fn commit_device_pairing_authorization(
-        &self,
-        commit: DevicePairingAuthorizationCommit,
-    ) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.device_pairings.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let new_device_pubkey =
-            serde_json::to_value(&commit.new_device_pubkey).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "cannot encode device pairing authorization public key: {error}"
-                ))
-            })?;
-        sql_query(
-            "UPDATE device_pairings SET \
-                    state = 'authorized', \
-                    device_id = $4, \
-                    authorized_by_actor_id = $5, \
-                    authorized_event_ref = $6 \
-                WHERE device_pairing_request_id = $1 \
-                    AND pairing_code = $2 \
-                    AND new_device_pubkey = $3 \
-                    AND state = 'pending_authorization' \
-                    AND expires_at > $7",
-        )
-        .bind::<Text, _>(&commit.device_pairing_request_id)
-        .bind::<Text, _>(&commit.pairing_code)
-        .bind::<Jsonb, _>(&new_device_pubkey)
-        .bind::<Text, _>(&commit.device_id)
-        .bind::<Text, _>(&commit.authorized_by_actor_id)
-        .bind::<Text, _>(&commit.authorized_event_ref)
-        .bind::<Timestamptz, _>(commit.changed_at)
-        .execute(&mut *conn)
-        .await
-        .map(|rows| rows > 0)
-        .map_err(PersistenceError::database)
-    }
-}
-
 impl FederationGovernanceStoreRegistry for PgPersistenceStore {
     fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore {
         &self.governance_dependencies

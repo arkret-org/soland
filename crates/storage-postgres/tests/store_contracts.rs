@@ -4909,3 +4909,339 @@ async fn postgres_checkpoint_reuses_untouched_cells_and_invalidates_changed_rule
         frontier = vec![seal.id];
     }
 }
+
+#[tokio::test]
+async fn postgres_agent_pairing_receipts_survive_renewal_and_block_cancelled_activation() {
+    use arkret_models_collaboration::agent_operations::{
+        AgentKeyPairActivationState, AgentLifecycleState,
+    };
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgAgentStore { pool: pool.clone() };
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let agent = format!("ak:did_core:webvh:zReceipt{suffix}");
+    let method = format!("did:webvh:zReceipt{suffix}:agent.example#runtime-1");
+    let now =
+        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
+    let mut record = AgentPrincipalRecord::new(
+        agent.clone(),
+        "ak:did_core:web:controller.example".into(),
+        event_derived_realm_id(agent.as_bytes()),
+        arkret_wire::DidUrl::new(format!(
+            "did:webvh:zReceipt{suffix}:agent.example#managed-controller"
+        ))
+        .unwrap(),
+        AgentLifecycleState::Paused,
+        now,
+    );
+    record.pairing_request_id = Some(
+        arkret_wire::OpaqueLocalId::new(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+    );
+    record.approval_request_id = Some(
+        arkret_wire::OpaqueLocalId::new(format!("agent_runtime_approval:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+    );
+    record.pairing_code = Some("AAAAAAAAAAAAAAAAAAAAAA".into());
+    record.pairing_expires_at = Some(now + chrono::Duration::minutes(5));
+    record.runtime_key_binding_digest = Some(arkret_canonical::sha256_digest(b"candidate"));
+    let public_key = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
+    record.runtime_public_key_digest = Some(arkret_canonical::sha256_digest(
+        arkret_canonical::base64url_decode(public_key).unwrap(),
+    ));
+    let event = arkret_wire::test_support::raw_event_at("ak.agent.key.authorize",
+        arkret_wire::ScopeRef::Realm { realm_id: arkret_identifiers::RealmId::new(record.principal_control_realm_id.clone()).unwrap() },
+        arkret_identifiers::DidCoreId::new(agent.clone()).unwrap(), arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example").unwrap(), 1,
+        arkret_identifiers::Hlc::new("019f00000000-0001-aabbccdd").unwrap(),
+        serde_json::json!({
+            "agent_id":agent,"key_id":"runtime-1","verification_method":method,
+            "public_key":{"kty":"OKP","kid":method,"algorithm":"Ed25519","key":public_key},
+            "accountable_principal_id":record.controller_principal_id,
+            "agent_key_scope":{"actions":["ak.event.read"],"resources":[{"kind":"realm","realm_id":record.principal_control_realm_id}],"constraints":[]},
+            "audience":["ak:did_core:web:station.example"],"issued_at":now,"expires_at":now+chrono::Duration::hours(1),
+            "approval_evidence":{"kind":"pairing_request","pairing_request_id":record.pairing_request_id,
+                "request_canonical_digest":arkret_canonical::sha256_digest(b"exact pair command"),"approved_by":record.controller_principal_id}
+        }), now).unwrap();
+    arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload::try_from(&event)
+        .expect("the storage fixture has a complete closed Agent authorize payload");
+    let digest = arkret_canonical::sha256_digest(b"exact pair command");
+    // Use the durable accepted Seal publication port, not an empty-basis gate.
+    // Semantic Event/Seal admission is exercised by the public HTTP ceremony;
+    // this contract isolates publication-vs-activation transaction ordering.
+    let registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
+        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+    );
+    let governance =
+        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), registry);
+    let availability = seal_dependency_contract_availability(&event, "agent-activation");
+    let availability_digest = seal_dependency_contract_digest(&availability);
+    let event_digest =
+        arkret_state::state::control_event_digest(&event, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+    governance
+        .control_event_store
+        .put_pending_with_ingress(
+            &event,
+            &arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
+                arkret_state::state::store::AcklessSelfPrincipalIngress {
+                    device_id: "ak:device:01904100-0000-7000-8000-000000000001".into(),
+                    device_authorize_event_id: event.event_id.to_string(),
+                    device_generation_ref: 1,
+                    seal_basis_digest: arkret_canonical::sha256_digest(b"storage-contract-basis"),
+                },
+            ),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .await
+        .unwrap();
+    let covered = [event_digest.clone()].into_iter().collect();
+    let seal = seal_dependency_contract_seal(
+        &event.realm_id,
+        vec![],
+        event_digest,
+        &covered,
+        availability_digest,
+    );
+    let dependency = GovernanceDependencyWrite {
+        realm_id: event.realm_id.clone(),
+        source: GovernanceDependencySource::Seal(seal.id.clone()),
+        edge_index: 0,
+        item: availability,
+    };
+    assert!(
+        governance
+            .event_seal_committer
+            .commit_if_frontier(
+                &seal,
+                arkret_canonical::DigestSuite::Sha256,
+                &[],
+                &[],
+                &covered,
+                None,
+                &[dependency],
+            )
+            .await
+            .unwrap()
+    );
+    record.pending_pairing_commit_intent = Some(soland_storage::PendingAgentPairingCommitIntent {
+        request_digest: digest.clone(),
+        authorize_event_id: event.event_id.to_string(),
+        key_authorization_event: Some(event.clone()),
+    });
+    store.put(record.clone()).await.unwrap();
+    assert_eq!(
+        store
+            .pairing_receipt(event.event_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .activation_state,
+        AgentKeyPairActivationState::AwaitingAcceptedFrontier
+    );
+    // Admission appends a Station proof without changing the frozen command.
+    // Persistence must compare the original Event and retain the accepted one.
+    let mut accepted_event = event.clone();
+    accepted_event.proofs.push(serde_json::from_value(serde_json::json!({
+        "kind": "station_admission",
+        "verification_method": "did:web:station.example#notary",
+        "event_digest": arkret_canonical::sha256_digest(b"event"),
+        "producer_proof_digest": arkret_canonical::sha256_digest(b"producer"),
+        "producer_verification_method": method,
+        "producer_signing_key_did": "did:key:z6MkmghdggH9iwAwmMypZmN9EsfPGwsbvmum2HkFWXVzrAeE",
+        "signer_resolution_evidence_ref": format!("ak:signer_evidence:{}", arkret_canonical::sha256_digest(b"signer")),
+        "accepted_at": now,
+        "jws": "storage-test-admission-proof"
+    })).unwrap());
+    let activation = soland_storage::AgentRuntimeActivation {
+        agent_id: agent.clone(),
+        approval_request_id: record.approval_request_id.clone().unwrap(),
+        runtime_key_binding_digest: record.runtime_key_binding_digest.clone().unwrap(),
+        pairing_request_id: record.pairing_request_id.clone().unwrap(),
+        paired_request_digest: digest,
+        authorized_event_ref: event.event_id.to_string(),
+        authorized_verification_method: method.clone(),
+        authorized_public_key_digest: record.runtime_public_key_digest.clone().unwrap(),
+        frozen_authorize_event: event.clone(),
+        outcome: AgentKeyPairActivationState::Active,
+        expected_accepted_basis: arkret_wire::SealBasis {
+            leaves: vec![seal.id.clone()],
+        },
+        authorized_key_event: accepted_event.clone(),
+        authorized_at: now,
+    };
+    let mut wrong_frozen_command = activation.clone();
+    wrong_frozen_command.frozen_authorize_event = accepted_event.clone();
+    assert!(
+        !store
+            .activate_runtime_if_current(&wrong_frozen_command)
+            .await
+            .unwrap(),
+        "Station proof addition must not silently change the exact controller command"
+    );
+    let mut stale_basis = activation.clone();
+    stale_basis.expected_accepted_basis.leaves.clear();
+    assert!(
+        store
+            .activate_runtime_if_current(&stale_basis)
+            .await
+            .is_err(),
+        "a stale accepted basis cannot consume the intent"
+    );
+    assert!(
+        store
+            .activate_runtime_if_current(&activation)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.get(&agent).await.unwrap().unwrap().state,
+        AgentLifecycleState::Paused,
+        "key activation never resumes the lifecycle"
+    );
+    assert_eq!(
+        store
+            .get(&agent)
+            .await
+            .unwrap()
+            .unwrap()
+            .authorized_key_event,
+        Some(accepted_event),
+        "the accepted Station proof must remain available"
+    );
+    assert_eq!(
+        store
+            .pairing_receipt(event.event_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .activation_state,
+        AgentKeyPairActivationState::Active
+    );
+    let mut renewed = store.get(&agent).await.unwrap().unwrap();
+    renewed.pairing_request_id = Some(
+        arkret_wire::OpaqueLocalId::new(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+    );
+    renewed.approval_request_id = Some(
+        arkret_wire::OpaqueLocalId::new(format!("agent_runtime_approval:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+    );
+    renewed.runtime_public_key_digest = Some(arkret_canonical::sha256_digest(&[1u8; 32]));
+    renewed.runtime_key_binding_digest = Some(arkret_canonical::sha256_digest(b"new candidate"));
+    let mut cancelled_event = event.clone();
+    cancelled_event.actor_seq = 2;
+    cancelled_event
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    renewed.pending_pairing_commit_intent = Some(soland_storage::PendingAgentPairingCommitIntent {
+        request_digest: arkret_canonical::sha256_digest(b"new command"),
+        authorize_event_id: cancelled_event.event_id.to_string(),
+        key_authorization_event: Some(cancelled_event.clone()),
+    });
+    store.put(renewed.clone()).await.unwrap();
+    let next_digest = arkret_state::state::control_event_digest(
+        &cancelled_event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    governance
+        .control_event_store
+        .put_pending_with_ingress(
+            &cancelled_event,
+            &arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
+                arkret_state::state::store::AcklessSelfPrincipalIngress {
+                    device_id: "ak:device:01904100-0000-7000-8000-000000000001".into(),
+                    device_authorize_event_id: event.event_id.to_string(),
+                    device_generation_ref: 1,
+                    seal_basis_digest: arkret_canonical::sha256_digest(
+                        b"storage-contract-next-basis",
+                    ),
+                },
+            ),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .await
+        .unwrap();
+    let mut next_covered = covered.clone();
+    next_covered.insert(next_digest.clone());
+    let next_availability = seal_dependency_contract_availability(&cancelled_event, "agent-cancel");
+    let next_seal = seal_dependency_contract_seal(
+        &event.realm_id,
+        vec![seal.id.clone()],
+        next_digest,
+        &next_covered,
+        seal_dependency_contract_digest(&next_availability),
+    );
+    let next_dependency = GovernanceDependencyWrite {
+        realm_id: event.realm_id.clone(),
+        source: GovernanceDependencySource::Seal(next_seal.id.clone()),
+        edge_index: 0,
+        item: next_availability,
+    };
+    assert!(
+        governance
+            .event_seal_committer
+            .commit_if_frontier(
+                &next_seal,
+                arkret_canonical::DigestSuite::Sha256,
+                &[seal.id.clone()],
+                &[],
+                &next_covered,
+                None,
+                &[next_dependency]
+            )
+            .await
+            .unwrap()
+    );
+    let mut cancellation = activation.clone();
+    cancellation.approval_request_id = renewed.approval_request_id.clone().unwrap();
+    cancellation.runtime_key_binding_digest = renewed.runtime_key_binding_digest.clone().unwrap();
+    cancellation.pairing_request_id = renewed.pairing_request_id.clone().unwrap();
+    cancellation.paired_request_digest = arkret_canonical::sha256_digest(b"new command");
+    cancellation.authorized_event_ref = cancelled_event.event_id.to_string();
+    cancellation.frozen_authorize_event = cancelled_event.clone();
+    cancellation.authorized_key_event = cancelled_event.clone();
+    cancellation.expected_accepted_basis = arkret_wire::SealBasis {
+        leaves: vec![next_seal.id],
+    };
+    cancellation.outcome = AgentKeyPairActivationState::Cancelled;
+    assert!(
+        store
+            .activate_runtime_if_current(&cancellation)
+            .await
+            .unwrap()
+    );
+    let reopened = PgAgentStore { pool: pool.clone() };
+    assert_eq!(
+        reopened
+            .pairing_receipt(event.event_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .activation_state,
+        AgentKeyPairActivationState::Active
+    );
+    assert_eq!(
+        reopened
+            .pairing_receipt(cancelled_event.event_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .activation_state,
+        AgentKeyPairActivationState::Cancelled
+    );
+    cancellation.outcome = AgentKeyPairActivationState::Active;
+    assert!(
+        !reopened
+            .activate_runtime_if_current(&cancellation)
+            .await
+            .unwrap()
+    );
+    use diesel_async::RunQueryDsl;
+    let mut connection = pool.get().await.unwrap();
+    diesel::sql_query("DELETE FROM agent_principals WHERE id=$1")
+        .bind::<diesel::sql_types::Text, _>(&agent)
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+}

@@ -38,8 +38,11 @@ pub struct AgentRuntimeActivation {
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
-    pub authorized_signing_key_binding:
-        arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
+    /// Exact controller Event frozen before Station admission adds its proof.
+    pub frozen_authorize_event: arkret_wire::Event,
+    pub expected_accepted_basis: arkret_wire::SealBasis,
+    pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
+    pub authorized_key_event: arkret_wire::Event,
     pub authorized_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]
@@ -50,7 +53,7 @@ pub struct AgentPairingCommitIntent {
     pub pairing_request_id: OpaqueLocalId,
     pub request_digest: String,
     pub authorize_event_id: String,
-    pub signing_key_binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
+    pub key_authorization_event: arkret_wire::Event,
 }
 #[derive(Clone, Debug)]
 pub struct AgentRuntimeApprovalWrite {
@@ -59,13 +62,14 @@ pub struct AgentRuntimeApprovalWrite {
     pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: chrono::DateTime<chrono::Utc>,
+    pub proof_verified_at: chrono::DateTime<chrono::Utc>,
     pub controller_account_pk: AccountPk,
     pub recipient_id: String,
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,
     pub runtime_attestation_digest: String,
     pub runtime_key_request:
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
+        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody,
 }
 
 /// Exact active-runtime snapshot that a durable Agent inbox write is allowed
@@ -109,8 +113,28 @@ pub enum AgentRuntimeEnqueueOutcome {
     RequestConflict,
     SnapshotConflict,
 }
+/// Durable terminal outcome of one exact controller authorize command.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AgentPairingReceipt {
+    pub agent_id: String,
+    pub controller_principal_id: String,
+    pub request_digest: String,
+    pub authorize_event_ref: String,
+    pub activation_state:
+        arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
+}
 #[async_trait]
 pub trait AgentStore: Send + Sync {
+    async fn pairing_receipt(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<AgentPairingReceipt>>;
+    /// Bounded durable scan; cursor wraps after an empty page.
+    async fn pending_pairings_after(
+        &self,
+        after_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<AgentPrincipalRecord>>;
     async fn put(&self, record: AgentPrincipalRecord) -> PersistenceResult<()>;
     async fn get(&self, agent_id: &str) -> PersistenceResult<Option<AgentPrincipalRecord>>;
     async fn get_by_pairing_request_id(

@@ -1714,16 +1714,6 @@ impl AppState {
         Ok(())
     }
 
-    pub(crate) fn member_identity_snapshot(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> Option<super::MemberIdentitySnapshot> {
-        self.member_identity
-            .lock()
-            .snapshot_for_actor(realm_id, actor_id)
-    }
-
     pub(crate) fn handle_claims_snapshot(
         &self,
     ) -> BTreeMap<arkret_wire::DidCoreId, Vec<super::HandleClaimEvidenceRecord>> {

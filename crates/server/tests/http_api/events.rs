@@ -355,6 +355,7 @@ pub(super) async fn seed_agent_grant_session(
         .unwrap(),
         approval_notification_id: new_prefixed_uuid7("ak:notification:"),
         approval_requested_at: now,
+        proof_verified_at: now,
         controller_account_pk: controller_account.pk,
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
@@ -363,15 +364,7 @@ pub(super) async fn seed_agent_grant_session(
             .as_str()
             .to_owned(),
         runtime_attestation_digest: attestation_digest.as_str().to_owned(),
-        runtime_key_request:
-            arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
-                pairing_request_id: request.body.pairing_request_id.clone(),
-                agent_id: request.body.agent_id.clone(),
-                verification_method: verification_method.clone(),
-                public_key: request.body.public_key.clone(),
-                proof_of_possession: request.body.proof_of_possession.clone(),
-                runtime_attestation: request.body.runtime_attestation.clone(),
-            },
+        runtime_key_request: request.body.clone(),
     };
     assert!(
         state
@@ -398,30 +391,16 @@ pub(super) async fn seed_agent_grant_session(
     let public_key_digest =
         arkret_signatures::agent_evidence::agent_signing_public_key_digest(&public_key).unwrap();
     let agent_key_id = arkret_wire::NonEmptyString::new("agent-runtime-key").unwrap();
-    let binding_core = arkret_signatures::agent_evidence::prepare_agent_signing_key_binding_core(
-        outcome.agent_id.clone(),
-        agent_key_id.clone(),
-        verification_method.clone(),
-        &request.body.public_key,
-        now,
-        None,
-        controller_core.clone(),
-    )
-    .expect("signing key binding core builds");
-    let signing_key_binding_digest =
-        arkret_signatures::agent_evidence::agent_signing_key_binding_core_digest(&binding_core)
-            .expect("signing key binding core digest");
     let paired_request_digest =
         arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
             arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
             &controller_core,
             &outcome.agent_id,
             &outcome.pairing_request_id,
-            &pairing_code,
+            &approval.approval_request_id,
             outcome.expires_at,
             &arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
             &binding_digest,
-            &request.body.proof_of_possession,
         )
         .unwrap();
     let authorize_payload =
@@ -429,8 +408,7 @@ pub(super) async fn seed_agent_grant_session(
             agent_id: outcome.agent_id.clone(),
             key_id: agent_key_id,
             verification_method: verification_method.clone(),
-            public_key_digest: public_key_digest.clone(),
-            signing_key_binding_digest,
+            public_key: request.body.public_key.clone(),
             accountable_principal_id: controller_core.clone(),
             agent_key_scope: serde_json::from_value(serde_json::json!({
                 "actions": [
@@ -561,27 +539,7 @@ pub(super) async fn seed_agent_grant_session(
         arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![proposal_member])
             .unwrap();
     let authorize_event_id = authorize_event.event_id.clone();
-    let binding_to_sign = arkret_signatures::agent_evidence::materialize_agent_signing_key_binding(
-        binding_core,
-        authorize_event_id.clone(),
-        controller_verification_method,
-    )
-    .expect("signing key binding materializes");
-    let controller_proof_bytes =
-        arkret_signatures::agent_evidence::agent_signing_key_binding_to_sign_bytes(
-            &binding_to_sign,
-        )
-        .unwrap();
-    let controller_jws = arkret_signatures::jws::sign_jws_ed25519(
-        &controller_proof_bytes,
-        &SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
-    )
-    .expect("controller proof JWS signs");
-    let signing_key_binding = arkret_signatures::agent_evidence::finish_agent_signing_key_binding(
-        binding_to_sign,
-        &controller_jws,
-    )
-    .expect("signing key binding finishes");
+    let key_authorization_event = authorize_event.clone();
     let intent = soland_storage::AgentPairingCommitIntent {
         agent_id: outcome.agent_id.to_string(),
         approval_request_id: approval.approval_request_id.clone(),
@@ -589,7 +547,7 @@ pub(super) async fn seed_agent_grant_session(
         pairing_request_id: outcome.pairing_request_id.clone(),
         request_digest: paired_request_digest.as_str().to_owned(),
         authorize_event_id: authorize_event_id.as_str().to_owned(),
-        signing_key_binding: signing_key_binding.clone(),
+        key_authorization_event: key_authorization_event.clone(),
     };
     assert!(
         state
@@ -613,7 +571,10 @@ pub(super) async fn seed_agent_grant_session(
         authorized_event_ref: authorize_event_id.as_str().to_owned(),
         authorized_verification_method: verification_method.as_str().to_owned(),
         authorized_public_key_digest: public_key_digest.as_str().to_owned(),
-        authorized_signing_key_binding: signing_key_binding,
+        frozen_authorize_event: key_authorization_event.clone(),
+        expected_accepted_basis: arkret_wire::SealBasis { leaves: vec![] },
+        outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active,
+        authorized_key_event: key_authorization_event,
         authorized_at: now,
     };
     assert!(

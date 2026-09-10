@@ -47,6 +47,26 @@ impl DevicePairingStore for PgDevicePairingStore {
             .transpose()
     }
 
+    async fn get_terminal(&self, request_id: &str) -> PersistenceResult<Option<serde_json::Value>> {
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            terminal_record: serde_json::Value,
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        diesel::sql_query(
+            "SELECT terminal_record FROM device_pairing_outcomes WHERE request_id = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(request_id)
+        .get_result::<Row>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(|r| r.terminal_record))
+        .map_err(PersistenceError::database)
+    }
+
     async fn delete_expired_before(&self, cutoff: DateTime<Utc>) -> PersistenceResult<u64> {
         let mut conn = pg_conn(&self.pool)
             .await

@@ -1,0 +1,337 @@
+use diesel_async::AsyncConnection;
+
+use super::{
+    BigInt, JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError,
+    PersistenceResult, PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz, Utc,
+    Value, ids, pg_conn, sql_query, sql_types,
+};
+
+#[derive(QueryableByName)]
+struct AuthorityRow {
+    #[diesel(sql_type=Text)]
+    account_id: String,
+    #[diesel(sql_type=Text)]
+    kind: String,
+    #[diesel(sql_type=Timestamptz)]
+    expires_at: chrono::DateTime<Utc>,
+    #[diesel(sql_type=Text)]
+    remaining: String,
+    #[diesel(sql_type=BigInt)]
+    rate_per_minute: i64,
+}
+#[derive(QueryableByName)]
+struct EntryRow {
+    #[diesel(sql_type=Text)]
+    object_digest: String,
+    #[diesel(sql_type=BigInt)]
+    charge: i64,
+    #[diesel(sql_type=Nullable<Text>)]
+    request_digest: Option<String>,
+    #[diesel(sql_type=Nullable<Text>)]
+    holder: Option<String>,
+}
+#[derive(QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type=BigInt)]
+    count: i64,
+}
+
+fn rejected(message: &str) -> PersistenceError {
+    PersistenceError::Conflict(message.to_owned())
+}
+fn field<'a>(value: &'a Value, name: &str) -> PersistenceResult<&'a str> {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .ok_or_else(|| rejected("unlock ledger binding incomplete"))
+}
+pub(crate) fn object_charge(value: &Value) -> PersistenceResult<(String, i64)> {
+    let bytes =
+        arkret_canonical::canonical_json_bytes(value).map_err(PersistenceError::database)?;
+    let size = i64::try_from(bytes.len()).map_err(PersistenceError::database)?;
+    Ok((arkret_canonical::sha256_digest(&bytes), size))
+}
+
+impl crate::key_backup::PgKeyBackupStore {
+    pub(crate) async fn issue_unlock(
+        &self,
+        challenge: Value,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Value> {
+        let id = field(&challenge, "challenge_id")?.to_owned();
+        let backup_id = field(&challenge, "backup_id")?.to_owned();
+        let device = field(&challenge, "requesting_device_id")?.to_owned();
+        let account = arkret_canonical::canonical_json_string(&challenge["account_id"])
+            .map_err(PersistenceError::database)?;
+        let identity = arkret_canonical::canonical_sha256(&serde_json::json!([
+            challenge["account_id"],
+            device,
+            backup_id,
+            challenge["request_id"]
+        ]))
+        .map_err(PersistenceError::database)?;
+        let expires = chrono::DateTime::parse_from_rfc3339(field(&challenge, "expires_at")?)
+            .map_err(PersistenceError::database)?
+            .with_timezone(&Utc);
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_,PgTransactionError,_>(async move |conn| {
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(format!("backup-unlock:{account}")).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            let existing=sql_query("SELECT challenge AS payload FROM key_backup_unlock_authorities WHERE identity_key=$1 AND expires_at>$2 AND NOT EXISTS (SELECT 1 FROM key_backup_unlock_entries e WHERE e.authority_id=key_backup_unlock_authorities.authority_id AND consumed_at IS NOT NULL)")
+                .bind::<Text,_>(&identity).bind::<Timestamptz,_>(now).get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+            if let Some(row)=existing { return Ok(row.payload); }
+            let pending=sql_query("SELECT count(*) AS count FROM key_backup_unlock_authorities a WHERE account_id=$1 AND kind='current_device' AND expires_at>$2 AND NOT EXISTS(SELECT 1 FROM key_backup_unlock_entries e WHERE e.authority_id=a.authority_id AND consumed_at IS NOT NULL)")
+                .bind::<Text,_>(&account).bind::<Timestamptz,_>(now).get_result::<CountRow>(&mut *conn).await.map_err(PersistenceError::database)?.count;
+            if pending>=64 {return Err(rejected("rate_limited: outstanding unlock challenges").into());}
+            // Keep consumed identities and their results for exact replay; a new issuance gets a distinct row.
+            sql_query("UPDATE key_backup_unlock_authorities SET identity_key=authority_id WHERE identity_key=$1")
+                .bind::<Text,_>(&identity).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            let backup=sql_query("SELECT payload FROM key_backups WHERE id=$1 FOR SHARE")
+                .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(&backup_id)).get_result::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?.payload;
+            if backup["series_id"]!=challenge["series_id"] || backup["ciphertext_digest"]!=challenge["ciphertext_digest"] { return Err(rejected("backup_frontier_stale").into()); }
+            let (digest,charge)=object_charge(&backup)?;
+            sql_query("INSERT INTO key_backup_unlock_authorities(authority_id,identity_key,account_id,device_id,kind,challenge,expires_at,remaining_bytes,verified_at,rate_per_minute) VALUES($1,$2,$3,$4,'current_device',$5,$6,$7,$8,4)")
+                .bind::<Text,_>(&id).bind::<Text,_>(&identity).bind::<Text,_>(&account).bind::<Text,_>(&device).bind::<Jsonb,_>(&challenge).bind::<Timestamptz,_>(expires).bind::<BigInt,_>(charge).bind::<Timestamptz,_>(now).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            sql_query("INSERT INTO key_backup_unlock_entries(authority_id,backup_id,object_digest,charge) VALUES($1,$2,$3,$4)")
+                .bind::<Text,_>(&id).bind::<Text,_>(&backup_id).bind::<Text,_>(digest).bind::<BigInt,_>(charge).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            Ok(challenge)
+        }).await.map_err(PgTransactionError::into_persistence)
+    }
+
+    pub(crate) async fn reserve_recovery_attempt(
+        &self,
+        id: &str,
+        holder: &str,
+        request_digest: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_,PgTransactionError,_>(async move |conn| {
+            lock_recovery_policy_for_session(conn,id,now).await?;
+            let now=chrono::Utc::now();
+            let authority=sql_query("SELECT account_id,kind,expires_at,remaining_bytes::text AS remaining,rate_per_minute FROM key_backup_unlock_authorities WHERE authority_id=$1 AND kind='recovery_session' FOR UPDATE")
+                .bind::<Text,_>(id).get_result::<AuthorityRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("recovery_evidence_unbound"))?;
+            let session=sql_query("SELECT to_jsonb(s) AS payload FROM recovery_sessions s WHERE id=$1 AND state='verified' AND expires_at>$2 FOR SHARE")
+                .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(id)).bind::<Timestamptz,_>(now).get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("recovery_evidence_unbound"))?.payload;
+            if authority.expires_at<=now || holder!=format!("{}:{}",field(&session,"session_grant_id")?,field(&session,"session_grant_cnf_jkt")?) {return Err(rejected("recovery_evidence_unbound").into());}
+            let replay=sql_query("SELECT count(*) AS count FROM key_backup_unlock_entries WHERE authority_id=$1 AND request_digest=$2 AND holder=$3 AND consumed_at IS NOT NULL")
+                .bind::<Text,_>(id).bind::<Text,_>(request_digest).bind::<Text,_>(holder).get_result::<CountRow>(&mut *conn).await.map_err(PersistenceError::database)?.count;
+            if replay>0 {return Ok(true);}
+            let row=sql_query("INSERT INTO key_backup_unlock_attempt_windows(authority_id,window_start,attempts,last_request_digest,last_attempt_at) VALUES($1,date_trunc('minute',$2::timestamptz),1,$3,$2) ON CONFLICT(authority_id,window_start) DO UPDATE SET attempts=LEAST(key_backup_unlock_attempt_windows.attempts+1,$4+1),last_request_digest=EXCLUDED.last_request_digest,last_attempt_at=EXCLUDED.last_attempt_at RETURNING attempts AS count")
+                .bind::<Text,_>(id).bind::<Timestamptz,_>(now).bind::<Text,_>(request_digest).bind::<BigInt,_>(authority.rate_per_minute).get_result::<CountRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+            // A denied attempt is committed too; no backup allowance is touched here.
+            Ok(row.count<=authority.rate_per_minute)
+        }).await.map_err(PgTransactionError::into_persistence)
+    }
+
+    pub(crate) async fn read_unlock(&self, id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        Ok(sql_query(
+            "SELECT challenge AS payload FROM key_backup_unlock_authorities WHERE authority_id=$1",
+        )
+        .bind::<Text, _>(id)
+        .get_result::<JsonPayloadRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| row.payload))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn consume_unlock_entry(
+        &self,
+        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+        active_basis: Value,
+        id: &str,
+        backup: Value,
+        request_digest: &str,
+        holder: &str,
+        ip: &str,
+        now: chrono::DateTime<Utc>,
+        daily_limit: u32,
+    ) -> PersistenceResult<Value> {
+        let id = id.to_owned();
+        let request_digest = request_digest.to_owned();
+        let holder = holder.to_owned();
+        let ip = ip.to_owned();
+        let backup_id = field(&backup, "backup_id")?.to_owned();
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_,PgTransactionError,_>(async move |conn| {
+            validate_active_basis(conn,&active_basis).await?;
+            if let Some(selector)=device_gate { crate::ensure_gate_allowed_in_transaction(conn,selector).await?; }
+            // Shared lock order serializes account counters and each authority's byte budget.
+            let account=arkret_canonical::canonical_json_string(&backup["actor_id"]["account_id"]).map_err(PersistenceError::database)?;
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(format!("backup-unlock:{account}")).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            // Current-device authorities carry an explicit device gate. A recovery
+            // authority must acquire the same policy lock as every policy publication.
+            if device_gate.is_none() { lock_recovery_policy_for_session(conn,&id,now).await?; }
+            let now=chrono::Utc::now();
+            let authority=sql_query("SELECT account_id,kind,expires_at,remaining_bytes::text AS remaining,rate_per_minute FROM key_backup_unlock_authorities WHERE authority_id=$1 FOR UPDATE")
+                .bind::<Text,_>(&id).get_result::<AuthorityRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+            if authority.account_id!=account {return Err(rejected("unlock account mismatch").into());}
+            match (authority.kind.as_str(),device_gate.is_some()) {
+                ("current_device",true)|("recovery_session",false)=>{},
+                _=>return Err(rejected("unlock authority and current gate mismatch").into()),
+            }
+            if authority.kind=="recovery_session" {
+                let session=sql_query("SELECT to_jsonb(s) AS payload FROM recovery_sessions s WHERE id=$1 AND state='verified' AND expires_at>$2 FOR SHARE")
+                    .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(&id)).bind::<Timestamptz,_>(now).get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("recovery_evidence_unbound"))?.payload;
+                if holder!=format!("{}:{}",field(&session,"session_grant_id")?,field(&session,"session_grant_cnf_jkt")?) {return Err(rejected("recovery holder changed").into());}
+            }
+            let entry=sql_query("SELECT object_digest,charge,request_digest,holder FROM key_backup_unlock_entries WHERE authority_id=$1 AND backup_id=$2 FOR UPDATE")
+                .bind::<Text,_>(&id).bind::<Text,_>(&backup_id).get_result::<EntryRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("backup outside frozen unlock manifest"))?;
+            let current=sql_query("SELECT payload FROM key_backups WHERE id=$1 FOR SHARE")
+                .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(&backup_id)).get_result::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?.payload;
+            let (digest,charge)=object_charge(&current)?;
+            if digest!=entry.object_digest || charge!=entry.charge || current!=backup {return Err(rejected("backup_frontier_stale").into());}
+            if let Some(previous)=entry.request_digest {
+                if previous==request_digest && entry.holder.as_deref()==Some(holder.as_str()) {return Ok(current);}
+                return Err(rejected("duplicate_conflict").into());
+            }
+            if authority.expires_at<=now {return Err(rejected("unlock challenge expired").into());}
+            let remaining=authority.remaining.parse::<u64>().map_err(PersistenceError::database)?;
+            if remaining < u64::try_from(charge).map_err(PersistenceError::database)? {return Err(rejected("unlock byte budget exhausted").into());}
+            let window=now-chrono::Duration::minutes(1);
+            if authority.kind=="current_device" {
+                let day=now-chrono::Duration::hours(24);
+                let count=sql_query("SELECT count(*) AS count FROM key_backup_unlock_entries e JOIN key_backup_unlock_authorities a USING(authority_id) WHERE a.account_id=$1 AND a.kind='current_device' AND e.consumed_at>$2")
+                    .bind::<Text,_>(&account).bind::<Timestamptz,_>(day).get_result::<CountRow>(&mut *conn).await.map_err(PersistenceError::database)?.count;
+                if count>=i64::from(daily_limit.min(64)) {return Err(rejected("rate_limited: daily backup unlock quota").into());}
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(format!("backup-unlock-ip:{ip}")).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                let count=sql_query("SELECT count(*) AS count FROM key_backup_unlock_entries WHERE ip=$1 AND consumed_at>$2")
+                    .bind::<Text,_>(&ip).bind::<Timestamptz,_>(window).get_result::<CountRow>(&mut *conn).await.map_err(PersistenceError::database)?.count;
+                if count>=4 {return Err(rejected("rate_limited: backup unlock IP quota").into());}
+            } else {
+                let count=sql_query("SELECT count(*) AS count FROM key_backup_unlock_entries WHERE authority_id=$1 AND consumed_at>$2")
+                    .bind::<Text,_>(&id).bind::<Timestamptz,_>(window).get_result::<CountRow>(&mut *conn).await.map_err(PersistenceError::database)?.count;
+                if count>=authority.rate_per_minute {return Err(rejected("rate_limited: recovery unlock quota").into());}
+            }
+            sql_query("UPDATE key_backup_unlock_authorities SET remaining_bytes=remaining_bytes-$2 WHERE authority_id=$1")
+                .bind::<Text,_>(&id).bind::<BigInt,_>(charge).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            sql_query("UPDATE key_backup_unlock_entries SET request_digest=$3,holder=$4,consumed_at=$5,ip=$6 WHERE authority_id=$1 AND backup_id=$2")
+                .bind::<Text,_>(&id).bind::<Text,_>(&backup_id).bind::<Text,_>(&request_digest).bind::<Text,_>(&holder).bind::<Timestamptz,_>(now).bind::<Text,_>(&ip).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            Ok(current)
+        }).await.map_err(PgTransactionError::into_persistence)
+    }
+}
+
+/// Serialize policy revocation and unlock consumption by exact Account, before
+/// any authority/session row lock. Normal later policy replacement is not revocation.
+pub(crate) async fn validate_recovery_unlock_policy(
+    conn: &mut crate::AsyncPgConnection,
+    session: &Value,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), PgTransactionError> {
+    let principal = arkret_wire::DidCoreId::new(field(session, "principal_id")?.to_owned())
+        .map_err(PersistenceError::database)?;
+    let station = arkret_wire::DidCoreId::new(field(session, "station_id")?.to_owned())
+        .map_err(PersistenceError::database)?;
+    let account = arkret_wire::AccountId::new(principal, station);
+    let canonical =
+        arkret_canonical::canonical_json_string(&account).map_err(PersistenceError::database)?;
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind::<Text, _>(format!("recovery-policy:{canonical}"))
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    let now = now.max(chrono::Utc::now());
+    let bound: arkret_models_crypto::RecoveryPolicy =
+        serde_json::from_value(session["policy_payload"].clone())
+            .map_err(PersistenceError::database)?;
+    if bound.account_id != account
+        || session
+            .get("policy_version")
+            .and_then(Value::as_u64)
+            .is_some_and(|version| version != bound.version)
+    {
+        return Err(rejected("recovery policy snapshot binding mismatch").into());
+    }
+    let version = i32::try_from(bound.version).map_err(PersistenceError::database)?;
+    let rows=sql_query("SELECT raw_payload AS payload FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 AND version>=$3 ORDER BY version ASC FOR SHARE")
+        .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(account.station_id.as_str()).bind::<crate::Integer,_>(version)
+        .load::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    if rows
+        .as_slice()
+        .first()
+        .is_none_or(|row| row.payload != session["policy_payload"])
+    {
+        return Err(rejected("frozen recovery policy is not accepted").into());
+    }
+    let updates = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::from_value::<arkret_models_crypto::RecoveryPolicy>(row.payload)
+                .map_err(PersistenceError::database)
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    let proof = session
+        .get("proof_payload")
+        .and_then(|payload| payload.get("proof"))
+        .filter(|proof| !proof.is_null())
+        .map(|proof| {
+            serde_json::from_value::<arkret_models_crypto::RecoverySessionProof>(proof.clone())
+                .map_err(PersistenceError::database)
+        })
+        .transpose()?;
+    if session.get("state").and_then(Value::as_str) == Some("verified") && proof.is_none() {
+        return Err(rejected("verified recovery session proof missing").into());
+    }
+    bound
+        .validate_inflight_authority(&updates, proof.as_ref(), now)
+        .map_err(|error| rejected(&error.to_string()))?;
+    Ok(())
+}
+
+pub(crate) async fn lock_recovery_policy_for_session(
+    conn: &mut crate::AsyncPgConnection,
+    id: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), PgTransactionError> {
+    let session=sql_query("SELECT to_jsonb(s) AS payload FROM recovery_sessions s WHERE id=$1 AND state='verified' AND expires_at>$2")
+        .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(id)).bind::<Timestamptz,_>(now)
+        .get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("recovery_evidence_unbound"))?;
+    validate_recovery_unlock_policy(conn, &session.payload, now).await
+}
+
+pub(crate) async fn validate_active_basis(
+    conn: &mut crate::AsyncPgConnection,
+    basis: &Value,
+) -> Result<(), PgTransactionError> {
+    #[derive(QueryableByName)]
+    struct SealText {
+        #[diesel(sql_type=Text)]
+        value: String,
+    }
+    let realm = field(basis, "realm_id")?;
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind::<Text, _>(realm)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    let blocked =
+        sql_query("SELECT count(*) AS count FROM state_seal_quarantine_realms WHERE realm_id=$1")
+            .bind::<Text, _>(realm)
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?
+            .count;
+    if blocked > 0 {
+        return Err(rejected("backup frontier quarantined").into());
+    }
+    let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_refs ? parent.id) ORDER BY parent.id ASC")
+        .bind::<Text,_>(realm).load::<SealText>(&mut *conn).await.map_err(PersistenceError::database)?.into_iter().map(|row|Value::String(row.value)).collect::<Vec<_>>();
+    if Value::Array(leaves) != basis["seal_basis"]["leaves"] {
+        return Err(rejected("backup_frontier_stale").into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pg_tests;

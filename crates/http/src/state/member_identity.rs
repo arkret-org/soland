@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_models_identity::{EffectiveIdentityEntry, HandleClaim, HandleClaimStatus};
+#[cfg(test)]
+use arkret_models_identity::HandleClaimStatus;
+use arkret_models_identity::{EffectiveIdentityEntry, HandleClaim};
 use serde_json::Value;
 pub use soland_storage::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
@@ -10,10 +12,9 @@ pub use soland_storage::{
 /// R3.1/R3.2 (arkret-spec @ b56cab1) — Realm-scoped MemberIdentity event
 /// registry. Stores every accepted `ak.member.identity.update` event by
 /// `(realm_id, actor_id, segment)`, computes the current effective set
-/// per the SDK helper `effective_identity_events`, and materializes both
-/// R3.2 digests: the `expected_state_digest` guard
-/// (`member_identity_effective_set_digest`, includes `segment`) and the
-/// roster `member_display_state_digest`. The reducer
+/// per the SDK helper `effective_identity_events`, and materializes the
+/// `expected_state_digest` guard (`member_identity_effective_set_digest`,
+/// including `segment`). The reducer
 /// (`reducer::apply_member_identity_update`) consults the guard for the
 /// optimistic-concurrency check (`expected_state_digest`) and writes
 /// accepted events back. Demand sync currently emits only bounded membership
@@ -46,43 +47,11 @@ pub struct MemberIdentityRegistry {
     handle_claims_by_subject: BTreeMap<arkret_wire::DidCoreId, Vec<HandleClaimEvidenceRecord>>,
 }
 
-#[derive(Clone, Debug)]
-pub struct HandleClaimDigestInput {
-    pub claim_digest: String,
-    pub status: HandleClaimStatus,
-    pub revocation_digest: Option<String>,
-    pub fresh_until: chrono::DateTime<chrono::Utc>,
-}
-
-/// Per-`(realm_id, actor_id)` snapshot derived on demand by
-/// [`MemberIdentityRegistry::snapshot_for_actor`]. Drives the sync
-/// roster projection (`SYNC-MEM-1..3`, R3.2 ROST-SOL-1..3).
-///
-/// MIU-SOL-4 (R3.2): the effective set is exposed verbatim as
-/// `identity_event_ids` / `identity_events` / `effective_entries` with NO
-/// last-writer-wins collapse — a multi-valued effective set (concurrent
-/// un-replaced writes) is returned as-is so the roster lists every
-/// effective event.
+/// Effective entries used by the accepted-state optimistic concurrency guard.
+/// Concurrent unreplaced identity events remain separate entries.
 #[derive(Clone, Debug, Default)]
-pub struct MemberIdentitySnapshot {
-    /// Effective event ids per the replacement-edge filter, sorted by
-    /// `(segment, event_id)`. Matches the wire-side `identity_event_ids[]`.
-    pub identity_event_ids: Vec<String>,
-    /// Effective `(event_id, segment, payload_digest)` triples, sorted by
-    /// `(segment, event_id)`. Drives the R3.2 digest helpers.
-    pub effective_entries: Vec<EffectiveIdentityEntry>,
-    /// R3.2 ROST-SOL-1 — roster display cache key
-    /// (`member_display_state_digest`). `sha256:<hex>` over the effective
-    /// identity-event set folded with the currently visible handle-claim
-    /// digest set. Equals the SDK `member_display_state_digest` helper.
-    pub member_display_state_digest: Option<String>,
-    /// Disclosed exact subject account, read
-    /// from the effective plaintext `MemberIdentity` carrier when present.
-    /// `None` for an encrypted-only effective set.
-    pub subject_account_id: Option<arkret_wire::AccountId>,
-    /// Original Event envelopes for the effective set. Used by
-    /// `SYNC-MEM-3` (inline events when the client lacks them).
-    pub identity_events: Vec<Value>,
+struct MemberIdentitySnapshot {
+    effective_entries: Vec<EffectiveIdentityEntry>,
 }
 
 impl MemberIdentityRegistry {
@@ -160,9 +129,7 @@ impl MemberIdentityRegistry {
     ///
     /// Uses the SDK `member_identity_effective_set_digest` formula
     /// `sha256(JCS({realm_id, actor_id, segment, effective_events:
-    /// [{event_id, segment, payload_digest}]}))` — note this INCLUDES
-    /// `segment` and is distinct from the roster
-    /// `member_display_state_digest`.
+    /// [{event_id, segment, payload_digest}]}))`, including `segment`.
     pub fn current_state_digest_for_actor(&self, realm_id: &str, actor_id: &str) -> Option<String> {
         let snapshot = self.snapshot_for_actor(realm_id, actor_id)?;
         effective_set_digest(realm_id, actor_id, &snapshot.effective_entries)
@@ -172,11 +139,7 @@ impl MemberIdentityRegistry {
     /// `(realm_id, actor_id)`. Applies the replacement-edge filter per
     /// MID-2/3, sorts by `(segment, event_id)`, and computes the
     /// projection digest per MID-6.
-    pub fn snapshot_for_actor(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> Option<MemberIdentitySnapshot> {
+    fn snapshot_for_actor(&self, realm_id: &str, actor_id: &str) -> Option<MemberIdentitySnapshot> {
         let candidates: Vec<&MemberIdentityEventRecord> = self
             .by_subject
             .iter()
@@ -260,50 +223,7 @@ impl MemberIdentityRegistry {
         let effective_entries: Vec<EffectiveIdentityEntry> =
             effective.iter().map(|(_, entry)| entry.clone()).collect();
 
-        // Read the disclosed account from the full subject actor in the
-        // first effective plaintext `MemberIdentity` carrier. Encrypted
-        // carriers do not expose it; `None` then. Disclosure gating
-        // (whether to actually emit it on the wire) is enforced at the
-        // sync layer per Realm policy.
-        let subject_account_id = effective.iter().find_map(|(record, _)| {
-            record
-                .raw_event
-                .get("payload")
-                .and_then(|payload| payload.get("identity_payload"))
-                .and_then(|carrier| carrier.get("member_identity"))
-                .and_then(|identity| identity.get("subject_actor_id"))
-                .and_then(|actor| {
-                    serde_json::from_value::<arkret_wire::ActorId>(actor.clone()).ok()
-                })
-                .and_then(|actor| actor.as_account_id().cloned())
-        });
-
-        // ROST-SOL-1 (R3.2) — roster `member_display_state_digest`.
-        // SHA-256 over RFC 8785 JCS canonical JSON of
-        // `{realm_id, actor_id, effective_events:[{event_id, segment,
-        // payload_digest}], handle_claims:[{claim_digest, status,
-        // revocation_digest, fresh_until}]}` (effective_events sorted by (segment, event_id),
-        // handle_claims sorted by claim_digest). The local handle-claim
-        // evidence cache (`handle_claims_by_subject`) is wired and
-        // populated, but this digest call currently passes an empty
-        // handle-claim set, so the digest covers the effective events
-        // only.
-        let member_display_state_digest =
-            display_state_digest(realm_id, actor_id, &effective_entries, &[]);
-
-        Some(MemberIdentitySnapshot {
-            identity_event_ids: effective
-                .iter()
-                .map(|(record, _)| record.event_id.clone())
-                .collect(),
-            effective_entries,
-            member_display_state_digest,
-            subject_account_id,
-            identity_events: effective
-                .iter()
-                .map(|(record, _)| record.raw_event.clone())
-                .collect(),
-        })
+        Some(MemberIdentitySnapshot { effective_entries })
     }
 }
 
@@ -379,50 +299,6 @@ fn effective_set_digest(
         &actor_id,
         arkret_models_identity::member_identity::MemberIdentitySegment::MemberIdentity,
         entries,
-    )
-    .ok()
-}
-
-/// ROST-SOL-1 (R3.2) — roster `member_display_state_digest`. SHA-256 over RFC
-/// 8785 JCS canonical JSON of `{realm_id, actor_id, effective_events:
-/// [{event_id, segment, payload_digest}], handle_claims:[{claim_digest,
-/// status, revocation_digest, fresh_until}]}` (handle_claims sorted by claim_digest).
-/// Byte-compatible with the SDK `member_display_state_digest` helper. The
-/// caller passes the disclosure-visible handle-claim digest set; contexts
-/// without visible handle evidence pass an empty slice.
-pub(crate) fn display_state_digest(
-    realm_id: &str,
-    actor_id: &str,
-    entries: &[EffectiveIdentityEntry],
-    handle_claims: &[HandleClaimDigestInput],
-) -> Option<String> {
-    let handle_claims: Vec<arkret_models_identity::member_identity::RosterHandleClaimDigestEntry> =
-        handle_claims
-            .iter()
-            .map(|claim| {
-                Some(
-                    arkret_models_identity::member_identity::RosterHandleClaimDigestEntry {
-                        claim_digest: arkret_identifiers::Hash::new(claim.claim_digest.clone())
-                            .ok()?,
-                        status: claim.status,
-                        revocation_digest: claim
-                            .revocation_digest
-                            .as_ref()
-                            .map(|digest| arkret_identifiers::Hash::new(digest.clone()))
-                            .transpose()
-                            .ok()?,
-                        fresh_until: claim.fresh_until,
-                    },
-                )
-            })
-            .collect::<Option<Vec<_>>>()?;
-    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
-    arkret_models_identity::member_identity::member_display_state_digest(
-        &realm_id,
-        &actor_id,
-        entries,
-        &handle_claims,
     )
     .ok()
 }
@@ -582,19 +458,11 @@ mod tests {
         let snapshot = registry
             .snapshot_for_actor(&subject.realm_id, &subject.actor_id)
             .expect("the valid record should still produce a snapshot");
-        assert_eq!(
-            snapshot.identity_event_ids,
-            ["ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1"]
-        );
         assert_eq!(snapshot.effective_entries.len(), 1);
-        assert_eq!(snapshot.identity_events.len(), 1);
         assert_eq!(
-            snapshot.subject_account_id,
-            account_actor("ak:did_core:web:station-a.example")
-                .as_account_id()
-                .cloned()
+            snapshot.effective_entries[0].event_id.as_str(),
+            "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1"
         );
-        assert!(snapshot.member_display_state_digest.is_some());
         assert!(
             registry
                 .snapshot_for_actor(

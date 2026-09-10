@@ -1566,6 +1566,22 @@ impl EventStore for PgEventStore {
                         true,
                     )?
                 };
+                if reanchor_slot.is_some() {
+                    let reanchor = records.iter().find(|record| record.kind == "ak.device.reanchor")
+                        .ok_or_else(||PersistenceError::SchemaViolation("reanchor unit missing anchor Event".to_owned()))?;
+                    let already_accepted=sql_query("SELECT EXISTS(SELECT 1 FROM accepted_events WHERE id=$1) AS present")
+                        .bind::<Text,_>(&reanchor.event_id).get_result::<ExistsRow>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+                    if !already_accepted {
+                        // Match manifest/unlock ordering: accepted Realm frontier, policy, session.
+                        if let Some(frontier)=frontier_cas.as_ref() {
+                            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+                                .bind::<Text,_>(&frontier.realm_id).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                        }
+                        let session_id=reanchor.envelope.pointer("/payload/recovery_session_id").and_then(Value::as_str)
+                            .ok_or_else(||PersistenceError::SchemaViolation("reanchor session missing".to_owned()))?;
+                        crate::recovery::lock_recovery_session_authority(conn,session_id).await?;
+                    }
+                }
                 if let Some(frontier_cas) = frontier_cas {
                     assert_identity_anchor_frontier(conn, &frontier_cas).await.map_err(PersistenceError::database)?;
                 }

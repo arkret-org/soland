@@ -55,6 +55,7 @@ use errors::*;
 mod policy_endpoints;
 use policy_endpoints::*;
 mod session_endpoints;
+pub(crate) use session_endpoints::validate_frozen_session_policy;
 use session_endpoints::*;
 mod security_transaction_endpoints;
 pub(super) use security_transaction_endpoints::backup_series_erase_command;

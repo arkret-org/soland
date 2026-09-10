@@ -5,7 +5,6 @@ pub(super) struct ValidatedRecoveryPolicy {
     pub account_id: arkret_wire::AccountId,
     pub version: u32,
     pub trust_domain: TrustDomainId,
-    pub allowed_proof_kinds: Vec<String>,
     pub supersedes_id: Option<String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub issued_at: chrono::DateTime<chrono::Utc>,
@@ -32,15 +31,6 @@ pub(super) fn validate_recovery_policy(
     let account_id = typed.account_id.clone();
     let version = require_u32_min(payload, "version", 1)?;
     let trust_domain = typed.trust_domain.clone();
-    let allowed_proof_kinds = require_string_array(payload, "allowed_proof_kinds")?;
-    for kind in &allowed_proof_kinds {
-        if !ALLOWED_PROOF_KINDS.contains(&kind.as_str()) {
-            return Err(AppError::param_invalid(format!(
-                "allowed_proof_kinds entry `{kind}` not in spec enum",
-            ))
-            .with_reason_code("recovery_proof_kind_unknown"));
-        }
-    }
     let supersedes_id = match payload.get("supersedes_id") {
         Some(Value::Null) | None => None,
         Some(Value::String(s)) => {
@@ -77,11 +67,6 @@ pub(super) fn validate_recovery_policy(
             ));
         }
     };
-    if allowed_proof_kinds.is_empty() && expires_at.is_none() {
-        return Err(AppError::param_invalid(
-            "explicit revocation policy (allowed_proof_kinds=[]) MUST set expires_at",
-        ));
-    }
     if let Some(exp) = expires_at
         && exp <= issued_at
     {
@@ -115,7 +100,6 @@ pub(super) fn validate_recovery_policy(
         account_id,
         version,
         trust_domain,
-        allowed_proof_kinds,
         supersedes_id,
         expires_at,
         issued_at,
@@ -161,18 +145,6 @@ pub(super) fn require_string(payload: &Value, key: &str) -> Result<String, AppEr
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| AppError::param_invalid(format!("{key} is required")))
-}
-
-pub(super) fn require_string_array(payload: &Value, key: &str) -> Result<Vec<String>, AppError> {
-    payload
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .ok_or_else(|| AppError::param_invalid(format!("{key} is required (array)")))
 }
 
 pub(super) fn require_u32_min(payload: &Value, key: &str, min: u64) -> Result<u32, AppError> {

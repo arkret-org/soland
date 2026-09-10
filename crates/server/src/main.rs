@@ -843,10 +843,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         let resolved_document = soland_services::identity::DidDocumentState {
                             did: document.id.to_string(),
                             did_document: document_value,
-                            key_log_head: document_view
-                                .head_event_digest
-                                .as_ref()
-                                .map(ToString::to_string),
+                            key_log_head: None,
                             seq: document_view.seq.unwrap_or_default(),
                             method_evidence: serde_json::json!({
                                 "source": "peer_identity_document",

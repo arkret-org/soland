@@ -380,13 +380,9 @@ pub(crate) async fn seed_seal_with_direct_event_effects(
         "bootstrap sealed effects must match Seal state_root"
     );
     state
-        .test_put_seal(seal, arkret_canonical::DigestSuite::Sha256)
+        .test_commit_bootstrap_seal(seal, arkret_canonical::DigestSuite::Sha256, &ops)
         .await
-        .expect("bootstrap Seal");
-    state
-        .test_append_sealed_effects(&seal.realm_id, &seal.id, &ops)
-        .await
-        .expect("bootstrap sealed effects");
+        .expect("bootstrap Seal, cell effects and effective-state checkpoint commit atomically");
 }
 
 fn fixture_sealed_state_root(

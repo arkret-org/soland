@@ -212,7 +212,7 @@ async fn list(
     json_ok(result)
 }
 
-async fn active_pointers(
+pub(super) async fn active_pointers(
     state: &AppState,
     account: &arkret_wire::AccountId,
 ) -> Result<BackupActiveSeriesState, AppError> {

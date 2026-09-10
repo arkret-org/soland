@@ -314,6 +314,15 @@ async fn enforce_recovery_session_grant_operation(
             "verified recovery session does not match the presented grant",
         ));
     }
+    crate::routing::identity::recovery::validate_frozen_session_policy(state, &recovery, None)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "recovery policy authority expired or revoked",
+            )
+        })?;
     Ok(())
 }
 

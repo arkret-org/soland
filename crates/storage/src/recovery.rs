@@ -45,6 +45,11 @@ pub trait RecoverySessionStore: Send + Sync {
         request_id: &str,
     ) -> PersistenceResult<Option<RecoverySessionRecord>>;
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()>;
+    async fn save_verified_with_unlock_manifest(
+        &self,
+        record: RecoverySessionRecord,
+        manifest: serde_json::Value,
+    ) -> PersistenceResult<()>;
     async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()>;
 }
 

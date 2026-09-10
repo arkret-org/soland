@@ -1,24 +1,5 @@
 use salvo::prelude::*;
 
-/// Whether `identifier` appears as a JSON string anywhere inside `value`.
-///
-/// Recovery policy documents carry the identifiers they authorize at
-/// unpredictable depths, so both the device-signing guard and the recovery
-/// session endpoints need the same recursive containment test.
-pub(crate) fn value_mentions_identifier(value: &serde_json::Value, identifier: &str) -> bool {
-    use serde_json::Value;
-    match value {
-        Value::String(value) => value == identifier,
-        Value::Array(values) => values
-            .iter()
-            .any(|value| value_mentions_identifier(value, identifier)),
-        Value::Object(object) => object
-            .values()
-            .any(|value| value_mentions_identifier(value, identifier)),
-        _ => false,
-    }
-}
-
 pub(crate) mod account;
 pub(crate) use account::{project_canonical_direct_binding, validate_direct_binding_operation};
 pub(crate) mod account_authority_client;

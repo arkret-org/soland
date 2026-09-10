@@ -222,3 +222,28 @@ pub(crate) mod test_event {
         .expect_structural_only();
     }
 }
+
+/// Produce a portable Agent context through the real verifier for SDK regression fixtures.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub async fn test_verified_agent_context_fixture(
+    state: &crate::state::AppState,
+    actor: arkret_wire::ActorId,
+    verification_method: arkret_wire::DidUrl,
+    realm_id: arkret_wire::RealmId,
+    recipient_account_id: arkret_wire::AccountId,
+) -> Result<serde_json::Value, String> {
+    let selector = crate::routing::identity::agents::evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
+        actor: actor.clone(), verification_method: verification_method.clone(),
+    };
+    let (root, dependencies) =
+        crate::routing::identity::agents::evidence::current_authenticated_agent_signer_evidence(
+            state, &selector,
+        )
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(
+        serde_json::json!({"actor":actor,"verification_method":verification_method,"realm_id":realm_id,
+        "recipient_account_id":recipient_account_id,"root":root,"dependencies":dependencies}),
+    )
+}

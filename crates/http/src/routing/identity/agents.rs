@@ -34,13 +34,12 @@ use arkret_identifiers::{BlobRef, DidCoreId, EventId, GrantId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentKeyPairActivationState, AgentKeyPairOutcome,
     AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState, AgentList,
-    AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody, AgentPauseRequestBody,
-    AgentPresence, AgentPresenceState, AgentProjection, AgentProvisionOutcome,
-    AgentProvisionRequestBody, AgentReadiness, AgentReadinessBlocker, AgentReadinessState,
-    AgentRenewPairingOutcome, AgentRenewPairingRequestBody, AgentResumeRequestBody,
-    AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
-    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
-    AgentView, KeyState,
+    AgentPairingBootstrap, AgentPairingResolveRequestBody, AgentPauseRequestBody, AgentPresence,
+    AgentPresenceState, AgentProjection, AgentProvisionOutcome, AgentProvisionRequestBody,
+    AgentReadiness, AgentReadinessBlocker, AgentReadinessState, AgentRenewPairingOutcome,
+    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
+    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
+    AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState, AgentView, KeyState,
 };
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
@@ -80,6 +79,9 @@ pub(crate) use common::agent_grant_within_requested_scope;
 pub(crate) mod evidence;
 mod lifecycle;
 mod pairing;
+pub(crate) use pairing::{
+    accepted_active_agent_key_authorizations, accepted_agent_key_authorizations,
+};
 mod participation;
 pub(crate) mod sidecar;
 
@@ -144,3 +146,52 @@ pub(crate) fn open_router() -> Router {
 #[cfg(test)]
 #[path = "agents/tests.rs"]
 mod tests;
+
+/// Restart-safe pairing activation; reads never own this state transition.
+pub(crate) fn spawn_pairing_activation_worker(state: AppState) {
+    tokio::spawn(async move {
+        let mut cursor = String::new();
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let rows = match state
+                .agent_pairings()
+                .pending_pairings_after(&cursor, 128)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(%error, "Agent activation scan failed");
+                    continue;
+                }
+            };
+            if rows.is_empty() {
+                cursor.clear();
+                continue;
+            }
+            for record in rows {
+                cursor = record.id.clone();
+                let record = match lifecycle::lazily_expire_pairing(&state, record).await {
+                    Ok(record) => record,
+                    Err(error) => {
+                        tracing::warn!(%error, "Agent pairing expiry failed");
+                        continue;
+                    }
+                };
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    pairing::reconcile_accepted_agent_authorization(&state, record),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        tracing::debug!(%error, "Agent authorization remains pending or cancelled")
+                    }
+                    Err(_) => tracing::warn!("Agent activation reconciliation timed out"),
+                }
+            }
+        }
+    });
+}

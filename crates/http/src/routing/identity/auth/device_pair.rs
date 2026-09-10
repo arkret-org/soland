@@ -43,6 +43,11 @@ async fn authorize_account_device_pair(
         generation.status
             == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
     });
+    if active_generation.is_none() {
+        return Err(AppError::capability_denied(
+            "pairing requires an active current device generation",
+        ));
+    }
     let authorized_generation_ref = active_generation
         .as_ref()
         .map(|generation| {
@@ -59,6 +64,63 @@ async fn authorize_account_device_pair(
             Ok(generation.current_ref)
         })
         .transpose()?;
+    let account_id =
+        crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(state, session)
+            .await?;
+    if body.authorize_event.event.actor_id != arkret_wire::ActorId::account(account_id.clone()) {
+        return Err(AppError::capability_denied(
+            "pairing Event must bind the authenticated complete AccountId",
+        ));
+    }
+    let actor = arkret_wire::ActorId::account(account_id.clone());
+    let device_id = DeviceId::new(session.device_id.clone())
+        .map_err(|e| AppError::capability_denied(e.to_string()))?;
+    let facet = crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
+        state,
+        account_id.principal_id.as_str(),
+        device_id.as_str(),
+    )
+    .await;
+    if crate::routing::identity::device_signing::current_device_authorization(
+        state, &actor, &device_id, &facet,
+    )
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
+    .is_none()
+    {
+        return Err(AppError::capability_denied(
+            "pairing authorizer no longer has an accepted current device authorization",
+        ));
+    }
+    let request_digest = arkret_canonical::canonical_sha256(&body)
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if let Some(record) = state
+        .device_pairings()
+        .get_terminal(body.device_pairing_request_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        if record.get("account_id")
+            != Some(
+                &serde_json::to_value(&account_id)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            )
+            || record.get("approving_device_id").and_then(Value::as_str)
+                != Some(session.device_id.as_str())
+            || record.get("request_digest").and_then(Value::as_str) != Some(request_digest.as_str())
+        {
+            return Err(AppError::conflict(
+                "device pairing request identity conflicts with its terminal outcome",
+            ));
+        }
+        return serde_json::from_value(
+            record
+                .get("outcome")
+                .cloned()
+                .ok_or_else(|| AppError::internal("pairing terminal outcome missing"))?,
+        )
+        .map_err(|error| AppError::internal(error.to_string()));
+    }
     let pairing_code = body.pairing_code.as_str().trim();
     if pairing_code.is_empty() {
         return Err(AppError::param_missing("pairing_code is required"));
@@ -113,6 +175,16 @@ async fn authorize_account_device_pair(
         return Err(device_pairing_not_found());
     }
     let challenge = arkret_signatures::device_pairing::ServerDevicePairingChallenge {
+        display_name: record
+            .display_name
+            .map(arkret_wire::NonEmptyString::new)
+            .transpose()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        device_metadata: record
+            .device_metadata
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| AppError::internal(error.to_string()))?,
         client_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
             record.client_nonce,
         )
@@ -126,13 +198,6 @@ async fn authorize_account_device_pair(
         )
         .map_err(|error| AppError::internal(format!("stored server_nonce invalid: {error}")))?,
     };
-    arkret_signatures::device_pairing::verify_server_device_pairing_challenge(
-        &body.new_device_pubkey,
-        &challenge,
-        &body.challenge_proof,
-        authorized_at,
-    )
-    .map_err(device_pairing_proof_failed)?;
     let authorize_payload = body
         .authorize_event
         .event
@@ -160,8 +225,8 @@ async fn authorize_account_device_pair(
         )
         .with_wire_code("schema_violation"));
     }
-    let target_attestation =
-        arkret_models_collaboration::http_bodies::DevicePairingTargetAttestation {
+    let target_proof =
+        arkret_models_collaboration::http_bodies::DevicePairingTargetProof {
             device_id: authorize_payload.device_id.clone(),
             device_public_key_did: arkret_wire::DidKey::new(
                 authorize_payload.device_public_key_did.as_str().to_owned(),
@@ -177,10 +242,10 @@ async fn authorize_account_device_pair(
                 arkret_models_collaboration::http_bodies::DevicePairingTargetKeyAlgorithm::Ed25519,
             authorization_binding_kind:
                 arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice,
-            pairing_challenge_transcript_digest: body.challenge_proof.transcript_digest.clone(),
+            pairing_challenge_transcript_digest: authorize_payload.pairing_challenge_transcript_digest.clone().ok_or_else(|| AppError::param_missing("pairing challenge digest is required"))?,
             device_signature: authorize_payload.device_signature.clone(),
         };
-    target_attestation
+    target_proof
         .validate_against_pair_request(&body, digest_suite)
         .map_err(|error| {
             AppError::param_invalid(format!(
@@ -188,8 +253,11 @@ async fn authorize_account_device_pair(
             ))
             .with_wire_code("schema_violation")
         })?;
-    arkret_signatures::device_pairing::verify_device_pairing_target_attestation(
-        &target_attestation,
+    arkret_signatures::device_pairing::verify_server_device_pairing_target_proof(
+        &body.new_device_pubkey,
+        &challenge,
+        &target_proof,
+        authorized_at,
     )
     .map_err(device_pairing_proof_failed)?;
     let authorized_by_actor_id =
@@ -204,6 +272,7 @@ async fn authorize_account_device_pair(
         authorized_by_actor_id,
         authorized_event_ref: body.authorize_event.event.event_id.to_string(),
         changed_at: authorized_at,
+        terminal_record: json!({"account_id": account_id, "approving_device_id": session.device_id, "request_digest": request_digest, "outcome": paired_device_outcome(device_id.clone(), body.authorize_event.event.event_id.as_str())?}),
     });
     let submitted =
         crate::routing::events::event_log::submit_initial_event_submission_with_device_pairing(
@@ -395,13 +464,13 @@ mod tests {
     }
 
     #[test]
-    fn target_attestation_rejects_any_post_signature_preassembly_change() {
+    fn target_proof_rejects_any_post_signature_preassembly_change() {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[19_u8; 32]);
         let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             signing_key.verifying_key().as_bytes(),
         );
         let unsigned =
-            arkret_models_collaboration::http_bodies::UnsignedDevicePairingTargetAttestation::new(
+            arkret_models_collaboration::http_bodies::UnsignedDevicePairingTargetProof::new(
                 arkret_wire::DeviceId::new("ak:device:01964137-0000-7000-8000-0000000000b2")
                     .unwrap(),
                 arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap(),
@@ -415,29 +484,26 @@ mod tests {
                 arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
             )
             .unwrap();
-        let attestation =
-            arkret_signatures::device_pairing::sign_device_pairing_target_attestation(
-                unsigned,
-                &signing_key,
-            )
-            .unwrap();
-        arkret_signatures::device_pairing::verify_device_pairing_target_attestation(&attestation)
+        let attestation = arkret_signatures::device_pairing::sign_device_pairing_target_proof(
+            unsigned,
+            &signing_key,
+        )
+        .unwrap();
+        arkret_signatures::device_pairing::verify_device_pairing_target_proof(&attestation)
             .unwrap();
 
         let mut changed_hpke = attestation.clone();
         changed_hpke.hpke_key = arkret_wire::NonEmptyString::new("different-hpke-key").unwrap();
         assert!(
-            arkret_signatures::device_pairing::verify_device_pairing_target_attestation(
-                &changed_hpke
-            )
-            .is_err()
+            arkret_signatures::device_pairing::verify_device_pairing_target_proof(&changed_hpke)
+                .is_err()
         );
 
         let mut changed_challenge = attestation;
         changed_challenge.pairing_challenge_transcript_digest =
             arkret_wire::Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
         assert!(
-            arkret_signatures::device_pairing::verify_device_pairing_target_attestation(
+            arkret_signatures::device_pairing::verify_device_pairing_target_proof(
                 &changed_challenge
             )
             .is_err()

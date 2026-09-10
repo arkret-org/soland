@@ -1,6 +1,5 @@
 #[cfg(test)]
 use arkret_wire::CapabilityActionId;
-use arkret_wire::{DidUrl, NonEmptyString};
 
 use super::*;
 
@@ -604,6 +603,28 @@ pub(super) fn agent_lifecycle_from_record(record: &AgentPrincipalRecord) -> Agen
     record.state
 }
 
+pub(super) fn projected_agent_lifecycle(
+    local_intent: AgentLifecycleState,
+    accepted: Option<arkret_models_identity::agent_signer_evidence::AgentLifecycleStatus>,
+) -> Result<AgentLifecycleState, AppError> {
+    use arkret_models_identity::agent_signer_evidence::AgentLifecycleStatus;
+    let accepted = accepted.ok_or_else(|| {
+        crate::app_error!(
+            FailedPrecondition,
+            "Agent accepted lifecycle is unavailable"
+        )
+    })?;
+    Ok(match (local_intent, accepted) {
+        (AgentLifecycleState::Deactivated, _) | (_, AgentLifecycleStatus::Deactivated) => {
+            AgentLifecycleState::Deactivated
+        }
+        (AgentLifecycleState::Paused, _) | (_, AgentLifecycleStatus::Paused) => {
+            AgentLifecycleState::Paused
+        }
+        (AgentLifecycleState::Active, AgentLifecycleStatus::Active) => AgentLifecycleState::Active,
+    })
+}
+
 /// Whether the record carries a live (unconsumed, unexpired) pairing handle for
 /// a non-terminal agent.
 pub(super) fn agent_pairing_handle_live(
@@ -633,28 +654,13 @@ pub(super) fn agent_runtime_state_from_record(
     )
 }
 
-/// Whether the reducer projection holds any active accepted key authorization
-/// for the agent — the `has_active_authorization` input to the runtime_state
-/// derivation.
-pub(super) fn agent_has_active_authorization(state: &AppState, agent_id: &str) -> bool {
-    state
-        .projections()
-        .snapshot()
-        .active_agent_key_authorizations(agent_id)
-        .into_iter()
-        .next()
-        .is_some()
-}
-
 pub(super) fn agent_projection_from_record(
     record: &AgentPrincipalRecord,
     runtime_state: AgentRuntimeState,
 ) -> AgentProjection {
     let lifecycle = agent_lifecycle_from_record(record);
     let (readiness_state, blockers) = match (lifecycle, runtime_state) {
-        (AgentLifecycleState::Active, AgentRuntimeState::Ready) => {
-            (AgentReadinessState::Ready, Vec::new())
-        }
+        (_, AgentRuntimeState::Ready) => (AgentReadinessState::Ready, Vec::new()),
         (_, AgentRuntimeState::PendingRuntimeKey) => (
             AgentReadinessState::NotReady,
             vec![
@@ -669,10 +675,6 @@ pub(super) fn agent_projection_from_record(
         (_, AgentRuntimeState::PairingExpired) => (
             AgentReadinessState::NotReady,
             vec![AgentReadinessBlocker::RuntimeKeyMissing],
-        ),
-        _ => (
-            AgentReadinessState::NotReady,
-            vec![AgentReadinessBlocker::SessionMissing],
         ),
     };
     let observed_at = chrono::Utc::now();
@@ -714,7 +716,11 @@ pub(super) async fn agent_view_from_record(
     state: &AppState,
     record: &AgentPrincipalRecord,
 ) -> Result<AgentView, AppError> {
-    let active_authorizations = active_agent_key_authorizations(state, &record.id)?;
+    let (keys, _, lifecycle) = accepted_agent_key_authorization_snapshot(state, record).await?;
+    let mut projected_record = record.clone();
+    projected_record.state = projected_agent_lifecycle(record.state, lifecycle)?;
+    let record = &projected_record;
+    let active_authorizations = active_agent_key_authorizations(state, keys).await?;
     let runtime_state = agent_runtime_state_from_record(
         record,
         !active_authorizations.is_empty(),
@@ -767,14 +773,10 @@ pub(super) fn agent_key_state_from_record(
             "persisted Agent controller account differs from its immutable principal binding",
         ));
     }
-    // pairing handle presence and its branch are a projection of the single
-    // derived runtime_state (key-management.md §3.6.1): an open handle appears
-    // exactly for pending_runtime_key (bootstrap) and replacing (replacement).
-    let (pairing_is_open, pairing_mode) = match runtime_state {
-        AgentRuntimeState::PendingRuntimeKey => (true, Some(AgentPairingMode::Bootstrap)),
-        AgentRuntimeState::Replacing => (true, Some(AgentPairingMode::Replacement)),
-        AgentRuntimeState::Ready | AgentRuntimeState::PairingExpired => (false, None),
-    };
+    let pairing_is_open = matches!(
+        runtime_state,
+        AgentRuntimeState::PendingRuntimeKey | AgentRuntimeState::Replacing
+    );
     let open_handle = pairing_is_open
         .then_some(runtime_bindings.open_handle.as_ref())
         .flatten()
@@ -801,53 +803,58 @@ pub(super) fn agent_key_state_from_record(
         controller_authorization_ref: record.controller_authorization_ref.clone(),
         requested_scope,
         pairing_request_id: open_handle.map(|handle| handle.pairing_request_id.clone()),
-        pairing_mode,
         pairing_code: open_handle.map(|handle| handle.pairing_code.clone()),
         pairing_expires_at: open_handle.map(|handle| handle.expires_at),
         approval_request_id: open_handle
             .and_then(|handle| handle.pending_runtime_key_request.as_ref())
             .and(record.approval_request_id.clone()),
         pending_runtime_key_request: open_handle
-            .and_then(|handle| handle.pending_runtime_key_request.clone()),
+            .and_then(|handle| handle.pending_runtime_key_request.as_ref())
+            .zip(record.approval_request_id.clone())
+            .map(|(candidate, approval)| runtime_key_request_for_controller(candidate, approval)),
         approval_requested_at: open_handle
             .and_then(|handle| handle.pending_runtime_key_request.as_ref())
             .and(record.approval_requested_at),
         authorized_event_ref,
         active_authorizations,
+        runtime_verifier_material: None,
     })
 }
 
-fn active_agent_key_authorizations(
+async fn active_agent_key_authorizations(
     state: &AppState,
-    agent_id: &str,
+    keys: BTreeSet<(String, String)>,
 ) -> Result<
     Vec<arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState>,
     AppError,
 > {
-    state
-        .projections()
-        .snapshot()
-        .active_agent_key_authorizations(agent_id)
-        .into_iter()
-        .map(|(key_id, authorized_event_ref)| {
-            Ok(arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState {
-                verification_method: DidUrl::new(key_id.clone()).map_err(|error| {
-                    AppError::internal(format!(
-                        "projected Agent verification method is invalid: {error}"
-                    ))
-                })?,
-                key_id: NonEmptyString::new(key_id).map_err(|error| {
-                    AppError::internal(format!("projected Agent key id is invalid: {error}"))
-                })?,
-                authorized_event_ref: EventId::new(authorized_event_ref).map_err(|error| {
-                    AppError::internal(format!(
-                        "projected Agent authorization Event is invalid: {error}"
-                    ))
-                })?,
-                expires_at: None,
-            })
-        })
-        .collect()
+    let mut result = Vec::new();
+    for (key_id, event_ref) in keys {
+        let event = state
+            .event_queries()
+            .canonical_event(&event_ref)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                AppError::internal("accepted Agent authorization Event is unavailable")
+            })?;
+        let payload: arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload =
+            serde_json::from_value(event.envelope["payload"].clone())
+                .map_err(|error| AppError::internal(error.to_string()))?;
+        if payload.key_id.as_str() != key_id {
+            return Err(AppError::internal("accepted Agent key id mismatch"));
+        }
+        result.push(
+            arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState {
+                verification_method: payload.verification_method,
+                key_id: payload.key_id,
+                authorized_event_ref: EventId::new(event_ref)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+                expires_at: payload.expires_at,
+            },
+        );
+    }
+    Ok(result)
 }
 
 // ─────────────────────────────────────────────────────────────────────

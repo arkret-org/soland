@@ -442,7 +442,6 @@ pub trait ResolutionStoreRegistry: Send + Sync {
 /// Complete persistence capability assembled by an infrastructure adapter.
 pub trait PersistenceStore:
     EventCommitUnitOfWork
-    + DevicePairingCommitUnitOfWork
     + IdentityStoreRegistry
     + FederationGovernanceStoreRegistry
     + DeliveryPolicyStoreRegistry

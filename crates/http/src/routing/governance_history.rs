@@ -3451,9 +3451,7 @@ async fn build_history_recipient_authority_views(
             unreachable!("current Agent evidence builder returned historical evidence")
         };
         let authority_state = &admission_evidence.agent_authority_state_evidence.state;
-        if authority_state
-            .signing_key_binding
-            .agent_key_authorize_event_id
+        if authority_state.key_authorization_event.event_id
             != *requester_agent_key_authorize_event_id
         {
             return Err(AppError::capability_denied(
@@ -4390,7 +4388,7 @@ async fn validate_history_requester_endpoint_authorization(
                 })?;
             if runtime.verification_method != *requester_agent_verification_method
                 || runtime.authorized_event_ref != *requester_agent_key_authorize_event_id
-                || runtime.signing_key_binding.agent_key_authorize_event_id
+                || runtime.key_authorization_event.event_id
                     != *requester_agent_key_authorize_event_id
             {
                 return Err(AppError::capability_denied(

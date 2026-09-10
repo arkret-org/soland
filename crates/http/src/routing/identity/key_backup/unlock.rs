@@ -143,23 +143,6 @@ pub(super) fn key_backup_canonical_digest_without_signature(
         .map_err(|error| AppError::internal(format!("key backup canonical digest failed: {error}")))
 }
 
-pub(super) fn required_proof_string<'a>(
-    proof: &'a Value,
-    field: &str,
-) -> Result<&'a str, AppError> {
-    proof
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            crate::app_error!(
-                SchemaViolation,
-                format!("key backup unlock proof `{field}` is required"),
-            )
-        })
-}
-
 pub(super) fn validate_key_backup_unlock_proof_shape(
     proof: &Value,
     account_id: &arkret_wire::AccountId,
@@ -198,206 +181,271 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
     Ok(())
 }
 
-pub(super) async fn verify_key_backup_unlock_proof_signature(
-    state: &AppState,
-    proof: &Value,
-) -> Result<(), AppError> {
-    let proof = serde_json::from_value::<KeyBackupUnlockProof>(proof.clone())
-        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
-    let canonical = proof
-        .signing_payload_bytes()
-        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
-    let verification_method = proof.auth_data.verification_method.as_str();
-    let signature_b64 = proof.auth_data.signature.as_str();
-    let raw = URL_SAFE_NO_PAD
-        .decode(signature_b64.as_bytes())
-        .map_err(|_| {
-            AppError::capability_denied("key backup unlock proof signature is not base64url")
-        })?;
-    let signature = Signature::from_slice(&raw).map_err(|_| {
-        AppError::capability_denied("key backup unlock proof signature must be 64 Ed25519 bytes")
-    })?;
-    let recovery_session = state
-        .recovery_sessions()
-        .session(proof.recovery_session_id.as_str())
-        .await
-        .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?;
-    let public_key = if proof.proof_kind == arkret_models_crypto::ProofKind::RecoveryUnlock {
-        let record = recovery_session.as_ref().ok_or_else(|| {
-            AppError::capability_denied(
-                "key backup unlock proof recovery session record is missing",
-            )
-        })?;
-        super::super::recovery::recovery_session_unlock_verifying_key(record, verification_method)?
-    } else if proof.proof_kind == arkret_models_crypto::ProofKind::CurrentDevice
-        && recovery_session.is_none()
-    {
-        let record = state
-            .identities()
-            .find_device(soland_services::identity::FindDeviceQuery {
-                actor_id: proof.account_id.principal_id.to_string(),
-                device_id: proof.requesting_device_id.to_string(),
-            })
-            .await
-            .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
-            .ok_or_else(|| {
-                AppError::capability_denied(
-                    "key backup unlock proof requesting device is not authorized",
-                )
-            })?;
-        if record.revoked_at.is_some() || record.verification_state != "verified" {
-            return Err(AppError::capability_denied(
-                "key backup unlock proof requesting device is not active",
-            ));
-        }
-        let device_public_key = record
-            .payload
-            .get("device_public_key_did")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                AppError::capability_denied(
-                    "key backup unlock proof requesting device key is unavailable",
-                )
-            })?;
-        if !key_backup_verification_method_matches_device_key(
-            proof.account_id.principal_id.as_str(),
-            proof.requesting_device_id.as_str(),
-            device_public_key,
-            verification_method,
-        ) {
-            return Err(AppError::capability_denied(
-                "key backup unlock proof verification method does not match the requesting device key",
-            ));
-        }
-        crate::routing::identity::device_signing::decode_ed25519_key(device_public_key, "multibase")
-            .map_err(|_| {
-                AppError::capability_denied(
-                    "key backup unlock proof requesting device key is invalid",
-                )
-            })?
-    } else {
-        crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
-            .await
-            .map_err(|error| {
-                AppError::capability_denied(format!(
-                    "key backup unlock proof verification method invalid: {error}"
-                ))
-            })?
-    };
-    public_key.verify(&canonical, &signature).map_err(|_| {
-        AppError::capability_denied("key backup unlock proof signature verification failed")
-    })
+fn unlock_audience(state: &AppState) -> Result<String, AppError> {
+    let url = reqwest::Url::parse(&state.config().public_base_url)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(url.origin().ascii_serialization())
 }
 
-/// Recovery-ceremony proof kinds whose transcript MUST be anchored to a
-/// verified/completed recovery session (key-management.md §7.7.1 / §7.8:
-/// an unbound proof MUST be rejected with `recovery_evidence_unbound`).
-/// `current_device` is outside that closed set: it is a device-signed decrypt
-/// proof, not a recovery ceremony, and is therefore not anchored to a durable
-/// recovery-session record.
-fn proof_kind_requires_recovery_session(proof_kind: &str) -> bool {
-    proof_kind != "current_device"
-}
-
-pub(super) async fn enforce_recovery_session_binding_when_present(
-    state: &AppState,
-    proof: &Value,
-    session: &soland_services::identity::SessionIdentityState,
-) -> Result<(), AppError> {
-    let typed_proof = serde_json::from_value::<KeyBackupUnlockProof>(proof.clone())
-        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
-    let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
-    let Some(record) = state
-        .recovery_sessions()
-        .session(recovery_session_id)
-        .await
-        .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?
-    else {
-        // Fail closed for recovery-ceremony proof kinds: a proof that claims
-        // a recovery session which does not exist locally cannot be anchored
-        // to a verified/completed ceremony (key-management.md §7.8).
-        let proof_kind = required_proof_string(proof, "proof_kind")?;
-        if proof_kind_requires_recovery_session(proof_kind) {
-            return Err(AppError::conflict(
-                "key backup unlock proof recovery session record is missing for a recovery-ceremony proof_kind",
-            )
-            .with_reason_code("recovery_evidence_unbound"));
-        }
-        return Ok(());
-    };
-    if record.principal_id.as_str() != session.actor
-        || record.principal_id != typed_proof.account_id.principal_id
-        || record.station_id != typed_proof.account_id.station_id
-        || record.requesting_device_id != session.device_id
-    {
-        return Err(AppError::capability_denied(
-            "key backup unlock proof recovery session binding does not match caller",
-        ));
-    }
-    if let Some(grant) = session.session_grant.as_ref()
-        && grant.credential_class
-            == arkret_models_identity::SessionGrantCredentialClass::RecoverySession
-        && (record.session_grant_id != grant.grant_id.as_str()
-            || record.session_grant_cnf_jkt != grant.cnf_jkt)
-    {
-        return Err(AppError::capability_denied(
-            "key backup unlock proof recovery session does not match the presented recovery grant",
-        ));
-    }
-    if !matches!(
-        record.state,
-        arkret_models_crypto::SessionState::Verified
-            | arkret_models_crypto::SessionState::Completed
-    ) {
-        // Registry reason `recovery_evidence_unbound`: the unlock proof is
-        // not backed by a verified/completed recovery session, so the
-        // recovery evidence is not bound to the session it claims.
-        return Err(AppError::conflict(
-            "key backup unlock proof recovery session must be verified or completed",
-        )
-        .with_reason_code("recovery_evidence_unbound"));
-    }
-    if let Some((kind, digest)) =
-        super::super::recovery::recovery_session_proof_kind_and_digest(&record)
-        && (required_proof_string(proof, "proof_kind")? != kind
-            || required_proof_string(proof, "proof_digest")? != digest)
-    {
-        return Err(AppError::capability_denied(
-            "key backup unlock proof proof_digest does not match recovery session",
-        ));
-    }
-    Ok(())
-}
-
-/// Spec `keys_backups_unlock_request_body` (additionalProperties: false) —
-/// the unlock proof travels as the `proof` field of the JSON request body of
-/// `POST /_arkret/self/keys/backups/{backup_id}/unlock`; header / query
-/// carriers are forbidden. The proof MUST validate as
-/// `ak.schema.key_backup_unlock_proof.v1` and is verified against the
-/// recovery session, caller, requesting device key, and target envelope
-/// before the full ciphertext is returned (key-management.md §7.7.1 / §7.8).
 pub(super) async fn verify_key_backup_unlock_proof(
     state: &AppState,
     proof: &Value,
     session: &soland_services::identity::SessionIdentityState,
     backup: &Value,
 ) -> Result<(), AppError> {
+    use arkret_models_crypto::KeyBackupUnlockAuthority;
     let account_id = arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-            AppError::capability_denied(format!("authenticated actor is invalid: {error}"))
-        })?,
+        arkret_wire::DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::capability_denied(error.to_string()))?,
         state.service_core_id(),
     );
     validate_key_backup_unlock_proof_shape(proof, &account_id, &session.device_id, backup)?;
-    enforce_recovery_session_binding_when_present(state, proof, session).await?;
-    verify_key_backup_unlock_proof_signature(state, proof).await
+    let typed: KeyBackupUnlockProof =
+        serde_json::from_value(proof.clone()).map_err(|error| schema_error(error.to_string()))?;
+    let now = Utc::now();
+    if typed.service_id != state.service_core_id()
+        || typed.audience.as_str() != unlock_audience(state)?
+        || typed.issued_at > now
+    {
+        return Err(AppError::capability_denied(
+            "unlock service, audience or issuance mismatch",
+        ));
+    }
+    let method = typed.auth_data.verification_method.as_str();
+    let key = match &typed.authority {
+        KeyBackupUnlockAuthority::CurrentDevice {
+            challenge_id,
+            nonce,
+        } => {
+            if session.session_grant.as_ref().is_some_and(|grant| {
+                grant.credential_class
+                    == arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+            }) {
+                return Err(AppError::capability_denied(
+                    "recovery grant cannot select current_device unlock",
+                ));
+            }
+            crate::routing::identity::session_actor::validated_session_actor(state, session)
+                .await?;
+            crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+                state,
+                &session.actor,
+                &session.device_id,
+            )
+            .await
+            .map_err(|error| AppError::capability_denied(error.to_string()))?;
+            let stored = state
+                .key_backups()
+                .unlock_challenge(challenge_id.as_str())
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| AppError::capability_denied("server unlock challenge is missing"))?;
+            let challenge: arkret_models_crypto::KeysBackupsUnlockChallenge =
+                serde_json::from_value(stored)
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+            if challenge.account_id != typed.account_id
+                || challenge.requesting_device_id != typed.requesting_device_id
+                || challenge.backup_id != typed.backup_id
+                || challenge.series_id != typed.series_id
+                || challenge.ciphertext_digest != typed.ciphertext_digest
+                || challenge.challenge != typed.challenge
+                || &challenge.nonce != nonce
+                || challenge.service_id != typed.service_id
+                || challenge.audience != typed.audience
+                || typed.issued_at < challenge.issued_at
+                || typed.issued_at >= challenge.expires_at
+                || typed.expires_at != challenge.expires_at
+            {
+                return Err(AppError::capability_denied(
+                    "unlock proof does not match exact server challenge",
+                ));
+            }
+            // Consumption enforces first-use expiry; an exact durable retry may outlive this
+            // challenge.
+            let device = state
+                .identities()
+                .find_device(soland_services::identity::FindDeviceQuery {
+                    actor_id: session.actor.clone(),
+                    device_id: session.device_id.clone(),
+                })
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| AppError::capability_denied("current device missing"))?;
+            let key = device
+                .payload
+                .get("device_public_key_did")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::capability_denied("current device key missing"))?;
+            if !key_backup_verification_method_matches_device_key(
+                &session.actor,
+                &session.device_id,
+                key,
+                method,
+            ) {
+                return Err(AppError::capability_denied(
+                    "unlock signer differs from current device",
+                ));
+            }
+            crate::routing::identity::device_signing::decode_ed25519_key(key, "multibase")
+                .map_err(|_| AppError::capability_denied("invalid current device key"))?
+        }
+        KeyBackupUnlockAuthority::RecoverySession {
+            recovery_session_id,
+        } => {
+            let record = state
+                .recovery_sessions()
+                .session(recovery_session_id.as_str())
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| AppError::capability_denied("recovery_evidence_unbound"))?;
+            let grant = session
+                .session_grant
+                .as_ref()
+                .ok_or_else(|| AppError::capability_denied("recovery grant required"))?;
+            if grant.credential_class
+                != arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+                || grant.grant_id.as_str() != record.session_grant_id
+                || grant.cnf_jkt != record.session_grant_cnf_jkt
+                || record.state != arkret_models_crypto::SessionState::Verified
+                || record.expires_at <= now
+                || record.expires_at != typed.expires_at
+                || record.principal_id != typed.account_id.principal_id
+                || record.station_id != typed.account_id.station_id
+                || record.requesting_device_id != typed.requesting_device_id.as_str()
+                || record.challenge != typed.challenge.as_str()
+                || typed.issued_at < record.created_at
+            {
+                return Err(AppError::capability_denied("recovery_evidence_unbound"));
+            }
+            let generation =
+                crate::routing::identity::device_generation::current_device_generation(
+                    state,
+                    &session.actor,
+                )
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| AppError::capability_denied("recovery generation missing"))?;
+            if generation.current_ref != record.current_device_generation_ref
+                || generation.status
+                    != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+            {
+                return Err(AppError::capability_denied("recovery generation changed"));
+            }
+            let key = &record.requesting_device_public_key_did;
+            let fragment = key.strip_prefix("did:key:").ok_or_else(|| {
+                AppError::capability_denied("frozen replacement key is not did:key")
+            })?;
+            if method != format!("{key}#{fragment}") {
+                return Err(AppError::capability_denied(
+                    "unlock must be signed by frozen replacement identity key",
+                ));
+            }
+            crate::routing::identity::device_signing::decode_ed25519_key(key, "multibase")
+                .map_err(|_| AppError::capability_denied("invalid frozen replacement key"))?
+        }
+    };
+    let signature = URL_SAFE_NO_PAD
+        .decode(typed.auth_data.signature.as_str())
+        .map_err(|_| AppError::capability_denied("invalid unlock signature"))?;
+    let signature = Signature::from_slice(&signature)
+        .map_err(|_| AppError::capability_denied("invalid unlock signature"))?;
+    let bytes = typed
+        .signing_payload_bytes()
+        .map_err(|error| schema_error(error.to_string()))?;
+    key.verify(&bytes, &signature)
+        .map_err(|_| AppError::capability_denied("unlock signature verification failed"))
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.backups.command.issue_unlock_challenge",
+    tags("identity")
+)]
+pub(super) async fn issue_key_backup_unlock_challenge(
+    aa: AuthArgs,
+    backup_id: PathParam<String>,
+    body: JsonBody<arkret_models_crypto::KeysBackupsIssueUnlockChallengeRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<arkret_models_crypto::KeysBackupsUnlockChallenge> {
+    use rand::RngExt as _;
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    if session.session_grant.as_ref().is_some_and(|grant| {
+        grant.credential_class
+            == arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+    }) {
+        return Err(AppError::capability_denied(
+            "recovery session reuses its frozen challenge",
+        ));
+    }
+    crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
+    crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+        state,
+        &session.actor,
+        &session.device_id,
+    )
+    .await
+    .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    let backup_id = backup_id.into_inner();
+    let backup = state
+        .key_backups()
+        .backup(&backup_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("key backup not found"))?;
+    if !backup_actor_matches(&backup, &local_backup_actor(state, &session.actor)?) {
+        return Err(AppError::not_found("key backup not found"));
+    }
+    let typed: KeyBackup =
+        serde_json::from_value(backup).map_err(|error| AppError::internal(error.to_string()))?;
+    let random = |size: usize| {
+        let mut bytes = vec![0u8; size];
+        rand::rng().fill(bytes.as_mut_slice());
+        arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(bytes)).expect("base64url")
+    };
+    let now = Utc::now();
+    let request_id = body.into_inner().request_id;
+    if !(22..=128).contains(&request_id.as_str().len()) {
+        return Err(AppError::param_invalid("invalid unlock request_id"));
+    }
+    let challenge = arkret_models_crypto::KeysBackupsUnlockChallenge {
+        challenge_id: random(16),
+        challenge: random(32),
+        nonce: random(16),
+        operation: "ak.self.keys.backups.command.unlock.v1".to_owned(),
+        account_id: arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(session.actor)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            state.service_core_id(),
+        ),
+        requesting_device_id: arkret_wire::DeviceId::new(session.device_id)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        backup_id: typed.backup_id,
+        series_id: typed.series_id,
+        ciphertext_digest: arkret_wire::Hash::new(typed.ciphertext_digest)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        audience: arkret_wire::NonEmptyString::new(unlock_audience(state)?)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        service_id: state.service_core_id(),
+        request_id,
+        issued_at: now,
+        expires_at: now + chrono::Duration::seconds(300),
+    };
+    let stored = state
+        .key_backups()
+        .issue_unlock_challenge(
+            serde_json::to_value(challenge)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            now,
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(serde_json::from_value(stored).map_err(|error| AppError::internal(error.to_string()))?)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        key_backup_verification_method_matches_device_key, proof_kind_requires_recovery_session,
-    };
+    use super::key_backup_verification_method_matches_device_key;
 
     // did-usage-and-verification.md §2.2 — a proof `verification_method` MUST
     // be a DID URL with a `#fragment`. A bare `did:key:<mb>` names no concrete
@@ -434,27 +482,27 @@ mod tests {
             did.as_str()
         ));
     }
+}
 
-    // key-management.md §7.7.1 / §7.8 — recovery-ceremony proof kinds fail
-    // closed when the claimed recovery session record is absent; the
-    // `current_device` proof is outside that closed set and proceeds
-    // without a durable session record.
-    #[test]
-    fn recovery_ceremony_proof_kinds_require_a_recovery_session() {
-        for kind in [
-            "recovery_unlock",
-            "threshold_recovery",
-            "device_quorum",
-            "trusted_recovery_service",
-        ] {
-            assert!(
-                proof_kind_requires_recovery_session(kind),
-                "{kind} must require a durable recovery session"
-            );
-        }
-        assert!(!proof_kind_requires_recovery_session("current_device"));
-        // Unknown kinds never reach this check (the shape validator rejects
-        // them first), but classify them as session-requiring anyway so a
-        // future closed-set widening cannot silently fail open here.
+pub(super) async fn unlock_active_basis(
+    state: &AppState,
+    account: &arkret_wire::AccountId,
+    backup: &Value,
+) -> Result<Value, AppError> {
+    use arkret_models_crypto::BackupActiveSeriesPointer;
+    let pointers = super::listing::active_pointers(state, account).await?;
+    let typed: KeyBackup = serde_json::from_value(backup.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let pointer = match typed.backup_kind {
+        BackupKind::SecretStorage => &pointers.secret_storage,
+        BackupKind::MlsHistory => &pointers.mls_history,
+    };
+    if !matches!(pointer,BackupActiveSeriesPointer::Active{active_series_id,..} if active_series_id==&typed.series_id)
+        || typed
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= Utc::now())
+    {
+        return Err(AppError::conflict("backup_frontier_stale"));
     }
+    Ok(json!({"realm_id":pointers.control_realm_id,"seal_basis":pointers.seal_basis}))
 }

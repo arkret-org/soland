@@ -29,10 +29,8 @@ use super::subscribe::account_subscribe_session_or_render;
 use crate::routing::spaces::space::realm_has_member;
 use crate::state::{AppState, EventNotification};
 
-/// Default lifetime of one `signal/subscribe` connection. A Signal TTL never
-/// exceeds 120s (§2), so a client that reconnects inside this window loses
-/// nothing: the relay still holds every unexpired envelope and the
-/// per-`(actor, device, realm)` watermark keeps redelivery at-most-once.
+/// Default lifetime of one cursorless Signal connection. Reconnection may lose frames;
+/// the relay never promises catch-up or delivery.
 const SIGNAL_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 /// Idle keepalive so an intermediary does not reap a quiet connection.
 const SIGNAL_SUBSCRIBE_DEFAULT_HEARTBEAT_MS: u64 = 15_000;
@@ -646,39 +644,36 @@ async fn verify_signal_agent_current_authority(
         ));
     }
 
-    let active_authorizations = state
-        .projections()
-        .snapshot()
-        .active_agent_key_authorizations(agent_id.as_str());
+    let active_authorizations =
+        crate::routing::identity::agents::accepted_active_agent_key_authorizations(
+            state,
+            &agent_record,
+        )
+        .await
+        .map_err(|_| signal_rail_unavailable("resolve accepted Agent key state"))?;
     if active_authorizations.is_empty() {
         return Err(signal_proof_invalid(
             "Signal Agent has no current accepted key authorization",
         ));
     }
-    for (method, authorization_ref) in active_authorizations {
+    for (key_id, authorization_ref) in active_authorizations {
         let authorization = state
             .event_queries()
             .canonical_event(&authorization_ref)
             .await
             .map_err(|_| signal_rail_unavailable("resolve Agent key authorization"))?
             .ok_or_else(|| signal_proof_invalid("Agent key authorization is unavailable"))?;
-        let payload = authorization
-            .envelope
-            .get("payload")
-            .and_then(serde_json::Value::as_object)
-            .ok_or_else(|| signal_proof_invalid("Agent key authorization payload is invalid"))?;
-        if authorization.kind != arkret_wire::EventKind::AgentKeyAuthorize.as_str()
-            || payload.get("agent_id").and_then(serde_json::Value::as_str)
-                != Some(agent_id.as_str())
-            || payload
-                .get("verification_method")
-                .and_then(serde_json::Value::as_str)
-                != Some(method.as_str())
-            || method != runtime.verification_method
-            || payload
-                .get("public_key_digest")
-                .and_then(serde_json::Value::as_str)
-                != Some(runtime.public_key_digest.as_str())
+        let event: arkret_wire::Event = serde_json::from_value(authorization.envelope)
+            .map_err(|_| signal_proof_invalid("Agent authorization Event is invalid"))?;
+        let key =
+            arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+                &event,
+            )
+            .map_err(|_| signal_proof_invalid("Agent authorization key is invalid"))?;
+        if key.agent_id != *agent_id
+            || key.agent_key_id.as_str() != key_id
+            || key.verification_method != runtime.verification_method
+            || key.public_key_digest != runtime.public_key_digest
         {
             return Err(signal_proof_invalid(
                 "Agent has conflicting current runtime key authorizations",
@@ -689,10 +684,13 @@ async fn verify_signal_agent_current_authority(
     // The authenticated grant binds the runtime authorization, while its
     // session public key authenticates HTTP DPoP only. Signal producers sign
     // with the independently accepted Agent runtime key (signal.md section 1).
-    let public_key = agent_runtime_signal_public_key(
-        &runtime.signing_key_binding.public_key,
-        &runtime.public_key_digest,
-    )?;
+    let authorized_key =
+        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
+            &runtime.key_authorization_event,
+        )
+        .map_err(|_| signal_proof_invalid("Agent authorization Event key is invalid"))?;
+    let public_key =
+        agent_runtime_signal_public_key(&authorized_key.public_key, &runtime.public_key_digest)?;
     arkret_signatures::verify_ed25519_signal_proof(envelope, &public_key).map_err(|error| {
         tracing::warn!(
             %error,
@@ -1078,7 +1076,9 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 }
                 _ = poll.tick() => {
                     for envelope in pending_signals_for_subscriber(&state, &session).await {
-                        yield Ok(ndjson_line(&SignalStreamFrame::signal(envelope)));
+                        if let Ok(frame) = admitted_signal_frame(&state, &session, envelope).await {
+                            yield Ok(ndjson_line(&frame));
+                        }
                     }
                 }
                 _ = heartbeat.tick() => {
@@ -1090,6 +1090,89 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
 
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+/// Fresh current admission belongs to the recipient authenticated self boundary,
+/// separately from peer relay. Never return a frame if current authority is unknown.
+pub(crate) async fn admitted_signal_frame(
+    state: &AppState,
+    session: &SessionIdentityState,
+    envelope: SignalEnvelope,
+) -> Result<SignalStreamFrame, AppError> {
+    use arkret_models_identity::{
+        AccountDeviceSenderKind, AgentSenderKind, CurrentAccountDeviceSelector,
+        CurrentAdmissionMode, CurrentAgentSelector, SignerKeyQueryOutcome, SignerKeyQuerySelector,
+        SignerKeysQueryRequestBody,
+    };
+    let actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
+    let recipient = actor
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| signal_invalid("recipient is not an account"))?;
+    admit_signal_outer(
+        state,
+        envelope.sender_actor_id.route_service_id().as_str(),
+        &envelope,
+    )
+    .await?;
+    let selector = match envelope.sender_device_id.as_ref() {
+        Some(device_id) => {
+            SignerKeyQuerySelector::CurrentAccountDevice(CurrentAccountDeviceSelector {
+                verification_mode: CurrentAdmissionMode::CurrentAdmission,
+                sender_kind: AccountDeviceSenderKind::AccountDevice,
+                actor: envelope.sender_actor_id.clone(),
+                device_id: device_id.clone(),
+                verification_method: envelope.proof.verification_method.clone(),
+            })
+        }
+        None => SignerKeyQuerySelector::CurrentAgent(CurrentAgentSelector {
+            verification_mode: CurrentAdmissionMode::CurrentAdmission,
+            sender_kind: AgentSenderKind::Agent,
+            actor: envelope.sender_actor_id.clone(),
+            verification_method: envelope.proof.verification_method.clone(),
+        }),
+    };
+    let request = SignerKeysQueryRequestBody {
+        request_id: arkret_wire::RequestId::new_v7_at(chrono::Utc::now().timestamp_millis() as u64),
+        realm_id: envelope.realm_id.clone(),
+        recipient_account_id: recipient.clone(),
+        queries: vec![selector],
+    };
+    let outcome = crate::routing::identity::current_signer_evidence::resolve_self_signer_keys(
+        state, session, &request,
+    )
+    .await?;
+    let Some(SignerKeyQueryOutcome::Current(result)) = outcome.results.into_iter().next() else {
+        return Err(signal_rail_unavailable("verify current sender authority"));
+    };
+    // Re-check time/scope after a possible remote round trip and before emitting this frame.
+    admit_signal_outer(
+        state,
+        envelope.sender_actor_id.route_service_id().as_str(),
+        &envelope,
+    )
+    .await?;
+    crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
+    let recipient_actor = arkret_wire::ActorId::account(recipient.clone()).to_string();
+    if !realm_has_member(state, envelope.realm_id.as_str(), &recipient_actor).await
+        || envelope.scope_ref.circle_id().is_some_and(|circle_id| {
+            !state
+                .projections()
+                .snapshot()
+                .circle_scope_visible_to_actor(circle_id.as_str(), &recipient_actor)
+        })
+    {
+        return Err(signal_rail_unavailable("verify current recipient scope"));
+    }
+    let authority = arkret_wire::SignalDeliveryAuthority {
+        recipient_account_id: recipient,
+        key: result.key,
+    };
+    authority
+        .validate_for_envelope(&envelope)
+        .map_err(structural_error)?;
+    Ok(SignalStreamFrame::signal(envelope, authority))
 }
 
 /// Every unexpired Signal this device is eligible for and has not already been

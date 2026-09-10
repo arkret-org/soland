@@ -179,12 +179,7 @@ impl ProjectionState {
             };
         }
         self.agent_lifecycles.insert(agent_actor_id, target);
-        if matches!(
-            target,
-            AgentLifecycleState::Paused | AgentLifecycleState::Deactivated
-        ) {
-            self.revoke_agent_runtime_bindings(&agent_id, target, operation);
-        }
+        self.project_agent_request_lifecycle(&agent_id, target, operation);
         ProjectionEffect::AgentLifecycleProjected {
             agent_id,
             new_state: target,
@@ -386,9 +381,9 @@ impl ProjectionState {
         let kind = match status {
             AgentActionRequestStatus::Approved => arkret_wire::EventKind::AgentActionApprove,
             AgentActionRequestStatus::Rejected => arkret_wire::EventKind::AgentActionReject,
-            AgentActionRequestStatus::Pending | AgentActionRequestStatus::Cancelled => {
-                arkret_wire::EventKind::AgentActionRequest
-            }
+            AgentActionRequestStatus::Pending
+            | AgentActionRequestStatus::AwaitingResume
+            | AgentActionRequestStatus::Cancelled => arkret_wire::EventKind::AgentActionRequest,
         };
         ProjectionEffect::AgentPrivateEventAccepted {
             kind,
@@ -396,23 +391,34 @@ impl ProjectionState {
         }
     }
 
-    fn revoke_agent_runtime_bindings(
+    fn project_agent_request_lifecycle(
         &mut self,
         agent_id: &str,
         target: AgentLifecycleState,
         operation: &Operation,
     ) {
-        let reason = match target {
-            AgentLifecycleState::Paused => "agent_paused",
-            AgentLifecycleState::Deactivated => "agent_deactivated",
-            AgentLifecycleState::Active => return,
-        };
-        for request in self.agent_action_requests.values_mut() {
-            if request.agent_id == agent_id && request.status == AgentActionRequestStatus::Pending {
-                request.status = AgentActionRequestStatus::Cancelled;
-                request.resolved_at = Some(operation.created_at);
-                request.resolution_event_id = Some(operation.operation_id.to_string());
-                request.cancel_reason = Some(reason.to_owned());
+        for request in self
+            .agent_action_requests
+            .values_mut()
+            .filter(|request| request.agent_id == agent_id)
+        {
+            match (target, request.status) {
+                (AgentLifecycleState::Paused, AgentActionRequestStatus::Pending) => {
+                    request.status = AgentActionRequestStatus::AwaitingResume;
+                }
+                (AgentLifecycleState::Active, AgentActionRequestStatus::AwaitingResume) => {
+                    request.status = AgentActionRequestStatus::Pending;
+                }
+                (
+                    AgentLifecycleState::Deactivated,
+                    AgentActionRequestStatus::Pending | AgentActionRequestStatus::AwaitingResume,
+                ) => {
+                    request.status = AgentActionRequestStatus::Cancelled;
+                    request.resolved_at = Some(operation.created_at);
+                    request.resolution_event_id = Some(operation.operation_id.to_string());
+                    request.cancel_reason = Some("agent_deactivated".to_owned());
+                }
+                _ => {}
             }
         }
     }

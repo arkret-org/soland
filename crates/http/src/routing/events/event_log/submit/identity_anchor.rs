@@ -1571,6 +1571,15 @@ async fn validate_reanchor_recovery_session(
             "replacement device authorization does not match an active verified recovery session",
         ));
     }
+    crate::routing::identity::recovery::validate_frozen_session_policy(state, &session, None)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "recovery_evidence_unbound",
+                error.to_string(),
+            )
+        })?;
     Ok(())
 }
 
@@ -2101,6 +2110,7 @@ mod tests {
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
         arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
+            pairing_challenge_transcript_digest: None,
             device_id: arkret_identifiers::DeviceId::new(
                 "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             )

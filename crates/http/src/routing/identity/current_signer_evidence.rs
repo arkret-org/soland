@@ -213,7 +213,6 @@ async fn current_key_result(
                 selector: selector.clone(),
                 status: SignerEvidenceResolvedStatus::Resolved,
                 key,
-                checked_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
             }));
         }
     }
@@ -262,7 +261,6 @@ async fn historical_agent_key_result(
             status: SignerEvidenceResolvedStatus::Resolved,
             key,
             accepted_at: event_admission.producer_accepted_at().ok()?,
-            signer_evidence_ref: root.evidence_ref().ok()?,
         },
     ))
 }

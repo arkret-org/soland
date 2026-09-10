@@ -784,15 +784,11 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .await
             .ok()
             .filter(|e| e.service_id.as_str() == state.service_id() && e.service_kind == "station");
-    // Disclose the current accepted Realm Seal view to resolvers the Directory
-    // has already authorized to resolve this Realm (this function is only
-    // reached after `realm_resolvable_to`). An invitee_id who is not yet a member
-    // cannot read the membership-gated `seals/frontier` Realm Seal view, so
-    // they stamp this as `seal_ref` for DataEvents or as full `seal_basis` for
-    // Control Moves before signing (spec discovery-directory.md §9.1.1). When
-    // this deployment holds no accepted Seal for the Realm (e.g. it does not
-    // host it / cannot notarize), it must not advertise itself as a submit
-    // candidate.
+    // Candidate governance facts only locate and cross-check the bounded join route.
+    // The applicant's Station must independently verify peer bootstrap dependencies
+    // before preparing the complete unsigned Event; clients must not author from a
+    // Directory candidate's basis. A Station with no accepted Realm Seal must not
+    // advertise itself as a submit candidate.
     let seal_basis = if let Some(seal_basis) = disclosed_seal_basis {
         seal_basis.clone()
     } else {
