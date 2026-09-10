@@ -16,7 +16,7 @@ use arkret_models_integration::{
     AppletGhostActorMode, AppletInstallAuthoringRequestBasis, AppletInstallEffectiveStatus,
     AppletInstallOutcome, AppletInstallPlan, AppletInstallRequestBody,
     AppletManagedActorProvisionPayload, AppletManagedActorRole, AppletPackage,
-    AppletRegistrationEpochEvidence, AppletRejectedItem, AppletWireNamespaces,
+    AppletRegistrationEpochEvidence, AppletScopeRejection, AppletWireNamespaces,
     CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
     ScopeGrant, WidgetEffect,
 };
@@ -840,7 +840,7 @@ pub(super) async fn register_package_install(
         effective_status,
         rejections: denied_scope_values(&package, &approved_actions)
             .into_iter()
-            .map(|scope| AppletRejectedItem {
+            .map(|scope| AppletScopeRejection {
                 requested_scope: Some(scope.requested_scope),
                 reason_code: scope.reason_code,
             })

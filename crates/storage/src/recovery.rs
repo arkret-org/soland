@@ -164,7 +164,7 @@ pub fn validate_backup_erase_progress_initial(
             .iter()
             .zip(&request.series)
             .any(|(result, binding)| {
-                result.status != arkret_models_crypto::BackupSeriesEraseResultStatus::Pending
+                result.status != arkret_models_crypto::BackupSeriesEraseRowStatus::Pending
                     || !result.erased_backups.is_empty()
                     || result.remaining_backups != {
                         let mut refs = binding.old_backups.clone();

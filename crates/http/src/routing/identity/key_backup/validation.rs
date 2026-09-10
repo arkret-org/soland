@@ -64,7 +64,7 @@ pub(super) fn validate_key_backup_body_typed(
     if backup.contents.is_empty() {
         return Err(schema_error("key backup contents must not be empty"));
     }
-    // `KeyBackupContentItem` is the closed union of
+    // `KeyBackupContentIndex` is the closed union of
     // `key-backup.schema.json#/properties/contents`, so the `item_kind`
     // vocabulary and the per-branch field sets are already decided by the type.
     // `validate_envelope_fields` adds the branch rules (`mls_history` indexes
@@ -323,8 +323,8 @@ pub(super) fn validate_mls_history_opaque_only_typed(backup: &KeyBackup) -> Resu
     }
     for (idx, item) in backup.contents.iter().enumerate() {
         let extra = match item {
-            arkret_models_crypto::KeyBackupContentItem::SecretStorage(index) => &index.extra,
-            arkret_models_crypto::KeyBackupContentItem::HistorySecretRanges(index) => &index.extra,
+            arkret_models_crypto::KeyBackupContentIndex::SecretStorage(index) => &index.extra,
+            arkret_models_crypto::KeyBackupContentIndex::HistorySecretRanges(index) => &index.extra,
         };
         for (key, value) in extra.iter() {
             scan_mls_history_opaque_field(key, value, &format!("/contents/{idx}"))?;

@@ -6,7 +6,7 @@ use arkret_models_collaboration::history_key::{
     HistoryKeyRequestReplica, HistoryKeyResponseAckRequestBody, HistoryKeyResponseLostRecord,
     HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequestBody,
     HistoryManifestAdmission, HistoryReleaseAttestation, HistoryResponseAckTokenClaims,
-    HistoryResponseId, HistoryResponsePageEntry, HistorySourceSignerResult,
+    HistoryResponseId, HistoryResponsePageEntry, HistorySourceSignerOutcome,
     SealedHistoryResponseCapability,
 };
 use arkret_wire::{Hash, HistoryEffectiveScope};
@@ -263,7 +263,7 @@ pub struct HistoryRequestPage {
 pub struct HistoryResponseReservationInput {
     pub source_record_digest: Hash,
     pub source_record: HistoryKeyResponseSendRequestBody,
-    pub source_signer_result: HistorySourceSignerResult,
+    pub source_signer_result: HistorySourceSignerOutcome,
     pub cipher_suite: String,
     pub manifest_admission: Option<HistoryManifestAdmission>,
     pub release_attestation: Option<HistoryReleaseAttestation>,
@@ -520,7 +520,7 @@ pub enum HistoryResponseCompleteOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistoryResponseReadPage {
     pub entries: Vec<HistoryResponsePageEntry>,
-    pub source_signer_results: Vec<HistorySourceSignerResult>,
+    pub source_signer_results: Vec<HistorySourceSignerOutcome>,
     pub cipher_suite: Option<String>,
     pub cursor: Option<String>,
     pub limited: bool,
@@ -614,7 +614,7 @@ pub fn history_lost_record_bytes(
 
 pub fn validate_history_singleton_page(
     entry: HistoryResponsePageEntry,
-    source_signer_results: Vec<HistorySourceSignerResult>,
+    source_signer_results: Vec<HistorySourceSignerOutcome>,
     cipher_suite: Option<String>,
 ) -> PersistenceResult<()> {
     let cursor = match &entry {

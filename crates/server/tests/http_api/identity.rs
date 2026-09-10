@@ -278,14 +278,14 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
             },
         ),
         events: vec![
-            arkret_wire::EventBatchReceiptItem {
+            arkret_wire::EventBatchReceiptRow {
                 event_id: genesis.event_id,
                 kind: arkret_wire::NonEmptyString::new(
                     arkret_wire::EventKind::RealmCreate.as_str(),
                 )
                 .unwrap(),
             },
-            arkret_wire::EventBatchReceiptItem {
+            arkret_wire::EventBatchReceiptRow {
                 event_id: authorize.event_id,
                 kind: arkret_wire::NonEmptyString::new(
                     arkret_wire::EventKind::DeviceAuthorize.as_str(),

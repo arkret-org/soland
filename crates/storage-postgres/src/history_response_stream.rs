@@ -1543,7 +1543,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             if row.state != "accepted" {
                 continue;
             }
-            let result: arkret_models_collaboration::history_key::HistorySourceSignerResult =
+            let result: arkret_models_collaboration::history_key::HistorySourceSignerOutcome =
                 decode(
                     row.source_signer_result_json.clone().ok_or_else(|| {
                         PersistenceError::Internal(

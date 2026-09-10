@@ -800,7 +800,7 @@ mod tests {
                             ),
                             &arkret_wire::RealmId::new("ak:realm:AdF_8ICakbYdEH0Cnl-w5o1WFlnh5rXGWqY_-_G6yM7N").unwrap(),
                             &arkret_wire::EventId::new("ak:event:AT33EWBTXdTx5CjY-ogbIIF2T4vh-v7jCMCQ80Fss2Rq").unwrap(),
-                            &arkret_wire::NotificationKind::Message,
+                            arkret_wire::OrdinaryNotificationKind::Message,
                         ).expect("notification id").into(),
                         schema: arkret_models_collaboration::objects::read_receipts::NotificationSchema::V1,
                         actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(

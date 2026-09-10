@@ -1,5 +1,5 @@
 use arkret_models_collaboration::history_key::{
-    OrganizationRecoveryArchiveListItem, OrganizationRecoveryArchiveListQuery,
+    OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveRow,
 };
 use arkret_wire::DidCoreId;
 
@@ -7,7 +7,7 @@ use super::HistoryPreparationError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedArchiveListPage {
-    pub items: Vec<OrganizationRecoveryArchiveListItem>,
+    pub items: Vec<OrganizationRecoveryArchiveRow>,
     pub last_sequence: Option<u64>,
     pub limited: bool,
 }
@@ -39,7 +39,7 @@ pub fn build_archive_list_page(
         {
             continue;
         }
-        let item = OrganizationRecoveryArchiveListItem {
+        let item = OrganizationRecoveryArchiveRow {
             archive_sequence: outcome.archive_sequence,
             archive_replica_digest: outcome.archive_replica_digest.clone(),
             archive: archive.clone(),
@@ -72,8 +72,8 @@ pub fn build_archive_list_page(
 #[cfg(test)]
 mod tests {
     use arkret_models_collaboration::history_key::{
-        OrganizationRecoveryArchiveListItem, OrganizationRecoveryArchiveReplica,
-        OrganizationRecoveryArchiveReplicaOutcome,
+        OrganizationRecoveryArchiveReplica, OrganizationRecoveryArchiveReplicaOutcome,
+        OrganizationRecoveryArchiveRow,
     };
     use chrono::Utc;
 
@@ -124,10 +124,10 @@ mod tests {
 
     fn expected_item(
         record: &soland_storage::PendingRhrkAcquisitionRecord,
-    ) -> OrganizationRecoveryArchiveListItem {
+    ) -> OrganizationRecoveryArchiveRow {
         let outcome = record.accepted_outcome.as_ref().unwrap();
         let replica = &record.input.archive_replica;
-        OrganizationRecoveryArchiveListItem {
+        OrganizationRecoveryArchiveRow {
             archive_sequence: outcome.archive_sequence,
             archive_replica_digest: outcome.archive_replica_digest.clone(),
             archive: replica.archive.clone(),
