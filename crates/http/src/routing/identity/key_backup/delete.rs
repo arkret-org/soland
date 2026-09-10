@@ -35,6 +35,7 @@ use rand::RngExt as _;
 
 use super::*;
 use crate::routing::identity::device_signing::decode_ed25519_key;
+use crate::routing::identity::value_mentions_identifier;
 
 /// Section 7.8.1 limits the TTL to 300 seconds.
 pub(super) const DELETE_CHALLENGE_TTL_SECONDS: i64 = 300;
@@ -590,7 +591,6 @@ async fn verify_trusted_recovery_service_delete(
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .iter()
         .any(|kind| kind.as_str() == Some("trusted_recovery_service"))
     {
         return Err(AppError::capability_denied(
