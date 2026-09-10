@@ -269,7 +269,7 @@ async fn admit_member(
             arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
             true,
         )
-        .json(&event)
+        .json(&serde_json::json!({"event": event}))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -382,7 +382,7 @@ async fn accept_invite(
             arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
             true,
         )
-        .json(&event)
+        .json(&serde_json::json!({"event": event}))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -424,7 +424,7 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
             arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
             true,
         )
-        .json(&event)
+        .json(&serde_json::json!({"event": event}))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -581,7 +581,7 @@ async fn send_circle_scoped_encrypted_message(
             arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
             true,
         )
-        .json(&event)
+        .json(&serde_json::json!({"event": event}))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -705,7 +705,7 @@ async fn submit_projection_event_result_with_causal_refs(
             arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
             true,
         )
-        .json(&event)
+        .json(&serde_json::json!({"event": event}))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -1705,17 +1705,16 @@ async fn poll_content_projection_replaces_votes_body() {
                 .all(|choices| !choices.selections.contains("now")),
             "{poll_state:?}"
         );
-        let mut expected_backup_voters = vec![bob_actor.as_str(), carol_actor.as_str()];
+        let mut expected_backup_voters = vec![bob_actor.clone(), carol_actor.clone()];
         expected_backup_voters.sort_unstable();
-        assert_eq!(
-            poll_state
-                .votes
-                .iter()
-                .filter(|(_, choices)| choices.selections.contains("backup"))
-                .map(|(actor, _)| actor.as_str())
-                .collect::<Vec<_>>(),
-            expected_backup_voters
-        );
+        let mut backup_voters = poll_state
+            .votes
+            .iter()
+            .filter(|(_, choices)| choices.selections.contains("backup"))
+            .map(|(actor, _)| actor.to_string())
+            .collect::<Vec<_>>();
+        backup_voters.sort_unstable();
+        assert_eq!(backup_voters, expected_backup_voters, "{poll_state:?}");
     }
 
     let restarted = soland_test_support::app_state_with_persistence(
@@ -1750,10 +1749,10 @@ async fn poll_content_projection_replaces_votes_body() {
         let mut voters = poll_state
             .votes
             .keys()
-            .map(String::as_str)
+            .map(ToString::to_string)
             .collect::<Vec<_>>();
         voters.sort_unstable();
-        let mut expected_voters = vec![bob_actor.as_str(), carol_actor.as_str()];
+        let mut expected_voters = vec![bob_actor.clone(), carol_actor.clone()];
         expected_voters.sort_unstable();
         assert_eq!(voters, expected_voters);
     }
