@@ -799,13 +799,11 @@ fn relation_scope_circle_id(relation: &Value) -> Option<String> {
 /// The Relation an `ak.relation.update` targets.
 ///
 /// `event-payload.schema.json#/$defs/relation_update_payload` is
-/// `additionalProperties:false` with a `oneOf` over `{relation_id, patch}` and
-/// `{target_ref, patch}`, so exactly one of the two carriers is present and
-/// both name the same Relation.
+/// `additionalProperties:false` and requires `relation_id` as the sole target
+/// carrier alongside `patch`.
 fn relation_update_target_id(payload: &Value) -> Option<&str> {
     payload
         .get("relation_id")
-        .or_else(|| payload.get("target_ref"))
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
 }
@@ -1501,6 +1499,33 @@ mod cross_realm_relation_tests {
         ));
     }
 
+    #[test]
+    fn relation_update_legacy_target_ref_has_no_reducer_path() {
+        let mut projection = proj();
+        let now = chrono::Utc::now();
+        let create = relation_op("references", STRAND_A, STRAND_A2);
+        projection.apply_relation_create(&create, now);
+        let relation_id = relation_id_of(&create);
+        let before = projection.relations[relation_id.as_str()].clone();
+        let legacy = relation_update_op(
+            "0000000000cd",
+            json!({
+                "target_ref": relation_id,
+                "patch": {"fields.label": {"$op": "set", "value": "legacy"}},
+            }),
+        );
+        assert!(matches!(
+            projection.apply_relation_update(&legacy, now, &ServerHlc::new("relation-test")),
+            ProjectionEffect::Ignored
+        ));
+        let after = &projection.relations[relation_id.as_str()];
+        assert_eq!(after.fields, before.fields);
+        assert_eq!(after.from_ref, before.from_ref);
+        assert_eq!(after.to_ref, before.to_ref);
+        assert_eq!(after.state, before.state);
+        assert_eq!(after.updated_at, before.updated_at);
+    }
+
     fn relation_update_op(seed: &str, payload: Value) -> Operation {
         arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
@@ -1514,7 +1539,7 @@ mod cross_realm_relation_tests {
     }
 
     /// `relation_update_payload` is `additionalProperties:false` over
-    /// `{relation_id|target_ref, patch, expected_state_digest}`: the flat
+    /// `{relation_id, patch, expected_state_digest}`: the flat
     /// `kind` / `relation_kind` / `from` / `from_ref` / `to` / `to_ref` /
     /// `fields` / `scope_circle_id` shape is not a spec payload and therefore
     /// has no reducer consumption path left. A payload carrying only those keys
