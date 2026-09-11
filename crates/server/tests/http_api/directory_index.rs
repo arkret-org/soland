@@ -794,26 +794,6 @@ async fn directory_resolve_realm_returns_spec_title_field_body() {
     );
 }
 
-async fn set_directory_preview_policy(state: &AppState, realm_id: &str, policy: Option<Value>) {
-    let mut meta = state
-        .test_persistence()
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .unwrap()
-        .unwrap();
-    meta.preview_policy_digest = policy
-        .as_ref()
-        .map(|value| arkret_canonical::canonical_sha256(value).unwrap());
-    meta.preview_policy = policy;
-    state
-        .test_persistence()
-        .realm_meta()
-        .put(realm_id, &meta)
-        .await
-        .unwrap();
-}
-
 #[test]
 fn directory_preview_policy_blinds_both_resolvers_and_search() {
     run_on_deep_stack(

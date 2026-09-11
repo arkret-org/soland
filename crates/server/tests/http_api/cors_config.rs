@@ -466,6 +466,16 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
     )
     .await;
     let resolved_realm_id = resolved_realm["realm_id"].as_str().unwrap();
+    set_directory_preview_policy(
+        &state,
+        resolved_realm_id,
+        Some(serde_json::json!({
+            "mode": "directory_card",
+            "audiences": ["anonymous"],
+            "fields": ["title", "join_rule"]
+        })),
+    )
+    .await;
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
 
