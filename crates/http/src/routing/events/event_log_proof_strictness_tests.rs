@@ -473,7 +473,6 @@ async fn circle_scoped_reaction_requires_circle_membership() {
             soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
-                object_revision_heads: Vec::new(),
                 tracks: std::collections::BTreeMap::from([(
                     arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
                         .to_owned(),
@@ -495,7 +494,6 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 updated_by: None,
                 updated_at: None,
                 schema_refs: Vec::new(),
-                schedule_revision_heads: Vec::new(),
                 scope_circle_id: Some(circle_id.to_owned()),
             },
         );

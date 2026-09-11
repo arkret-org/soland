@@ -135,7 +135,9 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
     async fn current_principal(
         &self,
         account_id: &AccountId,
+        registry: &dyn arkret_state::state::CellRegistry,
     ) -> PersistenceResult<soland_storage::CurrentPrincipalRead> {
+        current::refresh(&self.pool, account_id, registry).await?;
         current::read(&self.pool, account_id).await
     }
     async fn by_account_id(

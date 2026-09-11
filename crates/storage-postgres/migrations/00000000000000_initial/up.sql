@@ -2765,8 +2765,6 @@ CREATE TABLE public.projection_strands (
     encrypted_content jsonb,
     fields jsonb DEFAULT '{}'::jsonb NOT NULL,
     schema_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
-    object_revision_heads jsonb DEFAULT '[]'::jsonb NOT NULL,
-    schedule_revision_heads jsonb DEFAULT '[]'::jsonb NOT NULL,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     -- common-fields.md 3.2 orders the lifecycle cluster state, state_changed_at,

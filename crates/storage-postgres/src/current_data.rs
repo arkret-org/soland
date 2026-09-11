@@ -192,13 +192,23 @@ pub(crate) async fn commit_sources(
                 "dependency_missing: exact accepted patch source is not materialized".into(),
             ));
         }
-        let value = materialize_source(
+        let mut value = materialize_source(
             &write,
             &bases
                 .into_iter()
                 .map(|row| row.source_value)
                 .collect::<Vec<_>>(),
         )?;
+        // Persist exactly the complete value exposed by current. Authoring
+        // digests must not depend on omitted projection-only fields.
+        if let Some(object) = value.as_object_mut() {
+            if family.materialized_id_from_subject {
+                object.insert("id".into(), Value::String(cell.subject().to_owned()));
+            }
+            for omitted in &family.projection_omitted_fields {
+                object.remove(omitted);
+            }
+        }
         sql_query("INSERT INTO current_data_sources(realm_id,scope_key,cell_id,event_id,event_digest,source_value,causal_bases,target_kind,target_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
             .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
             .bind::<Text,_>(write.cell_id.as_str()).bind::<Binary,_>(event.event_id.token_bytes().to_vec())
@@ -302,19 +312,34 @@ pub(crate) fn materialize_source(
             patch,
             expected_prestate,
         } => {
-            let [base] = bases else {
-                return Err(projection_error(
-                    "patch causal_refs must select exactly one accepted source for its cell",
-                ));
+            // causal_refs records all explicitly observed sources. The signed
+            // prestate digest selects the value used for computation, so merging
+            // does not depend on receiver order or an implicit winner.
+            let base = match (bases, expected_prestate) {
+                ([base], None) => base,
+                (_, Some(expected)) => {
+                    let expected = expected
+                        .as_str()
+                        .ok_or_else(|| projection_error("patch prestate digest is not a string"))?;
+                    let mut matching = bases.iter().filter(|base| {
+                        arkret_canonical::canonical_json_bytes(base).is_ok_and(|bytes| {
+                            arkret_canonical::verify_digest(&bytes, expected).is_ok()
+                        })
+                    });
+                    let base = matching.next().ok_or_else(|| {
+                        projection_error("patch prestate does not match an observed source")
+                    })?;
+                    if matching.any(|other| other != base) {
+                        return Err(projection_error("ambiguous patch prestate"));
+                    }
+                    base
+                }
+                _ => {
+                    return Err(projection_error(
+                        "multiple patch sources require expected_state_digest",
+                    ));
+                }
             };
-            if let Some(expected) = expected_prestate {
-                let expected = expected
-                    .as_str()
-                    .ok_or_else(|| projection_error("patch prestate digest is not a string"))?;
-                let canonical =
-                    arkret_canonical::canonical_json_bytes(base).map_err(projection_error)?;
-                arkret_canonical::verify_digest(&canonical, expected).map_err(projection_error)?;
-            }
             let patch: Patch = serde_json::from_value(patch.clone()).map_err(projection_error)?;
             patch.apply(base).map_err(projection_error)
         }
@@ -360,6 +385,35 @@ mod tests {
         assert_eq!(
             materialize_source(&right, &[base]).unwrap(),
             json!({"metadata":{"title":"base","summary":"right"}})
+        );
+    }
+
+    #[test]
+    fn explicit_merge_selects_signed_prestate_independently_of_source_order() {
+        let left = json!({"metadata":{"title":"left","summary":"original"}});
+        let right = json!({"metadata":{"title":"base","summary":"right"}});
+        let mut write = update(json!({"metadata.summary":{"$op":"set","value":"right"}}));
+        if let ProjectedOp::ApplyPatch {
+            expected_prestate, ..
+        } = &mut write.op
+        {
+            *expected_prestate = Some(Value::String(arkret_canonical::sha256_digest(
+                arkret_canonical::canonical_json_bytes(&left).unwrap(),
+            )));
+        }
+        let expected = json!({"metadata":{"title":"left","summary":"right"}});
+        assert_eq!(
+            materialize_source(&write, &[left.clone(), right.clone()]).unwrap(),
+            expected
+        );
+        assert_eq!(
+            materialize_source(&write, &[right, left.clone()]).unwrap(),
+            expected
+        );
+        assert!(materialize_source(&write, &[json!({"metadata":{"title":"other"}})]).is_err());
+        assert_eq!(
+            materialize_source(&write, &[left.clone(), left]).unwrap(),
+            expected
         );
     }
 

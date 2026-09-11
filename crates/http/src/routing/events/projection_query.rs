@@ -44,7 +44,6 @@ use arkret_models_collaboration::objects::query_projection::{
 use arkret_models_collaboration::objects::relation::{
     RelationConflictDiagnostic, RelationEndpoint,
 };
-use arkret_wire::Hash;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
@@ -1028,17 +1027,6 @@ async fn list_strand_projections(
                 strand_id: parse_projection_id::<StrandId>(&f.strand_id, "strand_id")?,
                 realm_id: parse_projection_id::<RealmId>(&f.realm_id, "realm_id")?,
                 state: projection_object_state(f.state),
-                object_revision_heads: f
-                    .object_revision_heads
-                    .iter()
-                    .map(|digest| {
-                        Hash::new(digest.clone()).map_err(|error| {
-                            AppError::internal(format!(
-                                "stored Strand object revision head is invalid: {error}"
-                            ))
-                        })
-                    })
-                    .collect::<Result<_, AppError>>()?,
                 state_changed_at: f.state_changed_at,
                 stage: f.stage.clone(),
                 stage_changed_at: f.stage_changed_at,
@@ -1085,7 +1073,6 @@ async fn list_strand_projections(
 struct StrandProjectionView {
     strand_id: String,
     realm_id: String,
-    object_revision_heads: Vec<String>,
     state: ProjectionObjectState,
     #[serde(
         serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp"
@@ -1118,11 +1105,6 @@ struct StrandProjectionView {
     /// `metadata.fields.calendar` subtree co-occur in both directions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     schema_refs: Vec<String>,
-    /// Canonical schedule revision frontier as `event_digest` values. A client
-    /// signs a subset of this into an RSVP entry, so without it RSVP authoring
-    /// has to fail closed rather than claim an unobserved schedule.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    schedule_revision_heads: Vec<String>,
     /// Every live RSVP `mv_register` head for this Strand.
     ///
     /// Concurrent responses are exposed side by side rather than reduced to one
@@ -1276,7 +1258,6 @@ async fn get_strand_projection(
     json_ok(StrandProjectionView {
         strand_id: strand.strand_id,
         realm_id: strand.realm_id,
-        object_revision_heads: strand.object_revision_heads,
         state: projection_object_state(strand.state),
         state_changed_at: strand.state_changed_at,
         stage: strand
@@ -1291,7 +1272,6 @@ async fn get_strand_projection(
         encrypted_content: strand.encrypted_content,
         fields: strand.fields,
         schema_refs: strand.schema_refs,
-        schedule_revision_heads: strand.schedule_revision_heads,
         rsvps,
         board_space_id: board_space_id.map(|id| id.to_string()),
         list_space_id: list_space_id.map(|id| id.to_string()),

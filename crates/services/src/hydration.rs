@@ -948,7 +948,6 @@ pub async fn hydrate_projections_from_persistence(
                 StrandProjection {
                     strand_id: record.strand_id,
                     realm_id: record.realm_id,
-                    object_revision_heads: record.object_revision_heads,
                     tracks: record.tracks,
                     title: record.title,
                     summary: record.summary,
@@ -968,7 +967,6 @@ pub async fn hydrate_projections_from_persistence(
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
                     schema_refs: record.schema_refs,
-                    schedule_revision_heads: record.schedule_revision_heads,
                     scope_circle_id: record.scope_circle_id,
                 },
             );

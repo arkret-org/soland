@@ -936,7 +936,6 @@ mod cross_realm_relation_tests {
         StrandProjection {
             strand_id: String::new(),
             realm_id: realm.to_owned(),
-            object_revision_heads: Vec::new(),
             tracks: crate::reducer::projections::default_strand_tracks(),
             title: String::new(),
             summary: None,
@@ -953,7 +952,6 @@ mod cross_realm_relation_tests {
             updated_by: None,
             updated_at: None,
             schema_refs: Vec::new(),
-            schedule_revision_heads: Vec::new(),
             scope_circle_id: scope_circle_id.map(ToOwned::to_owned),
         }
     }

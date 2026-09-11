@@ -512,7 +512,6 @@ fn install_projected_strand_scope(
         StrandProjection {
             strand_id: strand_id.to_owned(),
             realm_id: realm_id.to_owned(),
-            object_revision_heads: Vec::new(),
             tracks: std::collections::BTreeMap::from([(
                 arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
                     .to_owned(),
@@ -533,7 +532,6 @@ fn install_projected_strand_scope(
             updated_by: None,
             updated_at: None,
             schema_refs: Vec::new(),
-            schedule_revision_heads: Vec::new(),
             scope_circle_id: Some(circle_id.to_owned()),
         },
     );

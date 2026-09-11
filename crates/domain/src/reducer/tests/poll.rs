@@ -16,7 +16,6 @@ fn seed_strand(state: &mut ProjectionState, strand_id: &str, circle_id: Option<&
         StrandProjection {
             strand_id: strand_id.to_owned(),
             realm_id: REALM_A.to_owned(),
-            object_revision_heads: Vec::new(),
             tracks: crate::reducer::projections::default_strand_tracks(),
             title: "Poll".to_owned(),
             summary: None,
@@ -34,7 +33,6 @@ fn seed_strand(state: &mut ProjectionState, strand_id: &str, circle_id: Option<&
             updated_at: None,
             scope_circle_id: circle_id.map(ToOwned::to_owned),
             schema_refs: Vec::new(),
-            schedule_revision_heads: Vec::new(),
         },
     );
 }

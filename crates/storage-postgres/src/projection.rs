@@ -265,10 +265,6 @@ struct StrandProjectionRow {
     fields: Value,
     #[diesel(sql_type = Jsonb)]
     schema_refs: Value,
-    #[diesel(sql_type = Jsonb)]
-    object_revision_heads: Value,
-    #[diesel(sql_type = Jsonb)]
-    schedule_revision_heads: Value,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -304,10 +300,6 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
             encrypted_content: row.encrypted_content,
             fields: serde_json::from_value(row.fields).unwrap_or_default(),
             schema_refs: serde_json::from_value(row.schema_refs).unwrap_or_default(),
-            object_revision_heads: serde_json::from_value(row.object_revision_heads)
-                .unwrap_or_default(),
-            schedule_revision_heads: serde_json::from_value(row.schedule_revision_heads)
-                .unwrap_or_default(),
             state: row.state,
             state_changed_at: row.state_changed_at,
             stage: row.stage,
@@ -321,7 +313,7 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
         }
     }
 }
-const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, fields, schema_refs, object_revision_heads, schedule_revision_heads, state, \
+const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, fields, schema_refs, state, \
      state_changed_at, stage, stage_changed_at, created_by AS created_by, created_at, history_basis_seals, updated_by AS updated_by, updated_at";
 #[async_trait]
 impl StrandProjectionStore for PgStrandProjectionStore {
@@ -349,9 +341,9 @@ impl StrandProjectionStore for PgStrandProjectionStore {
             .unwrap_or_else(|_| Value::Object(Default::default()));
         sql_query(
             "INSERT INTO projection_strands \
-             (id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, fields, schema_refs, object_revision_heads, schedule_revision_heads, state, state_changed_at, \
+             (id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, fields, schema_refs, state, state_changed_at, \
               stage, stage_changed_at, created_by, created_at, history_basis_seals, updated_by, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
@@ -362,8 +354,6 @@ impl StrandProjectionStore for PgStrandProjectionStore {
                 encrypted_content = EXCLUDED.encrypted_content, \
                 fields = EXCLUDED.fields, \
                 schema_refs = EXCLUDED.schema_refs, \
-                object_revision_heads = EXCLUDED.object_revision_heads, \
-                schedule_revision_heads = EXCLUDED.schedule_revision_heads, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 stage = EXCLUDED.stage, \
@@ -387,8 +377,6 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         .bind::<Nullable<Jsonb>, _>(&record.encrypted_content)
         .bind::<Jsonb, _>(&serde_json::json!(record.fields))
         .bind::<Jsonb, _>(&serde_json::json!(record.schema_refs))
-        .bind::<Jsonb, _>(&serde_json::json!(record.object_revision_heads))
-        .bind::<Jsonb, _>(&serde_json::json!(record.schedule_revision_heads))
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Nullable<Text>, _>(&record.stage)

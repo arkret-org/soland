@@ -81,7 +81,8 @@ impl CheckpointRuleContext {
                 let implementation = IMPLEMENTATION.get_or_init(|| {
                     arkret_canonical::sha256_digest(concat!(
                         include_str!("state_resolution.rs"),
-                        include_str!("state_resolution/account_summary.rs")
+                        include_str!("state_resolution/account_summary.rs"),
+                        include_str!("state_resolution/current_results.rs")
                     ))
                 });
                 let context = arkret_canonical::canonical_json_bytes(&serde_json::json!({
@@ -622,7 +623,7 @@ async fn lock_seal_realm(
         .map(|_| ())
 }
 
-/// Refresh time-sensitive current results inside the caller's sync transaction.
+/// Refresh expired or unavailable derived results inside the caller's transaction.
 /// The caller acquires its retention lock before entering this Realm lock.
 pub(crate) async fn refresh_current_if_expired(
     conn: &mut AsyncPgConnection,
@@ -631,9 +632,9 @@ pub(crate) async fn refresh_current_if_expired(
 ) -> soland_storage::PersistenceResult<()> {
     let result: Result<(), EventSealCommitError> = async {
         lock_seal_realm(conn, realm_id).await?;
-        let due = sql_query("SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND next_expiry IS NOT NULL AND next_expiry <= clock_timestamp()")
+        let due = sql_query("SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND (NOT ready OR (next_expiry IS NOT NULL AND next_expiry <= clock_timestamp()))")
             .bind::<Text,_>(realm_id).get_result::<CountRow>(&mut *conn).await?.value != 0;
-        if due {
+        if due || current_results::baseline_missing(conn, realm_id).await? {
             account_summary::invalidate(conn, realm_id).await?;
             account_summary::publish_current_frontier(conn, realm_id, registry).await?;
         }
@@ -3338,8 +3339,7 @@ mod event_seal_commit_tests {
             soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
         );
         let stores = build_state_resolution_stores(Some(pool.clone()), registry.clone());
-        let realm =
-            RealmId::new("ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6").unwrap();
+        let realm = RealmId::new("ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6").unwrap();
         let organization_id = "ak:did_core:web:organization.example";
         let cell = CellRef::new(format!(
             "ak:cell:ak.component.organization.moderation_policy.v1:{organization_id}"

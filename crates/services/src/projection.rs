@@ -2364,7 +2364,6 @@ impl ProjectionService {
                 ProjectionWriteThroughRecord::Strand(crate::events::StrandProjectionRecord {
                     strand_id: row.strand_id.clone(),
                     realm_id: row.realm_id.clone(),
-                    object_revision_heads: row.object_revision_heads.clone(),
                     tracks: row.tracks.clone(),
                     title: row.title.clone(),
                     summary: row.summary.clone(),
@@ -2372,7 +2371,6 @@ impl ProjectionService {
                     encrypted_content: row.encrypted_content.clone(),
                     fields: row.fields.clone(),
                     schema_refs: row.schema_refs.clone(),
-                    schedule_revision_heads: row.schedule_revision_heads.clone(),
                     state: row.state.as_str().to_owned(),
                     state_changed_at: row.state_changed_at,
                     stage: row.stage.as_ref().map(object_stage_wire_value),
@@ -2409,7 +2407,6 @@ impl ProjectionService {
                 ProjectionWriteThroughRecord::Strand(crate::events::StrandProjectionRecord {
                     strand_id: row.strand_id.clone(),
                     realm_id: row.realm_id.clone(),
-                    object_revision_heads: row.object_revision_heads.clone(),
                     tracks: row.tracks.clone(),
                     title: row.title.clone(),
                     summary: row.summary.clone(),
@@ -2417,7 +2414,6 @@ impl ProjectionService {
                     encrypted_content: row.encrypted_content.clone(),
                     fields: row.fields.clone(),
                     schema_refs: row.schema_refs.clone(),
-                    schedule_revision_heads: row.schedule_revision_heads.clone(),
                     state: row.state.as_str().to_owned(),
                     state_changed_at: row.state_changed_at,
                     stage: row.stage.as_ref().map(object_stage_wire_value),

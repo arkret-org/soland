@@ -48,7 +48,7 @@ pub(super) async fn resolve(
     }
     let read = state
         .persistence()
-        .current_principal(&body.account_id)
+        .current_principal(&body.account_id, state.projections().cell_registry())
         .await
         .map_err(|_| {
             AppError::new(

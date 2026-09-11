@@ -1001,7 +1001,6 @@ mod tests {
             soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
-                object_revision_heads: Vec::new(),
                 tracks: Default::default(),
                 title: "Scoped".to_owned(),
                 summary: None,
@@ -1018,7 +1017,6 @@ mod tests {
                 updated_by: None,
                 updated_at: None,
                 schema_refs: Vec::new(),
-                schedule_revision_heads: Vec::new(),
                 scope_circle_id: Some(circle_id.to_owned()),
             },
         );
@@ -1030,7 +1028,6 @@ mod tests {
             soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
-                object_revision_heads: Vec::new(),
                 tracks: Default::default(),
                 title: "Task".to_owned(),
                 summary: None,
@@ -1047,7 +1044,6 @@ mod tests {
                 updated_by: None,
                 updated_at: None,
                 schema_refs: Vec::new(),
-                schedule_revision_heads: Vec::new(),
                 scope_circle_id: None,
             },
         );

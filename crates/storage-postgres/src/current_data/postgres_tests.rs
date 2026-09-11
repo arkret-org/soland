@@ -153,6 +153,37 @@ async fn concurrent_mv_sources_keep_distinct_full_heads_and_failed_patch_is_atom
         count, 0,
         "rejected source must roll back accepted insertion"
     );
+    let selected = heads
+        .iter()
+        .find(|head| head["event_id"] == left.event_id.as_str())
+        .unwrap();
+    let selected_digest = arkret_canonical::sha256_digest(
+        arkret_canonical::canonical_json_bytes(&selected["value"]).unwrap(),
+    );
+    let merged = source(
+        "ak.strand.update",
+        &realm,
+        &actor,
+        8,
+        json!({"target_ref":id,"expected_state_digest":selected_digest,
+            "patch":{"metadata.summary":{"$op":"set","value":"right"}}}),
+        &[&left, &right],
+    );
+    persist(&pool, merged.clone()).await.unwrap();
+    let merged_current = sql_query("SELECT payload FROM current_result_heads WHERE realm_id=$1")
+        .bind::<Text, _>(realm.as_str())
+        .get_result::<Payload>(&mut *conn)
+        .await
+        .unwrap()
+        .payload;
+    assert_eq!(
+        merged_current["result"]["heads"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        merged_current["result"]["heads"][0]["value"]["metadata"],
+        json!({"title":"left","summary":"right"})
+    );
     let absent = source(
         "ak.strand.update",
         &realm,
