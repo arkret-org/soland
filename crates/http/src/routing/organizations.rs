@@ -276,7 +276,7 @@ pub(crate) fn effective_policy_value_for_realm(state: &AppState, realm_id: &str)
     // `ak.realm.organization` statement carrying the `moderation_policy`
     // control scope drive the effective moderation policy. Declared
     // `owning_organization_ids` hints no longer qualify.
-    let org_layers = applicable_organization_policies(state, realm_id)
+    let org_layers = applicable_organization_policies(state, realm_id, None)
         .into_iter()
         .map(|(organization_id, policy)| OrganizationPolicyLayer {
             source: "organization".to_owned(),
@@ -305,9 +305,20 @@ pub(crate) async fn organization_policy_blocks_join(
         tracing::warn!(%error, "failed to refresh organization projection for join policy");
     }
     // SOL-ORG-05 — only verified moderation-scoped organizations gate joins.
-    applicable_organization_policies(state, realm_id)
+    applicable_organization_policies(state, realm_id, None)
         .iter()
         .any(|(_, policy)| policy_denies_join_actor(policy, actor))
+}
+
+pub(crate) fn organization_policy_blocks_federation(
+    state: &AppState,
+    realm_id: &str,
+    peer_service_id: &DidCoreId,
+) -> bool {
+    let now = Utc::now();
+    applicable_organization_policies(state, realm_id, Some(peer_service_id))
+        .iter()
+        .any(|(_, policy)| policy_denies_federation_service(policy, peer_service_id, now))
 }
 
 pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
@@ -387,7 +398,7 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     // SOL-ORG-05 — effective rules are sourced only from verified
     // moderation-scoped organizations.
     let mut rules = Vec::new();
-    for (_, policy) in applicable_organization_policies(state, realm_id) {
+    for (_, policy) in applicable_organization_policies(state, realm_id, None) {
         rules.extend(policy_rules(&policy));
     }
     rules
@@ -415,9 +426,27 @@ fn policy_denies_join_actor(
     })
 }
 
+fn policy_denies_federation_service(
+    policy: &OrganizationModerationPolicyDocument,
+    service_id: &DidCoreId,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    use arkret_models_collaboration::events_payloads::OrganizationModerationAction;
+    policy.rules.iter().any(|rule| {
+        rule.action == OrganizationModerationAction::DenyFederation
+            && rule.created_at.is_none_or(|created_at| created_at <= now)
+            && rule.expires_at.is_none_or(|expires_at| now < expires_at)
+            && matches!(
+                &rule.target,
+                ModerationPolicyTarget::Service { service_id: target } if target == service_id
+            )
+    })
+}
+
 fn applicable_organization_policies(
     state: &AppState,
     realm_id: &str,
+    service_id: Option<&DidCoreId>,
 ) -> Vec<(DidCoreId, OrganizationModerationPolicyDocument)> {
     let now = Utc::now();
     let projection = state.projections().snapshot();
@@ -451,7 +480,15 @@ fn applicable_organization_policies(
                     .policy_scope
                     .applies_to_owned_realms
                     .unwrap_or(false);
-            if !explicit_realm && !owned_realm {
+            let explicit_service = service_id.is_some_and(|service_id| {
+                payload
+                    .value
+                    .policy_scope
+                    .service_ids
+                    .as_ref()
+                    .is_some_and(|ids| ids.iter().any(|id| id == service_id))
+            });
+            if !explicit_realm && !owned_realm && !explicit_service {
                 return None;
             }
             if payload.value.not_before.is_some_and(|start| now < start)
@@ -487,6 +524,9 @@ fn display_name_from_organization_id(organization_id: &str) -> String {
 mod tests {
     use super::*;
 
+    const REALM_ID: &str = "ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6";
+    const ORGANIZATION_ID: &str = "ak:did_core:web:organization.example";
+
     fn account_at(station: &str) -> ActorId {
         ActorId::account(arkret_wire::AccountId::new(
             DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
@@ -501,6 +541,63 @@ mod tests {
             "rules": [{"target": target, "action": action}]
         }))
         .unwrap()
+    }
+
+    fn install_federation_policy(
+        state: &AppState,
+        scope: Value,
+        target_service_id: &DidCoreId,
+    ) {
+        let organization_id = DidCoreId::new(ORGANIZATION_ID).unwrap();
+        let now = Utc::now();
+        let relationship = soland_domain::reducer::RealmOrganizationStatementState {
+            realm_id: REALM_ID.to_owned(),
+            organization_id: organization_id.clone(),
+            relationship: "governance".to_owned(),
+            statement_id: "ak:organization_statement:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60"
+                .to_owned(),
+            status: "active".to_owned(),
+            control_scopes: vec!["moderation_policy".to_owned()],
+            issued_at: now,
+            not_before: None,
+            expires_at: None,
+            supersedes_statement_id: None,
+            revokes_statement_id: None,
+            realm_frontier_digest: None,
+            proof_digest: None,
+            delegation_ref: None,
+            issuer_role: "organization".to_owned(),
+            updated_at: now,
+        };
+        let cell = CellRef::new(format!(
+            "ak:cell:{}:{}",
+            CellFamilyId::OrganizationModerationPolicyV1.as_str(),
+            organization_id
+        ))
+        .unwrap();
+        let mut projection = state.test_projection().lock();
+        projection.realm_organization_statements.insert(
+            (
+                REALM_ID.to_owned(),
+                organization_id.clone(),
+                "governance".to_owned(),
+            ),
+            relationship,
+        );
+        projection.cells.insert(
+            cell,
+            arkret_state::lattice::CellState::Value(json!({
+                "organization_id": organization_id,
+                "value": {
+                    "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
+                    "policy_scope": scope,
+                    "rules": [{
+                        "target": {"kind": "service", "service_id": target_service_id},
+                        "action": "deny_federation"
+                    }]
+                }
+            })),
+        );
     }
 
     #[test]
@@ -533,6 +630,44 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn federation_deny_requires_verified_relationship_scope_and_exact_service() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let denied = DidCoreId::new("ak:did_core:web:denied.example").unwrap();
+        let allowed = DidCoreId::new("ak:did_core:web:allowed.example").unwrap();
+        install_federation_policy(
+            &state,
+            json!({"realm_ids": [REALM_ID]}),
+            &denied,
+        );
+        assert!(organization_policy_blocks_federation(
+            &state, REALM_ID, &denied
+        ));
+        assert!(!organization_policy_blocks_federation(
+            &state, REALM_ID, &allowed
+        ));
+    }
+
+    #[test]
+    fn federation_deny_accepts_an_explicit_service_scope() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let denied = DidCoreId::new("ak:did_core:web:denied.example").unwrap();
+        install_federation_policy(
+            &state,
+            json!({"service_ids": [denied.clone()]}),
+            &denied,
+        );
+        assert!(organization_policy_blocks_federation(
+            &state, REALM_ID, &denied
+        ));
     }
 
     #[tokio::test]

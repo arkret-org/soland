@@ -2953,6 +2953,21 @@ pub(crate) async fn submit_federation_events(
         .filter(|value| !value.is_empty())
         .unwrap_or_default()
         .to_owned();
+    if let Ok(source_service_id) = arkret_wire::DidCoreId::new(source_id.clone())
+        && crate::routing::organizations::organization_policy_blocks_federation(
+            state,
+            &binding_realm,
+            &source_service_id,
+        )
+    {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "policy_denied",
+            "federation source is denied by the accepted Organization moderation policy",
+        );
+        return;
+    }
     match crate::routing::federation::frontier_exchange::inbound_peer_is_stale(
         state,
         &binding_realm,

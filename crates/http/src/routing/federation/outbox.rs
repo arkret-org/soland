@@ -1030,6 +1030,35 @@ impl FederationDispatcher {
                 return;
             }
         };
+        if let Some(binding) = row.delivery.realm_fanout.as_ref()
+            && crate::routing::organizations::organization_policy_blocks_federation(
+                &self.state,
+                &binding.realm_id,
+                &row.delivery.peer_id,
+            )
+        {
+            tracing::warn!(
+                target = "federation_outbox",
+                worker = "federation_outbox",
+                outbox_id = %row.delivery.id,
+                peer_id = %row.delivery.peer_id,
+                realm_id = %binding.realm_id,
+                "federation outbox delivery suppressed by accepted Organization moderation policy"
+            );
+            crate::metrics::record_federation_retry_state("policy_suppressed");
+            let command = self.transport_retry(
+                &row,
+                &lease_token,
+                row.attempts.saturating_add(1),
+                None,
+                error_code::EGRESS_POLICY_DENIED,
+                excerpt("organization_policy_denied"),
+                None,
+                now_unix_secs(),
+            );
+            self.commit(command).await;
+            return;
+        }
         let url = format!("{}{}", peer_target.base_url, row.delivery.endpoint);
         // `sovereign-deployment.md` §8 — the target service_id's trust_domain
         // MUST be checked against the local federation_allowlist BEFORE the
