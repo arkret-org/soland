@@ -527,6 +527,12 @@ fn session_device_selector_error(
             "device_unauthorized",
             "device authorization is not active",
         )
+    } else if error.is_conflict_kind() {
+        (
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "session device generation is no longer current",
+        )
     } else {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -760,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_absence_is_403_but_projection_corruption_is_500() {
+    fn selector_absence_is_403_generation_conflict_is_401_and_corruption_is_500() {
         assert_eq!(
             session_device_selector_error(&soland_services::ServiceError::NotFound(
                 "absent".to_owned()
@@ -769,6 +775,16 @@ mod tests {
                 StatusCode::FORBIDDEN,
                 "device_unauthorized",
                 "device authorization is not active"
+            )
+        );
+        assert_eq!(
+            session_device_selector_error(&soland_services::ServiceError::Conflict(
+                "device authorization is outside the current generation".to_owned()
+            )),
+            (
+                StatusCode::UNAUTHORIZED,
+                "auth_expired",
+                "session device generation is no longer current"
             )
         );
         assert_eq!(

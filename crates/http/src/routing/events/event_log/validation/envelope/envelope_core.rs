@@ -963,7 +963,7 @@ async fn validate_event_envelope_with_ingress(
             digest_suite: typed_digest_suite,
             canonical_bytes,
         },
-        is_identity_anchor_authorize,
+        is_identity_anchor_authorize || is_identity_anchor_reanchor,
         is_direct_conversation_founding,
         bootstrap_unit_member,
         is_applet_managed_pcr_genesis && is_verified_applet_formal_aggregate,
@@ -993,7 +993,7 @@ async fn finalize_validated_event_envelope(
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     internal_admission: Option<&InternalEventAdmission>,
     core: EnvelopeValidationCore,
-    is_identity_anchor_authorize: bool,
+    is_identity_anchor_device_event: bool,
     is_direct_conversation_founding: bool,
     bootstrap_unit_member: bool,
     privileged_bootstrap: bool,
@@ -1034,7 +1034,7 @@ async fn finalize_validated_event_envelope(
         session,
         object,
         core.actor_id.as_str(),
-        is_identity_anchor_authorize,
+        is_identity_anchor_device_event,
         internal_admission,
     )
     .await?;
@@ -1142,7 +1142,7 @@ async fn enforce_device_generation_fence(
     session: &SessionRecord,
     object: &serde_json::Map<String, Value>,
     actor_id: &str,
-    is_identity_anchor_authorize: bool,
+    is_identity_anchor_device_event: bool,
     internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<(), EventValidationError> {
     let root_anchor = object
@@ -1156,7 +1156,7 @@ async fn enforce_device_generation_fence(
                 )
             })
         });
-    if root_anchor || is_identity_anchor_authorize {
+    if root_anchor || is_identity_anchor_device_event {
         return Ok(());
     }
     if event_uses_active_applet_registration_epoch(state, object).await? {

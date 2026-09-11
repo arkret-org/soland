@@ -241,9 +241,9 @@ pub(in crate::routing) use submit::{
     submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
     submit_initial_event_batch_outcome, submit_initial_event_submission,
     submit_initial_event_submission_with_contact_projection,
-    submit_initial_event_submission_with_device_pairing, submit_initial_identity_anchor_batch,
-    submit_mimi_event_value, submit_mimi_reporter_initial_event_submission,
-    submit_one_error_to_app_error, submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
+    submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
+    submit_mimi_reporter_initial_event_submission, submit_one_error_to_app_error,
+    submit_peer_pcr_genesis, submit_recovery_identity_anchor_batch, submit_sidecar_ensure_batch,
     verify_frontier_backfill_event,
 };
 use submit::{

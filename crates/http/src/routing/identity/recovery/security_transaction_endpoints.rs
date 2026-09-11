@@ -1432,13 +1432,20 @@ async fn continue_issue_terminal_receipt(
             "accepted device authorization Event changed the recovery binding",
         ));
     }
-    let expected_verification_method = format!(
-        "{}#{}",
-        transaction.resource.account_id.principal_id.as_str(),
-        expected_device_id.as_str()
-    );
-    if attestation.auth_data.verification_method != expected_verification_method
-        || receipt.auth_data.verification_method != expected_verification_method
+    let mut producer_methods =
+        authorization_envelope
+            .proofs
+            .iter()
+            .filter_map(|proof| match proof {
+                arkret_wire::EventProof::Producer(proof) => Some(&proof.verification_method),
+                arkret_wire::EventProof::StationAdmission(_) => None,
+            });
+    let expected_verification_method = producer_methods.next().ok_or_else(|| {
+        AppError::internal("accepted replacement authorization Event has no producer proof")
+    })?;
+    if producer_methods.next().is_some()
+        || attestation.auth_data.verification_method != expected_verification_method.as_str()
+        || receipt.auth_data.verification_method != expected_verification_method.as_str()
     {
         return Err(crate::app_error!(
             FailedPrecondition,
@@ -1728,6 +1735,113 @@ fn verify_recovery_device_signature(
     })
 }
 
+async fn verify_recovery_unit_control_proposal_acks(
+    state: &AppState,
+    recovery_session: &soland_services::identity::RecoverySessionState,
+    submissions: &[arkret_wire::EventInitialSubmission],
+) -> Result<(), AppError> {
+    let context = &recovery_session.publication_authority_context;
+    context
+        .validate_for(RecoveryIdentityModel::PcrPolicy)
+        .map_err(|error| AppError::conflict(error.to_string()))?;
+    if context
+        .digest()
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != recovery_session.publication_authority_context_digest
+    {
+        return Err(AppError::conflict(
+            "recovery publication authority context digest changed",
+        ));
+    }
+    let proof_summary = recovery_proof_summary(recovery_session).ok_or_else(|| {
+        AppError::capability_denied("recovery session has no verified proof summary")
+    })?;
+    if proof_summary.kind != RecoveryProofKind::RecoveryUnlock {
+        return Err(AppError::capability_denied(
+            "recovery-word transaction requires recovery_unlock publication authority",
+        ));
+    }
+    let verification_method = proof_summary.verification_method.as_ref().ok_or_else(|| {
+        AppError::capability_denied("recovery_unlock proof has no verification method")
+    })?;
+    let rule = context
+        .authority_set_policy
+        .authorization_rules
+        .iter()
+        .find(|rule| rule.rule_id == proof_summary.kind.as_wire_str())
+        .ok_or_else(|| {
+            AppError::capability_denied(
+                "verified recovery method has no frozen publication authority",
+            )
+        })?;
+    if rule.threshold != 1
+        || rule.issuers.len() != 1
+        || rule.issuers[0].verification_method != *verification_method
+    {
+        return Err(AppError::capability_denied(
+            "recovery_unlock publication authority does not match the verified proof",
+        ));
+    }
+    let verifying_key =
+        recovery_session_unlock_verifying_key(recovery_session, verification_method.as_str())?;
+    let events = submissions
+        .iter()
+        .map(|submission| submission.event.clone())
+        .collect::<Vec<_>>();
+    let policy =
+        crate::control_proposal::control_proposal_policy(state, &events[0].realm_id, &events)
+            .await
+            .map_err(|error| AppError::conflict(error.to_string()))?;
+    for submission in submissions {
+        let ack = submission.control_proposal_ack.as_ref().ok_or_else(|| {
+            AppError::conflict(
+                "recovery re-anchor unit requires a Control Proposal Ack for each Control Move",
+            )
+        })?;
+        ack.validate_structural(policy)
+            .map_err(|error| AppError::conflict(error.to_string()))?;
+        let expected_digest = Hash::new(
+            submission
+                .event
+                .event_digest_with_digest_suite(
+                    state
+                        .projections()
+                        .realm_digest_suite(submission.event.realm_id.as_str()),
+                )
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?;
+        if ack.realm_id != submission.event.realm_id
+            || ack.proposal_digest != expected_digest
+            || ack.authority_set_ref != context.authority_set_ref.authority_set_digest
+            || ack.authority_acks.len() != 1
+            || ack.authority_acks[0].signature.verification_method != *verification_method
+        {
+            return Err(AppError::conflict(
+                "recovery Control Proposal Ack does not bind the frozen authority and exact Event",
+            ));
+        }
+        let member = &ack.authority_acks[0];
+        let signing_bytes = member
+            .canonical_bytes_for_signature()
+            .map_err(|error| AppError::conflict(error.to_string()))?;
+        arkret_signatures::Ed25519DetachedJwsVerifier::new()
+            .verify_detached_jws(
+                &member.signature.jws,
+                &signing_bytes,
+                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: verifying_key.to_bytes().to_vec(),
+                },
+            )
+            .map_err(|error| {
+                AppError::capability_denied(format!(
+                    "recovery Control Proposal Ack signature is invalid: {error}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
 async fn continue_submit_reanchor_unit(
     state: &AppState,
     session: &SessionRecord,
@@ -1755,6 +1869,26 @@ async fn continue_submit_reanchor_unit(
         prepared_material_digest.as_str(),
     )
     .map_err(|_| AppError::internal("prepared re-anchor unit digest changed after preparation"))?;
+    let recovery_session = state
+        .recovery_sessions()
+        .session(binding.recovery_session_id.as_str())
+        .await
+        .map_err(recovery_service_error)?
+        .ok_or_else(|| AppError::not_found("recovery session not found"))?;
+    if recovery_session.state != SessionState::Verified
+        || recovery_session.transaction_id.as_deref() != Some(transaction_id.as_str())
+    {
+        return Err(AppError::conflict(
+            "recovery session is not verified and bound to this transaction",
+        ));
+    }
+    validate_frozen_session_policy(
+        state,
+        &recovery_session,
+        recovery_session.proof_payload.as_ref(),
+    )
+    .await?;
+    verify_recovery_unit_control_proposal_acks(state, &recovery_session, &batch.events).await?;
     let reanchor_digest_suite = state
         .projections()
         .realm_digest_suite(batch.events[0].event.realm_id.as_str());
@@ -1778,9 +1912,10 @@ async fn continue_submit_reanchor_unit(
         .await
         .map_err(security_transaction_service_error)?;
 
-    let outcome = crate::routing::events::event_log::submit_initial_identity_anchor_batch(
+    let outcome = crate::routing::events::event_log::submit_recovery_identity_anchor_batch(
         state,
         session,
+        &binding.replacement_device_id,
         batch.events,
     )
     .await
@@ -1797,7 +1932,6 @@ async fn continue_submit_reanchor_unit(
     ];
     if !outcome.rejections.is_empty()
         || !outcome.quarantine.is_empty()
-        || outcome.ingress_receipts.len() != 2
         || outcome.accepted.len() != 2
         || outcome
             .accepted
