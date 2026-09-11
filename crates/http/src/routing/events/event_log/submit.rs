@@ -2281,8 +2281,7 @@ fn identity_creation_control_proof_window_valid(
     expires_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> bool {
-    issued_at
-        <= now + Duration::seconds(IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS)
+    issued_at <= now + Duration::seconds(IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS)
         && expires_at > now
         && expires_at - issued_at <= Duration::minutes(5)
 }

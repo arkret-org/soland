@@ -23,20 +23,19 @@ pub(super) async fn search_realms(
     };
     let mut results = Vec::new();
     for realm_entry in candidates {
-        if realm_search_visible_to(state, &realm_entry, session.as_ref()).await {
-            results.push(realm_entry);
+        if realm_search_visible_to(state, &realm_entry, session.as_ref()).await
+            && let Some(preview) =
+                realm_preview_for_policy(state, &realm_entry, session.as_ref(), None, None).await?
+        {
+            results.push(preview);
         }
     }
     let has_more = results.len() > requested_limit;
     if has_more {
         results.truncate(requested_limit);
     }
-    let projection = state.projections().snapshot();
     json_ok(DirectoryRealmSearchOutcome {
-        realms: results
-            .iter()
-            .map(|entry| realm_preview_from_directory_entry(&projection, entry))
-            .collect::<Result<Vec<_>, _>>()?,
+        realms: results,
         next_cursor: None,
         has_more,
     })
@@ -118,20 +117,25 @@ pub(super) async fn resolve_realm(
             )
             .await
         {
-            matched_realm = Some((entry, effective_alias));
+            matched_realm = Some(entry);
             break;
         }
     }
     match matched_realm {
-        Some((realm, effective_alias)) => {
+        Some(realm) => {
             let discoverability = realm_discoverability(state, realm.realm_id.as_str()).await;
-            let join_rule = realm_join_rule(state, realm.realm_id.as_str());
+            let preview = realm_preview_for_policy(
+                state,
+                &realm,
+                session.as_ref(),
+                body.invite_token.as_deref(),
+                None,
+            )
+            .await?
+            .ok_or_else(|| AppError::not_found("not found"))?;
             json_ok(DirectoryRealmResolutionOutcome {
-                realm_preview: realm_preview_from_directory_entry_with_alias(
-                    &realm,
-                    effective_alias,
-                )?,
-                join_rule: Some(join_rule_enum(&join_rule)),
+                join_rule: preview.join_rule.as_deref().map(join_rule_enum),
+                realm_preview: preview,
                 join_candidates: join_candidates_for_resolved_realm(
                     state,
                     realm.realm_id.as_str(),
@@ -235,7 +239,19 @@ pub(super) async fn resolve_target(
     let discoverability = realm_discoverability(state, realm_entry.realm_id.as_str()).await;
     let join_rule = realm_join_rule(state, realm_entry.realm_id.as_str());
     let target_kind = target_kind_for_address(&parsed);
-    let realm_preview = realm_preview_for_policy_typed(state, &realm_entry).await?;
+    let realm_preview = realm_preview_for_policy(
+        state,
+        &realm_entry,
+        session.as_ref(),
+        (parsed.address_link_kind == AddressLinkKind::Invite)
+            .then_some(token)
+            .flatten(),
+        (parsed.address_link_kind == AddressLinkKind::Preview)
+            .then_some(token)
+            .flatten(),
+    )
+    .await?
+    .ok_or_else(|| AppError::not_found("not found"))?;
     let policy_revision = if parsed.address_link_kind == AddressLinkKind::Preview
         && let Some(meta) = state
             .realms()
@@ -269,9 +285,9 @@ pub(super) async fn resolve_target(
     )?;
     json_ok(DirectoryTargetResolutionOutcome {
         target_kind,
+        join_rule: realm_preview.join_rule.as_deref().map(join_rule_enum),
         realm_preview: Some(realm_preview),
         object_preview,
-        join_rule: Some(join_rule_enum(&join_rule)),
         as_of,
         source_refs: Vec::new(),
         join_candidates,
@@ -359,51 +375,6 @@ pub(super) fn target_kind_for_address(
     } else {
         TargetKind::Realm
     }
-}
-
-pub(super) fn realm_preview_from_directory_entry(
-    projection: &ProjectionState,
-    entry: &RealmDirectoryEntry,
-) -> Result<RealmPreview, AppError> {
-    realm_preview_from_directory_entry_with_alias(
-        entry,
-        effective_realm_alias(projection, entry.realm_id.as_str()),
-    )
-}
-
-fn realm_preview_from_directory_entry_with_alias(
-    entry: &RealmDirectoryEntry,
-    alias: Option<String>,
-) -> Result<RealmPreview, AppError> {
-    let discoverability = if entry.public {
-        "public"
-    } else {
-        "invite_only"
-    };
-    Ok(RealmPreview {
-        realm_id: entry.realm_id.clone(),
-        alias,
-        title: Some(entry.title.clone()),
-        avatar_blob_ref: None,
-        organization_id: None,
-        join_rule: Some(default_join_rule().to_owned()),
-        member_count_bucket: entry
-            .public
-            .then_some(entry.members.len())
-            .filter(|count| *count > 0)
-            .map(member_count_bucket),
-        summary: entry.description.clone(),
-        owning_organization_ids: Vec::new(),
-        preview_ref: None,
-        discoverability: Some(discoverability.to_owned()),
-        history_access: None,
-        join_candidates: Vec::new(),
-        as_of: entry.as_of,
-        source_refs: parse_event_source_refs(&entry.source_refs)?,
-        policy_revision: entry.policy_revision.clone(),
-        stale: None,
-        divergent: None,
-    })
 }
 
 fn effective_realm_alias(projection: &ProjectionState, realm_id: &str) -> Option<String> {
@@ -635,122 +606,113 @@ pub(super) fn actor_preview_from_value(
     })
 }
 
-pub(super) async fn realm_preview_for_policy(
+async fn realm_preview_for_policy(
     state: &AppState,
     realm_entry: &RealmDirectoryEntry,
-) -> Value {
-    let meta = state
+    session: Option<&SessionRecord>,
+    invite_token: Option<&str>,
+    verified_preview_token: Option<&str>,
+) -> Result<Option<RealmPreview>, AppError> {
+    use arkret_models_collaboration::events_payloads::PreviewPolicyPayloadValue;
+
+    let Some(meta) = state
         .realms()
         .realm_metadata(realm_entry.realm_id.as_str())
         .await
         .ok()
-        .flatten();
-    let fields = meta
-        .as_ref()
-        .and_then(|record| record.preview_policy.as_ref())
-        .and_then(|policy| policy.get("fields"))
-        .and_then(Value::as_array)
-        .map(|fields| {
-            fields
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<&str>>()
+        .flatten()
+    else {
+        return Ok(None);
+    };
+    let Some(policy) = meta.preview_policy else {
+        return Ok(None);
+    };
+    let policy_digest = meta
+        .preview_policy_digest
+        .or_else(|| canonical_value_digest(&policy));
+    let verified_preview_token = verified_preview_token.is_some_and(|token| {
+        decode_preview_token(token).is_some_and(|claim| {
+            claim.get("preview_policy_digest").and_then(Value::as_str) == policy_digest.as_deref()
+                && !token_expired(&claim)
         })
-        .filter(|fields| !fields.is_empty())
-        .unwrap_or_else(|| vec!["alias", "title", "summary", "join_rule"]);
-
-    let mut preview = serde_json::Map::new();
-    if fields.contains(&"alias") {
-        let projection = state.projections().snapshot();
-        if let Some(alias) = effective_realm_alias(&projection, realm_entry.realm_id.as_str()) {
-            preview.insert("alias".to_owned(), json!(alias));
+    });
+    let Ok(policy) = serde_json::from_value::<PreviewPolicyPayloadValue>(policy) else {
+        return Ok(None);
+    };
+    if !matches!(
+        policy.mode.as_str(),
+        "directory_card" | "stripped_state" | "history_stub" | "history_snippet"
+    ) || policy.fields.is_empty()
+        || (policy
+            .token
+            .as_ref()
+            .is_some_and(|token| token.required == Some(true))
+            && !verified_preview_token)
+    {
+        return Ok(None);
+    }
+    let allows = |audience: &str| policy.audiences.iter().any(|value| value == audience);
+    let mut authorized = allows("anonymous")
+        || (allows("authenticated") && session.is_some())
+        || (allows("link_token_holder") && verified_preview_token);
+    if !authorized && let Some(session) = session {
+        let Ok(actor) =
+            crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+        else {
+            return Ok(None);
+        };
+        let actor_id = actor.to_string();
+        if allows("realm_member") {
+            authorized = realm_has_member(state, realm_entry.realm_id.as_str(), &actor_id).await;
+        }
+        if !authorized
+            && allows("invited")
+            && let Some(token) = invite_token
+            && invite_token_matches_realm(state, realm_entry.realm_id.as_str(), token).await
+            && let Ok(invites) = state.realm_invites().snapshot_all().await
+        {
+            authorized = invites.iter().any(|invite| {
+                invite.realm_id == realm_entry.realm_id.as_str()
+                    && invite.invite_token == token
+                    && invite.invitee_id.as_deref() == Some(actor_id.as_str())
+                    && invite.status == "pending"
+                    && invite
+                        .expires_at
+                        .is_none_or(|expires_at| expires_at > now())
+            });
         }
     }
-    if fields.contains(&"title") {
-        preview.insert("title".to_owned(), json!(realm_entry.title));
+    if !authorized {
+        return Ok(None);
     }
-    if fields.contains(&"summary") {
-        preview.insert("summary".to_owned(), json!(realm_entry.description));
-    }
-    if fields.contains(&"join_rule") {
-        preview.insert(
-            "join_rule".to_owned(),
-            json!(realm_join_rule(state, realm_entry.realm_id.as_str())),
-        );
-    }
-    if fields.contains(&"history_access") {
-        preview.insert(
-            "history_access".to_owned(),
-            json!(realm_history_access(state, realm_entry.realm_id.as_str()).await),
-        );
-    }
-    if fields.contains(&"member_count_bucket") && !realm_entry.members.is_empty() {
-        preview.insert(
-            "member_count_bucket".to_owned(),
-            json!(member_count_bucket_wire(realm_entry.members.len())),
-        );
-    }
-    if fields.contains(&"preview_ref") {
-        preview.insert(
-            "preview_ref".to_owned(),
-            json!(realm_entry.realm_id.as_str()),
-        );
-    }
-    if fields.contains(&"server_hints") {
-        preview.insert(
-            "server_hints".to_owned(),
-            json!({
-                "service_id": state.service_id().clone(),
-                "endpoint": state.config().public_base_url.clone(),
-            }),
-        );
-    }
-
-    preview.insert("realm_id".to_owned(), json!(realm_entry.realm_id.as_str()));
-    preview.insert("as_of".to_owned(), json!(realm_entry.as_of));
-    preview.insert(
-        "source_refs".to_owned(),
-        json!(realm_entry.source_refs.clone()),
-    );
-    preview.insert(
-        "policy_revision".to_owned(),
-        json!(realm_entry.policy_revision.clone()),
-    );
-    Value::Object(preview)
-}
-
-pub(super) async fn realm_preview_for_policy_typed(
-    state: &AppState,
-    realm_entry: &RealmDirectoryEntry,
-) -> Result<RealmPreview, AppError> {
-    serde_json::from_value(realm_preview_for_policy(state, realm_entry).await)
-        .map_err(|error| AppError::internal(format!("realm preview shape invalid: {error}")))
-}
-
-pub(super) fn member_count_bucket(count: usize) -> RealmMemberCountBucket {
-    RealmMemberCountBucket::Bucket(member_count_bucket_label(count))
-}
-
-pub(super) fn member_count_bucket_wire(count: usize) -> &'static str {
-    match member_count_bucket_label(count) {
-        RealmMemberCountBucketLabel::OneToTen => "1-10",
-        RealmMemberCountBucketLabel::ElevenToFifty => "11-50",
-        RealmMemberCountBucketLabel::FiftyOneToOneHundred => "51-100",
-        RealmMemberCountBucketLabel::OneHundredOneToFiveHundred => "101-500",
-        RealmMemberCountBucketLabel::FiveHundredOneToTwoThousand => "501-2000",
-        RealmMemberCountBucketLabel::TwoThousandPlus => "2000+",
-    }
-}
-
-pub(super) fn member_count_bucket_label(count: usize) -> RealmMemberCountBucketLabel {
-    match count {
-        0..=10 => RealmMemberCountBucketLabel::OneToTen,
-        11..=50 => RealmMemberCountBucketLabel::ElevenToFifty,
-        51..=100 => RealmMemberCountBucketLabel::FiftyOneToOneHundred,
-        101..=500 => RealmMemberCountBucketLabel::OneHundredOneToFiveHundred,
-        501..=2000 => RealmMemberCountBucketLabel::FiveHundredOneToTwoThousand,
-        _ => RealmMemberCountBucketLabel::TwoThousandPlus,
-    }
+    let includes = |field: &str| policy.fields.iter().any(|value| value == field);
+    Ok(Some(RealmPreview {
+        realm_id: realm_entry.realm_id.clone(),
+        alias: None,
+        title: includes("title").then(|| realm_entry.title.clone()),
+        avatar_blob_ref: None,
+        organization_id: None,
+        join_rule: includes("join_rule")
+            .then(|| realm_join_rule(state, realm_entry.realm_id.as_str())),
+        member_count_bucket: None,
+        summary: includes("summary")
+            .then(|| realm_entry.description.clone())
+            .flatten(),
+        owning_organization_ids: Vec::new(),
+        preview_ref: includes("preview_ref").then(|| realm_entry.realm_id.to_string()),
+        discoverability: None,
+        history_access: if includes("history_access") {
+            Some(realm_history_access(state, realm_entry.realm_id.as_str()).await)
+        } else {
+            None
+        },
+        join_candidates: Vec::new(),
+        as_of: realm_entry.as_of,
+        source_refs: parse_event_source_refs(&realm_entry.source_refs)?,
+        policy_revision: policy_digest.unwrap_or_else(|| realm_entry.policy_revision.clone()),
+        stale: None,
+        divergent: None,
+    }))
 }
 
 pub(super) async fn join_candidates_for_resolved_realm(
