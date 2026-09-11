@@ -95,6 +95,17 @@ async fn scope_visible(
     }
 }
 
+fn sort_coverage_identifiers(
+    strands: &mut Vec<arkret_wire::StrandId>,
+    events: &mut Vec<arkret_wire::EventId>,
+) {
+    // SyncFilter uses lexical strings, but CurrentCoverage uses decoded tokens.
+    strands.sort_by_key(arkret_wire::StrandId::token_bytes);
+    strands.dedup();
+    events.sort_by_key(arkret_wire::EventId::token_bytes);
+    events.dedup();
+}
+
 pub(super) async fn page(
     pool: &PgPool,
     request: &CurrentDetailRequest,
@@ -144,8 +155,8 @@ pub(super) async fn page(
                 Some(strands)=>strands.clone(),
                 None=>authority.default_strand_id.as_ref().map(|id|id.parse()).transpose().map_err(error)?.into_iter().collect(),
             };
-            strands.sort(); strands.dedup();
-            let mut events=request.event_ids.clone(); events.sort(); events.dedup();
+            let mut events=request.event_ids.clone();
+            sort_coverage_identifiers(&mut strands, &mut events);
             CurrentDetailProgress {
                 request_digest:request_digest.clone(),
                 snapshot_cursor:arkret_wire::Cursor::new(format!("ak:cursor:{}",uuid::Uuid::now_v7().simple())).map_err(error)?,

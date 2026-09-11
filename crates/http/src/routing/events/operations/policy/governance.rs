@@ -531,6 +531,37 @@ pub(super) async fn validate_realm_organization_policy(
     Err("missing_capability")
 }
 
+/// Organization moderation policy authorship is narrower than the generic
+/// `ak.policy.manage` capability gate. The semantic author is the Organization
+/// service actor named by `payload.organization_id`. A delegated governance
+/// service may execute and sign for that author only through the Event's
+/// explicit authorization reference, which is verified by the shared
+/// capability path.
+pub(super) fn validate_organization_moderation_policy_authority(
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_wire::EventKind::OrganizationModerationPolicy)
+    {
+        return Ok(());
+    }
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::OrganizationModerationPolicy>()
+        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+    if !matches!(operation.context.sender, arkret_wire::ActorId::Service { .. })
+        || operation.context.sender.signing_principal_id() != &payload.organization_id
+    {
+        return Err("organization_policy_author_mismatch");
+    }
+    if let Some(executor) = operation.context.executed_by.as_ref()
+        && (!matches!(executor, arkret_wire::ActorId::Service { .. })
+            || operation.context.authorization_ref.is_none())
+    {
+        return Err("organization_policy_executor_unauthorized");
+    }
+    Ok(())
+}
+
 /// P2 — capability gate for the moderation control-plane events ingested at
 /// `/_arkret/self/events` (content-moderation.md §2.6; capability-
 /// action-registry.json). Mirrors [`validate_member_state_policy`]'s ban
@@ -751,4 +782,77 @@ pub(super) fn active_direct_conversation_binding_for_realm(
         .settled_direct_binding_for_realm(realm_id)?;
     crate::routing::identity::account::direct_binding_matches_projection(state, &binding)
         .then_some(binding)
+}
+
+#[cfg(test)]
+mod organization_moderation_policy_tests {
+    use super::*;
+
+    fn policy_operation() -> Operation {
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6",
+            )
+            .unwrap(),
+            arkret_wire::EventKind::OrganizationModerationPolicy.as_str(),
+            serde_json::json!({
+                "organization_id": "ak:did_core:web:organization.example",
+                "value": {
+                    "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
+                    "policy_scope": {"applies_to_owned_realms": true},
+                    "rules": [{
+                        "target": {
+                            "kind": "service",
+                            "service_id": "ak:did_core:web:blocked.example"
+                        },
+                        "action": "deny_federation"
+                    }]
+                }
+            }),
+        );
+        operation.context.sender = arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new("ak:did_core:web:organization.example").unwrap(),
+        );
+        operation
+    }
+
+    #[test]
+    fn policy_subject_must_be_the_organization_service_actor() {
+        let mut operation = policy_operation();
+        assert_eq!(
+            validate_organization_moderation_policy_authority(&operation),
+            Ok(())
+        );
+        operation.context.sender = arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        );
+        assert_eq!(
+            validate_organization_moderation_policy_authority(&operation),
+            Err("organization_policy_author_mismatch")
+        );
+    }
+
+    #[test]
+    fn delegated_policy_executor_requires_a_service_and_authorization_ref() {
+        let mut operation = policy_operation();
+        operation.context.executed_by = Some(arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new("ak:did_core:web:governance.example").unwrap(),
+        ));
+        assert_eq!(
+            validate_organization_moderation_policy_authority(&operation),
+            Err("organization_policy_executor_unauthorized")
+        );
+        operation.context.authorization_ref = Some(
+            arkret_wire::AuthorizationRef::new(
+                "ak:grant:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM",
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            validate_organization_moderation_policy_authority(&operation),
+            Ok(())
+        );
+    }
 }

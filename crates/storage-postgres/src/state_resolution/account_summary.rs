@@ -216,12 +216,16 @@ pub(super) async fn publish_current_frontier(
     .load::<TextRow>(&mut *conn)
     .await?;
     let single_leaf = leaves.len() == 1;
+    if leaves.is_empty() || super::realm_has_seal_collision(conn, realm).await? {
+        return Ok(());
+    }
     let realm_id =
         RealmId::new(realm.to_owned()).map_err(|e| StoreError::Backend(e.to_string()))?;
     let rule_context = CheckpointRuleContext::capture(registry, &realm_id)?;
     let mut covered = BTreeSet::new();
     let mut mv_views = Vec::new();
-    let mut current_mv_ready = true;
+    let current_mv_ready = true;
+    let mut expected_seal = None;
     for leaf in leaves {
         let row = sql_query(
             "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json
@@ -240,9 +244,7 @@ pub(super) async fn publish_current_frontier(
             );
         }
         let view = checkpoint_view_from_value(row.state_json)?;
-        if !view.rule_context.reusable_with(&rule_context) {
-            return Ok(());
-        }
+        let reusable = view.rule_context.reusable_with(&rule_context);
         let quarantined = sql_query(
             "SELECT COUNT(*) AS value FROM state_seal_quarantine WHERE seal_id = ANY($1)",
         )
@@ -253,7 +255,7 @@ pub(super) async fn publish_current_frontier(
         if quarantined != 0 {
             return Ok(());
         }
-        if single_leaf {
+        if single_leaf && reusable && view.current_mv_ready {
             return publish(
                 conn,
                 realm,
@@ -264,11 +266,33 @@ pub(super) async fn publish_current_frontier(
             )
             .await;
         }
-        current_mv_ready &= view.current_mv_ready;
-        mv_views.push((
-            view.current_mv_heads,
-            row.covered_event_digests.iter().cloned().collect(),
-        ));
+        let heads = if reusable && view.current_mv_ready {
+            view.current_mv_heads
+        } else {
+            let Some(heads) = super::current_results::rebuild_mv_heads(
+                conn,
+                realm,
+                &row.covered_seal_ids,
+                &row.covered_event_digests,
+                &rule_context,
+            )
+            .await?
+            else {
+                return Ok(());
+            };
+            heads
+        };
+        if single_leaf {
+            let seal =
+                sql_query("SELECT seal_json AS value FROM state_seals WHERE id=$1 AND realm_id=$2")
+                    .bind::<Text, _>(&leaf.value)
+                    .bind::<Text, _>(realm)
+                    .get_result::<JsonRow>(&mut *conn)
+                    .await?;
+            expected_seal =
+                Some(serde_json::from_value::<Seal>(seal.value).map_err(serde_to_store)?);
+        }
+        mv_views.push((heads, row.covered_event_digests.iter().cloned().collect()));
         covered.extend(row.covered_event_digests);
     }
     let covered = covered.into_iter().collect::<Vec<_>>();
@@ -315,6 +339,21 @@ pub(super) async fn publish_current_frontier(
         );
     }
     let current_mv_heads = super::current_results::merge_mv_views(&mv_views)?;
+    if let Some(seal) = expected_seal {
+        let root = compute_state_root(
+            arkret_state::GovernanceView::new(&cells, &cas_heads),
+            seal.state_root
+                .digest_suite()
+                .map_err(|error| StoreError::Backend(error.to_string()))?,
+        )
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        if root != seal.state_root {
+            return Err(StoreError::Conflict(
+                "rebuilt current state disagrees with accepted Seal root".into(),
+            )
+            .into());
+        }
+    }
     publish(
         conn,
         realm,

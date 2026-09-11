@@ -33,7 +33,6 @@ fn seed_strand(state: &mut ProjectionState, strand_id: &str, circle_id: Option<&
             updated_at: None,
             scope_circle_id: circle_id.map(ToOwned::to_owned),
             schema_refs: Vec::new(),
-            schedule_revision_heads: Vec::new(),
         },
     );
 }

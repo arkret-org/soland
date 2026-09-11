@@ -4,6 +4,40 @@ use arkret_models_collaboration::sync_frames::current_results::{
 
 use super::*;
 
+#[test]
+fn coverage_uses_decoded_tokens_not_filter_lexical_order() {
+    let mut strands = vec![
+        "ak:strand:Ab37I4k6yBlQvDmm6v80xz-BaUrFUbaPneH1V_h_N2sG"
+            .parse()
+            .unwrap(),
+        "ak:strand:AbZXl2n7Hn5BHf2TGG5YlOYcXmc3o5Q1bbWSox76uZTB"
+            .parse()
+            .unwrap(),
+    ];
+    let mut events = strands
+        .iter()
+        .map(|strand: &arkret_wire::StrandId| {
+            strand
+                .to_string()
+                .replace("ak:strand:", "ak:event:")
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    strands.push(strands[0].clone());
+    sort_coverage_identifiers(&mut strands, &mut events);
+    assert_eq!(strands.len(), 2);
+    assert!(strands[0].as_str() > strands[1].as_str());
+    CurrentCoverage {
+        realm: true,
+        strand_ids: strands,
+        event_ids: events,
+        members: CurrentMemberCoverage::Selected { actor_ids: vec![] },
+    }
+    .validate()
+    .unwrap();
+}
+
 #[tokio::test]
 async fn baseline_budget_does_not_complete_or_change_snapshot_and_authority_change_restarts() {
     let database = crate::test_database::TestDatabase::lease().await;

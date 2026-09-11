@@ -894,7 +894,6 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
             updated_by: None,
             updated_at: None,
             schema_refs: Vec::new(),
-            schedule_revision_heads: Vec::new(),
             scope_circle_id: None,
         }
     };

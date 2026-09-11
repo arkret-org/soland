@@ -82,18 +82,28 @@ pub(super) async fn advance_mv_heads(
             continue;
         };
         let view = checkpoint_view_from_value(row.state_json)?;
-        if row.realm_id != realm
-            || !row.covered_seal_ids.contains(predecessor)
-            || !view.rule_context.reusable_with(rule_context)
-            || !view.current_mv_ready
-        {
+        if row.realm_id != realm || !row.covered_seal_ids.contains(predecessor) {
             ready = false;
             continue;
         }
-        views.push((
-            view.current_mv_heads,
-            row.covered_event_digests.into_iter().collect(),
-        ));
+        let heads = if view.rule_context.reusable_with(rule_context) && view.current_mv_ready {
+            view.current_mv_heads
+        } else {
+            let Some(heads) = rebuild_mv_heads(
+                conn,
+                realm,
+                &row.covered_seal_ids,
+                &row.covered_event_digests,
+                rule_context,
+            )
+            .await?
+            else {
+                ready = false;
+                continue;
+            };
+            heads
+        };
+        views.push((heads, row.covered_event_digests.into_iter().collect()));
     }
     let mut heads = merge_mv_views(&views)?;
     let mut updates = CurrentMvHeads::new();
@@ -124,6 +134,121 @@ pub(super) async fn advance_mv_heads(
         heads.insert(cell, values);
     }
     Ok((heads, ready))
+}
+
+#[derive(QueryableByName)]
+struct MvRebuildSeal {
+    #[diesel(sql_type = Text)]
+    seal_id: String,
+    #[diesel(sql_type = Array<Text>)]
+    covered_seal_ids: Vec<String>,
+    #[diesel(sql_type = Array<Text>)]
+    parents: Vec<String>,
+}
+
+/// Reconstruct provenance from accepted effects and Seal ancestry, never from
+/// arrival order or an incompatible joined-value cache. Same-Seal writes stay
+/// siblings; only writes in a strict successor Seal supersede a source.
+pub(super) async fn rebuild_mv_heads(
+    conn: &mut AsyncPgConnection,
+    realm: &str,
+    closure: &[String],
+    covered: &[String],
+    context: &CheckpointRuleContext,
+) -> Result<Option<CurrentMvHeads>, EventSealCommitError> {
+    if !matches!(context, CheckpointRuleContext::Stable { .. }) {
+        return Ok(None);
+    }
+    let seals = sql_query("SELECT s.id AS seal_id,c.covered_seal_ids,ARRAY(SELECT jsonb_array_elements_text(s.predecessor_refs)) AS parents FROM state_seals s JOIN state_seal_effective_checkpoints c ON c.seal_id=s.id AND c.realm_id=s.realm_id WHERE s.realm_id=$1 AND s.id=ANY($2) AND NOT EXISTS(SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=s.id)")
+        .bind::<Text,_>(realm).bind::<Array<Text>,_>(closure).load::<MvRebuildSeal>(&mut *conn).await?;
+    let expected = closure.iter().cloned().collect::<BTreeSet<_>>();
+    let actual = seals
+        .iter()
+        .map(|s| s.seal_id.clone())
+        .collect::<BTreeSet<_>>();
+    if expected != actual {
+        return Ok(None);
+    }
+    let lineage = seals
+        .iter()
+        .map(|s| {
+            (
+                s.seal_id.clone(),
+                s.covered_seal_ids.iter().cloned().collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for seal in &seals {
+        let ancestors = &lineage[&seal.seal_id];
+        if !ancestors.contains(&seal.seal_id)
+            || !ancestors.is_subset(&expected)
+            || seal.parents.iter().any(|p| {
+                p == &seal.seal_id || !ancestors.contains(p) || !lineage[p].is_subset(ancestors)
+            })
+            || ancestors
+                .iter()
+                .any(|a| a != &seal.seal_id && lineage[a].contains(&seal.seal_id))
+        {
+            return Ok(None);
+        }
+        let declared = seal
+            .parents
+            .iter()
+            .flat_map(|p| lineage[p].iter().cloned())
+            .chain(std::iter::once(seal.seal_id.clone()))
+            .collect::<BTreeSet<_>>();
+        if &declared != ancestors {
+            return Ok(None);
+        }
+    }
+    let rows = sql_query("SELECT cell_id,seal_id,op_json FROM state_cell_ops WHERE realm_id=$1 AND seal_id=ANY($2) AND move_id=ANY($3) ORDER BY cell_id,seq")
+        .bind::<Text,_>(realm).bind::<Array<Text>,_>(closure).bind::<Array<Text>,_>(covered).load::<EventCellOpRow>(&mut *conn).await?;
+    let mut writes = BTreeMap::<CellRef, Vec<(String, CurrentMvHead)>>::new();
+    for row in rows {
+        let cell = CellRef::new(row.cell_id).map_err(invalid)?;
+        if !current_family_descriptor(CellId::from_ref(&cell).map_err(invalid)?.component())
+            .map_err(invalid)?
+            .is_some_and(|d| d.lattice == "mv_register")
+        {
+            continue;
+        }
+        let issued = sealed_op_from_value(row.op_json)?;
+        let Some(value) = issued.op.op.value else {
+            return Ok(None);
+        };
+        let event_id =
+            arkret_wire::EventId::from_event_digest(&issued.op.move_id).map_err(invalid)?;
+        writes
+            .entry(cell)
+            .or_default()
+            .push((row.seal_id, CurrentMvHead { event_id, value }));
+    }
+    let mut result = CurrentMvHeads::new();
+    for (cell, candidates) in writes {
+        let mut surviving = BTreeMap::new();
+        for (seal, head) in &candidates {
+            if candidates
+                .iter()
+                .any(|(other, _)| other != seal && lineage[other].contains(seal))
+            {
+                continue;
+            }
+            if surviving
+                .get(&head.event_id)
+                .is_some_and(|old| old != &head.value)
+            {
+                return Err(invalid("same MV source has inconsistent accepted effects"));
+            }
+            surviving.insert(head.event_id.clone(), head.value.clone());
+        }
+        let mut heads = surviving
+            .into_iter()
+            .map(|(event_id, value)| CurrentMvHead { event_id, value })
+            .collect::<Vec<_>>();
+        heads.sort_by_key(|head| head.event_id.token_bytes());
+        result.insert(cell, heads);
+    }
+    Ok(Some(result))
 }
 
 #[derive(QueryableByName)]
@@ -340,8 +465,25 @@ async fn lifecycle_values(
     Ok(result)
 }
 
-/// Return false when a current value cannot yet be faithfully materialized.
-/// Admission remains valid; the reader must retain typed Realm unavailability.
+/// Missing required entries invalidate a derived publication, not admission.
+pub(super) async fn baseline_missing(
+    conn: &mut AsyncPgConnection,
+    realm: &str,
+) -> Result<bool, diesel::result::Error> {
+    // A ready flag cannot substitute for the required baseline entries.
+    let count = sql_query("SELECT COUNT(DISTINCT payload->'selector'->>'cell_id') AS value FROM current_result_heads WHERE realm_id=$1 AND target_kind='realm' AND payload->'selector'->'scope_ref'->>'kind'='realm' AND payload->'selector'->>'cell_id'=ANY($2)")
+        .bind::<Text,_>(realm)
+        .bind::<Array<Text>,_>(vec![
+            "ak:cell:ak.component.realm.genesis.v1:null",
+            "ak:cell:ak.component.realm.policy.v1:null",
+            "ak:cell:ak.component.realm.policy_bundle.v1:null",
+            "ak:cell:ak.component.realm.set_default_strand.v1:null",
+        ])
+        .get_result::<CountRow>(conn).await?.value;
+    Ok(count != 4)
+}
+
+/// Retain typed Realm unavailability when a value cannot be materialized.
 pub(super) async fn publish(
     conn: &mut AsyncPgConnection,
     realm: &str,

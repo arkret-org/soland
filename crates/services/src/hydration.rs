@@ -953,7 +953,7 @@ pub async fn hydrate_projections_from_persistence(
                     summary: record.summary,
                     content: record.content,
                     encrypted_content: record.encrypted_content,
-                    fields: Default::default(),
+                    fields: record.fields,
                     state,
                     state_changed_at: record.state_changed_at,
                     stage: record
@@ -966,8 +966,7 @@ pub async fn hydrate_projections_from_persistence(
                     history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
-                    schema_refs: Vec::new(),
-                    schedule_revision_heads: Vec::new(),
+                    schema_refs: record.schema_refs,
                     scope_circle_id: record.scope_circle_id,
                 },
             );

@@ -587,15 +587,6 @@ pub struct StrandProjection {
     /// `schema_refs` — the profile activation axis. Its calendar entry and the
     /// `metadata.fields.calendar` subtree co-occur in both directions.
     pub schema_refs: Vec<String>,
-    /// Canonical schedule revision frontier, as `event_digest` values of the
-    /// accepted Events that actually changed the calendar subtree.
-    ///
-    /// A responder signs a subset of this into the RSVP entry, so it has to be
-    /// readable: without it a client cannot author an RSVP at all, which is
-    /// exactly the fail-closed state the calendar UI is in until this is
-    /// populated. An `ak.strand.update` that leaves the calendar subtree
-    /// untouched is not a schedule revision and does not appear here.
-    pub schedule_revision_heads: Vec<String>,
 }
 
 pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrack> {

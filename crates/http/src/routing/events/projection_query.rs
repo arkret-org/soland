@@ -1105,11 +1105,6 @@ struct StrandProjectionView {
     /// `metadata.fields.calendar` subtree co-occur in both directions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     schema_refs: Vec<String>,
-    /// Canonical schedule revision frontier as `event_digest` values. A client
-    /// signs a subset of this into an RSVP entry, so without it RSVP authoring
-    /// has to fail closed rather than claim an unobserved schedule.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    schedule_revision_heads: Vec<String>,
     /// Every live RSVP `mv_register` head for this Strand.
     ///
     /// Concurrent responses are exposed side by side rather than reduced to one
@@ -1277,7 +1272,6 @@ async fn get_strand_projection(
         encrypted_content: strand.encrypted_content,
         fields: strand.fields,
         schema_refs: strand.schema_refs,
-        schedule_revision_heads: strand.schedule_revision_heads,
         rsvps,
         board_space_id: board_space_id.map(|id| id.to_string()),
         list_space_id: list_space_id.map(|id| id.to_string()),

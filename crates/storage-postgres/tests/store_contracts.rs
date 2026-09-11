@@ -475,6 +475,8 @@ async fn postgres_structured_projection_and_invite_identities_round_trip() {
             summary: None,
             content: Some(serde_json::json!({"text":"test"})),
             encrypted_content: None,
+            fields: Default::default(),
+            schema_refs: vec!["ak.schema.calendar_event.v1".to_owned()],
             scope_circle_id: None,
             history_basis_seals: vec![],
             realm_id: realm_id.into(),

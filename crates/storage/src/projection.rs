@@ -126,6 +126,8 @@ pub struct StrandProjectionRecord {
     /// object and both are absent once `state=redacted` (common-fields.md 5.2).
     pub content: Option<serde_json::Value>,
     pub encrypted_content: Option<serde_json::Value>,
+    pub fields: BTreeMap<String, serde_json::Value>,
+    pub schema_refs: Vec<String>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,

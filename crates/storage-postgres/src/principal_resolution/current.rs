@@ -4,6 +4,7 @@ use arkret_models_collaboration::sync_frames::current_results::{
 };
 use arkret_wire::{CellRef, EventId, ScopeRef};
 use diesel::sql_types::{Binary, Bool};
+use diesel_async::AsyncConnection;
 use soland_storage::CurrentPrincipalRead;
 
 use super::*;
@@ -78,6 +79,26 @@ async fn accepted(
     .await
     .optional()?;
     Ok(row.and_then(|row| serde_json::from_value(row.envelope).ok()))
+}
+
+/// Repair only derived current publication under the normal Realm lock. The
+/// subsequent read still independently validates the exact source and anchor
+/// in one snapshot; repair does not grant authority or return a cached success.
+pub(super) async fn refresh(
+    pool: &PgPool,
+    account: &AccountId,
+    registry: &dyn arkret_state::state::CellRegistry,
+) -> PersistenceResult<()> {
+    let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
+    conn.transaction::<_,crate::PgTransactionError,_>(async |conn| {
+        let anchor = sql_query("SELECT pcr_realm_id,genesis_event_id FROM principal_resolutions WHERE principal_id=$1 AND station_id=$2")
+            .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(account.station_id.as_str())
+            .get_result::<Anchor>(conn).await.optional()?;
+        if let Some(anchor) = anchor {
+            crate::state_resolution::refresh_current_if_expired(conn, &anchor.pcr_realm_id, registry).await?;
+        }
+        Ok(())
+    }).await.map_err(crate::PgTransactionError::into_persistence)
 }
 
 pub(super) async fn read(

@@ -532,7 +532,6 @@ fn install_projected_strand_scope(
             updated_by: None,
             updated_at: None,
             schema_refs: Vec::new(),
-            schedule_revision_heads: Vec::new(),
             scope_circle_id: Some(circle_id.to_owned()),
         },
     );

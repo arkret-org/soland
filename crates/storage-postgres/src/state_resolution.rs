@@ -81,7 +81,8 @@ impl CheckpointRuleContext {
                 let implementation = IMPLEMENTATION.get_or_init(|| {
                     arkret_canonical::sha256_digest(concat!(
                         include_str!("state_resolution.rs"),
-                        include_str!("state_resolution/account_summary.rs")
+                        include_str!("state_resolution/account_summary.rs"),
+                        include_str!("state_resolution/current_results.rs")
                     ))
                 });
                 let context = arkret_canonical::canonical_json_bytes(&serde_json::json!({
@@ -622,7 +623,7 @@ async fn lock_seal_realm(
         .map(|_| ())
 }
 
-/// Refresh time-sensitive current results inside the caller's sync transaction.
+/// Refresh expired or unavailable derived results inside the caller's transaction.
 /// The caller acquires its retention lock before entering this Realm lock.
 pub(crate) async fn refresh_current_if_expired(
     conn: &mut AsyncPgConnection,
@@ -631,9 +632,9 @@ pub(crate) async fn refresh_current_if_expired(
 ) -> soland_storage::PersistenceResult<()> {
     let result: Result<(), EventSealCommitError> = async {
         lock_seal_realm(conn, realm_id).await?;
-        let due = sql_query("SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND next_expiry IS NOT NULL AND next_expiry <= clock_timestamp()")
+        let due = sql_query("SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND (NOT ready OR (next_expiry IS NOT NULL AND next_expiry <= clock_timestamp()))")
             .bind::<Text,_>(realm_id).get_result::<CountRow>(&mut *conn).await?.value != 0;
-        if due {
+        if due || current_results::baseline_missing(conn, realm_id).await? {
             account_summary::invalidate(conn, realm_id).await?;
             account_summary::publish_current_frontier(conn, realm_id, registry).await?;
         }
@@ -3328,6 +3329,171 @@ mod event_seal_commit_tests {
             .unwrap();
 
         assert_eq!(state.get(&cell), Some(&CellState::Value(json!("ban"))),);
+    }
+
+    #[tokio::test]
+    async fn postgres_organization_policy_survives_restart_replay_and_out_of_order_seal() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let registry: Arc<dyn CellRegistry> = Arc::new(
+            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+        );
+        let stores = build_state_resolution_stores(Some(pool.clone()), registry.clone());
+        let realm = RealmId::new("ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6").unwrap();
+        let organization_id = "ak:did_core:web:organization.example";
+        let cell = CellRef::new(format!(
+            "ak:cell:ak.component.organization.moderation_policy.v1:{organization_id}"
+        ))
+        .unwrap();
+        let value = json!({
+            "organization_id": organization_id,
+            "value": {
+                "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
+                "policy_scope": {"realm_ids": [realm.clone()]},
+                "rules": [{
+                    "target": {
+                        "kind": "service",
+                        "service_id": "ak:did_core:web:denied.example"
+                    },
+                    "action": "deny_federation"
+                }]
+            }
+        });
+        let (mut seal, mut ops, covered, event) = competing_seal(
+            stores.cell_store.as_ref(),
+            registry.as_ref(),
+            &realm,
+            'o',
+            1,
+        )
+        .await;
+        ops[0].0 = cell.clone();
+        ops[0].1.op.op.value = Some(value.clone());
+        let state = effective_state_with_new_ops(
+            stores.cell_store.as_ref(),
+            registry.as_ref(),
+            &realm,
+            &covered,
+            &ops,
+        )
+        .await
+        .unwrap();
+        let cas_heads = arkret_state::effective_cas_heads_with_new_ops(
+            &covered,
+            &realm,
+            stores.cell_store.as_ref(),
+            registry.as_ref(),
+            &ops,
+        )
+        .await
+        .unwrap();
+        seal.state_root = compute_state_root(
+            arkret_state::GovernanceView::new(&state, &cas_heads),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        seal.id = seal
+            .derive_id(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+            device_id: "ak:device:organization-policy-fixture".to_owned(),
+            device_authorize_event_id: "ak:event:organization-policy-fixture".to_owned(),
+            device_generation_ref: 1,
+            seal_basis_digest: "sha256:organization-policy-fixture".to_owned(),
+        });
+        stores
+            .control_event_store
+            .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
+            .await
+            .unwrap();
+        assert!(
+            stores
+                .event_seal_committer
+                .commit_if_frontier(
+                    &seal,
+                    arkret_canonical::DigestSuite::Sha256,
+                    &[],
+                    &ops,
+                    &covered,
+                    Some(&BTreeSet::new()),
+                    &[],
+                )
+                .await
+                .unwrap()
+        );
+
+        let restarted = build_state_resolution_stores(Some(pool), registry.clone());
+        let stored = restarted
+            .cell_store
+            .sealed_ops_for_cell(&realm, &cell)
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].op.op.value, Some(value));
+        assert!(
+            restarted
+                .event_seal_committer
+                .commit_if_frontier(
+                    &seal,
+                    arkret_canonical::DigestSuite::Sha256,
+                    &[],
+                    &ops,
+                    &covered,
+                    Some(&BTreeSet::new()),
+                    &[],
+                )
+                .await
+                .unwrap(),
+            "an exact replay after adapter restart must be idempotent"
+        );
+
+        let (mut out_of_order, out_of_order_ops, out_of_order_covered, _) = competing_seal(
+            restarted.cell_store.as_ref(),
+            registry.as_ref(),
+            &realm,
+            'p',
+            2,
+        )
+        .await;
+        let missing_predecessor =
+            SealId::new(format!("ak:seal:sha256:{}", "f".repeat(64))).unwrap();
+        out_of_order.predecessor_refs = vec![missing_predecessor.clone()];
+        out_of_order.id = out_of_order
+            .derive_id(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        assert!(
+            !restarted
+                .event_seal_committer
+                .commit_if_frontier(
+                    &out_of_order,
+                    arkret_canonical::DigestSuite::Sha256,
+                    &[missing_predecessor],
+                    &out_of_order_ops,
+                    &out_of_order_covered,
+                    Some(&BTreeSet::new()),
+                    &[],
+                )
+                .await
+                .unwrap(),
+            "a Seal whose predecessor has not arrived must not commit"
+        );
+        assert!(
+            restarted
+                .seal_store
+                .get(&out_of_order.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            restarted
+                .cell_store
+                .sealed_ops_for_cell(&realm, &cell)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

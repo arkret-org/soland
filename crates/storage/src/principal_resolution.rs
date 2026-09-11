@@ -65,6 +65,7 @@ pub trait PrincipalResolutionStore: Send + Sync {
     async fn current_principal(
         &self,
         account_id: &AccountId,
+        registry: &dyn arkret_state::state::CellRegistry,
     ) -> PersistenceResult<CurrentPrincipalRead>;
     async fn by_account_id(
         &self,

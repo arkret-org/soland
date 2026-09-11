@@ -3,6 +3,50 @@
 
 use super::*;
 
+#[tokio::test]
+async fn unwritten_realm_singletons_publish_confirmed_empty_baseline() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let mut conn = pg_conn(&database.pool()).await.unwrap();
+    let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [46; 32],
+    ));
+    assert!(baseline_missing(&mut conn, realm.as_str()).await.unwrap());
+    conn.transaction::<_, EventSealCommitError, _>(async |conn| {
+        let revision = crate::current_results::next_revision(conn)
+            .await
+            .map_err(persistence_to_store)?;
+        publish(
+            conn,
+            realm.as_str(),
+            &BTreeMap::new(),
+            revision as i64,
+            &BTreeMap::new(),
+            true,
+        )
+        .await
+    })
+    .await
+    .unwrap();
+    assert!(!baseline_missing(&mut conn, realm.as_str()).await.unwrap());
+    let policy = sql_query("SELECT payload AS value FROM current_result_heads WHERE realm_id=$1 AND payload->'selector'->>'cell_id'='ak:cell:ak.component.realm.policy.v1:null'")
+        .bind::<Text,_>(realm.as_str()).get_result::<JsonRow>(&mut *conn).await.unwrap().value;
+    assert_eq!(
+        policy["result"],
+        serde_json::json!({"status":"value","value":null})
+    );
+    // Confirmed absence is not authority: a missing genesis still fails closed.
+    let pending = sql_query(
+        "SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND NOT ready",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap()
+    .value;
+    assert_eq!(pending, 1);
+}
+
 async fn checkpoint(
     conn: &mut AsyncPgConnection,
     realm: &RealmId,
@@ -188,4 +232,105 @@ async fn expired_agent_current_result_refreshes_atomically_and_partial_view_stay
     // This intentionally partial storage fixture has no Realm genesis cell;
     // expiry repair must not turn missing current coverage into completion.
     assert_eq!(pending, 1);
+}
+
+#[tokio::test]
+async fn stale_mv_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let mut conn = pg_conn(&pool).await.unwrap();
+    let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [45; 32],
+    ));
+    let cell = CellRef::new("ak:cell:ak.component.agent.selector_claim.v1:claim").unwrap();
+    let old = CheckpointRuleContext::Stable {
+        digest: Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap(),
+    };
+    let fresh = CheckpointRuleContext::Stable {
+        digest: Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
+    };
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        "ak:did_core:web:principal.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    ));
+    let empty = StoredCheckpointView {
+        cells: Default::default(),
+        cas_heads: Default::default(),
+        rule_context: old,
+        current_mv_heads: Default::default(),
+        current_mv_ready: false,
+    };
+    let mut seals = Vec::<String>::new();
+    let mut coverage = Vec::<Vec<String>>::new();
+    // A -> B and A -> C. D is a successor of B with no write. C arriving last
+    // cannot erase B. Both writes in B share one frozen parent view.
+    for (index, parent, sources) in [
+        (0, None, vec![1u8]),
+        (1, Some(0), vec![2, 3]),
+        (2, Some(1), vec![]),
+        (3, Some(0), vec![4]),
+    ] {
+        let mut covered = parent.map(|p| coverage[p].clone()).unwrap_or_default();
+        covered.extend(
+            sources
+                .iter()
+                .map(|b| format!("sha256:{}", format!("{b:02x}").repeat(32))),
+        );
+        let seal = format!(
+            "ak:seal:sha256:{}",
+            format!("{:02x}", index + 11).repeat(32)
+        );
+        let ancestors = parent
+            .map(|p| {
+                if p == 1 {
+                    vec![seals[0].clone(), seals[1].clone()]
+                } else {
+                    vec![seals[p].clone()]
+                }
+            })
+            .unwrap_or_default();
+        let parents: Vec<String> = parent.map(|p| vec![seals[p].clone()]).unwrap_or_default();
+        let closure = ancestors
+            .into_iter()
+            .chain(std::iter::once(seal.clone()))
+            .collect::<Vec<_>>();
+        sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_refs) VALUES($1,'sha256',$2,$3,$3,'{}',$4)")
+            .bind::<Text,_>(&seal).bind::<Text,_>(realm.as_str()).bind::<Binary,_>(vec![index as u8+11]).bind::<Jsonb,_>(serde_json::json!(parents)).execute(&mut *conn).await.unwrap();
+        sql_query("INSERT INTO state_seal_effective_checkpoints(seal_id,realm_id,covered_event_digests,covered_seal_ids,state_json) VALUES($1,$2,$3,$4,$5)")
+            .bind::<Text,_>(&seal).bind::<Text,_>(realm.as_str()).bind::<Array<Text>,_>(&covered).bind::<Array<Text>,_>(&closure).bind::<Jsonb,_>(serde_json::to_value(&empty).unwrap()).execute(&mut *conn).await.unwrap();
+        for (offset, source) in sources.into_iter().enumerate() {
+            let digest = format!("sha256:{}", format!("{source:02x}").repeat(32));
+            let op = serde_json::json!({"issuer_id":actor,"move_id":digest,"op":{"kind":"set","value":{"source":source}},"supersedes":[]});
+            sql_query("INSERT INTO state_cell_ops(realm_id,seal_id,op_index,cell_id,move_id,op_json) VALUES($1,$2,$3,$4,$5,$6)")
+                .bind::<Text,_>(realm.as_str()).bind::<Text,_>(&seal).bind::<BigInt,_>(offset as i64).bind::<Text,_>(cell.as_str()).bind::<Text,_>(&digest).bind::<Jsonb,_>(op).execute(&mut *conn).await.unwrap();
+        }
+        seals.push(seal);
+        coverage.push(covered);
+    }
+    for parents in [
+        vec![seals[2].clone(), seals[3].clone()],
+        vec![seals[3].clone(), seals[2].clone()],
+    ] {
+        let (heads, ready) = advance_mv_heads(&mut conn, realm.as_str(), &parents, &[], &fresh)
+            .await
+            .unwrap();
+        assert!(ready);
+        assert_eq!(
+            heads[&cell]
+                .iter()
+                .map(|h| h.value["source"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
+    }
+    // A missing accepted ancestor cannot be treated as an empty predecessor.
+    let mut missing = seals.clone();
+    missing.push(format!("ak:seal:sha256:{}", "ff".repeat(32)));
+    assert!(
+        rebuild_mv_heads(&mut conn, realm.as_str(), &missing, &coverage[2], &fresh)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
