@@ -385,6 +385,24 @@ pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
     state: &AppState,
     targets: &BTreeSet<arkret_identifiers::SealId>,
 ) -> Result<Vec<arkret_wire::CbsProofBundle>, String> {
+    let canonical_events = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| format!("read federation Control Events: {error}"))?;
+    let mut control_moves_by_digest = BTreeMap::new();
+    for record in canonical_events {
+        let event: Event = serde_json::from_value(record.envelope)
+            .map_err(|error| format!("stored canonical Event is invalid: {error}"))?;
+        if !event.kind.is_control_plane() {
+            continue;
+        }
+        let digest = arkret_wire::Hash::new(record.canonical_digest)
+            .map_err(|error| format!("stored Control Event digest is invalid: {error}"))?;
+        if control_moves_by_digest.insert(digest, event).is_some() {
+            return Err("stored Control Event digest is not unique".to_owned());
+        }
+    }
     let mut bundles = Vec::with_capacity(targets.len());
     for target_seal_ref in targets {
         let mut pending = vec![target_seal_ref.clone()];
@@ -405,15 +423,99 @@ pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
         if by_id.len() > arkret_wire::cbs_proof_bundle::MAX_BUNDLE_SEALS {
             return Err("federation Seal prerequisite closure exceeds the v1 limit".to_owned());
         }
+        let target = by_id
+            .get(target_seal_ref)
+            .ok_or_else(|| "federation CBS target Seal is unavailable".to_owned())?;
+        let covered = by_id
+            .values()
+            .flat_map(|seal| seal.delta.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        if covered.len() > arkret_wire::cbs_proof_bundle::MAX_BUNDLE_CONTROL_MOVES {
+            return Err("federation Control Move closure exceeds the v1 limit".to_owned());
+        }
+        let digest_suite = target
+            .control_event_set_root
+            .digest_suite()
+            .map_err(|error| format!("federation Seal root digest suite: {error}"))?;
+        let computed_root = arkret_state::event_digest_set_root(&covered, digest_suite)
+            .map_err(|error| format!("federation Control Event root: {error}"))?;
+        if computed_root != target.control_event_set_root {
+            return Err("federation Seal Control Event closure does not match its root".to_owned());
+        }
+        let mut control_moves = Vec::with_capacity(covered.len());
+        let mut inclusion_proofs = Vec::with_capacity(covered.len());
+        for digest in &covered {
+            let event = control_moves_by_digest.get(digest).ok_or_else(|| {
+                format!("federation Control Event prerequisite {digest} is unavailable")
+            })?;
+            if event.realm_id != target.realm_id {
+                return Err("federation Control Event prerequisite crosses Realm".to_owned());
+            }
+            control_moves.push(event.clone());
+            inclusion_proofs.push(control_event_inclusion_proof(
+                &covered,
+                digest,
+                &target.control_event_set_root,
+                digest_suite,
+            )?);
+        }
+        control_moves.sort_by(|left, right| left.event_id.cmp(&right.event_id));
+        inclusion_proofs.sort_by(|left, right| {
+            let left = arkret_canonical::canonical_json_bytes(left).unwrap_or_default();
+            let right = arkret_canonical::canonical_json_bytes(right).unwrap_or_default();
+            left.cmp(&right)
+        });
         bundles.push(arkret_wire::CbsProofBundle {
             target_seal_ref: target_seal_ref.clone(),
             seals: by_id.into_values().collect(),
-            control_moves: Vec::new(),
-            inclusion_proofs: Vec::new(),
+            control_moves,
+            inclusion_proofs,
             availability_proofs: Vec::new(),
         });
     }
     Ok(bundles)
+}
+
+fn control_event_inclusion_proof(
+    covered: &BTreeSet<arkret_wire::Hash>,
+    target: &arkret_wire::Hash,
+    root_digest: &arkret_wire::Hash,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<arkret_wire::SemanticRefProof, String> {
+    let (_, hex) = target
+        .as_str()
+        .split_once(':')
+        .ok_or_else(|| "Control Event digest omits its suite".to_owned())?;
+    let mut preimage = Vec::with_capacity(32);
+    for index in (0..hex.len()).step_by(2) {
+        preimage.push(
+            u8::from_str_radix(&hex[index..index + 2], 16)
+                .map_err(|_| "Control Event digest contains invalid hex".to_owned())?,
+        );
+    }
+    if preimage.len() != 32 {
+        return Err("Control Event digest must decode to 32 bytes".to_owned());
+    }
+    let proof = arkret_state::event_digest_set_inclusion_proof(covered, target, digest_suite)
+        .map_err(|error| format!("Control Event inclusion proof: {error}"))?;
+    let mut leaf_input = Vec::with_capacity(33);
+    leaf_input.push(0);
+    leaf_input.extend_from_slice(&preimage);
+    let leaf_digest = arkret_wire::Hash::new(arkret_canonical::digest(digest_suite, leaf_input))
+        .map_err(|error| format!("Control Event inclusion leaf digest: {error}"))?;
+    Ok(arkret_wire::SemanticRefProof {
+        kind: arkret_wire::SemanticRefProofKind::Rfc6962Merkle,
+        root_field: arkret_wire::SemanticRefProofRootField::ControlEventSetRoot,
+        root_digest: root_digest.clone(),
+        leaf_canonical_preimage_b64u: arkret_wire::Base64UrlString::new(
+            arkret_canonical::base64url_encode(&preimage),
+        )
+        .map_err(|error| format!("Control Event inclusion preimage: {error}"))?,
+        leaf_digest,
+        audit_path: proof.audit_path,
+        leaf_index: proof.leaf_index,
+        leaf_count: proof.leaf_count,
+    })
 }
 
 /// Pair delayed Events with the publication evidence they were admitted under
@@ -1431,7 +1533,31 @@ pub(super) fn typed_frontier_or_fallback(
 mod tests {
     use serde_json::json;
 
-    use super::{authorization_selects_compensation, joined_member_route_target};
+    use super::{
+        authorization_selects_compensation, control_event_inclusion_proof,
+        joined_member_route_target,
+    };
+
+    #[test]
+    fn control_event_semantic_proof_recomputes_the_signed_root() {
+        let first = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
+        let second = arkret_wire::Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap();
+        let covered = std::collections::BTreeSet::from([first.clone(), second]);
+        let suite = arkret_canonical::DigestSuite::Sha256;
+        let root = arkret_state::control_event_set_root(&covered, suite).unwrap();
+        let semantic = control_event_inclusion_proof(&covered, &first, &root, suite).unwrap();
+        let proof = arkret_state::EventDigestSetInclusionProof {
+            leaf_digest: first,
+            leaf_index: semantic.leaf_index,
+            leaf_count: semantic.leaf_count,
+            audit_path: semantic.audit_path,
+        };
+
+        assert_eq!(semantic.root_digest, root);
+        assert!(
+            arkret_state::verify_event_digest_set_inclusion_proof(&proof, &root, suite).unwrap()
+        );
+    }
 
     #[test]
     fn compensation_carrier_follows_only_its_exact_event() {

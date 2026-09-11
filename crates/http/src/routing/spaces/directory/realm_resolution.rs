@@ -443,7 +443,8 @@ pub(crate) fn realm_join_rule(state: &AppState, realm_id: &str) -> String {
 fn join_rule_from_value(value: &Value) -> Option<&str> {
     value.as_str().or_else(|| {
         value
-            .get("default_join_rule")
+            .get("value")
+            .or_else(|| value.get("default_join_rule"))
             .or_else(|| value.get("join_rule"))
             .or_else(|| value.pointer("/object/default_join_rule"))
             .or_else(|| value.pointer("/object/join_rule"))
@@ -879,6 +880,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
             role: RealmJoinCandidateRole::JoinedMemberStation,
             endpoint_url: None,
             operations: vec![
+                arkret_wire::ServiceOperationId::PEER_REALM_JOIN_READ_BOOTSTRAP_V1.to_owned(),
                 arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT_V1.to_owned(),
             ],
             join_methods,
@@ -943,6 +945,14 @@ mod tests {
         assert_eq!(
             realm_alias_from_cell_value(&json!({"tombstone": false})),
             None
+        );
+    }
+
+    #[test]
+    fn realm_join_rule_reads_the_registered_payload_value() {
+        assert_eq!(
+            join_rule_from_value(&json!({"value": "knock_restricted"})),
+            Some("knock_restricted")
         );
     }
 }

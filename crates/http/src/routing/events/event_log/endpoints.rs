@@ -2148,7 +2148,6 @@ impl<'a> VerifiedActorPredecessors<'a> {
     }
 
     /// Events that already passed the ordinary acceptance rules for this actor and Realm.
-    #[allow(dead_code)]
     pub(crate) const fn from_verified(events: &'a [arkret_wire::Event]) -> Self {
         Self(events)
     }
@@ -2169,32 +2168,51 @@ pub(crate) async fn load_realm_actor_frontier(
         .canonical_events_for_realm_actor(realm_id.as_str(), &actor_id.to_string())
         .await
         .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
-    let (next_actor_seq, frontier_event_ids) =
-        if let Some(max_seq) = records.iter().map(|record| record.actor_seq).max() {
-            let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
-                crate::app_error!(FrontierSequenceExhausted, "actor sequence is exhausted",)
-            })?;
-            let mut ids = records
+    for event in verified_predecessors.0 {
+        if event.realm_id != realm_id || event.actor_id != actor_id {
+            return Err(crate::app_error!(
+                FrontierUnavailable,
+                "verified applicant predecessor crosses the requested Realm or actor",
+            ));
+        }
+    }
+    let max_seq = records
+        .iter()
+        .map(|record| record.actor_seq)
+        .chain(verified_predecessors.0.iter().map(|event| event.actor_seq))
+        .max();
+    let (next_actor_seq, frontier_event_ids) = if let Some(max_seq) = max_seq {
+        let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
+            crate::app_error!(FrontierSequenceExhausted, "actor sequence is exhausted",)
+        })?;
+        let mut ids = records
+            .iter()
+            .filter(|record| record.actor_seq == max_seq)
+            .map(|record| {
+                EventId::new(record.event_id.clone())
+                    .map_err(|_| AppError::internal("stored event_id is invalid"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.extend(
+            verified_predecessors
+                .0
                 .iter()
-                .filter(|record| record.actor_seq == max_seq)
-                .map(|record| {
-                    EventId::new(record.event_id.clone())
-                        .map_err(|_| AppError::internal("stored event_id is invalid"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-            ids.dedup();
-            (next_actor_seq, ids)
-        } else {
-            require_decidable_empty_realm_actor_frontier(
-                state,
-                &realm_id,
-                &actor_id,
-                verified_predecessors,
-            )
-            .await?;
-            (0, Vec::new())
-        };
+                .filter(|event| event.actor_seq == max_seq)
+                .map(|event| event.event_id.clone()),
+        );
+        ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        ids.dedup();
+        (next_actor_seq, ids)
+    } else {
+        require_decidable_empty_realm_actor_frontier(
+            state,
+            &realm_id,
+            &actor_id,
+            verified_predecessors,
+        )
+        .await?;
+        (0, Vec::new())
+    };
     build_realm_actor_frontier(
         state,
         realm_id,

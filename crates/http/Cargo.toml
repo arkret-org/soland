@@ -39,6 +39,7 @@ arkret-http-client.workspace = true
 arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
+arkret-lattice-registry.workspace = true
 arkret-mls.workspace = true
 arkret-models-collaboration = { workspace = true, features = ["openapi"] }
 arkret-models-crypto = { workspace = true, features = ["openapi"] }

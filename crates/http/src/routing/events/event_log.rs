@@ -187,6 +187,7 @@ use realm_index::{
 };
 
 mod submit;
+pub(in crate::routing) use submit::post_commit::cbs_proof_bundles_for_targets;
 
 /// Reuse the durable, closed Ack-less admission classification for external PCR signing.
 pub(crate) async fn validate_pcr_prepare_ackless_ingress(
@@ -244,7 +245,7 @@ pub(in crate::routing) use submit::{
     submit_initial_event_submission_with_device_pairing, submit_initial_identity_anchor_batch,
     submit_mimi_event_value, submit_mimi_reporter_initial_event_submission,
     submit_one_error_to_app_error, submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
-    verify_frontier_backfill_event,
+    verify_federated_event_admission, verify_frontier_backfill_event,
 };
 use submit::{
     IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
