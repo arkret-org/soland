@@ -126,13 +126,22 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
     assert!(
         matches!(current::read(&pool,&slot.account_id).await.unwrap(),CurrentPrincipalRead::Ready{projection,..} if projection.resolution_event_ref==slot.create_event_id)
     );
+    let mut conn = pg_conn(&pool).await.unwrap();
+    sql_query("INSERT INTO governance_current_ready(realm_id,ready,revision) VALUES($1,TRUE,1)")
+        .bind::<Text, _>(&slot.realm_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(
+        matches!(current::read(&pool,&slot.account_id).await.unwrap(),CurrentPrincipalRead::Ready{projection,..} if projection.resolution_event_ref==slot.create_event_id),
+        "derived readiness cannot establish or suppress the pre-Seal branch"
+    );
     let registry =
         soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
     super::super::PgPrincipalResolutionStore { pool: pool.clone() }
         .current_principal(&slot.account_id, &registry)
         .await
         .unwrap();
-    let mut conn = pg_conn(&pool).await.unwrap();
     let absent=sql_query("SELECT NOT EXISTS(SELECT 1 FROM governance_current_ready) AND NOT EXISTS(SELECT 1 FROM state_seals) AS applied").get_result::<AppliedRow>(&mut *conn).await.unwrap();
     assert!(
         absent.applied,
@@ -158,6 +167,42 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
     );
     let absent=sql_query("SELECT NOT EXISTS(SELECT 1 FROM governance_current_ready) AND NOT EXISTS(SELECT 1 FROM state_seals) AS applied").get_result::<AppliedRow>(&mut *conn).await.unwrap();
     assert!(absent.applied);
+    // An accepted resolution successor is a canonical pending-current fact,
+    // so the pre-Seal genesis exception is closed without consulting caches.
+    sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,actor_seq,realm_id,kind,schema_id,canonical_bytes,envelope) VALUES(decode('01'||repeat('11',32),'hex'),1,decode(repeat('11',32),'hex'),$1,99,$2,'ak.identity.resolution.update','fixture','x','{}')")
+        .bind::<Text, _>(slot.account_id.canonical_key().unwrap())
+        .bind::<Text, _>(&slot.realm_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        current::read(&pool, &slot.account_id).await.unwrap(),
+        CurrentPrincipalRead::Unavailable
+    );
+    store
+        .put_identity_anchor_batch_atomic(
+            records.clone(),
+            acks.clone(),
+            vec![],
+            None,
+            None,
+            Some(slot.clone()),
+            None,
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        current::read(&pool, &slot.account_id).await.unwrap(),
+        CurrentPrincipalRead::Unavailable,
+        "exact genesis replay cannot reopen the bootstrap exception after a successor"
+    );
+    sql_query("DELETE FROM canonical_events WHERE id=decode('01'||repeat('11',32),'hex')")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
     // Once a Seal exists, an unavailable governance current must never fall
     // back to the bootstrap projection.
     sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,is_genesis) VALUES('ak:seal:test-genesis','sha256',$1,'x','x','{}',TRUE)")
@@ -201,6 +246,65 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
     assert_eq!(
         current::read(&pool, &slot.account_id).await.unwrap(),
         CurrentPrincipalRead::Unavailable
+    );
+}
+
+#[tokio::test]
+async fn current_identity_survives_index_eviction_but_requires_the_initial_current_head() {
+    let db = crate::test_database::TestDatabase::lease().await;
+    let pool = db.pool();
+    let store = crate::PgEventStore { pool: pool.clone() };
+    let (slot, records, acks) = unit();
+    store
+        .put_identity_anchor_batch_atomic(
+            records,
+            acks,
+            vec![],
+            None,
+            None,
+            Some(slot.clone()),
+            None,
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let registry =
+        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+    let principal_store = super::super::PgPrincipalResolutionStore { pool: pool.clone() };
+    let mut conn = pg_conn(&pool).await.unwrap();
+    sql_query("DELETE FROM principal_resolutions WHERE principal_id=$1 AND station_id=$2")
+        .bind::<Text, _>(slot.account_id.principal_id.as_str())
+        .bind::<Text, _>(slot.account_id.station_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            principal_store
+                .current_principal(&slot.account_id, &registry)
+                .await
+                .unwrap(),
+            CurrentPrincipalRead::Ready { projection, .. }
+                if projection.resolution_event_ref == slot.create_event_id
+        ),
+        "evicting the replaceable principal index must not affect current identity"
+    );
+
+    sql_query("DELETE FROM current_result_heads WHERE realm_id=$1")
+        .bind::<Text, _>(&slot.realm_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        principal_store
+            .current_principal(&slot.account_id, &registry)
+            .await
+            .unwrap(),
+        CurrentPrincipalRead::Unavailable,
+        "the immutable slot and accepted source cannot replace a missing current cell"
     );
 }
 

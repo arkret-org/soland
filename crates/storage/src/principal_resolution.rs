@@ -53,7 +53,6 @@ pub enum CurrentPrincipalRead {
     Ready {
         pcr_realm_id: RealmId,
         projection: PrincipalResolutionProjection,
-        observed_at: chrono::DateTime<chrono::Utc>,
     },
 }
 

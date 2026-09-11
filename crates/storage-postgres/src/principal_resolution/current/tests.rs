@@ -66,8 +66,10 @@ async fn current_cell_ignores_async_cache_and_requires_live_exact_source() {
         .expect("fixture accepted Event roundtrip");
     assert!(source_matches(&event, &projection));
     let mut conn = pg_conn(&pool).await.unwrap();
-    // Intentionally corrupt only the asynchronous cache fields. The immutable
-    // creation coordinates and accepted current result are the read authority.
+    sql_query("INSERT INTO identity_anchor_account_slots(account_authority_id,account_subject,principal_id,station_id,realm_id,create_event_id) VALUES($1,'fixture-subject',$2,$3,$4,$5)")
+        .bind::<Text,_>(account.station_id.as_str()).bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(account.station_id.as_str()).bind::<Text,_>(realm.as_str()).bind::<Text,_>(event.event_id.as_str()).execute(&mut *conn).await.unwrap();
+    // Intentionally corrupt the replaceable principal-resolution index. The
+    // immutable account slot and accepted current result are read authority.
     sql_query("INSERT INTO principal_resolutions(principal_id,station_id,pcr_realm_id,genesis_event_id,current_event_id,projection,updated_at) VALUES($1,$2,$3,$4,'stale-index','{}',now())")
         .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(account.station_id.as_str()).bind::<Text,_>(realm.as_str()).bind::<Text,_>(event.event_id.as_str()).execute(&mut *conn).await.unwrap();
     assert_eq!(
@@ -85,6 +87,11 @@ async fn current_cell_ignores_async_cache_and_requires_live_exact_source() {
     let entry=CurrentResultEntry::try_from_json(json!({"selector":selector,"target":{"kind":"realm"},"revision":1,"result":{"status":"value","value":projection}})).unwrap();
     sql_query("INSERT INTO current_result_heads(realm_id,selector_key,revision,target_kind,target_key,payload) VALUES($1,$2,1,'realm','',$3)")
         .bind::<Text,_>(realm.as_str()).bind::<Text,_>(selector.canonical_key().unwrap()).bind::<Jsonb,_>(serde_json::to_value(entry).unwrap()).execute(&mut *conn).await.unwrap();
+    sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,is_genesis) VALUES('ak:seal:test-current','sha256',$1,'x','x','{}',TRUE)")
+        .bind::<Text, _>(realm.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
     sql_query("INSERT INTO governance_current_ready(realm_id,ready,revision) VALUES($1,TRUE,1)")
         .bind::<Text, _>(realm.as_str())
         .execute(&mut *conn)
@@ -103,7 +110,7 @@ async fn current_cell_ignores_async_cache_and_requires_live_exact_source() {
         projection: projection.clone(),
     })
     .expect("fixture account binding");
-    let round=sql_query("SELECT payload,TRUE AS ready,now() AS observed_at FROM current_result_heads WHERE realm_id=$1 AND selector_key=$2")
+    let round=sql_query("SELECT payload,TRUE AS ready FROM current_result_heads WHERE realm_id=$1 AND selector_key=$2")
         .bind::<Text,_>(realm.as_str()).bind::<Text,_>(selector.canonical_key().unwrap()).get_result::<Current>(&mut *conn).await.unwrap();
     let entry = CurrentResultEntry::try_from_json(round.payload)
         .expect("database current result roundtrip");
