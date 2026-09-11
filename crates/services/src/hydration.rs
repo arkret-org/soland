@@ -861,9 +861,7 @@ pub async fn hydrate_projections_from_persistence(
                         owner: Some(record.owner),
                         title: None,
                         deleted: record.deleted,
-                        archived: false,
-                        frozen: false,
-                        freeze_expires_at: None,
+
                         created_at: record.created_at,
                         updated_at: record.updated_at,
                         trust_domain: None,

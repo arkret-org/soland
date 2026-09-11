@@ -2599,9 +2599,7 @@ mod membership_hydration_tests {
                 owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: Some("Hydration Test Realm".to_owned()),
                 deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
+
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 trust_domain: None,

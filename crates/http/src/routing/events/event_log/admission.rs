@@ -158,25 +158,16 @@ pub fn terminal_realm_check(
     None
 }
 
-fn frozen_realm_write_exempt(kind: &str) -> bool {
-    kind.parse::<arkret_wire::EventKind>().is_ok_and(|kind| {
-        arkret_wire::events::kinds::is_audit_kind(&kind)
-            || matches!(
-                kind,
-                arkret_wire::EventKind::RealmArchive
-                    | arkret_wire::EventKind::RealmFreeze
-                    | arkret_wire::EventKind::RealmTombstone
-                    | arkret_wire::EventKind::RealmDestroy
-            )
-    })
-}
-
 /// Reject ordinary writes on a Realm with the reversible `ak.realm.freeze`
 /// facet set. Lifecycle/admin escape hatches remain admissible so an
 /// authorized actor can unfreeze, tombstone, or destroy the Realm.
-pub fn frozen_realm_check(realm_frozen: bool, kind: &str) -> Option<&'static str> {
-    if realm_frozen && !frozen_realm_write_exempt(kind) {
-        return Some("Realm is frozen; ordinary writes are not accepted");
+pub fn frozen_realm_check(realm_frozen: bool, kind: &str, payload: &Value) -> Option<&'static str> {
+    if realm_frozen
+        && !kind
+            .parse::<arkret_wire::EventKind>()
+            .is_ok_and(|kind| arkret_wire::events::kinds::realm_write_gate_exempt(&kind, payload))
+    {
+        return Some("Realm is archived or frozen; ordinary writes are not accepted");
     }
     None
 }

@@ -297,9 +297,7 @@ fn mls_circle_omitting_local_content_floor_inherits_parent_floor() {
             owner: Some(account_actor_string("ak:did_core:web:alice.example")),
             title: Some("Encrypted Realm".to_owned()),
             deleted: false,
-            archived: false,
-            frozen: false,
-            freeze_expires_at: None,
+
             created_at: now,
             updated_at: now,
             trust_domain: None,

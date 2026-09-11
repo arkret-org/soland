@@ -10,9 +10,7 @@ fn seed_realm_member(state: &mut ProjectionState, realm_id: &str, member: &str) 
             owner: Some(member.clone()),
             title: Some("Product".to_owned()),
             deleted: false,
-            archived: false,
-            frozen: false,
-            freeze_expires_at: None,
+
             created_at: now,
             updated_at: now,
             trust_domain: None,

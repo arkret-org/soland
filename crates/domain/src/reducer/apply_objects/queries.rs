@@ -427,18 +427,30 @@ impl ProjectionState {
         self.realm_is_tombstoned(realm_id) || self.realm_is_destroyed(realm_id)
     }
 
-    /// True when the Realm's reversible freeze facet is active at `now`.
-    pub fn realm_is_frozen_at(&self, realm_id: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
-        let Some(state) = self.realm_states.get(realm_id) else {
-            return false;
-        };
-        if !state.frozen {
-            return false;
-        }
-        match state.freeze_expires_at {
-            Some(expires_at) => expires_at > now,
-            None => true,
-        }
+    /// Read the explicit facet from the canonical accepted cells. Missing
+    /// cells have the registry's initial false value; Bottom fails closed.
+    fn realm_facet_blocks(&self, realm_id: &str, family: &str) -> bool {
+        let key = (realm_id.to_owned(), format!("ak:cell:{family}:null"));
+        !matches!(
+            self.realm_null_subject_cells.get(&key),
+            None | Some(CellState::Value(Value::Bool(false)))
+        )
+    }
+
+    pub fn realm_is_frozen(&self, realm_id: &str) -> bool {
+        self.realm_facet_blocks(realm_id, arkret_wire::CellFamilyId::REALM_FREEZE_V1)
+    }
+
+    pub fn realm_is_archived(&self, realm_id: &str) -> bool {
+        self.realm_facet_blocks(realm_id, arkret_wire::CellFamilyId::REALM_ARCHIVE_V1)
+    }
+
+    /// Unknown Realms and conflicting/malformed gates fail closed.
+    pub fn realm_ordinary_writes_blocked(&self, realm_id: &str) -> bool {
+        (!self.realm_states.contains_key(realm_id)
+            && self.realm_genesis_cell_value(realm_id).is_none())
+            || self.realm_is_archived(realm_id)
+            || self.realm_is_frozen(realm_id)
     }
 
     pub fn realm_policy_bundle_cell_value(&self, realm_id: &str) -> Option<&Value> {

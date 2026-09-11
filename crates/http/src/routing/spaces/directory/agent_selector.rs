@@ -1,7 +1,5 @@
 use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_models_identity::HandleBindingState;
-use arkret_wire::SchemaId;
 
 use super::*;
 
@@ -68,94 +66,112 @@ pub(super) fn selector_claim_audience(
         .to_owned()
 }
 
-/// The signed target is the complete Agent `AccountId`, derived by the caller
-/// from the accepted provision's controller account rather than from this
-/// service's own Station. The selector namespace stays principal-scoped.
-/// Ruling:
-/// `review/spec-done/2026-09-05-1310-agent-selector-mention-has-no-normative-station-source.md`.
-pub(super) fn signed_agent_selector_claim(
+fn selector_disclosure_allowed(
+    claim: &AgentSelectorClaim,
+    controller: &arkret_wire::AccountId,
+    request: &DirectoryResolveAgentSelectorRequestBody,
+) -> bool {
+    let requester_is_controller =
+        request.requester_id == controller.principal_id;
+    if claim.visibility == HandleVisibility::Private && !requester_is_controller {
+        return false;
+    }
+    if claim.visibility == HandleVisibility::Restricted && claim.audience.is_none() {
+        return false;
+    }
+    if claim
+        .audience
+        .as_ref()
+        .is_some_and(|a| a != &selector_claim_audience(request))
+    {
+        return false;
+    }
+    claim
+        .claim_scope
+        .iter()
+        .all(|(key, value)| match key.as_str() {
+            "realm_id" => request
+                .realm_id
+                .as_ref()
+                .is_some_and(|realm| value.as_str() == Some(realm.as_str())),
+            "purpose" => value.as_str() == Some(request.intent.as_str()),
+            "allowed_operations" => value.as_array().is_some_and(|operations| {
+                operations.iter().all(|op| op.is_string())
+                    && operations.iter().any(|op| {
+                        op.as_str() == Some("ak.find.directory.read.resolve_agent_selector.v1")
+                    })
+            }),
+            _ => false,
+        })
+}
+
+/// Return only the original portable claim surviving at the accepted PCR
+/// frontier. A provision projection without an inner claim proof is not a
+/// portable claim and must never be signed into one by this directory.
+async fn accepted_agent_selector_claim(
     state: &AppState,
-    controller_subject: &str,
-    agent_slug: &str,
-    subject_account_id: &arkret_wire::AccountId,
+    controller: &arkret_wire::AccountId,
     request: &DirectoryResolveAgentSelectorRequestBody,
 ) -> Result<AgentSelectorClaim, AppError> {
-    let service_id = DidCoreId::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("invalid service core id: {error}")))?;
-    let issuer = service_id.clone();
-    let issuer_did = state.service_resolution_commitment().did.clone();
-    let controller_subject = DidCoreId::new(controller_subject.to_owned())
-        .map_err(|err| AppError::internal(format!("invalid controller DID: {err}")))?;
-    let subject_account_id = subject_account_id.clone();
-    let audience = selector_claim_audience(request);
-    let created_at = now();
-    let expires_at = created_at + chrono::Duration::hours(24);
-    let mut claim_scope = BTreeMap::new();
-    claim_scope.insert("intent".to_owned(), json!(request.intent.as_str()));
-    if let Some(realm_id) = request.realm_id.as_ref() {
-        claim_scope.insert("realm_id".to_owned(), json!(realm_id.as_str()));
-    }
-    let unsigned = json!({
-        "schema": SchemaId::AGENT_SELECTOR_CLAIM_V1,
-        "controller_subject_id": controller_subject.as_str(),
-        "agent_slug": agent_slug,
-        "subject_account_id": serde_json::to_value(&subject_account_id)
-            .map_err(|error| AppError::internal(format!("serialize agent AccountId: {error}")))?,
-        "issuer_id": issuer.as_str(),
-        "vouching_id": service_id.as_str(),
-        "binding_state": "verified",
-        "visibility": "restricted",
-        "audience": audience,
-        "claim_scope": claim_scope.clone(),
-        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-        "created_at": arkret_canonical::format_timestamp_canonical(created_at),
-        "source_refs": [],
-    });
-    let canonical_bytes = canonical::canonical_json_bytes(&unsigned).map_err(|err| {
-        AppError::internal(format!(
-            "agent selector claim canonicalization failed: {err}"
-        ))
-    })?;
-    let signer = Ed25519PayloadSigner::new(
-        (*state.notary_signing_key()).clone(),
-        issuer_did.clone(),
-        arkret_wire::DidUrl::new(format!("{issuer_did}#directory-agent-selector-claim")).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "directory claim verification method is invalid: {error}"
-                ))
-            },
-        )?,
-    );
-    let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
-        .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;
-    let proof = PayloadProof {
-        kind: "detached_jws".to_owned(),
-        verification_method: signature.verification_method,
-        payload_digest: signature.payload_digest,
-        created_at: signature.created_at,
-        domain: None,
-        audience: None,
-        proof_purpose: None,
-        jws: signature.jws,
+    let current = state
+        .persistence()
+        .current_principal(controller, state.projections().cell_registry())
+        .await
+        .map_err(|_| selector_not_found())?;
+    let soland_storage::CurrentPrincipalRead::Ready { pcr_realm_id, .. } = current else {
+        return Err(selector_not_found());
     };
-    Ok(AgentSelectorClaim {
-        schema: SchemaId::AGENT_SELECTOR_CLAIM_V1.to_owned(),
-        controller_subject_id: controller_subject,
-        agent_slug: agent_slug.to_owned(),
-        subject_account_id,
-        issuer_id: issuer,
-        vouching_id: Some(service_id),
-        binding_state: HandleBindingState::Verified,
-        visibility: HandleVisibility::Restricted,
-        audience: Some(selector_claim_audience(request)),
-        claim_scope,
-        expires_at: Some(expires_at),
-        created_at,
-        verified_at: Some(created_at),
-        source_refs: Vec::new(),
-        proofs: vec![proof],
-    })
+    let leaves = state
+        .projections()
+        .realm_seal_leaves(&pcr_realm_id)
+        .await
+        .map_err(|_| selector_not_found())?;
+    if leaves.is_empty() {
+        return Err(selector_not_found());
+    }
+    let effective = state
+        .projections()
+        .effective_state_at(&leaves, &pcr_realm_id)
+        .await
+        .map_err(|_| selector_not_found())?;
+    let subject =
+        arkret_wire::composite_subject(&[controller.principal_id.as_str(), &request.agent_slug])
+            .map_err(|_| selector_not_found())?;
+    let cell = arkret_wire::CellRef::new(format!(
+        "ak:cell:{}:{subject}",
+        CellFamilyId::AGENT_SELECTOR_CLAIM_V1
+    ))
+    .map_err(|_| selector_not_found())?;
+    let Some(arkret_state::lattice::CellState::Value(value)) = effective.get(&cell) else {
+        return Err(selector_not_found());
+    };
+    let claim: AgentSelectorClaim =
+        serde_json::from_value(value.clone()).map_err(|_| selector_not_found())?;
+    if claim.validate().is_err()
+        || claim.controller_subject_id != controller.principal_id
+        || claim.agent_slug != request.agent_slug
+        || claim.subject_account_id.is_none()
+        || claim.expires_at.is_some_and(|expiry| expiry <= now())
+        || !selector_disclosure_allowed(&claim, controller, request)
+        || claim.issuer_id != controller.principal_id
+    {
+        return Err(selector_not_found());
+    }
+    for proof in &claim.proofs {
+        let binding = claim
+            .canonical_proof_binding_bytes(proof)
+            .map_err(|_| selector_not_found())?;
+        crate::jws_verify::verify_did_controlled_jws_async(
+            &binding,
+            &proof.jws,
+            &proof.verification_method,
+            claim.controller_subject_id.as_str(),
+            state,
+        )
+        .await
+        .map_err(|_| selector_not_found())?;
+    }
+    Ok(claim)
 }
 
 #[salvo::oapi::endpoint(
@@ -222,6 +238,13 @@ pub(super) async fn resolve_agent_selector(
     if matches.len() != 1 {
         return Err(selector_not_found());
     }
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
+        state,
+        matches[0],
+        now(),
+    )
+    .await
+    .map_err(|_| selector_not_found())?;
     let subject = matches[0].id.as_str();
     let controller_account =
         crate::routing::identity::agent_pcr::agent_controller_account(state, matches[0])
@@ -229,7 +252,7 @@ pub(super) async fn resolve_agent_selector(
             .map_err(|_| selector_not_found())?;
     let subject_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         directory_actor_core_id(subject)?,
-        controller_account.station_id,
+        controller_account.station_id.clone(),
     ));
     if body
         .expected_actor_id
@@ -242,19 +265,22 @@ pub(super) async fn resolve_agent_selector(
         .as_account_id()
         .ok_or_else(selector_not_found)?
         .clone();
-    let selector_claim = signed_agent_selector_claim(
-        state,
-        controller_subject,
-        &body.agent_slug,
-        &subject_account_id,
-        &body,
-    )?;
+    let selector_claim = accepted_agent_selector_claim(state, &controller_account, &body).await?;
+    if selector_claim.subject_account_id.as_ref() != Some(&subject_account_id) {
+        return Err(selector_not_found());
+    }
     let response = DirectoryAgentSelectorResolutionOutcome {
         controller_subject_id: selector_claim.controller_subject_id.clone(),
-        subject_account_id: selector_claim.subject_account_id.clone(),
+        subject_account_id,
         agent_slug: body.agent_slug,
         expires_at: selector_claim.expires_at,
-        source_refs: Vec::new(),
+        source_refs: selector_claim
+            .source_refs
+            .iter()
+            .cloned()
+            .map(EventId::new)
+            .collect::<Result<_, _>>()
+            .map_err(|_| selector_not_found())?,
         selector_claim,
     };
     response.validate().map_err(|err| {

@@ -1908,7 +1908,7 @@ async fn direct_conversation_resolve(
             });
         }
         let mut send_blockers = Vec::new();
-        if projection.realm_is_frozen_at(&binding.realm_id, now()) {
+        if projection.realm_ordinary_writes_blocked(&binding.realm_id) {
             send_blockers.push(DirectConversationSendBlocker::PolicyStale);
         }
         if let Some(contact) = contact.as_ref() {

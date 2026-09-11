@@ -184,13 +184,6 @@ pub(crate) fn validate_event_time_fields(
                 )
             })?;
         }
-        None if !state.config().development_mode => {
-            return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "param_missing",
-                "hlc is required in production mode",
-            ));
-        }
         None => {}
     }
 

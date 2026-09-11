@@ -121,9 +121,7 @@ fn seed_realm_projection(
             owner: Some(owner.to_owned()),
             title: Some("Test Realm".to_owned()),
             deleted: false,
-            archived: false,
-            frozen: false,
-            freeze_expires_at: None,
+
             created_at: now,
             updated_at: now,
             trust_domain: Some("ak:trust_domain:example.net".to_owned()),

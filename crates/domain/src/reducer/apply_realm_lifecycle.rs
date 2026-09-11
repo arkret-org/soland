@@ -872,9 +872,7 @@ impl ProjectionState {
                 owner: None,
                 title: None,
                 deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
+
                 created_at: now,
                 updated_at: now,
                 trust_domain: None,
@@ -954,7 +952,9 @@ impl ProjectionState {
                 arkret_wire::EventKind::RealmCreate
                     | arkret_wire::EventKind::RealmProfile
                     | arkret_wire::EventKind::RealmArchive
+                    | arkret_wire::EventKind::RealmRestore
                     | arkret_wire::EventKind::RealmFreeze
+                    | arkret_wire::EventKind::RealmUnfreeze
                     | arkret_wire::EventKind::RealmTombstone
                     | arkret_wire::EventKind::RealmDestroy
             ),
@@ -1268,9 +1268,7 @@ impl ProjectionState {
                 owner: owner.clone(),
                 title: title.clone(),
                 deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
+
                 created_at: now,
                 updated_at: now,
                 trust_domain: payload_trust_domain.clone(),
@@ -1300,24 +1298,6 @@ impl ProjectionState {
         } else if kind == arkret_wire::EventKind::RealmDestroy {
             realm.terminal_state = Some("destroyed".to_owned());
             realm.successor_realm_id = None;
-        } else if kind == arkret_wire::EventKind::RealmArchive {
-            realm.archived = operation
-                .payload
-                .get("archived")
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-        } else if kind == arkret_wire::EventKind::RealmFreeze {
-            realm.frozen = operation
-                .payload
-                .get("frozen")
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-            realm.freeze_expires_at = operation
-                .payload
-                .get("freeze_expires_at")
-                .and_then(Value::as_str)
-                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&chrono::Utc));
         }
         if owner.is_some() {
             realm.owner.clone_from(&owner);
@@ -1414,60 +1394,22 @@ impl ProjectionState {
                     CellState::Value(operation.payload.clone()),
                 );
             }
-            arkret_wire::EventKind::RealmArchive => {
-                let mut value = serde_json::Map::new();
-                value.insert(
-                    "archived".to_owned(),
-                    operation
-                        .payload
-                        .get("archived")
-                        .cloned()
-                        .unwrap_or(Value::Bool(true)),
-                );
-                if let Some(reason) = operation.payload.get("reason").cloned() {
-                    value.insert("reason".to_owned(), reason);
-                }
-                value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
-                value.insert(
-                    "operation_id".to_owned(),
-                    Value::String(operation.operation_id.as_str().to_owned()),
-                );
+            arkret_wire::EventKind::RealmArchive | arkret_wire::EventKind::RealmRestore => {
                 self.realm_null_subject_cells.insert(
                     (
                         realm_id.clone(),
                         "ak:cell:ak.component.realm.archive.v1:null".to_owned(),
                     ),
-                    CellState::Value(Value::Object(value)),
+                    CellState::Value(Value::Bool(kind == arkret_wire::EventKind::RealmArchive)),
                 );
             }
-            arkret_wire::EventKind::RealmFreeze => {
-                let mut value = serde_json::Map::new();
-                value.insert(
-                    "frozen".to_owned(),
-                    operation
-                        .payload
-                        .get("frozen")
-                        .cloned()
-                        .unwrap_or(Value::Bool(true)),
-                );
-                if let Some(reason) = operation.payload.get("reason").cloned() {
-                    value.insert("reason".to_owned(), reason);
-                }
-                if let Some(freeze_expires_at) = operation.payload.get("freeze_expires_at").cloned()
-                {
-                    value.insert("freeze_expires_at".to_owned(), freeze_expires_at);
-                }
-                value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
-                value.insert(
-                    "operation_id".to_owned(),
-                    Value::String(operation.operation_id.as_str().to_owned()),
-                );
+            arkret_wire::EventKind::RealmFreeze | arkret_wire::EventKind::RealmUnfreeze => {
                 self.realm_null_subject_cells.insert(
                     (
                         realm_id.clone(),
                         "ak:cell:ak.component.realm.freeze.v1:null".to_owned(),
                     ),
-                    CellState::Value(Value::Object(value)),
+                    CellState::Value(Value::Bool(kind == arkret_wire::EventKind::RealmFreeze)),
                 );
             }
             arkret_wire::EventKind::RealmTombstone => {

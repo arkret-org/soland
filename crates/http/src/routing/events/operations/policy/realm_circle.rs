@@ -1,16 +1,5 @@
 use super::*;
 
-pub(super) fn realm_frozen_operation_exempt(kind: &arkret_wire::EventKind) -> bool {
-    arkret_wire::events::kinds::is_audit_kind(kind)
-        || matches!(
-            kind,
-            arkret_wire::EventKind::RealmArchive
-                | arkret_wire::EventKind::RealmFreeze
-                | arkret_wire::EventKind::RealmTombstone
-                | arkret_wire::EventKind::RealmDestroy
-        )
-}
-
 pub(super) fn validate_realm_lifecycle_write_gate(
     state: &AppState,
     operation: &Operation,
@@ -23,8 +12,8 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     {
         return Err("realm_terminal_state");
     }
-    if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
-        && !realm_frozen_operation_exempt(&kind)
+    if projection.realm_ordinary_writes_blocked(realm_id)
+        && !arkret_wire::events::kinds::realm_write_gate_exempt(&kind, &operation.payload)
     {
         return Err(arkret_wire::ErrorCode::REALM_FROZEN);
     }

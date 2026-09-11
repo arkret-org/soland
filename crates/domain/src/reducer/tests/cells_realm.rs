@@ -675,57 +675,79 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
 }
 
 #[test]
-fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
+fn realm_freeze_requires_explicit_unfreeze_and_preserves_archive() {
     use arkret_state::lattice::CellState;
-    use serde_json::Value;
-
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::RealmCreate,
-            realm_id,
-            serde_json::json!({"action": "create", "owner": "ak:did_core:web:alice"}),
-        ),
-        &hlc,
-    );
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::RealmFreeze,
-            realm_id,
-            serde_json::json!({
-                "frozen": true,
-                "reason": "incident hold",
-                "freeze_expires_at": "2026-06-22T10:00:00.000Z"
-            }),
-        ),
+    apply_projected_create(
+        &mut state,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "schema": "ak.schema.realm_genesis.v1",
+                "purpose": "collaboration",
+                "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "trust_domain": "ak:trust_domain:example.net",
+                "schema_refs": ["ak.schema.realm.v1"],
+                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+                "digest_algorithm": "sha256",
+                "security_class": "standard",
+                "encryption_profile": "mls_rfc9420",
+                "notary": serde_json::to_value(test_single_signer_notary("did:web:alice"))
+                    .unwrap(),
+            }
+        }),
         &hlc,
     );
 
+    assert!(state.realm_genesis_cell_value(realm_id).is_some());
+    assert!(!state.realm_ordinary_writes_blocked(realm_id));
+    for kind in [
+        arkret_wire::EventKind::RealmArchive,
+        arkret_wire::EventKind::RealmFreeze,
+    ] {
+        state.apply(
+            &make_operation(kind, realm_id, serde_json::json!({"reason":"hold"})),
+            &hlc,
+        );
+    }
+    assert!(state.realm_is_frozen(realm_id));
     assert!(matches!(
         state.realm_null_subject_cells.get(&(
             realm_id.to_owned(),
             "ak:cell:ak.component.realm.freeze.v1:null".to_owned()
         )),
-        Some(CellState::Value(value)) if value.get("frozen").and_then(Value::as_bool) == Some(true)
+        Some(CellState::Value(serde_json::Value::Bool(true)))
     ));
-    assert!(
-        state.realm_is_frozen_at(
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::RealmUnfreeze,
             realm_id,
-            chrono::DateTime::parse_from_rfc3339("2026-06-22T09:59:59.000Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc)
-        )
+            serde_json::json!({}),
+        ),
+        &hlc,
     );
-    assert!(
-        !state.realm_is_frozen_at(
+    assert!(!state.realm_is_frozen(realm_id));
+    assert!(state.realm_is_archived(realm_id));
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::RealmRestore,
             realm_id,
-            chrono::DateTime::parse_from_rfc3339("2026-06-22T10:00:00.000Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc)
-        )
+            serde_json::json!({}),
+        ),
+        &hlc,
     );
+    assert!(!state.realm_is_archived(realm_id));
+    assert!(!state.realm_ordinary_writes_blocked(realm_id));
+    let realm = RealmId::new(realm_id.to_owned()).unwrap();
+    let cell = arkret_wire::CellRef::new("ak:cell:ak.component.realm.freeze.v1:null".to_owned()).unwrap();
+    let bottom = arkret_wire::Bottom::new(arkret_wire::BottomKind::Conflict, vec![cell.clone()]);
+    state.install_reloaded_cells(&realm, [(cell.clone(), CellState::Bottom(bottom))]);
+    assert!(state.realm_ordinary_writes_blocked(realm_id));
+    state.install_reloaded_cells(&realm, [(cell, CellState::Value(Value::Bool(false)))]);
+    assert!(!state.realm_ordinary_writes_blocked(realm_id));
+    assert!(state.realm_ordinary_writes_blocked("unknown"));
 }
 
 /// The `ak.audit.erasure_receipt` reducer pass extracts `scope.realm_id`

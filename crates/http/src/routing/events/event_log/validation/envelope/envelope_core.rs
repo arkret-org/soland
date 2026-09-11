@@ -192,6 +192,44 @@ async fn validate_created_at_causal_lower_bound(
     Ok(())
 }
 
+/// Read-only preparation preflight. This cannot produce an admission token or
+/// enter the submit pipeline: the signed Event is validated again on submit.
+pub(in crate::routing) async fn validate_message_authoring_candidate(
+    state: &AppState, event: &Event, suite: arkret_canonical::DigestSuite,
+) -> Result<(), AppError> {
+    let render = |error: EventValidationError| {
+        let mut result = AppError::from_rejection(
+            ErrorCode::from_wire(error.code).unwrap_or(ErrorCode::PolicyViolation), error.message);
+        if let Some(reason) = error.reason_code { result = result.with_reason_code(reason); }
+        result
+    };
+    if event.kind != arkret_wire::EventKind::MessageCreate || !event.proofs.is_empty() {
+        return Err(AppError::new(ErrorCode::SchemaViolation, "expected unsigned Message candidate"));
+    }
+    let value = serde_json::to_value(event).map_err(|e| AppError::internal(e.to_string()))?;
+    let object = value.as_object().ok_or_else(|| AppError::internal("Event is not an object"))?;
+    validate_created_at_causal_lower_bound(state, object, &event.prev_refs).await.map_err(render)?;
+    let cells = derived_data_event_cells(&value, object, suite).map_err(render)?;
+    realm_authority_root::validate_realm_authority_root_authorization(state, object,
+        event.kind.as_str(), event.realm_id.as_str(), &event.actor_id, false, &[]).await.map_err(render)?;
+    let root = event.authorization_ref.as_ref().is_some_and(|r| r.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL);
+    validate_data_event_capability_refs(state, event.actor_id.signing_principal_id().as_str(),
+        state.service_id(), event.realm_id.as_str(), event.kind.as_str(), object, &cells, root).await.map_err(render)?;
+    let operation_id = super::super::super::sdk_projection::event_operation_id(&value, event.event_id.as_str())
+        .ok_or_else(|| AppError::internal("cannot derive operation identity"))?;
+    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(operation_id,
+        arkret_wire::OperationKind::Create, None, event, suite)
+        .map_err(|e| AppError::new(ErrorCode::SchemaViolation, e.to_string()))?;
+    let operations = std::slice::from_ref(&operation);
+    validate_operation_semantics(state, operations).map_err(|reason| AppError::new(ErrorCode::SchemaViolation, reason))?;
+    for result in [validate_operation_policy(state, operations).await,
+        validate_content_encryption_floor(state, operations).await] {
+        result.map_err(|reason| AppError::from_rejection(
+            ErrorCode::from_wire(reason).unwrap_or(ErrorCode::FailedPrecondition), reason))?;
+    }
+    Ok(())
+}
+
 async fn validate_event_envelope_with_ingress(
     state: &AppState,
     session: &SessionRecord,
@@ -521,8 +559,12 @@ async fn validate_event_envelope_with_ingress(
     let realm_frozen = state
         .projections()
         .snapshot()
-        .realm_is_frozen_at(realm_id.as_str(), chrono::Utc::now());
-    if let Some(reason) = frozen_realm_check(realm_frozen, &kind) {
+        .realm_ordinary_writes_blocked(realm_id.as_str());
+    if let Some(reason) = frozen_realm_check(
+        realm_frozen && kind != arkret_wire::EventKind::RealmCreate.as_str(),
+        &kind,
+        object.get("payload").unwrap_or(&Value::Null),
+    ) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             arkret_wire::ErrorCode::REALM_FROZEN,
@@ -754,6 +796,41 @@ async fn validate_event_envelope_with_ingress(
     // accepting a durable Commit never authorizes a member to apply it.
     let payload = object.get("payload").expect("payload required above");
     match arkret_wire::EventKind::from(kind.as_str()) {
+        arkret_wire::EventKind::AgentSelectorClaim => {
+            let reject = || {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+                    "invalid controller selector claim",
+                )
+            };
+            let claim: arkret_models_identity::AgentSelectorClaim =
+                serde_json::from_value(payload.clone()).map_err(|_| reject())?;
+            claim.validate().map_err(|_| reject())?;
+            if claim.controller_subject_id != actor_id {
+                return Err(reject());
+            }
+            for proof in &claim.proofs {
+                let binding = claim
+                    .canonical_proof_binding_bytes(proof)
+                    .map_err(|_| reject())?;
+                crate::jws_verify::verify_did_controlled_jws_async(
+                    &binding,
+                    &proof.jws,
+                    &proof.verification_method,
+                    claim.controller_subject_id.as_str(),
+                    state,
+                )
+                .await
+                .map_err(|_| {
+                    event_validation_error(
+                        StatusCode::UNAUTHORIZED,
+                        arkret_wire::ErrorCode::SIGNATURE_INVALID,
+                        "invalid selector controller proof",
+                    )
+                })?;
+            }
+        }
         arkret_wire::EventKind::MlsGenesis => {
             let payload = serde_json::from_value::<
                 arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload,

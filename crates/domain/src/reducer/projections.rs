@@ -1061,9 +1061,6 @@ pub struct SolandRealmState {
     pub owner: Option<String>,
     pub title: Option<String>,
     pub deleted: bool,
-    pub archived: bool,
-    pub frozen: bool,
-    pub freeze_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Round 4 (B1.2) — Realm trust domain. Captured and locked

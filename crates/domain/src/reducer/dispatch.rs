@@ -230,12 +230,26 @@ fn apply_realm_archive_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmArchive)
 }
+fn apply_realm_restore_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmRestore)
+}
 fn apply_realm_freeze_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmFreeze)
+}
+fn apply_realm_unfreeze_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmUnfreeze)
 }
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
@@ -986,8 +1000,16 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_realm_archive_dispatch,
     );
     m.insert(
+        arkret_wire::EventKind::RealmRestore,
+        apply_realm_restore_dispatch,
+    );
+    m.insert(
         arkret_wire::EventKind::RealmFreeze,
         apply_realm_freeze_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::RealmUnfreeze,
+        apply_realm_unfreeze_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::RealmTombstone,

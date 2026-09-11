@@ -3059,9 +3059,7 @@ impl ProjectionService {
                         owner: Some(controller_actor_id.to_owned()),
                         title: None,
                         deleted,
-                        archived: false,
-                        frozen: false,
-                        freeze_expires_at: None,
+
                         created_at,
                         updated_at,
                         trust_domain: None,

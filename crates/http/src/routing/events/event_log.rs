@@ -73,6 +73,7 @@ use crate::routing::organizations;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::describe;
+pub(in crate::routing) use validation::validate_message_authoring_candidate;
 
 fn current_query_error(error: arkret_wire::WireError) -> AppError {
     let code = match error.error_code() {

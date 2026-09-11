@@ -52,11 +52,52 @@ fn terminal_realm_blocks_non_audit_kind() {
 
 #[test]
 fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
-    assert!(frozen_realm_check(true, "ak.message.create").is_some());
-    assert!(frozen_realm_check(true, arkret_wire::EventKind::RealmFreeze.as_str()).is_none());
-    assert!(frozen_realm_check(true, arkret_wire::EventKind::RealmDestroy.as_str()).is_none());
-    assert!(frozen_realm_check(true, "ak.audit.accessed").is_none());
-    assert!(frozen_realm_check(false, "ak.message.create").is_none());
+    assert!(frozen_realm_check(true, "ak.message.create", &json!({})).is_some());
+    assert!(
+        frozen_realm_check(
+            true,
+            arkret_wire::EventKind::RealmFreeze.as_str(),
+            &json!({})
+        )
+        .is_none()
+    );
+    assert!(
+        frozen_realm_check(
+            true,
+            arkret_wire::EventKind::RealmDestroy.as_str(),
+            &json!({})
+        )
+        .is_none()
+    );
+    assert!(frozen_realm_check(true, "ak.audit.accessed", &json!({})).is_none());
+    assert!(frozen_realm_check(false, "ak.message.create", &json!({})).is_none());
+}
+
+#[test]
+fn lifecycle_escape_preserves_terminal_and_authority_boundaries() {
+    for kind in [
+        "ak.realm.restore",
+        "ak.realm.unfreeze",
+        "ak.capability.revoke",
+        "ak.device.revoke",
+    ] {
+        assert!(frozen_realm_check(true, kind, &json!({})).is_none());
+        assert!(terminal_realm_check(true, kind).is_some());
+    }
+    assert!(frozen_realm_check(true, "ak.member.state", &json!({"membership":"leave"})).is_none());
+    for membership in ["join", "knock", "ban"] {
+        assert!(
+            frozen_realm_check(true, "ak.member.state", &json!({"membership":membership}))
+                .is_some()
+        );
+    }
+    for kind in [
+        "ak.realm.policy_bundle",
+        "ak.capability.grant",
+        "ak.message.create",
+    ] {
+        assert!(frozen_realm_check(true, kind, &json!({})).is_some());
+    }
 }
 
 #[test]

@@ -250,9 +250,7 @@ mod agent_key_tests {
                 owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: None,
                 deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
+
                 created_at: now,
                 updated_at: now,
                 trust_domain: None,
@@ -621,9 +619,7 @@ mod agent_key_tests {
                 owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: None,
                 deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
+
                 created_at: now,
                 updated_at: now,
                 trust_domain: None,
@@ -1086,9 +1082,7 @@ mod authority_cycle_tests {
                 owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: None,
                 deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
+
                 created_at: now,
                 updated_at: now,
                 trust_domain: None,
@@ -1516,9 +1510,7 @@ mod realm_owner_authority_tests {
                 owner: mirror_owner.map(ToOwned::to_owned),
                 title: None,
                 deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
+
                 created_at: now,
                 updated_at: now,
                 trust_domain: None,

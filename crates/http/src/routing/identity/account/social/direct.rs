@@ -249,7 +249,7 @@ pub(crate) async fn validate_direct_message_bootstrap(
     if actor != create.actor_id
         || !projection.realm_is_direct_conversation(realm_id)
         || projection.realm_is_in_terminal_state(realm_id)
-        || projection.realm_is_frozen_at(realm_id, now())
+        || projection.realm_ordinary_writes_blocked(realm_id)
         || state
             .contacts()
             .settled_direct_binding_for_realm(realm_id)
@@ -406,7 +406,7 @@ pub(crate) async fn validate_direct_message_participant(
     }
     let projection = state.projections().snapshot();
     if projection.realm_is_in_terminal_state(realm_id)
-        || projection.realm_is_frozen_at(realm_id, now())
+        || projection.realm_ordinary_writes_blocked(realm_id)
     {
         return Err("Direct Conversation is not writable");
     }

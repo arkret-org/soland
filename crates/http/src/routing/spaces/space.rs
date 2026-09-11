@@ -249,24 +249,23 @@ pub async fn realm_lifecycle_response(
             })
             .collect::<Result<_, _>>()?
     };
-    let (archived, frozen, terminal_state, successor_realm_id, freeze_expires_at) = {
+    let (archived, frozen, terminal_state, successor_realm_id) = {
         let projection = state.projections().snapshot();
         projection
             .realm_states
             .get(realm_id)
             .map(|realm| {
                 (
-                    realm.archived,
-                    projection.realm_is_frozen_at(realm_id, now()),
+                    projection.realm_is_archived(realm_id),
+                    projection.realm_is_frozen(realm_id),
                     realm.terminal_state.clone(),
                     realm
                         .successor_realm_id
                         .as_ref()
                         .and_then(|id| RealmId::new(id.clone()).ok()),
-                    realm.freeze_expires_at,
                 )
             })
-            .unwrap_or((false, false, None, None, None))
+            .unwrap_or((false, false, None, None))
     };
     let record = state
         .realms()
@@ -286,7 +285,6 @@ pub async fn realm_lifecycle_response(
         frozen,
         terminal_state,
         successor_realm_id,
-        freeze_expires_at,
     })
 }
 

@@ -137,9 +137,7 @@ fn seed_realm_owner(state: &mut ProjectionState) {
             owner: Some(ISSUER.to_owned()),
             title: None,
             deleted: false,
-            archived: false,
-            frozen: false,
-            freeze_expires_at: None,
+
             created_at: now,
             updated_at: now,
             trust_domain: None,

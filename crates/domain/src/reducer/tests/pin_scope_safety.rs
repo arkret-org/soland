@@ -16,9 +16,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             owner: Some("ak:did_core:web:alice.example".to_owned()),
             title: Some("Product".to_owned()),
             deleted: false,
-            archived: false,
-            frozen: false,
-            freeze_expires_at: None,
+
             created_at: now,
             updated_at: now,
             trust_domain: None,
