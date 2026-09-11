@@ -1272,8 +1272,7 @@ impl NotaryWorker {
             .seal_digest_suites_for_delta(realm_id, leaves, &request.event_digests)
             .await
             .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
-        if suites.event_digest_suite != arkret_canonical::DigestSuite::Sha256
-            || suites.seal_digest_suite != arkret_canonical::DigestSuite::Sha256
+        if suites.event_digest_suite != suites.seal_digest_suite
             || events
                 .iter()
                 .any(|(_, event)| event.kind == arkret_wire::EventKind::RealmDigestSuiteTransition)

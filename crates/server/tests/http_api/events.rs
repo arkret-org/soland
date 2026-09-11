@@ -216,6 +216,15 @@ pub(super) async fn seed_agent_grant_session(
     slug: &str,
     granted_scopes: &[&str],
 ) -> (AppState, AgentGrantPresentation) {
+    seed_agent_grant_session_with_suite(slug, granted_scopes, arkret_canonical::DigestSuite::Sha256)
+        .await
+}
+
+async fn seed_agent_grant_session_with_suite(
+    slug: &str,
+    granted_scopes: &[&str],
+    agent_pcr_digest_suite: arkret_canonical::DigestSuite,
+) -> (AppState, AgentGrantPresentation) {
     use tokio::io::AsyncWriteExt;
 
     let mut config = test_config();
@@ -251,7 +260,7 @@ pub(super) async fn seed_agent_grant_session(
     super::agents::seed_agent_provision_prerequisites(&state, controller).await;
     let controller_authority =
         super::agents::seed_active_controller_device_generation(&state, controller).await;
-    let (status, body) = super::agents::provision_agent_with_sdk_events(
+    let (status, body) = super::agents::provision_agent_with_sdk_events_and_pcr_suite(
         &state,
         &controller_token,
         controller,
@@ -272,6 +281,7 @@ pub(super) async fn seed_agent_grant_session(
             ],
             "constraints": []
         }),
+        agent_pcr_digest_suite,
     )
     .await;
     assert_eq!(
@@ -501,11 +511,11 @@ pub(super) async fn seed_agent_grant_session(
     authorize_event.authorization_ref = Some(record.controller_authorization_ref.clone().into());
     authorize_event.seal_basis = Some(genesis_seal.seal_basis());
     authorize_event
-        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .refresh_content_bound_identity_with_digest_suite(agent_pcr_digest_suite)
         .unwrap();
     let mut authorize_event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
         authorize_event,
-        arkret_canonical::DigestSuite::Sha256,
+        agent_pcr_digest_suite,
     )
     .expect("authorize Event finalizes");
     arkret_signatures::sign_event(
@@ -515,7 +525,21 @@ pub(super) async fn seed_agent_grant_session(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
-    let authorize_event = authorize_event.into_event();
+    let authorize_event = soland_http::attach_fixture_station_admission_proof(
+        &state,
+        authorize_event.into_event(),
+        arkret_wire::DidKey::new(format!(
+            "did:key:{}",
+            test_ed25519_multibase_public(&SigningKey::from_bytes(
+                &super::agents::CONTROLLER_DEVICE_SIGNING_SEED,
+            ))
+        ))
+        .unwrap(),
+        now,
+    )
+    .await
+    .expect("Station admission fixture succeeds")
+    .expect("fixture Station has resolvable signer evidence");
     let agent_pcr_authority = arkret_bootstrap::AgentPcrGenesisAuthority::from_accepted_create(
         &genesis_event,
         &super::agents::genesis_projector,
@@ -525,7 +549,7 @@ pub(super) async fn seed_agent_grant_session(
         agent_pcr_realm.clone(),
         arkret_wire::Hash::new(
             authorize_event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .event_digest_with_digest_suite(agent_pcr_digest_suite)
                 .unwrap(),
         )
         .unwrap(),
@@ -596,11 +620,47 @@ pub(super) async fn seed_agent_grant_session(
         ))
         .await
         .unwrap();
+    let admission = authorize_event
+        .proofs
+        .iter()
+        .find_map(arkret_wire::EventProof::as_station_admission)
+        .expect("accepted control Event carries Station admission");
+    let dependency_selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+        content_digest: admission
+            .signer_resolution_evidence_ref
+            .content_digest()
+            .unwrap(),
+    };
+    let dependency = state
+        .test_persistence()
+        .governance_dependencies()
+        .get_unscoped_signer_evidence(&dependency_selector)
+        .await
+        .unwrap()
+        .expect("fixture admission retained Station signer evidence");
+    state
+        .test_persistence()
+        .governance_dependencies()
+        .put_exact(soland_storage::GovernanceDependencyWrite {
+            realm_id: agent_pcr_realm.clone(),
+            source: soland_storage::GovernanceDependencySource::Event(
+                arkret_wire::Hash::new(
+                    authorize_event
+                        .event_digest_with_digest_suite(agent_pcr_digest_suite)
+                        .unwrap(),
+                )
+                .unwrap(),
+            ),
+            edge_index: 0,
+            item: dependency,
+        })
+        .await
+        .unwrap();
     state
         .test_put_pending_control_event_with_ack(
             &authorize_event,
             &proposal_ack,
-            arkret_canonical::DigestSuite::Sha256,
+            agent_pcr_digest_suite,
         )
         .await
         .unwrap();
@@ -632,7 +692,13 @@ pub(super) async fn seed_agent_grant_session(
         .map(|event| {
             arkret_wire::Hash::new(
                 event
-                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .event_digest_with_digest_suite(
+                        if event.kind == arkret_wire::EventKind::RealmCreate {
+                            arkret_canonical::DigestSuite::Sha256
+                        } else {
+                            agent_pcr_digest_suite
+                        },
+                    )
                     .unwrap(),
             )
             .unwrap()
@@ -663,9 +729,26 @@ pub(super) async fn seed_agent_grant_session(
         arkret_models_collaboration::governance_dependencies::SealPrepareOutcome,
     >(&availability_body)
     .unwrap();
+    assert_eq!(
+        availability_request.digest_suite().unwrap(),
+        agent_pcr_digest_suite
+    );
+    for digest in [
+        &availability.seal_body.control_event_set_root,
+        &availability.seal_body.state_root,
+        &availability.seal_body.completeness_root,
+    ]
+    .into_iter()
+    .chain(availability.seal_body.availability_receipt_digests.iter())
+    {
+        assert_eq!(digest.digest_suite().unwrap(), agent_pcr_digest_suite);
+    }
     let successor_seal = availability
         .sign(&availability_request, &controller_signer)
         .expect("successor Agent PCR Seal builds");
+    successor_seal
+        .validate_id(agent_pcr_digest_suite)
+        .expect("successor Agent PCR Seal uses its genesis suite");
     let mut seal_response = TestClient::post("http://server/_arkret/self/seals")
         .add_header("authorization", format!("Bearer {controller_token}"), true)
         .add_header("content-type", "application/json", true)
@@ -893,6 +976,23 @@ pub(super) async fn seed_agent_grant_session(
             holder_key: runtime_key,
         },
     )
+}
+
+#[test]
+fn blake3_agent_pcr_authorize_successor_uses_the_selected_suite() {
+    run_on_deep_stack(
+        "blake3_agent_pcr_authorize_successor_uses_the_selected_suite",
+        blake3_agent_pcr_authorize_successor_uses_the_selected_suite_body,
+    );
+}
+
+async fn blake3_agent_pcr_authorize_successor_uses_the_selected_suite_body() {
+    let _ = seed_agent_grant_session_with_suite(
+        "blake3-agent-pcr",
+        &["ak.self.events.read.scan.v1"],
+        arkret_canonical::DigestSuite::Blake3,
+    )
+    .await;
 }
 
 fn assert_agent_scope_denied(body: &Value, scope: &str) {

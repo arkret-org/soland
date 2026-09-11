@@ -37,6 +37,7 @@ pub fn canonical_event_record(
     realm_id: Option<&str>,
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> soland_storage::CanonicalEventRecord {
+    let digest_suite = event.event_id.digest_suite_code().digest_suite();
     soland_storage::CanonicalEventRecord {
         event_id: event.event_id.to_string(),
         actor_id: event.actor_id.to_string(),
@@ -44,9 +45,9 @@ pub fn canonical_event_record(
         realm_id: realm_id.map(str::to_owned),
         kind: event.kind.to_string(),
         schema_id: "ak.schema.event.v1".to_owned(),
-        digest_suite: arkret_canonical::DigestSuite::Sha256,
+        digest_suite,
         canonical_digest: event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .event_digest_with_digest_suite(digest_suite)
             .expect("fixture Event digest"),
         canonical_bytes: arkret_canonical::canonical_json_bytes(
             &event

@@ -731,13 +731,35 @@ pub(super) async fn provision_agent_with_sdk_events(
     slug: &str,
     requested_scope: Value,
 ) -> (StatusCode, Value) {
-    let (status, body, commit_body, fault_outcome) = provision_agent_sdk_commit_attempt(
+    provision_agent_with_sdk_events_and_pcr_suite(
         state,
         token,
         controller,
         controller_authority,
         slug,
         requested_scope,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .await
+}
+
+pub(super) async fn provision_agent_with_sdk_events_and_pcr_suite(
+    state: &AppState,
+    token: &str,
+    controller: &str,
+    controller_authority: &arkret_wire::AccountId,
+    slug: &str,
+    requested_scope: Value,
+    agent_pcr_digest_suite: arkret_canonical::DigestSuite,
+) -> (StatusCode, Value) {
+    let (status, body, commit_body, fault_outcome) = provision_agent_sdk_commit_attempt_with_suite(
+        state,
+        token,
+        controller,
+        controller_authority,
+        slug,
+        requested_scope,
+        agent_pcr_digest_suite,
         None,
     )
     .await;
@@ -775,6 +797,31 @@ fn provision_agent_sdk_commit_attempt<'a>(
         soland_test_support::fault_injection::FaultPlan,
     )>,
 ) -> AgentCommitAttempt<'a> {
+    provision_agent_sdk_commit_attempt_with_suite(
+        state,
+        token,
+        controller,
+        controller_authority,
+        slug,
+        requested_scope,
+        arkret_canonical::DigestSuite::Sha256,
+        fault,
+    )
+}
+
+fn provision_agent_sdk_commit_attempt_with_suite<'a>(
+    state: &'a AppState,
+    token: &'a str,
+    controller: &'a str,
+    controller_authority: &'a arkret_wire::AccountId,
+    slug: &'a str,
+    requested_scope: Value,
+    agent_pcr_digest_suite: arkret_canonical::DigestSuite,
+    fault: Option<(
+        &'a soland_test_support::fault_injection::FaultInjector,
+        soland_test_support::fault_injection::FaultPlan,
+    )>,
+) -> AgentCommitAttempt<'a> {
     Box::pin(provision_agent_sdk_commit_attempt_inner(
         state,
         token,
@@ -782,6 +829,7 @@ fn provision_agent_sdk_commit_attempt<'a>(
         controller_authority,
         slug,
         requested_scope,
+        agent_pcr_digest_suite,
         fault,
     ))
 }
@@ -793,6 +841,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     controller_authority: &arkret_wire::AccountId,
     slug: &str,
     requested_scope: Value,
+    agent_pcr_digest_suite: arkret_canonical::DigestSuite,
     fault: Option<(
         &soland_test_support::fault_injection::FaultInjector,
         soland_test_support::fault_injection::FaultPlan,
@@ -935,7 +984,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             controller_principal_id: controller_principal_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
             trust_domain: state.config().trust_domain.clone(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            digest_suite: agent_pcr_digest_suite,
             created_at: now,
         },
     )

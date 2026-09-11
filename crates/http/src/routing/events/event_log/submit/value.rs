@@ -1510,7 +1510,7 @@ pub async fn attach_fixture_station_admission_proof(
     producer_signing_key_did: arkret_wire::DidKey,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Event>, String> {
-    let digest_suite = arkret_canonical::DigestSuite::Sha256;
+    let digest_suite = event.event_id.digest_suite_code().digest_suite();
     let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
         return Err("fixture Event must carry exactly one producer proof".to_owned());
     };
@@ -1553,17 +1553,16 @@ pub async fn attach_fixture_station_admission_proof(
     let signer_resolution_evidence_ref = signer_evidence
         .evidence_ref()
         .map_err(|error| error.to_string())?;
+    let dependency = arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+            content_digest,
+        },
+        authenticated_signer_resolution_evidence: Box::new(signer_evidence),
+    };
     state
         .persistence()
         .governance_dependency_store()
-        .put_unscoped_signer_evidence_exact(
-            arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-                    content_digest,
-                },
-                authenticated_signer_resolution_evidence: Box::new(signer_evidence),
-            },
-        )
+        .put_unscoped_signer_evidence_exact(dependency)
         .await
         .map_err(|error| error.to_string())?;
     let mut admission = arkret_wire::StationAdmissionProof {
