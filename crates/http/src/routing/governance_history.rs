@@ -753,10 +753,17 @@ async fn resolve_peer_dependencies(
     } else {
         false
     };
+    let provider_service_id = state.service_core_id();
     let outcome = state
         .persistence()
         .governance_history_service()
-        .resolve_peer_dependencies(request, ordinary_visible, &source_service_core_id, now())
+        .resolve_peer_dependencies(
+            request,
+            ordinary_visible,
+            &source_service_core_id,
+            &provider_service_id,
+            now(),
+        )
         .await
         .map_err(map_service_error)?;
     json_ok(outcome)

@@ -56,6 +56,7 @@ struct ResolveDependenciesInput<'a> {
     byte_limit: u64,
     access: Option<HistoryTraversalAccess>,
     ordinary_realm_visible: bool,
+    public_service_signer_id: Option<&'a DidCoreId>,
     caller: Option<TraversalCaller<'a>>,
     now: DateTime<Utc>,
 }
@@ -86,6 +87,7 @@ impl GovernanceHistoryService {
             byte_limit: request.byte_limit,
             access,
             ordinary_realm_visible,
+            public_service_signer_id: None,
             caller: Some(TraversalCaller::SelfPrincipal(caller)),
             now,
         })
@@ -97,6 +99,7 @@ impl GovernanceHistoryService {
         request: PeerGovernanceDependencyResolveRequestBody,
         ordinary_realm_visible: bool,
         caller: &DidCoreId,
+        provider_service_id: &DidCoreId,
         now: DateTime<Utc>,
     ) -> ServiceResult<GovernanceDependencyResolveOutcome> {
         request
@@ -112,6 +115,7 @@ impl GovernanceHistoryService {
             byte_limit: request.byte_limit,
             access,
             ordinary_realm_visible,
+            public_service_signer_id: Some(provider_service_id),
             caller: Some(TraversalCaller::PeerService(caller)),
             now,
         })
@@ -128,6 +132,7 @@ impl GovernanceHistoryService {
             byte_limit,
             access,
             ordinary_realm_visible,
+            public_service_signer_id,
             caller,
             now,
         } = input;
@@ -142,7 +147,7 @@ impl GovernanceHistoryService {
         let mut items = Vec::new();
         let mut missing_selectors = Vec::new();
         for selector in &selectors {
-            let item = if let Some(retained) = &retained_dependencies {
+            let mut item = if let Some(retained) = &retained_dependencies {
                 retained
                     .iter()
                     .find(|item| item.selector() == selector)
@@ -163,6 +168,44 @@ impl GovernanceHistoryService {
                     }
                 }
             };
+            // A first-contact receiver has no Realm visibility yet, but it must
+            // still authenticate the provider Station's historical admission
+            // signature. Service DID resolution evidence is public identity
+            // material, so permit only the provider's own exact,
+            // content-addressed Service branch. Principal, device, Agent and
+            // third-party service evidence remain behind the ordinary Realm or
+            // retained-cut authorization paths.
+            if item.is_none()
+                && access.is_none()
+                && let Some(provider_service_id) = public_service_signer_id
+                && matches!(
+                    selector,
+                    GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { .. }
+                )
+            {
+                let candidate = self
+                    .persistence
+                    .governance_dependencies()
+                    .get_unscoped_signer_evidence(selector)
+                    .await?;
+                if candidate.as_ref().is_some_and(|candidate| {
+                    matches!(
+                        candidate,
+                        GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                            authenticated_signer_resolution_evidence,
+                            ..
+                        } if matches!(
+                            authenticated_signer_resolution_evidence.as_ref(),
+                            arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service {
+                                signer_id,
+                                ..
+                            } if signer_id == provider_service_id
+                        )
+                    )
+                }) {
+                    item = candidate;
+                }
+            }
             match item {
                 Some(item) => items.push(item),
                 None => missing_selectors.push(selector.clone()),
