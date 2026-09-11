@@ -349,11 +349,7 @@ async fn introspect_session_grant_remote(
         "auth_unavailable",
         "session grant introspection request failed",
     ))?;
-    if !response.status().is_success() {
-        return Err(unauthenticated(
-            "session grant introspection was rejected by the Account Authority process",
-        ));
-    }
+    require_successful_introspection(response.status().as_u16())?;
     let outcome = response
         .json::<SessionGrantIntrospectOutcome>()
         .await
@@ -367,9 +363,25 @@ async fn introspect_session_grant_remote(
     if !outcome.active || outcome.status != SessionGrantIntrospectStatus::Active {
         return Err(unauthenticated("session grant is not active"));
     }
-    outcome
-        .grant
-        .ok_or_else(|| unauthenticated("session grant introspection omitted grant metadata"))
+    outcome.grant.ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "auth_unavailable",
+        "session grant introspection omitted grant metadata",
+    ))
+}
+
+fn require_successful_introspection(
+    status: u16,
+) -> Result<(), (StatusCode, &'static str, &'static str)> {
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "auth_unavailable",
+            "session grant introspection service did not return an authoritative outcome",
+        ))
+    }
 }
 
 // ── DPoP replay defense ──────────────────────────────────────────────────────
@@ -824,6 +836,16 @@ mod tests {
             DpopReplayRegistration::Full
         );
         assert!(!seen.contains_key("capacity-overflow"));
+    }
+
+    #[test]
+    fn introspection_failure_never_claims_the_user_grant_is_invalid() {
+        for status in [400, 401, 403, 404, 429, 500, 502, 503, 504] {
+            let error = require_successful_introspection(status).unwrap_err();
+            assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(error.1, "auth_unavailable");
+        }
+        assert!(require_successful_introspection(200).is_ok());
     }
 
     #[test]
