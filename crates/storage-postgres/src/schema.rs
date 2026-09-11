@@ -1354,7 +1354,6 @@ diesel::table! {
         identity_model -> Text,
         current_device_generation_ref -> Int8,
         device_generation_status -> Text,
-        registry_head -> Text,
         accepted_seal_frontier -> Jsonb,
         policy_payload -> Jsonb,
         publication_authority_context -> Jsonb,

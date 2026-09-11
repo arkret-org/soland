@@ -279,7 +279,6 @@ impl Fixture {
         session["policy_id"] = json!(ids::typed_uuid_part_expect_internal(
             typed_policy.policy_id.as_str()
         ));
-        session["registry_head"] = json!(REQUEST);
         session["policy_payload"] = policy.clone();
         session["proof_payload"] = proof_payload;
         assert_eq!(

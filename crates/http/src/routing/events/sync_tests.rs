@@ -7,81 +7,6 @@ fn roster_actor(principal: &str) -> arkret_wire::ActorId {
     ))
 }
 
-fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Event {
-    let mut event = crate::test_event::raw_event(
-        arkret_wire::EventKind::MessageCreate.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: arkret_identifiers::RealmId::new(
-                "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
-            )
-            .unwrap(),
-        },
-        crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
-        actor_seq,
-        arkret_identifiers::Hlc::new(hlc).unwrap(),
-        json!({
-            "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
-            "body": body,
-        }),
-    )
-    .unwrap();
-    let event_digest = arkret_wire::Hash::new(
-        event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .unwrap(),
-    )
-    .unwrap();
-    event.proofs = vec![arkret_wire::EventProof::Producer(
-        arkret_wire::ProducerEventProof {
-            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-            verification_method: arkret_wire::DidUrl::new(
-                "did:webvh:z6mkfixture:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
-            )
-            .unwrap(),
-            event_digest,
-            signer_resolution_evidence_ref: None,
-            created_at: event.created_at,
-            domain: None,
-            audience: None,
-            proof_purpose: None,
-            jws: "eyJhbGciOiJFZDI1NTE5In0..c2ln".to_owned(),
-        },
-    )];
-    event
-}
-
-#[test]
-fn timeline_ordered_log_siblings_are_all_visible_and_non_destructive() {
-    let left = ordered_log_message(7, "019041000000-0000-aabbcc01", "left");
-    let right = ordered_log_message(7, "019041000001-0000-aabbcc01", "right");
-    let normal = ordered_log_message(8, "019041000002-0000-aabbcc01", "normal");
-    let left_id = left.event_id.clone();
-    let right_id = right.event_id.clone();
-
-    let (visible, siblings) =
-        annotate_message_ordered_log_siblings(vec![(10, left), (11, right), (12, normal.clone())]);
-
-    assert_eq!(
-        visible.len(),
-        3,
-        "all accepted siblings must remain visible"
-    );
-    assert!(visible.iter().any(|(_, event)| event.event_id == left_id));
-    assert!(visible.iter().any(|(_, event)| event.event_id == right_id));
-    assert!(
-        visible
-            .iter()
-            .any(|(_, event)| event.event_id == normal.event_id)
-    );
-    assert_eq!(siblings.len(), 1, "sibling set must be user-visible");
-    let diagnostic = &siblings[0];
-    assert_eq!(diagnostic.reason, "actor_seq_siblings");
-    assert_eq!(diagnostic.issuer_seq, 7);
-    assert_eq!(diagnostic.event_ids.len(), 2);
-    assert!(diagnostic.event_ids.contains(&left_id));
-    assert!(diagnostic.event_ids.contains(&right_id));
-}
-
 fn stream_cursor_handle_binding(
     principal_id: &str,
     device_id: &str,
@@ -301,23 +226,6 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         derive_cursor_handle(k2, &base),
         "different server key -> different handle (unguessable without key)"
     );
-}
-
-#[test]
-fn timeline_position_disambiguates_same_second_events() {
-    let created_at = DateTime::parse_from_rfc3339("2026-05-22T16:18:24.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let realm_create = timestamp_position_with_tie_breaker(
-        created_at,
-        "ak:event:AdSEMuROttK4LOqkM58-n9-IoPYt49AdbtfNotnepAVd",
-    );
-    let welcome_message = timestamp_position_with_tie_breaker(
-        created_at,
-        "ak:event:AaoIV7frfdMcyZ_DS4-v9rSL4m-ejw11XJ0Vwo5M1f1E",
-    );
-
-    assert_ne!(realm_create, welcome_message);
 }
 
 // ── Signal rail (`sync/signal.md`) ─────────────────────────────────────
@@ -633,8 +541,8 @@ fn accepted_sync_test_operation_at(
     .expect("accepted sync fixture operation")
 }
 
-fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
-    let mut entry = RealmDirectoryEntry::new(
+fn roster_realm(public: bool, include_caller: bool) -> crate::state::RealmDirectoryEntry {
+    let mut entry = crate::state::RealmDirectoryEntry::new(
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
         "Roster evidence",
         soland_services::events::DirectoryProvenance::LocalOnly,

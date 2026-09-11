@@ -3001,7 +3001,6 @@ CREATE TABLE public.recovery_sessions (
     identity_model text NOT NULL,
     current_device_generation_ref bigint NOT NULL,
     device_generation_status text NOT NULL,
-    registry_head text NOT NULL,
     accepted_seal_frontier jsonb NOT NULL,
     policy_payload jsonb NOT NULL,
     publication_authority_context jsonb NOT NULL,

@@ -1264,6 +1264,51 @@ fn realm_cell_exposes_policy_bundle_without_cross_realm_leakage() {
     assert!(state.realm_cell("ak:realm:missing", &cell_id).is_none());
 }
 
+#[test]
+fn realm_cell_keeps_non_null_subject_values_isolated_by_realm() {
+    use arkret_state::lattice::CellState;
+
+    let mut state = ProjectionState::new();
+    let first_realm = arkret_identifiers::RealmId::new(
+        "ak:realm:AfIbRfUkX5fr8sWMWUzYZMiIwiHVj7tWH1Sl0W6DR9PQ".to_owned(),
+    )
+    .unwrap();
+    let second_realm = arkret_identifiers::RealmId::new(
+        "ak:realm:AciqNsLTCvFHPZIbNMxgqrpGZT_y58mPatmdG-8CC4UA".to_owned(),
+    )
+    .unwrap();
+    let cell = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.invite.live_target.v1:{}",
+        "A".repeat(43)
+    ))
+    .unwrap();
+
+    state.install_reloaded_cells(
+        &first_realm,
+        [(cell.clone(), CellState::Value(serde_json::json!("first")))],
+    );
+
+    assert_eq!(
+        state.realm_cell_value(first_realm.as_str(), &cell),
+        Some(&serde_json::json!("first"))
+    );
+    assert_eq!(state.realm_cell_value(second_realm.as_str(), &cell), None);
+
+    state.install_reloaded_cells(
+        &second_realm,
+        [(cell.clone(), CellState::Value(serde_json::json!("second")))],
+    );
+
+    assert_eq!(
+        state.realm_cell_value(first_realm.as_str(), &cell),
+        Some(&serde_json::json!("first"))
+    );
+    assert_eq!(
+        state.realm_cell_value(second_realm.as_str(), &cell),
+        Some(&serde_json::json!("second"))
+    );
+}
+
 fn base_search_policy() -> Value {
     serde_json::json!({
         "enabled_profile_refs": ["ak.profile.search.blind_index.v1"],

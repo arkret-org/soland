@@ -694,7 +694,7 @@ mod tests {
             _recipient: &str,
             _device_id: &str,
             _queue_position: i64,
-            limit: usize,
+            _limit: usize,
         ) -> ServiceResult<Vec<DeviceMessageState>> {
             Ok(Vec::new())
         }

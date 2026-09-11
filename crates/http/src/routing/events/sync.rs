@@ -56,10 +56,9 @@ use super::{
     realm_state_snapshot_manifest_for_realm, render_error, sha256_hex,
 };
 pub(crate) use crate::ids;
-pub(crate) use crate::state::{AppState, RealmDirectoryEntry};
+pub(crate) use crate::state::AppState;
 pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncRequestBody};
 
-pub(crate) const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
 /// Default reconnect guard advertised on subscribe terminal control frames.
 /// Shared by `account_subscribe` (subscribe.rs) and `events_subscribe`
 /// (events_query.rs).

@@ -132,35 +132,3 @@ pub(super) fn federation_peer_id_document(state: &AppState, did: &str) -> Option
         "assertionMethod": [verification_method],
     }))
 }
-
-pub(in crate::routing) fn validate_did_document_services(
-    did: &str,
-    document: &Value,
-    development_mode: bool,
-) -> Result<(), &'static str> {
-    let services = document.get("service").and_then(|v| v.as_array());
-    if let Some(services) = services {
-        for service in services {
-            let endpoint = service.get("serviceEndpoint").and_then(|v| v.as_str());
-            match endpoint {
-                None | Some("") => {
-                    if !development_mode {
-                        return Err("DID document service must have a non-empty serviceEndpoint");
-                    }
-                }
-                Some(ep) => {
-                    if !ep.starts_with("http://")
-                        && !ep.starts_with("https://")
-                        && !ep.starts_with('/')
-                    {
-                        return Err("DID document serviceEndpoint must be an absolute URL or path");
-                    }
-                }
-            }
-        }
-    }
-    if did.starts_with("did:web:") && services.is_none_or(|s| s.is_empty()) && !development_mode {
-        return Err("did:web document must declare at least one service endpoint");
-    }
-    Ok(())
-}

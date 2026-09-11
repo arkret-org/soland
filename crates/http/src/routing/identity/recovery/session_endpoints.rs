@@ -818,22 +818,8 @@ pub(super) async fn recovery_session_create(
         identity_model,
         current_device_generation_ref,
         device_generation_status,
-        registry_head,
         accepted_seal_frontier,
     ) = if let Some(generation) = device_generation {
-        let mut entries = state
-            .dids()
-            .log_events(authority_record.projection.did.as_str())
-            .await
-            .map_err(recovery_service_error)?;
-        entries.sort_by_key(|entry| entry.seq);
-        let registry_head = entries
-            .last()
-            .map(|entry| entry.event_digest.clone())
-            .ok_or_else(|| {
-                AppError::conflict("recovery requires an accepted DID registry head")
-                    .with_wire_code("device_reanchor_entry_not_head")
-            })?;
         let leaves =
             crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
                 state, &principal, &realm_id,
@@ -870,9 +856,6 @@ pub(super) async fn recovery_session_create(
                     DeviceGenerationStatus::Conflicted
                 }
             },
-            Hash::new(registry_head).map_err(|error| {
-                AppError::internal(format!("invalid accepted DID registry head: {error}"))
-            })?,
             accepted_seal_frontier,
         )
     } else {
@@ -907,7 +890,6 @@ pub(super) async fn recovery_session_create(
         identity_model,
         current_device_generation_ref,
         device_generation_status,
-        registry_head,
         accepted_seal_frontier,
         policy_payload: active.raw_payload.clone(),
         publication_authority_context,

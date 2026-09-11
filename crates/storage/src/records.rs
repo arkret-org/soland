@@ -174,7 +174,6 @@ pub struct RecoverySessionRecord {
     pub identity_model: RecoveryIdentityModel,
     pub current_device_generation_ref: u64,
     pub device_generation_status: DeviceGenerationStatus,
-    pub registry_head: Hash,
     pub accepted_seal_frontier: DeviceReanchorPreFenceSealFrontier,
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).

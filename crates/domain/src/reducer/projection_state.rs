@@ -127,6 +127,15 @@ pub struct ProjectionState {
     ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
     ///     `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
+    /// Realm-scoped mirror for all resolved cell families, including cells
+    /// whose subject is derived from an account or Event. A canonical CellRef
+    /// does not carry its enclosing Realm, so the same invite target (for
+    /// example) legitimately produces the same CellRef in multiple Realms.
+    ///
+    /// `cells` remains populated for legacy callers whose families have a
+    /// globally unique subject; Realm-aware admission and read paths prefer
+    /// this map and therefore cannot observe another Realm's value.
+    pub realm_cells: BTreeMap<(String, String), CellState>,
     /// Realm-scoped resolved values for protocol cell families
     /// whose canonical subject is the literal `null`. The Realm id belongs
     /// to the CellStore namespace, not the wire cell id, so these values
@@ -685,7 +694,16 @@ impl ProjectionState {
             }
             _ => {
                 let realm_key = (realm_id.to_owned(), cell_id.as_str().to_owned());
-                let realm_state = self.realm_null_subject_cells.get(&realm_key);
+                let realm_state = self
+                    .realm_cells
+                    .get(&realm_key)
+                    .or_else(|| self.realm_null_subject_cells.get(&realm_key));
+                if cell_id
+                    .as_str()
+                    .starts_with("ak:cell:ak.component.invite.live_target.v1:")
+                {
+                    return realm_state;
+                }
                 let is_null_subject = arkret_wire::CellId::from_ref(cell_id)
                     .is_ok_and(|parsed| parsed.subject() == "null");
                 if is_null_subject {
@@ -933,6 +951,10 @@ impl ProjectionState {
                         .insert((realm_id.to_string(), cell.as_str().to_owned()), resolved);
                 }
                 _ => {
+                    self.realm_cells.insert(
+                        (realm_id.to_string(), cell.as_str().to_owned()),
+                        resolved.clone(),
+                    );
                     self.cells.insert(cell, resolved);
                 }
             }

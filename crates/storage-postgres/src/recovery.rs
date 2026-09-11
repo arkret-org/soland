@@ -315,8 +315,6 @@ struct RecoverySessionRow {
     current_device_generation_ref: i64,
     #[diesel(sql_type = Text)]
     device_generation_status: String,
-    #[diesel(sql_type = Text)]
-    registry_head: String,
     #[diesel(sql_type = Jsonb)]
     accepted_seal_frontier: Value,
     #[diesel(sql_type = Jsonb)]
@@ -375,12 +373,6 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 row.recovery_session_id
             ))
         })?;
-        let registry_head = arkret_identifiers::Hash::new(row.registry_head).map_err(|error| {
-            PersistenceError::Internal(format!(
-                "recovery session `{}` has invalid registry_head: {error}",
-                row.recovery_session_id
-            ))
-        })?;
         let accepted_seal_frontier =
             serde_json::from_value(row.accepted_seal_frontier).map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -429,7 +421,6 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             identity_model,
             current_device_generation_ref,
             device_generation_status,
-            registry_head,
             accepted_seal_frontier,
             policy_payload: row.policy_payload,
             publication_authority_context,
@@ -448,7 +439,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 }
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, \
      trust_domain, policy_id, policy_version, identity_model, \
-     current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
+     current_device_generation_ref, device_generation_status, accepted_seal_frontier, \
      policy_payload, publication_authority_context, publication_authority_context_digest, \
      challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
 
@@ -549,10 +540,10 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             "INSERT INTO recovery_sessions \
              (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
-              device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
+              device_generation_status, accepted_seal_frontier, policy_payload, \
               publication_authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -581,7 +572,6 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             )
         })?))
         .bind::<Nullable<Text>, _>(Some(device_generation_status))
-        .bind::<Nullable<Text>, _>(Some(record.registry_head.as_str()))
         .bind::<Nullable<Jsonb>, _>(Some(
             serde_json::to_value(&record.accepted_seal_frontier).map_err(|error| {
                 PersistenceError::Internal(format!(
