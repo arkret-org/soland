@@ -27,8 +27,6 @@ impl NotaryKind {
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminNotaryValue {
     pub notary: arkret_wire::NotaryValue,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revocation_freshness_window_ms: Option<u64>,
     #[serde(default)]
     pub paused: bool,
 }

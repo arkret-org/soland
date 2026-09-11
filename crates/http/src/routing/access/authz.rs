@@ -282,7 +282,7 @@ mod tests {
     use super::{capability_resource_selector, parse_authz_resource};
 
     #[test]
-    fn effective_grants_query_preserves_explicit_actor_kind_and_credential_default() {
+    fn effective_grants_query_preserves_explicit_actor_id_variant_and_credential_default() {
         let principal = super::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
         let station = super::DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let account =

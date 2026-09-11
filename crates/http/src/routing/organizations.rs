@@ -543,11 +543,7 @@ mod tests {
         .unwrap()
     }
 
-    fn install_federation_policy(
-        state: &AppState,
-        scope: Value,
-        target_service_id: &DidCoreId,
-    ) {
+    fn install_federation_policy(state: &AppState, scope: Value, target_service_id: &DidCoreId) {
         let organization_id = DidCoreId::new(ORGANIZATION_ID).unwrap();
         let now = Utc::now();
         let relationship = soland_domain::reducer::RealmOrganizationStatementState {
@@ -601,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn organization_actor_deny_preserves_station_and_actor_kind() {
+    fn organization_actor_deny_preserves_station_and_actor_id_variant() {
         let actor = account_at("station-a");
         let foreign = account_at("station-b");
         let service = ActorId::service(actor.signing_principal_id().clone());
@@ -640,11 +636,7 @@ mod tests {
         );
         let denied = DidCoreId::new("ak:did_core:web:denied.example").unwrap();
         let allowed = DidCoreId::new("ak:did_core:web:allowed.example").unwrap();
-        install_federation_policy(
-            &state,
-            json!({"realm_ids": [REALM_ID]}),
-            &denied,
-        );
+        install_federation_policy(&state, json!({"realm_ids": [REALM_ID]}), &denied);
         assert!(organization_policy_blocks_federation(
             &state, REALM_ID, &denied
         ));
@@ -660,11 +652,7 @@ mod tests {
             soland_storage_postgres::Db { pool: None },
         );
         let denied = DidCoreId::new("ak:did_core:web:denied.example").unwrap();
-        install_federation_policy(
-            &state,
-            json!({"service_ids": [denied.clone()]}),
-            &denied,
-        );
+        install_federation_policy(&state, json!({"service_ids": [denied.clone()]}), &denied);
         assert!(organization_policy_blocks_federation(
             &state, REALM_ID, &denied
         ));

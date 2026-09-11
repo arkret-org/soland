@@ -1762,15 +1762,6 @@ pub(super) async fn accepted_event_envelope(
     } else {
         None
     };
-    if event.actor_kind == Some(arkret_wire::EnvelopeActorKind::Agent)
-        && producer_signer_evidence.is_none()
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "temporarily_unavailable",
-            "Agent admission could not freeze producer signer evidence",
-        ));
-    }
     let authenticated_resolution =
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
             .await

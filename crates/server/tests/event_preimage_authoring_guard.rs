@@ -1,10 +1,10 @@
 //! The Event digest preimage has one implementation, and it is in the SDK.
 //!
-//! `conformance/encoding.md` §6 excludes `proofs`, `unsigned`, `actor_kind` and
+//! `conformance/encoding.md` §6 excludes `proofs`, `unsigned` and
 //! `event_id` from the digest preimage. Production ingest already goes through
 //! it (`event_canonical_bytes` -> `Event::digest_payload`); the copy that
 //! drifted was in this crate's own test helpers, where
-//! `event_canonical_digest` kept `event_id` and `actor_kind` in the preimage and
+//! `event_canonical_digest` kept `event_id` in the preimage and
 //! stripped two slots that no longer exist on the envelope. Every digest it
 //! produced was therefore one the server could never reach, which makes a
 //! federation test assert against a value nothing computes.
@@ -12,12 +12,12 @@
 //! Removing `proofs` alone is deliberately not flagged: `EventBatchReceipt`,
 //! `PrincipalLocator`, range-completeness attestations and DID documents all
 //! legally strip their own `proofs` before signing, and none of them carries an
-//! `event_id` or `actor_kind` to drop.
+//! `event_id` to drop.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const HAND_ROLLED_EXCLUSIONS: &[&str] = &[r#"remove("event_id")"#, r#"remove("actor_kind")"#];
+const HAND_ROLLED_EXCLUSIONS: &[&str] = &[r#"remove("event_id")"#];
 
 fn rust_sources(root: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {

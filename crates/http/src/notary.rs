@@ -100,7 +100,6 @@ pub enum SigningLeaseSlotResolution {
     NotaryValueUnavailable,
     LocalSignerNotMember,
     ThresholdRequiresExternalCoordinator,
-    MixedRecoveryNotYetEligible { eligible_at_ms: i64 },
     MixedRecoveryRequiresExternalCoordinator,
 }
 
@@ -325,7 +324,7 @@ impl NotaryWorker {
                 .sealed_ops_for_cell(realm_id, &notary_cell)
                 .await?
         };
-        let Some((profile, envelope)) =
+        let Some((profile, _envelope)) =
             self.resolve_notary_value(state, realm_id, &notary_cell, &ops)?
         else {
             return Ok(SigningLeaseSlotResolution::NotaryValueUnavailable);
@@ -344,26 +343,7 @@ impl NotaryWorker {
             arkret_wire::notary::NotaryValue::Mixed {
                 recovery_signers, ..
             } if recovery_signers.contains(&local) => {
-                let recovery_window_ms = envelope
-                    .get("revocation_freshness_window_ms")
-                    .and_then(serde_json::Value::as_u64);
-                let eligible_at_ms = match recovery_window_ms {
-                    Some(window) => {
-                        self.frontier_recovery_eligible_at_ms(state, realm_id, window)
-                            .await?
-                    }
-                    None => None,
-                };
-                match eligible_at_ms {
-                    Some(eligible_at_ms)
-                        if eligible_at_ms > chrono::Utc::now().timestamp_millis() =>
-                    {
-                        Ok(SigningLeaseSlotResolution::MixedRecoveryNotYetEligible {
-                            eligible_at_ms,
-                        })
-                    }
-                    _ => Ok(SigningLeaseSlotResolution::MixedRecoveryRequiresExternalCoordinator),
-                }
+                Ok(SigningLeaseSlotResolution::MixedRecoveryRequiresExternalCoordinator)
             }
             arkret_wire::notary::NotaryValue::Threshold { .. } => {
                 Ok(SigningLeaseSlotResolution::ThresholdRequiresExternalCoordinator)
@@ -1607,8 +1587,8 @@ impl NotaryWorker {
         // forensic attribution, and recovery descriptors). Anything else — including
         // pre-standard alias spellings (`shape`/`k`/`n`/
         // `primary`/`threshold_dids`/...) — is fail-closed: not authorized.
-        // Envelope-only extras (`paused`, `revocation_freshness_window_ms`)
-        // ride alongside the notary in the cell object and are stripped
+        // The envelope-only `paused` flag rides alongside the notary in the
+        // cell object and is stripped
         // before the (now `deny_unknown_fields`) `NotaryValue` parse.
         let Ok(notary_value) =
             serde_json::from_value::<arkret_wire::notary::NotaryValue>(notary_value_wire(&value))
@@ -1694,35 +1674,6 @@ impl NotaryWorker {
                 .await?;
         }
         Ok(())
-    }
-
-    /// Earliest physical millisecond when a mixed recovery member could be
-    /// eligible. A missing frontier remains ineligible so the primary must
-    /// author the genesis Seal.
-    async fn frontier_recovery_eligible_at_ms(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-        staleness_ms: u64,
-    ) -> Result<Option<i64>, NotaryError> {
-        let leaves = state.projections().realm_seal_leaves(realm_id).await?;
-        let Some(leaf_id) = leaves.first() else {
-            return Ok(None);
-        };
-        let Some(seal) = state.projections().seal_by_id(leaf_id).await? else {
-            return Ok(None);
-        };
-        // The Seal.hlc carries a 12-hex physical-millis prefix per the
-        // HLC encoding. Reuse the same parser the replay-window checker
-        // uses to compare against now.
-        let signed_at = match crate::jws_verify::physical_millis_from_hlc(seal.hlc.as_str()) {
-            Some(ms) => ms,
-            None => return Ok(None),
-        };
-        let staleness_ms = i64::try_from(staleness_ms).unwrap_or(i64::MAX);
-        Ok(Some(
-            signed_at.saturating_add(staleness_ms).saturating_add(1),
-        ))
     }
 
     /// Read current effective state per cell from the cell_store, joining
@@ -2410,15 +2361,14 @@ fn effective_membership_join_digest(ops: &[IssuedOp]) -> Result<Option<Hash>, No
 /// The value never reaches the wire — `sign_pending_for_realm` overwrites
 /// `seal.notary_signature` with the real signature after deriving the
 /// canonical bytes and the id.
-/// Strip envelope-only extras (`paused`, `revocation_freshness_window_ms`)
-/// that ride alongside the `NotaryValue` profile in a notary cell object, so
+/// Strip the envelope-only `paused` flag that rides alongside the
+/// `NotaryValue` profile in a notary cell object, so
 /// the strict (`deny_unknown_fields`) `NotaryValue` parse accepts the profile.
 /// Non-object values pass through unchanged.
 fn notary_value_wire(value: &serde_json::Value) -> serde_json::Value {
     let mut value = value.clone();
     if let Some(object) = value.as_object_mut() {
         object.remove("paused");
-        object.remove("revocation_freshness_window_ms");
     }
     value
 }
@@ -2894,8 +2844,8 @@ mod tests {
 
     #[test]
     fn notary_cell_value_parses_authoritative_wire_only() {
-        // The authoritative `NotaryValue` form parses; envelope extras
-        // (`paused`, `revocation_freshness_window_ms`) ride alongside the
+        // The authoritative `NotaryValue` form parses; the `paused` envelope
+        // flag rides alongside the
         // value in the cell object and are stripped by `notary_value_wire`
         // before the strict (`deny_unknown_fields`) `NotaryValue` parse.
         let mut v = serde_json::to_value(arkret_wire::NotaryValue::Threshold {
@@ -2908,9 +2858,6 @@ mod tests {
             forensic_attribution: arkret_wire::ForensicAttribution::QuorumIntersection,
         })
         .unwrap();
-        v.as_object_mut()
-            .unwrap()
-            .insert("revocation_freshness_window_ms".to_owned(), json!(60000));
         v.as_object_mut()
             .unwrap()
             .insert("paused".to_owned(), json!(false));

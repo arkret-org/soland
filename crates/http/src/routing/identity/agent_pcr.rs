@@ -1350,7 +1350,7 @@ mod tests {
             ));
         }
         assert!(!agent_envelope_uses_root_anchor(
-            serde_json::json!({"refs": []}).as_object().unwrap()
+            serde_json::json!({}).as_object().unwrap()
         ));
     }
 

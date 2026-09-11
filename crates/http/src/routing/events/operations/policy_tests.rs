@@ -1932,7 +1932,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
 }
 
 #[tokio::test]
-async fn provenance_actor_kind_agent_unknown_action_fails_closed_before_context() {
+async fn signed_agent_provenance_unknown_action_fails_closed_before_context() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AXzeZ-Ew-5O_W5FC1b8TyxqwA3twPkBPtlQ6j3xWqBYN".to_owned(),
@@ -1945,7 +1945,7 @@ async fn provenance_actor_kind_agent_unknown_action_fails_closed_before_context(
         json!({
             "sender": "ak:did_core:web:alice.example",
             "provenance": {
-                "actor_kind": "agent"
+                "kind": "agent"
             },
             "relation_id": "ak:relation:AXDTq-UrA4iZU_0Xw6aOv4uWM8yGmnIpTstlVPn9zSLd",
             "relation_kind": "references",

@@ -40,14 +40,10 @@ fn notary_value_from_cell_reads_authoritative_single_signer_form() {
         serde_json::to_value(arkret_wire::NotaryValue::single_signer(signer.clone())).unwrap();
     v.as_object_mut()
         .unwrap()
-        .insert("revocation_freshness_window_ms".to_owned(), json!(60000));
-    v.as_object_mut()
-        .unwrap()
         .insert("paused".to_owned(), json!(false));
     let resp = notary_value_from_cell(Some(&v), &default_signer).unwrap();
     assert_eq!(resp.kind_label(), "single_signer");
     assert_eq!(resp.notary, arkret_wire::NotaryValue::single_signer(signer));
-    assert_eq!(resp.revocation_freshness_window_ms, Some(60000));
     assert!(!resp.paused);
     let j = serde_json::to_value(&resp).unwrap();
     assert_eq!(j["notary"]["kind"], "single_signer");
@@ -55,7 +51,6 @@ fn notary_value_from_cell_reads_authoritative_single_signer_form() {
         j["notary"]["signer"]["actor_id"],
         json!({"kind": "service", "service_id": "ak:did_core:web:alice.example"})
     );
-    assert_eq!(j["revocation_freshness_window_ms"], 60000);
 }
 
 #[test]

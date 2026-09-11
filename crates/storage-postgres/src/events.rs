@@ -370,9 +370,8 @@ async fn settled_collision_verdict(
 /// Two column meanings decide the statements below:
 ///
 /// * `canonical_bytes` is the **digest preimage**, which by definition excludes `proofs`,
-///   `unsigned`, `actor_kind` and `event_id`. A verdict carries exactly that, so it replaces the
-///   column verbatim.
-/// * `envelope` is the full wire Event, so it is rebuilt as the winner preimage plus those four
+///   `unsigned` and `event_id`. A verdict carries exactly that, so it replaces the column verbatim.
+/// * `envelope` is the full wire Event, so it is rebuilt as the winner preimage plus those three
 ///   members taken from the row already here. That is not a shortcut: both variants compute the
 ///   same `event_digest`, so the proofs this Station already verified for this identity hold over
 ///   the winner's bytes unchanged, and re-deriving them from the loser is precisely what must not
@@ -424,7 +423,7 @@ pub(crate) async fn admit_collision_winner(
     .map_err(PersistenceError::database)?;
 
     sql_query(
-        "UPDATE canonical_events SET            canonical_bytes = $3,            envelope = convert_from($3, 'UTF8')::jsonb || (              SELECT COALESCE(jsonb_object_agg(member.key, member.value), '{}'::jsonb)              FROM jsonb_each(canonical_events.envelope) AS member              WHERE member.key IN ('proofs', 'unsigned', 'actor_kind', 'event_id')            ),            received_at = $4,            state = 'accepted'          WHERE id = $1 AND realm_id = $2 AND canonical_bytes <> $3",
+        "UPDATE canonical_events SET            canonical_bytes = $3,            envelope = convert_from($3, 'UTF8')::jsonb || (              SELECT COALESCE(jsonb_object_agg(member.key, member.value), '{}'::jsonb)              FROM jsonb_each(canonical_events.envelope) AS member              WHERE member.key IN ('proofs', 'unsigned', 'event_id')            ),            received_at = $4,            state = 'accepted'          WHERE id = $1 AND realm_id = $2 AND canonical_bytes <> $3",
     )
     .bind::<Binary, _>(collision_event_id)
     .bind::<Text, _>(realm_id)

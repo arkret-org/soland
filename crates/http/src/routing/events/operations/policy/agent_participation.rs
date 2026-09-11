@@ -486,13 +486,9 @@ pub(super) fn operation_provenance_marks_agent(operation: &Operation) -> bool {
         return false;
     };
     provenance
-        .get("actor_kind")
+        .get("kind")
         .and_then(Value::as_str)
         .is_some_and(|value| value == "agent")
-        || provenance
-            .get("kind")
-            .and_then(Value::as_str)
-            .is_some_and(|value| value == "agent")
         || operation_provenance_agent_id(operation).is_some()
 }
 

@@ -2042,7 +2042,7 @@ async fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
 }
 
 #[tokio::test]
-async fn data_event_revocation_successor_within_window_is_accepted() {
+async fn current_revocation_blocks_a_new_data_event_admission() {
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
     let seal_ref =
@@ -2051,7 +2051,7 @@ async fn data_event_revocation_successor_within_window_is_accepted() {
         .await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    validate_data_event_capability_refs(
+    let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
         DATA_EVENT_STATION,
@@ -2062,11 +2062,12 @@ async fn data_event_revocation_successor_within_window_is_accepted() {
         false,
     )
     .await
-    .expect("a linear revocation inside the freshness window must remain accepted");
+    .unwrap_err();
+    assert_eq!(err.code, "capability_denied");
 }
 
 #[tokio::test]
-async fn data_event_revocation_successor_at_window_boundary_is_accepted() {
+async fn current_revocation_blocks_admission_regardless_of_seal_distance() {
     let state = make_state(true);
     let grant_id = "ak:grant:Adtfh7VczxqGjGKRiDCJlBwIw-G-GAX-uATlzwwXLQcQ";
     let seal_ref =
@@ -2075,30 +2076,6 @@ async fn data_event_revocation_successor_at_window_boundary_is_accepted() {
         .await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    validate_data_event_capability_refs(
-        &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
-        "ak.message.create",
-        &object,
-        &data_event_derived_cells(),
-        false,
-    )
-    .await
-    .expect("a revocation exactly at the freshness-window boundary must remain accepted");
-}
-
-#[tokio::test]
-async fn data_event_revocation_successor_outside_window_is_excluded() {
-    let state = make_state(true);
-    let grant_id = "ak:grant:AXpDvFT5Ig3ReD8ssTjbXBgzMXgcnSVx4liP7nvihgRe";
-    let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 25)
-        .await;
-    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
-
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
@@ -2111,31 +2088,7 @@ async fn data_event_revocation_successor_outside_window_is_excluded() {
     )
     .await
     .unwrap_err();
-    assert_eq!(err.code, "seal_ref_stale");
-}
-
-#[tokio::test]
-async fn high_risk_data_event_revocation_has_no_grace_window() {
-    let state = make_state(true);
-    let grant_id = "ak:grant:AbcriCdScRg5DEU1Lki7mHfAdOK609vnq1PWuZBQR-mS";
-    let action = "ak.message.mention.broadcast";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, action, false).await;
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, action, 1).await;
-    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
-
-    let err = validate_data_event_capability_refs(
-        &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
-        "ak.message.create",
-        &object,
-        &data_event_derived_cells(),
-        false,
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(err.code, "seal_ref_stale");
+    assert_eq!(err.code, "capability_denied");
 }
 
 /// Attach a fixed issuer to a strictness fixture op; these cells are not

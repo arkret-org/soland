@@ -19,14 +19,13 @@ pub(super) fn notary_value_from_cell(
     let Some(value) = value else {
         return Ok(admin_notary_value_from_sdk(
             SdkNotaryValue::single_signer(default_signer.clone()),
-            None,
+            false,
         ));
     };
 
     let mut profile = value.clone();
     if let Some(object) = profile.as_object_mut() {
         object.remove("paused");
-        object.remove("revocation_freshness_window_ms");
     }
     let parsed: SdkNotaryValue = serde_json::from_value(profile).map_err(|e| {
         app_error!(
@@ -40,24 +39,18 @@ pub(super) fn notary_value_from_cell(
             "notary cell contains an invalid frozen signer descriptor: {error}"
         )
     })?;
-    Ok(admin_notary_value_from_sdk(parsed, Some(value)))
+    Ok(admin_notary_value_from_sdk(
+        parsed,
+        value
+            .get("paused")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    ))
 }
 
-fn admin_notary_value_from_sdk(
-    value: SdkNotaryValue,
-    envelope: Option<&Value>,
-) -> AdminNotaryValue {
-    let revocation_freshness_window_ms = envelope.and_then(|value| {
-        value
-            .get("revocation_freshness_window_ms")
-            .and_then(Value::as_u64)
-    });
-    let paused = envelope
-        .and_then(|value| value.get("paused").and_then(Value::as_bool))
-        .unwrap_or(false);
+fn admin_notary_value_from_sdk(value: SdkNotaryValue, paused: bool) -> AdminNotaryValue {
     AdminNotaryValue {
         notary: value,
-        revocation_freshness_window_ms,
         paused,
     }
 }

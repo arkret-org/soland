@@ -548,8 +548,10 @@ pub(super) fn validate_organization_moderation_policy_authority(
     let payload = operation
         .typed_payload::<arkret_wire::event_spec::OrganizationModerationPolicy>()
         .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
-    if !matches!(operation.context.sender, arkret_wire::ActorId::Service { .. })
-        || operation.context.sender.signing_principal_id() != &payload.organization_id
+    if !matches!(
+        operation.context.sender,
+        arkret_wire::ActorId::Service { .. }
+    ) || operation.context.sender.signing_principal_id() != &payload.organization_id
     {
         return Err("organization_policy_author_mismatch");
     }

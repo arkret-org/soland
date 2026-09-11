@@ -2548,9 +2548,7 @@ pub(in crate::routing) async fn verify_federated_event_admission(
     else {
         return Err("accepted Event proof set is not closed".to_owned());
     };
-    if event.actor_kind == Some(arkret_wire::EnvelopeActorKind::Agent)
-        && admission.producer_signer_resolution_evidence_ref.is_none()
-    {
+    if event.executed_by.is_some() && admission.producer_signer_resolution_evidence_ref.is_none() {
         return Err("Agent admission omitted its frozen producer signer evidence".to_owned());
     }
     let producer_multibase = admission

@@ -476,9 +476,6 @@ async fn run_pending_realm_pass(
         Ok(SigningLeaseSlotResolution::ThresholdRequiresExternalCoordinator) => {
             return ControlSealAttemptOutcome::ThresholdRequiresExternalCoordinator;
         }
-        Ok(SigningLeaseSlotResolution::MixedRecoveryNotYetEligible { eligible_at_ms }) => {
-            return ControlSealAttemptOutcome::MixedRecoveryNotYetEligible { eligible_at_ms };
-        }
         Ok(SigningLeaseSlotResolution::MixedRecoveryRequiresExternalCoordinator) => {
             return ControlSealAttemptOutcome::MixedRecoveryRequiresExternalCoordinator;
         }

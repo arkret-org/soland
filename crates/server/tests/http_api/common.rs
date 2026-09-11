@@ -1189,7 +1189,7 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
     // The digest the server computes is sha256 over the SDK Event digest
     // preimage (`event_canonical_bytes` -> `Event::digest_payload`), so this
     // helper calls the same SDK function rather than restating the exclusion
-    // rule. Its previous hand-rolled copy kept `event_id` and `actor_kind` in
+    // rule. Its previous hand-rolled copy kept `event_id` in
     // the preimage and stripped two slots (`canonical_digest`,
     // `canonical_hash`) that no longer exist on the envelope, which made every
     // digest it produced unreachable for the server.

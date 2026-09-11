@@ -2,7 +2,7 @@
 //!
 //! Endpoints:
 //! - `GET  /_soland/admin/realms/{realm_id}/notary` — typed notary cell value (`{kind, notary:
-//!   NotaryValue, revocation_freshness_window_ms?, paused}`).
+//!   NotaryValue, paused}`).
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
 //! - `GET  /_soland/admin/bottom` — global cross-Realm list.

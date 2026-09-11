@@ -418,22 +418,6 @@ async fn validate_event_envelope_with_ingress(
         ));
     }
 
-    // REDU-7 / AKP-0008 / AKP-0009 (R3 spec-sync 2026-05-27,
-    // arkret-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
-    // reject any client-supplied value with the spec-canonical
-    // `actor_kind_reducer_managed` reason code. The reducer derives the
-    // canonical `EnvelopeActorKind` (user/organization/team/agent/bot/
-    // service/integration) from the Actor Profile after bearer-session
-    // derivation lands. Device and Ghost are not actor kinds.
-    // TODO(P2-impl): once the deep reducer pipeline runs here, stamp the
-    // canonical `EnvelopeActorKind` onto the persisted projection envelope.
-    if object.get("actor_kind").is_some() {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            arkret_wire::ReasonCode::ACTOR_KIND_REDUCER_MANAGED,
-            "envelope.actor_kind is reducer-managed; clients MUST NOT supply it",
-        ));
-    }
     // AKP-0008 / AKP-0009 — when `executed_by` is present the reducer MUST
     // verify the DID resolved from `proof.verification_method` matches
     // `executed_by` (signs-as-X-on-behalf-of-Y attribution proof). This
@@ -842,16 +826,31 @@ async fn validate_event_envelope_with_ingress(
     let realm_authority_root_authorized = event_string_field(object, &["authorization_ref"])
         .as_deref()
         == Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL);
-    realm_authority_root::validate_realm_authority_root_authorization(
-        state,
-        object,
-        &kind,
-        realm_id.as_str(),
-        &actor,
-        bootstrap_unit_member,
-        realm_bootstrap_contexts,
-    )
-    .await?;
+    let has_station_admission =
+        object
+            .get("proofs")
+            .and_then(Value::as_array)
+            .is_some_and(|proofs| {
+                proofs.iter().any(|proof| {
+                    proof.get("kind").and_then(Value::as_str) == Some("station_admission")
+                })
+            });
+    // A caller candidate is authorized against the origin's current control
+    // state. An already admitted Event is immutable history: receivers verify
+    // its frozen station_admission proof later in the submit pipeline and MUST
+    // NOT re-evaluate it against a later capability or lifecycle state.
+    if !has_station_admission {
+        realm_authority_root::validate_realm_authority_root_authorization(
+            state,
+            object,
+            &kind,
+            realm_id.as_str(),
+            &actor,
+            bootstrap_unit_member,
+            realm_bootstrap_contexts,
+        )
+        .await?;
+    }
     let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;
     // The MIMI facade is the sole closed service-authored message adapter. Its
     // exact current room-binding ref, provider attestation, attributed sender
@@ -860,8 +859,9 @@ async fn validate_event_envelope_with_ingress(
     // capability grant, so that closed authority tuple substitutes only for
     // the ordinary data-event capability lookup; every other validation and
     // reducer step remains shared with native Event submission.
-    if !internal_admission
-        .is_some_and(|admission| admission.authorizes_mimi_facade_write(session, object))
+    if !has_station_admission
+        && !internal_admission
+            .is_some_and(|admission| admission.authorizes_mimi_facade_write(session, object))
     {
         validate_data_event_capability_refs(
             state,

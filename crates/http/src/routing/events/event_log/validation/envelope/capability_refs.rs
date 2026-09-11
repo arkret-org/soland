@@ -424,12 +424,11 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             used_grant_ids.insert(covering_grant.grant_id.clone());
         }
     }
-    validate_data_event_revocation_freshness(
+    validate_current_data_event_admission(
         state,
         &realm,
-        &seal_id,
-        kind,
-        &state_at_ref,
+        realm_id,
+        &capability_subject,
         &used_grant_ids,
     )
     .await
@@ -437,8 +436,8 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
 
 /// `refs[]` entries carrying `role=authorized_by`.
 ///
-/// `refs[]` is a required envelope member whose items are `SemanticRef`
-/// objects; a malformed entry is a schema violation rather than a silently
+/// `refs[]` is optional; when present, it is a non-empty array of `SemanticRef`
+/// objects. A malformed entry is a schema violation rather than a silently
 /// skipped ref.
 fn data_event_authorized_by_refs(
     object: &serde_json::Map<String, Value>,
@@ -479,186 +478,68 @@ fn data_event_authorized_by_refs(
     Ok(authorized_by)
 }
 
-async fn validate_data_event_revocation_freshness(
+/// Re-check every capability actually used by this candidate against the
+/// origin's current authoritative control view. This is an admission-time
+/// fence only: accepted/federated Events carry `station_admission` and never
+/// re-enter this gate, so a later revocation blocks new admissions without
+/// invalidating history.
+async fn validate_current_data_event_admission(
     state: &AppState,
     realm: &RealmId,
-    seal_ref: &arkret_identifiers::SealId,
-    kind: &str,
-    state_at_ref: &std::collections::BTreeMap<
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::CellState,
-    >,
+    realm_id: &str,
+    capability_subject: &arkret_wire::ActorId,
     used_grant_ids: &std::collections::BTreeSet<String>,
 ) -> Result<(), EventValidationError> {
     if used_grant_ids.is_empty() {
         return Ok(());
     }
-    let base_seal = state
-        .projections()
-        .seal_by_id(seal_ref)
-        .await
-        .map_err(|error| stale_seal_ref_error(format!("seal_ref lookup failed: {error}")))?
-        .ok_or_else(|| stale_seal_ref_error("seal_ref is not projected"))?;
-    let configured_window = realm_revocation_freshness_window_ms(state_at_ref);
-    let effective_window =
-        if data_event_authorization_is_high_risk(state_at_ref, used_grant_ids, kind) {
-            0
-        } else {
-            configured_window
-        };
-
-    let mut queue = std::collections::VecDeque::from([seal_ref.clone()]);
-    let mut visited = std::collections::BTreeSet::new();
-    let mut first_revocation: Option<chrono::DateTime<chrono::Utc>> = None;
-    while let Some(current) = queue.pop_front() {
-        if !visited.insert(current.clone()) {
-            continue;
-        }
-        for successor in state
-            .projections()
-            .seal_successors(realm, &current)
-            .await
-            .map_err(|error| {
-                stale_seal_ref_error(format!("Seal successor lookup failed: {error}"))
-            })?
-        {
-            if visited.contains(&successor) {
-                continue;
-            }
-            let successor_seal = state
-                .projections()
-                .seal_by_id(&successor)
-                .await
-                .map_err(|error| {
-                    stale_seal_ref_error(format!("successor Seal lookup failed: {error}"))
-                })?
-                .ok_or_else(|| stale_seal_ref_error("successor Seal is not projected"))?;
-            let successor_state = state
-                .projections()
-                .effective_state_at(std::slice::from_ref(&successor), realm)
-                .await
-                .map_err(|error| {
-                    stale_seal_ref_error(format!(
-                        "successor control view could not be resolved: {error}"
-                    ))
-                })?;
-            if used_grant_ids.iter().any(|grant_id| {
-                grant_invalid_in_state(&successor_state, grant_id, successor_seal.sealed_at)
-            }) {
-                first_revocation = Some(
-                    first_revocation.map_or(successor_seal.sealed_at, |current| {
-                        current.min(successor_seal.sealed_at)
-                    }),
-                );
-            } else {
-                queue.push_back(successor);
-            }
-        }
-    }
-
-    if let Some(revoked_at) = first_revocation {
-        let distance = revoked_at.signed_duration_since(base_seal.sealed_at);
-        if distance < chrono::Duration::zero() {
-            return Err(stale_seal_ref_error(
-                "revocation successor predates seal_ref signed time",
-            ));
-        }
-        let distance_ms = u64::try_from(distance.num_milliseconds()).unwrap_or(u64::MAX);
-        if distance_ms > effective_window || effective_window == 0 {
-            return Err(stale_seal_ref_error(format!(
-                "authorization was revoked {distance_ms}ms after seal_ref (window {effective_window}ms)"
-            )));
-        }
-        return Ok(());
-    }
-
-    // A revoked joined view without a descendant revocation means the revoke
-    // arrived on a concurrent branch. Such a branch has no linear distance and
-    // receives no grace window.
     let leaves = state
         .projections()
         .realm_seal_leaves(realm)
         .await
-        .map_err(|error| stale_seal_ref_error(format!("joined leaves unavailable: {error}")))?;
-    if !leaves.is_empty() {
-        let joined = state
-            .projections()
-            .effective_state_at(&leaves, realm)
-            .await
-            .map_err(|error| {
-                stale_seal_ref_error(format!("joined control view unavailable: {error}"))
-            })?;
-        if used_grant_ids
-            .iter()
-            .any(|grant_id| grant_invalid_in_state(&joined, grant_id, base_seal.sealed_at))
-        {
-            return Err(stale_seal_ref_error(
-                "authorization is revoked in a concurrent joined control view",
-            ));
-        }
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "capability_denied",
+                format!("current admission frontier is unavailable: {error}"),
+            )
+        })?;
+    if leaves.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            "capability_denied",
+            "current admission frontier is unavailable",
+        ));
+    }
+    let current_state = state
+        .projections()
+        .effective_state_at(&leaves, realm)
+        .await
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "capability_denied",
+                format!("current admission control view is unavailable: {error}"),
+            )
+        })?;
+    let current_grants = data_event_grants_from_state_at_ref(&current_state);
+    let effective = effective_historical_grants_for_subject(
+        &current_grants,
+        capability_subject,
+        realm_id,
+        chrono::Utc::now(),
+    );
+    if let Some(inactive) = used_grant_ids
+        .iter()
+        .find(|grant_id| !effective.contains_key(grant_id.as_str()))
+    {
+        return Err(event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            "capability_denied",
+            format!("capability {inactive} is not active at origin admission"),
+        ));
     }
     Ok(())
-}
-
-fn grant_invalid_in_state(
-    state: &std::collections::BTreeMap<
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::CellState,
-    >,
-    grant_id: &str,
-    sealed_at: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    let grants = data_event_grants_from_state_at_ref(state);
-    let Some(grant) = grants.get(grant_id) else {
-        return true;
-    };
-    let snapshot = grants.values().cloned().collect::<Vec<_>>();
-    grant.revoked || crate::authz::grant_revoked_upstream(&snapshot, grant_id, sealed_at)
-}
-
-fn realm_revocation_freshness_window_ms(
-    state: &std::collections::BTreeMap<
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::CellState,
-    >,
-) -> u64 {
-    state
-        .values()
-        .filter_map(|cell| match cell {
-            arkret_state::lattice::CellState::Value(value) => value
-                .get("revocation_freshness_window_ms")
-                .and_then(Value::as_u64),
-            arkret_state::lattice::CellState::Bottom(_) => None,
-        })
-        .next()
-        .unwrap_or(86_400_000)
-}
-
-fn data_event_authorization_is_high_risk(
-    state: &std::collections::BTreeMap<
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::CellState,
-    >,
-    used_grant_ids: &std::collections::BTreeSet<String>,
-    kind: &str,
-) -> bool {
-    let grants = data_event_grants_from_state_at_ref(state);
-    used_grant_ids.iter().any(|grant_id| {
-        grants.get(grant_id).is_none_or(|grant| {
-            grant.actions.iter().any(|action| {
-                arkret_schema::capability_action(action)
-                    .map(|descriptor| {
-                        descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High
-                    })
-                    .unwrap_or(true)
-            })
-        })
-    }) || arkret_schema::capability_action(kind)
-        .is_some_and(|descriptor| descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High)
-}
-
-fn stale_seal_ref_error(message: impl Into<String>) -> EventValidationError {
-    event_validation_error(StatusCode::PRECONDITION_FAILED, "seal_ref_stale", message)
 }
 
 pub(super) async fn data_event_state_at_seal_ref(

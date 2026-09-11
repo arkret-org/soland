@@ -2689,7 +2689,6 @@ mod invite_locator_security_tests {
             "actor_seq": 0,
             "created_at": "2026-08-21T00:00:00.000Z",
             "prev_refs": [],
-            "refs": [],
             "payload": {
                 "invitee_account_id": {"principal_id": PRODUCTION_HOLDER, "station_id": state.service_id()},
                 "introduction_evidence_digest": canonical::canonical_sha256(&IntroductionEvidence::ExplicitAddress).unwrap(),

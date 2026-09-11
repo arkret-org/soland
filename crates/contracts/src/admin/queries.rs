@@ -139,8 +139,8 @@ pub struct AdminAuditEntry {
     pub operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
-    /// Action-specific structured detail (AKP-0008 `executed_by` /
-    /// `authorization_ref` / `actor_kind` live here when present).
+    /// Action-specific structured detail (AKP-0008 `executed_by` and
+    /// `authorization_ref` live here when present).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
     #[serde(

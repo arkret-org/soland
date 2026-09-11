@@ -2266,6 +2266,21 @@ mod tests {
             )
             .to_string()
         };
+        let mut envelope = serde_json::json!({
+            "prev_refs": prev_refs.iter().map(|value| event_id(*value)).collect::<Vec<_>>(),
+            "payload": payload,
+        });
+        if !causal_refs.is_empty() {
+            envelope.as_object_mut().unwrap().insert(
+                "causal_refs".to_owned(),
+                serde_json::json!(
+                    causal_refs
+                        .iter()
+                        .map(|value| format!("sha256:{value:064x}"))
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
         AcceptedEvent {
             event_id: event_id(suffix),
             actor_id: "ak:did_core:webvh:z6mkalice".to_owned(),
@@ -2276,15 +2291,7 @@ mod tests {
             digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest: format!("sha256:{digest_suffix:064x}"),
             canonical_bytes: Vec::new(),
-            envelope: serde_json::json!({
-                "prev_refs": prev_refs.iter().map(|value| event_id(*value)).collect::<Vec<_>>(),
-                "causal_refs": causal_refs
-                    .iter()
-                    .map(|value| format!("sha256:{value:064x}"))
-                    .collect::<Vec<_>>(),
-                "refs": [],
-                "payload": payload,
-            }),
+            envelope,
             received_at: Utc::now(),
         }
     }
