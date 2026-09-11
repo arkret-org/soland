@@ -7,6 +7,9 @@ use parking_lot::Mutex;
 const PEER_KEYPACKAGE_CLAIM_WINDOW: Duration = Duration::seconds(60);
 const PEER_KEYPACKAGE_CLAIM_MAX_PER_WINDOW: u32 = 5;
 const PEER_KEYPACKAGE_CLAIM_TRACKER_MAX_ENTRIES: usize = 16_384;
+const REALM_JOIN_BOOTSTRAP_WINDOW: Duration = Duration::seconds(60);
+const REALM_JOIN_BOOTSTRAP_MAX_PER_WINDOW: u32 = 10;
+const REALM_JOIN_BOOTSTRAP_TRACKER_MAX_ENTRIES: usize = 16_384;
 const KEY_BACKUP_DOWNLOAD_WINDOW: Duration = Duration::hours(24);
 const KEY_BACKUP_DOWNLOAD_TRACKER_MAX_ENTRIES: usize = 16_384;
 pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT: u32 = 64;
@@ -44,6 +47,7 @@ pub struct RuntimeGuardService {
 
 struct RuntimeGuards {
     peer_keypackage_claims: Mutex<BTreeMap<(String, String), WindowRecord>>,
+    realm_join_bootstraps: Mutex<BTreeMap<(String, String), WindowRecord>>,
     key_backup_downloads: Mutex<BTreeMap<String, WindowRecord>>,
     moderation_reports: Mutex<BTreeMap<String, WindowRecord>>,
 }
@@ -60,6 +64,7 @@ impl Default for RuntimeGuardService {
         Self {
             inner: Arc::new(RuntimeGuards {
                 peer_keypackage_claims: Mutex::new(BTreeMap::new()),
+                realm_join_bootstraps: Mutex::new(BTreeMap::new()),
                 key_backup_downloads: Mutex::new(BTreeMap::new()),
                 moderation_reports: Mutex::new(BTreeMap::new()),
             }),
@@ -84,6 +89,24 @@ impl RuntimeGuardService {
             PEER_KEYPACKAGE_CLAIM_WINDOW,
             PEER_KEYPACKAGE_CLAIM_TRACKER_MAX_ENTRIES,
         ) > PEER_KEYPACKAGE_CLAIM_MAX_PER_WINDOW
+    }
+
+    pub fn realm_join_bootstrap_rate_limited(
+        &self,
+        realm_id: &str,
+        applicant_account_id: &str,
+    ) -> bool {
+        let mut records = self.inner.realm_join_bootstraps.lock();
+        let now = Utc::now();
+        prune_window_records(&mut records, now - REALM_JOIN_BOOTSTRAP_WINDOW);
+        let key = (realm_id.to_owned(), applicant_account_id.to_owned());
+        record_window_attempt(
+            &mut records,
+            key,
+            now,
+            REALM_JOIN_BOOTSTRAP_WINDOW,
+            REALM_JOIN_BOOTSTRAP_TRACKER_MAX_ENTRIES,
+        ) > REALM_JOIN_BOOTSTRAP_MAX_PER_WINDOW
     }
 
     pub fn record_key_backup_download(
@@ -278,5 +301,16 @@ mod tests {
                 .record_key_backup_download("did:web:bob.example", 4)
                 .rate_limited
         );
+    }
+
+    #[test]
+    fn realm_join_bootstrap_quota_is_scoped_per_realm_and_applicant() {
+        let service = RuntimeGuardService::default();
+        for _ in 0..10 {
+            assert!(!service.realm_join_bootstrap_rate_limited("realm-a", "alice@station-a"));
+        }
+        assert!(service.realm_join_bootstrap_rate_limited("realm-a", "alice@station-a"));
+        assert!(!service.realm_join_bootstrap_rate_limited("realm-b", "alice@station-a"));
+        assert!(!service.realm_join_bootstrap_rate_limited("realm-a", "bob@station-a"));
     }
 }

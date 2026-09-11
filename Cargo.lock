@@ -5949,6 +5949,7 @@ dependencies = [
  "arkret-identifiers",
  "arkret-identity",
  "arkret-keystore",
+ "arkret-lattice-registry",
  "arkret-mls",
  "arkret-models-collaboration",
  "arkret-models-crypto",

@@ -1892,6 +1892,15 @@ impl AppState {
             .peer_keypackage_claim_rate_limited(source_id, target_identity_key)
     }
 
+    pub fn realm_join_bootstrap_rate_limited(
+        &self,
+        realm_id: &str,
+        applicant_account_id: &str,
+    ) -> bool {
+        self.runtime_guards
+            .realm_join_bootstrap_rate_limited(realm_id, applicant_account_id)
+    }
+
     /// Spec `identity/key-management.md` §7.8 — record a full-ciphertext
     /// key-backup download for `principal_id` and report whether the rolling
     /// 24h quota ([`KEY_BACKUP_DOWNLOAD_WINDOW`]) is exhausted. Once

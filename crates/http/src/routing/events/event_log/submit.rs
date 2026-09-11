@@ -4000,7 +4000,7 @@ mod device_gate;
 mod duplicate;
 mod ingress_receipt;
 mod outcome;
-mod post_commit;
+pub(super) mod post_commit;
 mod preflight;
 mod projection_preflight;
 mod value;

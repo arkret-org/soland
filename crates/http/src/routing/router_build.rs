@@ -379,6 +379,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(identity::current_signer_evidence::peer_router())
                 .push(identity::peer_keys_router())
                 .push(federation::erasure_receipts::router())
+                .push(realm_join::peer_router())
                 .push(governance_history::peer_router())
                 .push(mls::peer_router()),
         )
