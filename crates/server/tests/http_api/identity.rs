@@ -8,6 +8,191 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
+async fn seed_current_principal_genesis(
+    state: &AppState,
+    principal_did: &str,
+) -> (arkret_wire::AccountId, RealmId) {
+    use arkret_wire::{ActorId, EventKind, Hash};
+    use soland_storage::{CanonicalEventRecord, IdentityAnchorAccountSlot};
+
+    let principal_did = Did::new(principal_did.to_owned()).unwrap();
+    let account = arkret_wire::AccountId::new(
+        arkret_wire::project_did_to_core_id(&principal_did).unwrap(),
+        state.service_core_id(),
+    );
+    let time = chrono::DateTime::parse_from_rfc3339("2026-09-10T00:00:00.000Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let create = arkret_wire::test_support::raw_event_for_actor_at(
+        EventKind::RealmCreate.as_str(),
+        arkret_wire::ScopeRef::RealmGenesis,
+        ActorId::account(account.clone()),
+        1,
+        "000000000001-0000-00000000".parse().unwrap(),
+        serde_json::json!({"object":{"purpose":"principal_control","initial_resolution":{"did":principal_did,"method_history_head":"accepted-head","version_id":"1"}}}),
+        time,
+    )
+    .unwrap();
+    let mut authorize = arkret_wire::test_support::raw_event_for_actor_at(
+        EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: create.realm_id.clone(),
+        },
+        ActorId::account(account.clone()),
+        2,
+        "000000000002-0000-00000000".parse().unwrap(),
+        serde_json::json!({"authorization_binding_kind":"registration_anchor"}),
+        time,
+    )
+    .unwrap();
+    authorize.prev_refs = vec![create.event_id.clone()];
+    authorize.event_id = authorize
+        .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let realm_id = create.realm_id.clone();
+    let slot = IdentityAnchorAccountSlot {
+        account_authority_id: account.station_id.to_string(),
+        account_subject: "alice".to_owned(),
+        account_id: account.clone(),
+        realm_id: realm_id.to_string(),
+        create_event_id: create.event_id.to_string(),
+    };
+    let records = [create, authorize]
+        .into_iter()
+        .map(|event| CanonicalEventRecord {
+            event_id: event.event_id.to_string(),
+            actor_id: event.actor_id.canonical_key().unwrap(),
+            actor_seq: event.actor_seq,
+            realm_id: Some(event.realm_id.to_string()),
+            kind: event.kind.as_str().to_owned(),
+            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(
+                &event.digest_payload().unwrap(),
+            )
+            .unwrap(),
+            envelope: serde_json::to_value(event).unwrap(),
+            received_at: time,
+        })
+        .collect::<Vec<_>>();
+    let acks = records
+        .iter()
+        .map(|record| {
+            let mut member = arkret_wire::ControlProposalAuthorityAck {
+                realm_id: realm_id.clone(),
+                proposal_digest: record.canonical_digest.parse().unwrap(),
+                received_at: time,
+                decision_due_at: time + chrono::Duration::seconds(30),
+                absolute_due_at: time + chrono::Duration::seconds(90),
+                authority_set_ref: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+                signature: arkret_wire::PayloadSignature {
+                    verification_method: state.service_verification_method("notary-key").unwrap(),
+                    payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+                    created_at: time,
+                    jws: "e30..c2ln".to_owned(),
+                },
+            };
+            member.signature.payload_digest = member.authority_ack_digest().unwrap();
+            arkret_wire::ControlProposalAck {
+                kind: arkret_wire::ControlProposalAckKind::SignedAck,
+                realm_id: member.realm_id.clone(),
+                proposal_digest: member.proposal_digest.clone(),
+                received_at: time,
+                decision_due_at: member.decision_due_at,
+                absolute_due_at: member.absolute_due_at,
+                defer_count: 0,
+                authority_set_ref: member.authority_set_ref.clone(),
+                authority_acks: vec![member],
+            }
+        })
+        .collect();
+    state
+        .test_persistence()
+        .events()
+        .put_identity_anchor_batch_atomic(
+            records,
+            acks,
+            vec![],
+            None,
+            None,
+            Some(slot),
+            None,
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .unwrap();
+    (account, realm_id)
+}
+
+async fn seed_current_principal_session(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+    database_url: &str,
+) -> String {
+    let token = "current-principal-authenticated-session";
+    let now = chrono::Utc::now();
+    let account_pk = state
+        .test_persistence()
+        .accounts()
+        .put(&soland_storage::AccountRecord {
+            pk: soland_storage::AccountPk(0),
+            principal_id: account_id.principal_id.clone(),
+            station_id: account_id.station_id.clone(),
+            localpart: "alice-current-principal".to_owned(),
+            display_name: Some("Alice".to_owned()),
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(state.service_id().as_bytes());
+    hasher.update(b":");
+    hasher.update(token.as_bytes());
+    state
+        .test_persistence()
+        .sessions()
+        .put(&soland_storage::SessionRecord {
+            token_hash: format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize())),
+            account_pk,
+            actor: account_id.principal_id.to_string(),
+            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: now + chrono::Duration::minutes(5),
+            created_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    let (client, connection) = tokio_postgres::connect(database_url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move { connection.await.unwrap() });
+    client
+        .execute(
+            "INSERT INTO device_inventory_station(station_id) VALUES($1) ON CONFLICT DO NOTHING",
+            &[&account_id.station_id.as_str()],
+        )
+        .await
+        .unwrap();
+    client
+        .execute(
+            "INSERT INTO devices(station_id,id,actor_id,device_id,verification_state,payload) VALUES($1,'01904100-0000-7000-8000-a11ce0000001',$2,'ak:device:01904100-0000-7000-8000-a11ce0000001','verified','{}')",
+            &[&account_id.station_id.as_str(), &account_id.principal_id.as_str()],
+        )
+        .await
+        .unwrap();
+    token.to_owned()
+}
+
 #[test]
 fn current_principal_blinds_other_accounts_and_requires_closed_authenticated_request() {
     run_on_deep_stack(
@@ -17,17 +202,53 @@ fn current_principal_blinds_other_accounts_and_requires_closed_authenticated_req
 }
 
 async fn current_principal_request_body() {
-    let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
+    let database = soland_storage_postgres::TestDatabase::lease().await;
+    let state = app_state_for_postgres(test_config(), database.db());
+    let (account_id, realm_id) =
+        seed_current_principal_genesis(&state, "did:web:alice.example").await;
+    let token = seed_current_principal_session(&state, &account_id, database.url()).await;
     let app = app_from_state(state.clone());
-    let body = serde_json::json!({"request_id":"ak:request:01904100-0000-7000-8000-000000000001",
-        "account_id":{"principal_id":fixture_actor_core_id("did:web:alice.example"),"station_id":fixture_actor_core_id("did:web:wrong-server.example")}});
+    let body = serde_json::json!({
+        "request_id":"ak:request:01904100-0000-7000-8000-000000000001",
+        "account_id": account_id.clone()
+    });
     let response = TestClient::post("http://server/_arkret/self/account/current-principal")
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&body))
         .send(&app)
         .await;
     assert_eq!(response.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let mut response = TestClient::post("http://server/_arkret/self/account/current-principal")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&body))
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let outcome: Value = response.take_json().await.unwrap();
+    let keys = outcome
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        keys,
+        std::collections::BTreeSet::from([
+            "account_id",
+            "principal_control_realm_id",
+            "request_id",
+            "resolution_projection"
+        ])
+    );
+    assert_eq!(outcome["principal_control_realm_id"], realm_id.as_str());
+    assert!(
+        outcome["resolution_projection"]["resolution_event_ref"]
+            .as_str()
+            .is_some_and(|event_id| event_id.starts_with("ak:event:"))
+    );
+
     for (principal, station) in [
         (
             fixture_actor_core_id("did:web:alice.example"),
@@ -50,7 +271,7 @@ async fn current_principal_request_body() {
         let error: Value = response.take_json().await.unwrap();
         assert_eq!(problem_code(&error), "not_found");
     }
-    let mut invalid = body;
+    let mut invalid = body.clone();
     invalid["extra"] = serde_json::json!(true);
     let response = TestClient::post("http://server/_arkret/self/account/current-principal")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -59,6 +280,40 @@ async fn current_principal_request_body() {
         .send(&app)
         .await;
     assert_eq!(response.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
+
+    let over_budget = serde_json::json!({
+        "request_id":"ak:request:01904100-0000-7000-8000-000000000001",
+        "account_id": account_id,
+        "padding": "x".repeat(arkret_models_identity::identity_resolution::CURRENT_PRINCIPAL_MAX_BYTES)
+    });
+    let response = TestClient::post("http://server/_arkret/self/account/current-principal")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&over_budget))
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::PAYLOAD_TOO_LARGE));
+
+    let (client, connection) = tokio_postgres::connect(database.url(), tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move { connection.await.unwrap() });
+    client
+        .execute(
+            "DELETE FROM current_result_heads WHERE realm_id=$1",
+            &[&realm_id.as_str()],
+        )
+        .await
+        .unwrap();
+    let mut response = TestClient::post("http://server/_arkret/self/account/current-principal")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&body))
+        .send(&app)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::SERVICE_UNAVAILABLE));
+    let error: Value = response.take_json().await.unwrap();
+    assert_eq!(problem_code(&error), "temporarily_unavailable");
 }
 
 async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
