@@ -672,12 +672,16 @@ pub(crate) async fn parse_account_cursor(
     let mut detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress> =
         serde_json::from_value(positions_value["detail_positions"].clone())
             .map_err(|_| SyncCursorError::Integrity("invalid current detail positions"))?;
-    let replaced = replace_filter && positions_value.get("detail_filter") != filter;
-    if replaced {
-        // The old handle is immutable. Only detail frontiers restart; account
-        // channels retain their installed positions across a window change.
-        positions.clear();
-        account_positions.clear();
+    let filter_changed = positions_value.get("detail_filter") != filter;
+    if replace_filter {
+        // Explicit replacement always restarts the bounded detail baseline.
+        // This also supports refreshing an invalidated Realm without changing
+        // the demand window. Timeline/account coordinates restart only when
+        // the window itself changed.
+        if filter_changed {
+            positions.clear();
+            account_positions.clear();
+        }
         detail_positions.clear();
     }
     let to_device_position = positions_value
@@ -697,8 +701,8 @@ pub(crate) async fn parse_account_cursor(
             .filter(|value| !value.is_null())
             .cloned(),
         detail_positions,
-        detail_turn: replaced || positions_value["detail_turn"].as_bool().unwrap_or(false),
-        detail_next_realm: if replaced {
+        detail_turn: replace_filter || positions_value["detail_turn"].as_bool().unwrap_or(false),
+        detail_next_realm: if replace_filter {
             None
         } else {
             positions_value["detail_next_realm"]

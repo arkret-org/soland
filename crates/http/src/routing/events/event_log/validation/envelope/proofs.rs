@@ -113,9 +113,12 @@ pub(crate) async fn validate_event_proofs(
     // schema already requires `authorization_ref` whenever `executed_by` is
     // present, and the actor/executed_by DID validity + vm-DID==executed_by
     // checks ran earlier in this function.
-    let typed_identity_anchor_event = if object.get("kind").and_then(Value::as_str)
-        == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
-    {
+    let typed_identity_anchor_event = if matches!(
+        object.get("kind").and_then(Value::as_str),
+        Some(kind)
+            if kind == arkret_wire::EventKind::DeviceReanchor.as_str()
+                || kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
+    ) {
         Some(
             serde_json::from_value::<arkret_wire::Event>(Value::Object(object.clone())).map_err(
                 |error| {
@@ -130,7 +133,13 @@ pub(crate) async fn validate_event_proofs(
     } else {
         None
     };
-    let typed_candidate = if let Some(event) = typed_identity_anchor_event.as_ref() {
+    let typed_candidate = if typed_identity_anchor_event
+        .as_ref()
+        .is_some_and(|event| event.kind == arkret_wire::EventKind::DeviceAuthorize)
+    {
+        let event = typed_identity_anchor_event
+            .as_ref()
+            .expect("candidate branch requires a typed identity-anchor Event");
         let payload = event
             .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
             .map_err(|error| {
@@ -149,21 +158,28 @@ pub(crate) async fn validate_event_proofs(
     } else {
         None
     };
-    let root_anchored_candidate = typed_candidate.as_ref().and_then(|payload| {
-        realm_bootstrap_contexts.iter().find_map(|context| {
-            let candidate = context.identity_anchor_candidate_device.as_ref()?;
-            (context.actor_id == event_actor.to_string()
-                && candidate.device_id == payload.device_id
+    let root_anchored_candidate = realm_bootstrap_contexts.iter().find_map(|context| {
+        let candidate = context.identity_anchor_candidate_device.as_ref()?;
+        if context.actor_id != event_actor.to_string() {
+            return None;
+        }
+        let event = typed_identity_anchor_event.as_ref()?;
+        let matches_anchor = event.kind == arkret_wire::EventKind::DeviceReanchor
+            && context.identity_anchor_event_id.as_deref() == Some(event.event_id.as_str())
+            && candidate.authorization_binding_kind
+                == arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery;
+        let matches_authorize = typed_candidate.as_ref().is_some_and(|payload| {
+            candidate.device_id == payload.device_id
                 && candidate.device_public_key_did == payload.device_public_key_did
                 && candidate.hpke_key == payload.hpke_key
                 && candidate.algorithms == payload.algorithms
-                && candidate.authorization_binding_kind == payload.authorization_binding_kind)
-                .then(|| {
-                    (
-                        candidate.clone(),
-                        context.identity_anchor_resolution.clone(),
-                    )
-                })
+                && candidate.authorization_binding_kind == payload.authorization_binding_kind
+        });
+        (matches_anchor || matches_authorize).then(|| {
+            (
+                candidate.clone(),
+                context.identity_anchor_resolution.clone(),
+            )
         })
     });
     let ordinary_proof_root = object
@@ -283,14 +299,21 @@ pub(crate) async fn validate_event_proofs(
                             "candidate device Event proof requires the accepted PCR resolution",
                         )
                     })?;
-                serde_json::from_value::<arkret_models_identity::ResolutionCommitment>(resolution)
-                    .map_err(|error| {
+                let projection = serde_json::from_value::<
+                    arkret_models_identity::PrincipalResolutionProjection,
+                >(resolution)
+                .map_err(|error| {
                     event_validation_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "schema_violation",
                         format!("stored PCR resolution is not the public SDK type: {error}"),
                     )
-                })?
+                })?;
+                arkret_models_identity::ResolutionCommitment {
+                    did: projection.did,
+                    method_history_head: projection.method_history_head,
+                    version_id: projection.version_id,
+                }
             };
             if !arkret_wire::project_did_to_core_id(&resolution.did)
                 .is_ok_and(|principal| principal.as_str() == actor_id)

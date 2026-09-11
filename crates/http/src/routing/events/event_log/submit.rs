@@ -39,7 +39,7 @@ pub(in crate::routing) use backfill::{
 /// signed lease and peer publication by federation admission; neither may be
 /// silently reclassified as an online request merely because an uploader has
 /// a valid session.
-pub(super) fn validate_initial_publication_session_context(
+fn validate_online_self_actor_session_context(
     session: &SessionRecord,
     submission: &arkret_wire::EventInitialSubmission,
 ) -> Result<(), SubmitOneError> {
@@ -78,6 +78,17 @@ pub(super) fn validate_initial_publication_session_context(
             "actor_session_mismatch",
             "online Event principal/executor and station_id must match the authenticated session authority",
         ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_initial_publication_session_context(
+    session: &SessionRecord,
+    submission: &arkret_wire::EventInitialSubmission,
+) -> Result<(), SubmitOneError> {
+    validate_online_self_actor_session_context(session, submission)?;
+    if submission.publication_lane() != arkret_wire::EventPublicationLane::OnlineSelf {
+        return Ok(());
     }
     if let Some(grant) = session.session_grant.as_ref() {
         match &grant.holder_binding {
@@ -131,6 +142,50 @@ pub(super) fn validate_initial_publication_session_context(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_recovery_anchor_publication_session_context(
+    session: &SessionRecord,
+    submission: &arkret_wire::EventInitialSubmission,
+    replacement_device_id: &arkret_identifiers::DeviceId,
+) -> Result<(), SubmitOneError> {
+    validate_online_self_actor_session_context(session, submission)?;
+    if submission.publication_lane() != arkret_wire::EventPublicationLane::OnlineSelf {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "recovery anchor transaction requires the online-self publication lane",
+        ));
+    }
+    let grant = session.session_grant.as_ref().ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "recovery anchor transaction requires a recovery-session grant",
+        )
+    })?;
+    let arkret_models_identity::SessionGrantHolderBinding::RecoveryCandidateDevice { device_id } =
+        &grant.holder_binding
+    else {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "recovery anchor transaction requires a recovery-candidate holder binding",
+        ));
+    };
+    if grant.credential_class
+        != arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+        || grant.device_binding.is_some()
+        || device_id != replacement_device_id
+        || session.device_id != replacement_device_id.as_str()
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "recovery anchor transaction grant does not match the replacement device",
+        ));
     }
     Ok(())
 }
@@ -1804,6 +1859,7 @@ async fn submit_event_batch_outcome_with_leases(
             control_proposal_acks,
             None,
             None,
+            false,
         )
         .await;
     }
@@ -1959,9 +2015,10 @@ async fn submit_event_batch_outcome_with_leases(
 /// Submit a closed two-Event identity-anchor unit with publication evidence.
 /// Validation, Event rows, re-anchor receipt/device projection, and both
 /// ingress receipts are committed as one storage transaction.
-pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
+pub(in crate::routing) async fn submit_recovery_identity_anchor_batch(
     state: &AppState,
     session: &SessionRecord,
+    replacement_device_id: &arkret_identifiers::DeviceId,
     submissions: Vec<arkret_wire::EventInitialSubmission>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     let submit_context = if submissions.len() == 2
@@ -1980,7 +2037,11 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error))?;
     for (submission, digest_suite) in submissions.iter().zip(digest_suites.iter().copied()) {
         validate_initial_submission_in_context(submission, submit_context, digest_suite)?;
-        validate_initial_publication_session_context(session, submission)?;
+        validate_recovery_anchor_publication_session_context(
+            session,
+            submission,
+            replacement_device_id,
+        )?;
     }
     let envelopes = submissions
         .iter()
@@ -2003,6 +2064,7 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
         Some(&control_proposal_acks),
         None,
         None,
+        true,
     )
     .await
 }
@@ -2101,6 +2163,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
                     )
                 })?,
         }),
+        false,
     )
     .await?;
     let outcome = existing_pcr_genesis_outcome(state, request, accepted_device_id)
@@ -2218,8 +2281,7 @@ fn identity_creation_control_proof_window_valid(
     expires_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> bool {
-    issued_at
-        <= now + Duration::seconds(IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS)
+    issued_at <= now + Duration::seconds(IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS)
         && expires_at > now
         && expires_at - issued_at <= Duration::minutes(5)
 }

@@ -70,6 +70,7 @@ pub(super) async fn submit_identity_anchor_batch(
     submitted_control_proposal_acks: Option<&[Option<arkret_wire::ControlProposalAck>]>,
     receipt_audience: Option<&DidCoreId>,
     pcr_genesis_pins: Option<PcrGenesisPins>,
+    recovery_policy_acks_verified: bool,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(unit_error(
@@ -410,15 +411,25 @@ pub(super) async fn submit_identity_anchor_batch(
             )
         })?;
         for (event, ack) in typed_control_events.iter().zip(&submitted) {
-            crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
-                .await
-                .map_err(|error| {
+            if recovery_policy_acks_verified {
+                ack.validate_structural(policy).map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::PRECONDITION_FAILED,
                         "failed_precondition",
                         format!("reanchor Control Proposal Ack is invalid: {error}"),
                     )
                 })?;
+            } else {
+                crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
+                    .await
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::PRECONDITION_FAILED,
+                            "failed_precondition",
+                            format!("reanchor Control Proposal Ack is invalid: {error}"),
+                        )
+                    })?;
+            }
         }
         submitted
     };
@@ -1193,7 +1204,7 @@ async fn validate_unit_relationships(
         ));
     }
     let expected_realm = arkret_wire::RealmId::from_event_id(&first.event_id);
-    if first.realm_id != expected_realm {
+    if is_bootstrap && first.realm_id != expected_realm {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "failed_precondition",

@@ -970,6 +970,9 @@ mod tests {
             arkret_wire::ServiceOperationId::OpenDevicePairingCommandStageV1,
             arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
             arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
+            arkret_wire::ServiceOperationId::SelfSecurityTransactionCommandContinueV1,
+            arkret_wire::ServiceOperationId::SelfSecurityTransactionCommandCreateV1,
+            arkret_wire::ServiceOperationId::SelfSecurityTransactionResourceGetV1,
         ] {
             assert!(
                 description

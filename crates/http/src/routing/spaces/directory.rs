@@ -37,9 +37,8 @@ use arkret_models_discovery::{
     DirectorySearchRealmsRequestBody, DirectorySearchUsersRequestBody, DirectorySubjectHandleList,
     DirectoryTargetResolutionOutcome, DirectoryUserSearchOutcome, ObjectPreview, ObjectPreviewId,
     ObjectPreviewKind, OrganizationPreview, RealmJoinCandidate, RealmJoinCandidateRole,
-    RealmJoinCandidateServiceKind, RealmJoinCandidateSource, RealmJoinMethod,
-    RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, ServiceDescribe,
-    ServiceProtocolVersion, TargetKind, UserSearchOutcome,
+    RealmJoinCandidateServiceKind, RealmJoinCandidateSource, RealmJoinMethod, RealmPreview,
+    ServiceDescribe, ServiceProtocolVersion, TargetKind, UserSearchOutcome,
 };
 use arkret_models_identity::claim_presentation::{AgentSelectorClaim, validate_agent_slug};
 use arkret_models_identity::{

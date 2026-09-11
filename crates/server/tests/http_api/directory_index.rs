@@ -40,17 +40,46 @@ async fn sync_and_directory_share_demo_realm_body() {
 
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    let sync = account_subscribe_frame(state, Some(&token), "catchup=true").await;
+    let realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Shared directory realm",
+        None,
+        "public",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = realm["realm_id"].as_str().unwrap();
+    assert_eq!(
+        add_test_realm_member(&state, realm_id, "did:web:alice.example")["ok"],
+        true
+    );
+    let query = format!("catchup=true&filter=%7B%22realm_ids%22%3A%5B%22{realm_id}%22%5D%7D");
+    let initial = account_subscribe_frame(state.clone(), Some(&token), &query).await;
+    let cursor = initial["cursor"].as_str().expect("global baseline cursor");
+    let sync = account_subscribe_frame(
+        state.clone(),
+        Some(&token),
+        &format!("{query}&after={cursor}"),
+    )
+    .await;
     assert!(
-        sync["realms"]
-            .as_object()
-            .unwrap()
-            .contains_key(demo_realm_id())
+        sync["realms"].as_object().unwrap().contains_key(realm_id),
+        "detail continuation must contain the selected Realm: {sync}"
     );
 
+    set_directory_preview_policy(
+        &state,
+        realm_id,
+        Some(serde_json::json!({
+            "mode": "directory_card", "audiences": ["anonymous"], "fields": ["title"]
+        })),
+    )
+    .await;
     let directory: Value = TestClient::post("http://server/_arkret/find/directory/search-realms")
-        .json(&serde_json::json!({"query": "demo", "limit": 10}))
-        .send(&app())
+        .json(&serde_json::json!({"query": "Shared directory realm", "limit": 10}))
+        .send(&app_from_state(state))
         .await
         .take_json()
         .await
@@ -732,6 +761,16 @@ async fn directory_resolve_realm_returns_spec_title_field_body() {
     )
     .await;
     let realm_id = realm["realm_id"].as_str().unwrap();
+    set_directory_preview_policy(
+        &state,
+        realm_id,
+        Some(serde_json::json!({
+            "mode": "directory_card",
+            "audiences": ["anonymous"],
+            "fields": ["title"]
+        })),
+    )
+    .await;
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": realm_id}))
@@ -746,10 +785,112 @@ async fn directory_resolve_realm_returns_spec_title_field_body() {
         "{resolved}"
     );
     assert_eq!(resolved["realm_preview"]["title"], "Spec title realm");
+    assert!(resolved["realm_preview"].get("summary").is_none());
+    assert!(resolved["realm_preview"].get("join_rule").is_none());
+    assert!(resolved.get("join_rule").is_none());
     assert!(
         resolved["realm_preview"].get("name").is_none(),
         "resolve-realm realm_preview must not expose retired name field: {resolved}"
     );
+}
+
+#[test]
+fn directory_preview_policy_blinds_both_resolvers_and_search() {
+    run_on_deep_stack(
+        "directory_preview_policy_blinds_both_resolvers_and_search",
+        directory_preview_policy_blinds_both_resolvers_and_search_body,
+    );
+}
+
+async fn directory_preview_policy_blinds_both_resolvers_and_search_body() {
+    let state = soland_test_support::app_state(test_config());
+    let realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Private preview metadata",
+        Some("must stay private"),
+        "public",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = realm["realm_id"].as_str().unwrap();
+    let missing = soland_test_support::fixture_content_bound_id("ak:realm:");
+    let valid_policy = serde_json::json!({
+        "mode": "directory_card", "audiences": ["anonymous"], "fields": ["title"]
+    });
+    // Establish a valid same-resource control before removing its authorization.
+    set_directory_preview_policy(&state, realm_id, Some(valid_policy.clone())).await;
+    for (path, body) in [
+        ("resolve-realm", serde_json::json!({"realm_id": realm_id})),
+        (
+            "resolve-target",
+            serde_json::json!({"address": format!("web+arkret:realm/{}", realm_id.strip_prefix("ak:realm:").unwrap())}),
+        ),
+    ] {
+        let mut response = TestClient::post(format!("http://server/_arkret/find/directory/{path}"))
+            .json(&body)
+            .send(&app_from_state(state.clone()))
+            .await;
+        assert_eq!(response.status_code.unwrap(), StatusCode::OK, "{path}");
+        let result: Value = response.take_json().await.unwrap();
+        assert_eq!(result["realm_preview"]["title"], "Private preview metadata");
+        assert!(result["realm_preview"].get("summary").is_none());
+        assert!(result["realm_preview"].get("alias").is_none());
+        assert!(result.get("join_rule").is_none());
+    }
+    for policy in [
+        None,
+        Some(serde_json::json!({"mode": "none", "audiences": ["anonymous"], "fields": ["title"]})),
+        Some(
+            serde_json::json!({"mode": "directory_card", "audiences": ["realm_member"], "fields": ["title"]}),
+        ),
+        Some(
+            serde_json::json!({"mode": "directory_card", "audiences": ["authenticated"], "fields": ["title"]}),
+        ),
+        Some(
+            serde_json::json!({"mode": "directory_card", "audiences": ["anonymous"], "fields": ["title"], "token": {"required": true}}),
+        ),
+    ] {
+        set_directory_preview_policy(&state, realm_id, policy).await;
+        for path in ["resolve-realm", "resolve-target"] {
+            let mut responses = Vec::new();
+            for id in [realm_id, missing.as_str()] {
+                let body = if path == "resolve-realm" {
+                    serde_json::json!({"realm_id": id})
+                } else {
+                    serde_json::json!({"address": format!("web+arkret:realm/{}", id.strip_prefix("ak:realm:").unwrap())})
+                };
+                let mut response =
+                    TestClient::post(format!("http://server/_arkret/find/directory/{path}"))
+                        .json(&body)
+                        .send(&app_from_state(state.clone()))
+                        .await;
+                assert_eq!(
+                    response.status_code.unwrap(),
+                    StatusCode::NOT_FOUND,
+                    "{path}"
+                );
+                let mut problem: Value = response.take_json().await.unwrap();
+                let instance = problem.as_object_mut().unwrap().remove("instance").unwrap();
+                arkret_wire::RequestId::new(instance.as_str().unwrap().to_owned()).unwrap();
+                // RFC 9457 instance identifies this request, not the hidden resource.
+                responses.push(arkret_canonical::canonical_json_bytes(&problem).unwrap());
+            }
+            assert_eq!(
+                responses[0], responses[1],
+                "{path} must blind hidden and missing realms"
+            );
+        }
+        let result: Value = TestClient::post("http://server/_arkret/find/directory/search-realms")
+            .json(&serde_json::json!({"query": "Private preview metadata"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert!(result["realms"].as_array().unwrap().is_empty());
+    }
 }
 
 fn preview_token_for_address(
@@ -800,6 +941,26 @@ fn broader_protocol_surface_returns_contract_shapes() {
 }
 
 async fn broader_protocol_surface_returns_contract_shapes_body() {
+    let directory_state = soland_test_support::app_state(test_config());
+    let directory_realm = seed_test_realm(
+        &directory_state,
+        "did:web:alice.example",
+        "Directory contract realm",
+        None,
+        "public",
+        &[],
+        &[],
+    )
+    .await;
+    let directory_realm_id = directory_realm["realm_id"].as_str().unwrap();
+    set_directory_preview_policy(
+        &directory_state,
+        directory_realm_id,
+        Some(serde_json::json!({
+            "mode": "directory_card", "audiences": ["anonymous"], "fields": ["title"]
+        })),
+    )
+    .await;
     let directory_describe: Value =
         TestClient::get("http://server/_arkret/find/directory/describe")
             .send(&app())
@@ -814,13 +975,13 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
     );
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
-        .json(&serde_json::json!({"realm_id": demo_realm_id()}))
-        .send(&app())
+        .json(&serde_json::json!({"realm_id": directory_realm_id}))
+        .send(&app_from_state(directory_state))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resolved["realm_preview"]["realm_id"], demo_realm_id());
+    assert_eq!(resolved["realm_preview"]["realm_id"], directory_realm_id);
 
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;

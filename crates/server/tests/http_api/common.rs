@@ -3528,3 +3528,27 @@ fn run_on_deep_stack_with<F>(
         std::panic::resume_unwind(payload);
     }
 }
+
+pub(crate) async fn set_directory_preview_policy(
+    state: &AppState,
+    realm_id: &str,
+    policy: Option<Value>,
+) {
+    let mut meta = state
+        .test_persistence()
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    meta.preview_policy_digest = policy
+        .as_ref()
+        .map(|value| arkret_canonical::canonical_sha256(value).unwrap());
+    meta.preview_policy = policy;
+    state
+        .test_persistence()
+        .realm_meta()
+        .put(realm_id, &meta)
+        .await
+        .unwrap();
+}

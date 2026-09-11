@@ -1569,8 +1569,13 @@ impl EventStore for PgEventStore {
                 if reanchor_slot.is_some() {
                     let reanchor = records.iter().find(|record| record.kind == "ak.device.reanchor")
                         .ok_or_else(||PersistenceError::SchemaViolation("reanchor unit missing anchor Event".to_owned()))?;
+                    let reanchor_id = ids::parse_event_id(&reanchor.event_id).ok_or_else(|| {
+                        PersistenceError::SchemaViolation(
+                            "reanchor unit contains a malformed canonical Event id".to_owned(),
+                        )
+                    })?;
                     let already_accepted=sql_query("SELECT EXISTS(SELECT 1 FROM accepted_events WHERE id=$1) AS present")
-                        .bind::<Text,_>(&reanchor.event_id).get_result::<ExistsRow>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+                        .bind::<Binary,_>(reanchor_id.to_vec()).get_result::<ExistsRow>(&mut *conn).await.map_err(PersistenceError::database)?.present;
                     if !already_accepted {
                         // Match manifest/unlock ordering: accepted Realm frontier, policy, session.
                         if let Some(frontier)=frontier_cas.as_ref() {
