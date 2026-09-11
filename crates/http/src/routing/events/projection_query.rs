@@ -44,6 +44,7 @@ use arkret_models_collaboration::objects::query_projection::{
 use arkret_models_collaboration::objects::relation::{
     RelationConflictDiagnostic, RelationEndpoint,
 };
+use arkret_wire::Hash;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
@@ -1027,6 +1028,17 @@ async fn list_strand_projections(
                 strand_id: parse_projection_id::<StrandId>(&f.strand_id, "strand_id")?,
                 realm_id: parse_projection_id::<RealmId>(&f.realm_id, "realm_id")?,
                 state: projection_object_state(f.state),
+                object_revision_heads: f
+                    .object_revision_heads
+                    .iter()
+                    .map(|digest| {
+                        Hash::new(digest.clone()).map_err(|error| {
+                            AppError::internal(format!(
+                                "stored Strand object revision head is invalid: {error}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<_, AppError>>()?,
                 state_changed_at: f.state_changed_at,
                 stage: f.stage.clone(),
                 stage_changed_at: f.stage_changed_at,
@@ -1073,6 +1085,7 @@ async fn list_strand_projections(
 struct StrandProjectionView {
     strand_id: String,
     realm_id: String,
+    object_revision_heads: Vec<String>,
     state: ProjectionObjectState,
     #[serde(
         serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp"
@@ -1263,6 +1276,7 @@ async fn get_strand_projection(
     json_ok(StrandProjectionView {
         strand_id: strand.strand_id,
         realm_id: strand.realm_id,
+        object_revision_heads: strand.object_revision_heads,
         state: projection_object_state(strand.state),
         state_changed_at: strand.state_changed_at,
         stage: strand

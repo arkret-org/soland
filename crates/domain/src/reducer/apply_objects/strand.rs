@@ -117,6 +117,7 @@ impl ProjectionState {
         let projection = StrandProjection {
             strand_id: strand_id.clone(),
             realm_id,
+            object_revision_heads: strand_event_digest(operation).into_iter().collect(),
             tracks,
             title,
             summary,
@@ -245,6 +246,7 @@ impl ProjectionState {
                     strand.schedule_revision_heads.dedup();
                 }
             }
+            advance_strand_object_revision_heads(strand, operation);
         }
         strand.updated_by = Some(operation.context.sender.to_string());
         strand.updated_at = Some(now);
@@ -455,6 +457,7 @@ impl ProjectionState {
                     };
                 }
                 strand.tracks = tracks;
+                advance_strand_object_revision_heads(strand, operation);
             }
             Err(reason) => {
                 return ProjectionEffect::Rejected {
@@ -991,4 +994,20 @@ fn strand_causal_refs(operation: &Operation) -> Vec<String> {
         .iter()
         .map(ToString::to_string)
         .collect()
+}
+
+/// Advance the Strand object MV-register frontier without collapsing unseen
+/// concurrent heads. The admission layer has already required exactly one
+/// causal base for ordinary patch events; retaining every unreferenced head is
+/// what makes concurrency visible to subsequent authors.
+fn advance_strand_object_revision_heads(strand: &mut StrandProjection, operation: &Operation) {
+    let causal_refs = strand_causal_refs(operation);
+    strand
+        .object_revision_heads
+        .retain(|head| !causal_refs.iter().any(|value| value == head));
+    if let Some(digest) = strand_event_digest(operation) {
+        strand.object_revision_heads.push(digest);
+        strand.object_revision_heads.sort();
+        strand.object_revision_heads.dedup();
+    }
 }

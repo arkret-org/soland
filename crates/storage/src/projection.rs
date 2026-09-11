@@ -119,6 +119,7 @@ pub struct SpaceContainerProjectionRecord {
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
+    pub object_revision_heads: Vec<String>,
     pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     pub title: String,
     pub summary: Option<String>,
@@ -126,6 +127,9 @@ pub struct StrandProjectionRecord {
     /// object and both are absent once `state=redacted` (common-fields.md 5.2).
     pub content: Option<serde_json::Value>,
     pub encrypted_content: Option<serde_json::Value>,
+    pub fields: BTreeMap<String, serde_json::Value>,
+    pub schema_refs: Vec<String>,
+    pub schedule_revision_heads: Vec<String>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,

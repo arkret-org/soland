@@ -548,6 +548,10 @@ pub fn object_stage_from_wire_value(value: &str) -> Option<ObjectStage> {
 pub struct StrandProjection {
     pub strand_id: String,
     pub realm_id: String,
+    /// Complete current head set for `ak.component.strand.object.v1`.
+    /// Kept sorted and duplicate-free so authoring projections never hide an
+    /// unresolved concurrent version behind an arrival-order winner.
+    pub object_revision_heads: Vec<String>,
     /// Strand track entries. The `synthesis` entry may carry its own narrative
     /// content; `discussion` remains configuration for the Message timeline.
     pub tracks: BTreeMap<String, StrandTrack>,

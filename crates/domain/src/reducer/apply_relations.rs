@@ -936,6 +936,7 @@ mod cross_realm_relation_tests {
         StrandProjection {
             strand_id: String::new(),
             realm_id: realm.to_owned(),
+            object_revision_heads: Vec::new(),
             tracks: crate::reducer::projections::default_strand_tracks(),
             title: String::new(),
             summary: None,

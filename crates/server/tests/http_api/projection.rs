@@ -878,6 +878,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
         soland_domain::reducer::StrandProjection {
             strand_id: strand_id.to_owned(),
             realm_id: strand_realm_id.to_owned(),
+            object_revision_heads: Vec::new(),
             tracks: Default::default(),
             title: title.to_owned(),
             summary: None,

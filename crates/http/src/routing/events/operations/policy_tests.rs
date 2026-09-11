@@ -916,6 +916,7 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
             soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.as_str().to_owned(),
                 realm_id: realm_id.to_string(),
+                object_revision_heads: Vec::new(),
                 tracks: Default::default(),
                 title: "Scoped".to_owned(),
                 summary: None,
