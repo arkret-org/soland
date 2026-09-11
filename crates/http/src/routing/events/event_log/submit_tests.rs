@@ -1,5 +1,24 @@
 use super::*;
 
+#[test]
+fn identity_creation_proof_allows_bounded_cross_service_clock_skew() {
+    let now = chrono::Utc::now();
+    let accepted_issued_at =
+        now + chrono::Duration::seconds(IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS);
+    let rejected_issued_at = accepted_issued_at + chrono::Duration::milliseconds(1);
+
+    assert!(identity_creation_control_proof_window_valid(
+        accepted_issued_at,
+        accepted_issued_at + chrono::Duration::minutes(5),
+        now,
+    ));
+    assert!(!identity_creation_control_proof_window_valid(
+        rejected_issued_at,
+        rejected_issued_at + chrono::Duration::minutes(5),
+        now,
+    ));
+}
+
 mod event_collision_reason_tests {
     use super::*;
 

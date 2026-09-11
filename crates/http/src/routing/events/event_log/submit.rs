@@ -26,6 +26,7 @@ const ACCOUNT_DATA_SUBMIT_LOCK_SHARDS: usize = 1024;
 const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
 const AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS: usize = 256;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
+const IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS: i64 = 30;
 
 mod applet_admission;
 mod backfill;
@@ -2178,9 +2179,7 @@ async fn validate_identity_creation_control_proof(
     // The complete historical registration evidence carries no freshness gate
     // against this receiver's clock: its `accepted_at` is the relaying
     // Authority's registry acceptance instant, not a claim about now.
-    if proof.issued_at > now
-        || proof.expires_at <= now
-        || proof.expires_at - proof.issued_at > Duration::minutes(5)
+    if !identity_creation_control_proof_window_valid(proof.issued_at, proof.expires_at, now)
         || proof.audience_id.as_str() != state.service_id().as_str()
     {
         return Err(SubmitOneError::new(
@@ -2212,6 +2211,17 @@ async fn validate_identity_creation_control_proof(
         )
     })?;
     Ok(())
+}
+
+fn identity_creation_control_proof_window_valid(
+    issued_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> bool {
+    issued_at
+        <= now + Duration::seconds(IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS)
+        && expires_at > now
+        && expires_at - issued_at <= Duration::minutes(5)
 }
 
 async fn direct_bootstrap_source_is_contact_authority(
