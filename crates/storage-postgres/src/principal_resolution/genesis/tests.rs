@@ -1,5 +1,5 @@
 use arkret_wire::{ActorId, EventKind, Hash};
-use soland_storage::{CurrentPrincipalRead, EventStore};
+use soland_storage::{CurrentPrincipalRead, EventStore, PrincipalResolutionStore};
 
 use super::*;
 
@@ -126,13 +126,45 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
     assert!(
         matches!(current::read(&pool,&slot.account_id).await.unwrap(),CurrentPrincipalRead::Ready{projection,..} if projection.resolution_event_ref==slot.create_event_id)
     );
+    let registry =
+        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+    super::super::PgPrincipalResolutionStore { pool: pool.clone() }
+        .current_principal(&slot.account_id, &registry)
+        .await
+        .unwrap();
     let mut conn = pg_conn(&pool).await.unwrap();
     let absent=sql_query("SELECT NOT EXISTS(SELECT 1 FROM governance_current_ready) AND NOT EXISTS(SELECT 1 FROM state_seals) AS applied").get_result::<AppliedRow>(&mut *conn).await.unwrap();
     assert!(
         absent.applied,
-        "identity initialization must not fabricate a Seal or ready governance frontier"
+        "identity reads before the first Seal must not fabricate a governance frontier"
     );
-    // A failed/ambiguous sealed frontier must never fall back to bootstrap.
+    // Rows written by the old pre-Seal refresh bug are derived state rather
+    // than an accepted governance frontier and must repair on the next read.
+    sql_query("INSERT INTO governance_current_ready(realm_id,ready,revision) VALUES($1,FALSE,1)")
+        .bind::<Text, _>(&slot.realm_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            super::super::PgPrincipalResolutionStore { pool: pool.clone() }
+                .current_principal(&slot.account_id, &registry)
+                .await
+                .unwrap(),
+            CurrentPrincipalRead::Ready { projection, .. }
+                if projection.resolution_event_ref == slot.create_event_id
+        ),
+        "a pre-Seal read must repair the obsolete unavailable marker"
+    );
+    let absent=sql_query("SELECT NOT EXISTS(SELECT 1 FROM governance_current_ready) AND NOT EXISTS(SELECT 1 FROM state_seals) AS applied").get_result::<AppliedRow>(&mut *conn).await.unwrap();
+    assert!(absent.applied);
+    // Once a Seal exists, an unavailable governance current must never fall
+    // back to the bootstrap projection.
+    sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,is_genesis) VALUES('ak:seal:test-genesis','sha256',$1,'x','x','{}',TRUE)")
+        .bind::<Text, _>(&slot.realm_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
     sql_query("INSERT INTO governance_current_ready(realm_id,ready,revision) VALUES($1,FALSE,1)")
         .bind::<Text, _>(&slot.realm_id)
         .execute(&mut *conn)

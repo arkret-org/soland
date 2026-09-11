@@ -632,6 +632,27 @@ pub(crate) async fn refresh_current_if_expired(
 ) -> soland_storage::PersistenceResult<()> {
     let result: Result<(), EventSealCommitError> = async {
         lock_seal_realm(conn, realm_id).await?;
+        let seal_count = sql_query(
+            "SELECT COUNT(*) AS value FROM state_seals WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm_id)
+        .get_result::<CountRow>(&mut *conn)
+        .await?
+        .value;
+        if seal_count == 0 {
+            // There is no governance frontier to rebuild before the first
+            // accepted Seal. In particular, a current-principal read must not
+            // turn the atomically published human-genesis identity cell into
+            // a permanently unavailable governance result. Remove rows left
+            // by older readers that attempted this invalid pre-Seal rebuild;
+            // the bootstrap reader still independently requires the exact
+            // immutable anchor, complete registration unit and genesis cell.
+            sql_query("DELETE FROM governance_current_ready WHERE realm_id=$1")
+                .bind::<Text, _>(realm_id)
+                .execute(&mut *conn)
+                .await?;
+            return Ok(());
+        }
         let due = sql_query("SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND (NOT ready OR (next_expiry IS NOT NULL AND next_expiry <= clock_timestamp()))")
             .bind::<Text,_>(realm_id).get_result::<CountRow>(&mut *conn).await?.value != 0;
         if due || current_results::baseline_missing(conn, realm_id).await? {
