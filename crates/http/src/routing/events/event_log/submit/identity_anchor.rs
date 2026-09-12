@@ -672,42 +672,53 @@ pub(super) async fn submit_identity_anchor_batch(
             (&accepted_create_event, first.digest_suite),
             (&accepted_authorize_event, second.digest_suite),
         ];
-        for (event, digest_suite) in accepted_control_events {
-            let digest = event
-                .event_digest_with_digest_suite(digest_suite)
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("accepted identity anchor digest failed: {error}"),
-                    )
-                })?;
-            // A committed anchor unit minted exactly one Ack per Control
-            // Move above; a miss here means the durable Event+Ack+pending
-            // atomicity is already broken, so fail instead of writing an
-            // Ack-less pending row.
-            let ack = control_proposal_acks
-                .iter()
-                .find(|ack| ack.proposal_digest.as_str() == digest)
-                .ok_or_else(|| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        "accepted identity anchor is missing its minted Control Proposal Ack",
-                    )
-                })?;
-            state
-                .projections()
-                .put_pending_control_event_with_ack(event, ack, digest_suite)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("accepted identity anchor pending index unavailable: {error}"),
-                    )
-                })?;
-        }
+        let pending_unit = accepted_control_events
+            .into_iter()
+            .map(|(event, digest_suite)| {
+                let digest =
+                    event
+                        .event_digest_with_digest_suite(digest_suite)
+                        .map_err(|error| {
+                            SubmitOneError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "internal_error",
+                                format!("accepted identity anchor digest failed: {error}"),
+                            )
+                        })?;
+                // A committed anchor unit minted exactly one Ack per Control
+                // Move above; a miss here means the durable Event+Ack+pending
+                // atomicity is already broken, so fail instead of writing an
+                // Ack-less pending row.
+                let ack = control_proposal_acks
+                    .iter()
+                    .find(|ack| ack.proposal_digest.as_str() == digest)
+                    .ok_or_else(|| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            "accepted identity anchor is missing its minted Control Proposal Ack",
+                        )
+                    })?;
+                Ok(arkret_state::state::ControlUnitIngressMember {
+                    event: event.clone(),
+                    digest_suite,
+                    ingress: arkret_state::state::store::ControlProposalIngress::AckRequired(
+                        ack.clone(),
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, SubmitOneError>>()?;
+        state
+            .projections()
+            .put_pending_control_unit(&pending_unit)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted identity anchor pending index unavailable: {error}"),
+                )
+            })?;
         state.wake_control_seal_coordinator();
         for (parsed, envelope) in [(&first, &envelopes[0]), (&second, &envelopes[1])] {
             if let Some(operation) = projection_operation_from_event(parsed, envelope) {
@@ -1039,6 +1050,7 @@ async fn identical_historical_retry_with_wake(
             Vec::new(),
             None,
         );
+        let mut recovery_unit = Vec::new();
         for record in existing.iter().flatten() {
             let digest = Hash::new(record.canonical_digest.clone()).map_err(|error| {
                 SubmitOneError::new(
@@ -1090,23 +1102,28 @@ async fn identical_historical_retry_with_wake(
                         format!("stored identity anchor is not canonical Event wire: {error}"),
                     )
                 })?;
-                // Restore the durable producer Event with its separate Control
-                // Proposal Ack into the pending control index.
-                state
-                    .projections()
-                    .put_pending_control_event_with_ack(&event, &ack, record.digest_suite)
-                    .await
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            format!(
-                                "accepted identity anchor pending index recovery failed: {error}"
-                            ),
-                        )
-                    })?;
+                recovery_unit.push(arkret_state::state::ControlUnitIngressMember {
+                    event,
+                    digest_suite: record.digest_suite,
+                    ingress: arkret_state::state::store::ControlProposalIngress::AckRequired(
+                        ack.clone(),
+                    ),
+                });
             }
             outcome.control_proposal_acks.push(ack);
+        }
+        if !recovery_unit.is_empty() {
+            state
+                .projections()
+                .put_pending_control_unit(&recovery_unit)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("accepted identity anchor pending index recovery failed: {error}"),
+                    )
+                })?;
         }
         if wake_control_seal_coordinator {
             state.wake_control_seal_coordinator();

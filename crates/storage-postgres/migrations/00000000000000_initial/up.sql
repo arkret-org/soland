@@ -781,10 +781,16 @@ CREATE TABLE public.state_control_events (
     -- `{"class":"ack_required"}` or `{"class":"ackless_self_principal", ...}`
     -- carrying the stable references first admission was proven against.
     ingress_class jsonb NOT NULL,
+    -- Exact registered command unit in normative member order. Every member
+    -- carries the same array; ordinary commands use a singleton array.
+    command_unit_event_digests jsonb NOT NULL,
     proposal_decisions jsonb DEFAULT '[]'::jsonb NOT NULL,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     is_pending boolean DEFAULT true NOT NULL,
-    UNIQUE (event_digest, realm_id)
+    UNIQUE (event_digest, realm_id),
+    CONSTRAINT state_control_events_command_unit_array_check
+        CHECK (jsonb_typeof(command_unit_event_digests) = 'array'
+            AND jsonb_array_length(command_unit_event_digests) BETWEEN 1 AND 4096)
 );
 
 CREATE INDEX state_control_events_realm_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest);
@@ -794,14 +800,11 @@ CREATE INDEX state_control_events_pending_due_idx
     ON public.state_control_events (realm_id, (control_proposal_ack->>'absolute_due_at') ASC NULLS FIRST, event_digest)
     WHERE is_pending;
 
--- Terminal decisions and accepted coverage remove work in the same transaction
--- as their authoritative fact. Historical bytes remain available independently.
+-- Only a signed Seal command outcome removes pending work. Proposal decisions
+-- remain advisory until that atomic decision is accepted with the Seal.
 CREATE FUNCTION public.update_control_event_pending() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'UPDATE' AND NOT OLD.is_pending THEN
-        NEW.is_pending := false;
-    END IF;
-    IF NEW.proposal_decisions @> '[{"kind":"signed_reject"}]'::jsonb THEN
         NEW.is_pending := false;
     END IF;
     RETURN NEW;
@@ -930,7 +933,10 @@ CREATE TABLE public.state_seal_control_events (
     seal_id text NOT NULL,
     realm_id text NOT NULL,
     event_digest text NOT NULL,
-    delta_index bigint NOT NULL,
+    command_index bigint NOT NULL,
+    member_index bigint NOT NULL,
+    outcome text NOT NULL,
+    reason_code text,
     -- SHA-256 over the AvailabilityReceipt event-bytes domain preimage.
     accepted_event_bytes_digest text NOT NULL,
     -- Full accepted Event canonical bytes with only `unsigned` removed.
@@ -938,12 +944,19 @@ CREATE TABLE public.state_seal_control_events (
     sealed_at timestamp with time zone NOT NULL,
     decision_overdue boolean DEFAULT false NOT NULL,
     PRIMARY KEY (seal_id, event_digest),
-    UNIQUE (seal_id, delta_index),
+    UNIQUE (event_digest),
+    UNIQUE (seal_id, command_index, member_index),
     FOREIGN KEY (seal_id, realm_id)
         REFERENCES public.state_seals(id, realm_id) ON DELETE RESTRICT,
     FOREIGN KEY (event_digest, realm_id)
         REFERENCES public.state_control_events(event_digest, realm_id) ON DELETE RESTRICT,
-    CONSTRAINT state_seal_control_events_delta_index_check CHECK (delta_index >= 0)
+    CONSTRAINT state_seal_control_events_command_index_check CHECK (command_index >= 0),
+    CONSTRAINT state_seal_control_events_member_index_check CHECK (member_index >= 0),
+    CONSTRAINT state_seal_control_events_outcome_check CHECK (outcome IN ('committed', 'rejected')),
+    CONSTRAINT state_seal_control_events_reason_check CHECK (
+        (outcome = 'committed' AND reason_code IS NULL)
+        OR (outcome = 'rejected' AND reason_code IS NOT NULL)
+    )
 );
 
 CREATE INDEX state_seal_control_events_event_idx

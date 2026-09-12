@@ -43,21 +43,14 @@ impl AdminNotaryValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct BottomCandidateHead {
-    pub event_id: String,
-    pub value: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct BottomEntry {
-    pub realm_id: String,
-    pub cell_id: String,
-    pub kind: String,
+    pub realm_id: arkret_wire::RealmId,
+    pub cell_id: arkret_wire::CellRef,
+    pub kind: arkret_wire::BottomKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub candidate_heads: Vec<BottomCandidateHead>,
+    pub candidate_heads: Vec<arkret_wire::CausalHead>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1,9 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, agent_requested_scope_digest,
 };
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
-use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Seal};
+use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Event, Seal, SealCommandOutcome};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_http::error::AppError;
@@ -13,6 +15,91 @@ use soland_services::identity::{
 };
 
 use crate::state::AppState;
+
+pub(crate) struct AgentPcrOrderedHistory {
+    pub(crate) seal_view: crate::notary::MaterializedEventSealView,
+    pub(crate) units: Vec<arkret_state::OrderedControlUnit>,
+    pub(crate) committed_command_results: Vec<SealCommandOutcome>,
+}
+
+/// Resolve one Agent PCR history in its signed Seal command order.
+///
+/// The Event store is only a digest-addressed source of immutable envelopes.
+/// It cannot choose replay order from actor sequence, arrival time, or
+/// `seal_basis`; the accepted Seal lineage and its signed command results own
+/// that order.
+pub(crate) async fn resolve_agent_pcr_ordered_history(
+    state: &AppState,
+    terminal_seal: Seal,
+    events_by_digest: &BTreeMap<Hash, (Event, arkret_canonical::DigestSuite)>,
+) -> Result<AgentPcrOrderedHistory, AppError> {
+    let seal_view = crate::notary::materialized_event_seal_view(state, terminal_seal.clone())
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FrontierUnavailable,
+                format!("Agent PCR Seal lineage is unavailable: {error}"),
+            )
+        })?;
+    let mut predecessor_ref = None;
+    let mut seen_seals = BTreeSet::new();
+    let mut command_results = Vec::new();
+    for seal in &seal_view.seal_path {
+        seal.validate_structural().map_err(|error| {
+            crate::app_error!(
+                StateMismatch,
+                format!(
+                    "Agent PCR Seal {} is structurally invalid: {error}",
+                    seal.id
+                ),
+            )
+        })?;
+        if seal.realm_id != terminal_seal.realm_id
+            || seal.predecessor_ref != predecessor_ref
+            || !seen_seals.insert(seal.id.clone())
+        {
+            return Err(crate::app_error!(
+                StateMismatch,
+                "Agent PCR Seal lineage is not one complete ordered chain",
+            ));
+        }
+        predecessor_ref = Some(seal.id.clone());
+        command_results.extend(seal.command_results.iter().cloned());
+    }
+    if predecessor_ref.as_ref() != Some(&terminal_seal.id) {
+        return Err(crate::app_error!(
+            StateMismatch,
+            "Agent PCR Seal lineage does not terminate at the selected Seal",
+        ));
+    }
+    let units = arkret_state::resolve_committed_ordered_control_units(&command_results, |digest| {
+        let (event, digest_suite) = events_by_digest.get(digest).ok_or_else(|| {
+            arkret_state::OrderedControlBatchAbort::Structural(format!(
+                "signed Agent PCR command member {digest} is missing",
+            ))
+        })?;
+        Ok(arkret_state::OrderedControlUnitEvent {
+            digest: digest.clone(),
+            event: event.clone(),
+            digest_suite: *digest_suite,
+        })
+    })
+    .map_err(|error| {
+        crate::app_error!(
+            StateMismatch,
+            format!("Agent PCR signed command history is invalid: {error}"),
+        )
+    })?;
+    let committed_command_results = command_results
+        .into_iter()
+        .filter(|result| result.outcome == arkret_wire::CommandOutcome::Committed)
+        .collect();
+    Ok(AgentPcrOrderedHistory {
+        seal_view,
+        units,
+        committed_command_results,
+    })
+}
 
 fn managed_controller_core_id(controller_principal_id: &str) -> Result<DidCoreId, AppError> {
     DidCoreId::new(controller_principal_id.to_owned())

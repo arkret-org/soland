@@ -15,7 +15,7 @@ pub(super) fn router() -> Router {
     Router::with_path("messages/prepare").post(prepare)
 }
 fn invalid(error: impl std::fmt::Display) -> AppError {
-    AppError::new(ErrorCode::SchemaViolation, error.to_string())
+    crate::app_error!(SchemaViolation, error.to_string())
 }
 
 async fn device_active(
@@ -46,8 +46,8 @@ async fn validate_encryption_context(
         return Ok(());
     };
     if &frozen.effective_scope != scope || frozen.sender_domain != device {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "message encryption scope or sender does not match target and authenticated device",
         ));
     }
@@ -58,8 +58,8 @@ async fn validate_encryption_context(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 "accepted MLS group state is unavailable",
             )
         })?;
@@ -87,8 +87,8 @@ async fn validate_encryption_context(
                     && removal.circle_id.as_deref() == scope.circle_id().map(|id| id.as_str())
             })
     {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        return Err(crate::app_error!(
+            FrontierUnavailable,
             "frozen message encryption context is no longer applicable",
         ));
     }
@@ -117,8 +117,8 @@ async fn prepare(
     }
     let observed_at = crate::wire::now();
     body.validate_time(observed_at).map_err(|_| {
-        AppError::new(
-            ErrorCode::AuthoringRequestExpired,
+        crate::app_error!(
+            AuthoringRequestExpired,
             "message preparation has expired or has a future creation time",
         )
     })?;
@@ -145,14 +145,14 @@ async fn prepare(
         .map_err(|e| AppError::internal(e.to_string()))?
     {
         if record.request_hash != request_hash {
-            return Err(AppError::new(
-                ErrorCode::DuplicateConflict,
+            return Err(crate::app_error!(
+                DuplicateConflict,
                 "message request_id already has another intent",
             ));
         }
         if record.expires_at <= observed_at {
-            return Err(AppError::new(
-                ErrorCode::AuthoringRequestExpired,
+            return Err(crate::app_error!(
+                AuthoringRequestExpired,
                 "message preparation expired",
             ));
         }
@@ -197,8 +197,8 @@ async fn prepare(
     leaves.sort();
     leaves.dedup();
     let [authority_ref] = leaves.as_slice() else {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        return Err(crate::app_error!(
+            FrontierUnavailable,
             "message preparation requires one accepted Realm authority head",
         ));
     };
@@ -207,8 +207,8 @@ async fn prepare(
     }
     .validate_protocol_bounds()
     .map_err(|_| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
+        crate::app_error!(
+            FrontierUnavailable,
             "accepted authorization Seal is unavailable",
         )
     })?;
@@ -235,8 +235,8 @@ async fn prepare(
                     .contacts()
                     .settled_direct_binding_for_realm(body.realm_id.as_str())
                     .ok_or_else(|| {
-                        AppError::new(
-                            ErrorCode::FrontierUnavailable,
+                        crate::app_error!(
+                            FrontierUnavailable,
                             "settled Direct Conversation binding unavailable",
                         )
                     })?
@@ -260,7 +260,7 @@ async fn prepare(
         .projections()
         .predecessor_digest_suite(&body.realm_id, authority_ref)
         .await
-        .map_err(|e| AppError::new(ErrorCode::FrontierUnavailable, e.to_string()))?;
+        .map_err(|e| crate::app_error!(FrontierUnavailable, e.to_string()))?;
     for authority in &authorities {
         let draft = MessagePrepareOutcome::prepare(
             &body,
@@ -295,8 +295,8 @@ async fn prepare(
     }
     let mut outcome = outcome.ok_or_else(|| {
         failure.unwrap_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 "accepted message authorization unavailable",
             )
         })
@@ -326,14 +326,11 @@ async fn prepare(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::AuthoringRequestExpired,
-                "preparation record is unavailable",
-            )
+            crate::app_error!(AuthoringRequestExpired, "preparation record is unavailable",)
         })?;
     if landed.request_hash != request_hash {
-        return Err(AppError::new(
-            ErrorCode::DuplicateConflict,
+        return Err(crate::app_error!(
+            DuplicateConflict,
             "message request identity conflicts with concurrent request",
         ));
     }

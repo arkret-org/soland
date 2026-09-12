@@ -6,8 +6,10 @@ use super::*;
 
 fn validation(error: arkret_wire::WireError) -> AppError {
     match error {
-        arkret_wire::WireError::ProtocolCode { code, message } => AppError::new(code, message),
-        error => AppError::new(ErrorCode::SchemaViolation, error.to_string()),
+        arkret_wire::WireError::ProtocolCode { code, message } => {
+            AppError::from_rejection(code, message)
+        }
+        error => crate::app_error!(SchemaViolation, error.to_string()),
     }
 }
 
@@ -22,24 +24,18 @@ pub(super) async fn resolve(
 ) -> JsonResult<CurrentPrincipalOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let bytes = req.payload().await.map_err(|_| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
-            "invalid current principal request",
-        )
-    })?;
+    let bytes = req
+        .payload()
+        .await
+        .map_err(|_| crate::app_error!(SchemaViolation, "invalid current principal request",))?;
     if bytes.len() > arkret_models_identity::identity_resolution::CURRENT_PRINCIPAL_MAX_BYTES {
-        return Err(AppError::new(
-            ErrorCode::PayloadTooLarge,
+        return Err(crate::app_error!(
+            PayloadTooLarge,
             "current principal request exceeds byte budget",
         ));
     }
-    let body: CurrentPrincipalRequestBody = serde_json::from_slice(bytes).map_err(|_| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
-            "invalid current principal request",
-        )
-    })?;
+    let body: CurrentPrincipalRequestBody = serde_json::from_slice(bytes)
+        .map_err(|_| crate::app_error!(SchemaViolation, "invalid current principal request",))?;
     body.validate().map_err(validation)?;
     if body.account_id.principal_id.as_str() != session.actor
         || body.account_id.station_id.as_str() != state.service_id()
@@ -50,12 +46,7 @@ pub(super) async fn resolve(
         .persistence()
         .current_principal(&body.account_id, state.projections().cell_registry())
         .await
-        .map_err(|_| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                "current principal unavailable",
-            )
-        })?;
+        .map_err(|_| crate::app_error!(TemporarilyUnavailable, "current principal unavailable",))?;
     let CurrentPrincipalRead::Ready {
         pcr_realm_id,
         projection,
@@ -64,8 +55,8 @@ pub(super) async fn resolve(
     else {
         // Authentication establishes that this own account exists; no creation
         // anchor/current cell yet is unavailable, not an absent profile.
-        return Err(AppError::new(
-            ErrorCode::TemporarilyUnavailable,
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
             "current principal unavailable",
         ));
     };
@@ -81,7 +72,7 @@ pub(super) async fn resolve(
         } else {
             ErrorCode::TemporarilyUnavailable
         };
-        AppError::new(code, "current principal result unavailable")
+        AppError::from_rejection(code, "current principal result unavailable")
     })?;
     json_ok(result)
 }

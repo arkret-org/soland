@@ -34,11 +34,11 @@ pub struct GcCandidate {
 /// Scan one Realm's Control Event + Seal stores and emit GC candidates.
 ///
 /// A Control Move is a candidate when ALL hold:
-///   - It is in the sealed control-event log (`list_sealed`) — i.e. it was part of some Seal
-///     coverage set.
+///   - It is in the decided control-event log (`list_decided`) — i.e. a Seal finalized it coverage
+///     set.
 ///   - That referencing Seal is NOT a current leaf — i.e. its coverage has been superseded.
 ///   - The Control Move is NOT in any current leaf coverage set.
-///   - The Control Move is NOT in the pending pool (`list_pending_for_notary`).
+///   - The Control Move is NOT in the pending unit pool (`list_pending_units_for_notary`).
 pub async fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandidate> {
     let projections = state.projections();
 
@@ -68,12 +68,12 @@ pub async fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcC
         live_coverage.extend(covered.into_iter().map(|digest| digest.to_string()));
     }
 
-    // 3) Walk the sealed control-event log; emit those that are neither pending nor live-covered.
+    // 3) Walk the decided control-event log; emit those that are neither pending nor live-covered.
     let mut candidates: Vec<GcCandidate> = Vec::new();
     let mut cursor: Option<Hash> = None;
     loop {
         let page = match projections
-            .sealed_control_events(realm_id, cursor.as_ref(), 256)
+            .decided_control_events(realm_id, cursor.as_ref(), 256)
             .await
         {
             Ok(page) if !page.is_empty() => page,

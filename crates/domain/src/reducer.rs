@@ -122,9 +122,7 @@ pub use projections::{
     SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
-pub(crate) use projections::{
-    CallTransitionHead, operation_history_basis_seals, space_container_id_from_payload,
-};
+pub(crate) use projections::{operation_history_basis_seals, space_container_id_from_payload};
 
 #[cfg(test)]
 mod tests;

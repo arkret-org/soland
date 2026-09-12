@@ -15,8 +15,9 @@ use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressC
 use arkret_state::state::{
     CellStateModelBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
     ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
-    ControlSealScheduleRepairStats, PendingControlEventRecord, SealDigestSuites, SealEffect,
-    SealLeafUnionProof, SealReject, SealStore, SealedControlEventRecord, StoreError, StoreResult,
+    ControlSealScheduleRepairStats, ControlUnitIngressMember, DecidedControlEventRecord,
+    PendingControlEventRecord, PendingControlUnitRecord, SealDigestSuites, SealEffect,
+    SealLeafUnionProof, SealReject, SealStore, StoreError, StoreResult,
 };
 use arkret_state::state_model::ResolvedCellState;
 use arkret_state::state_model::ordered_log::IssuedOp;
@@ -546,7 +547,23 @@ impl ProjectionService {
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
         self.control_event_store()
-            .put_pending_with_ingress(event, ingress, digest_suite)
+            .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
+                event: event.clone(),
+                digest_suite,
+                ingress: ingress.clone(),
+            }])
+            .await
+            .map(|_| ())
+    }
+
+    /// Persist one already-validated atomic control command unit without
+    /// losing its normative member order.
+    pub async fn put_pending_control_unit(
+        &self,
+        members: &[ControlUnitIngressMember],
+    ) -> StoreResult<Vec<Hash>> {
+        self.control_event_store()
+            .put_pending_unit_with_ingress(members)
             .await
     }
 
@@ -826,14 +843,14 @@ impl ProjectionService {
             .await
     }
 
-    pub async fn pending_control_events_for_notary(
+    pub async fn pending_control_units_for_notary(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<Event>> {
+    ) -> StoreResult<Vec<PendingControlUnitRecord>> {
         self.control_event_store()
-            .list_pending_for_notary(realm_id, cursor, limit)
+            .list_pending_units_for_notary(realm_id, cursor, limit)
             .await
     }
 
@@ -848,14 +865,14 @@ impl ProjectionService {
             .await
     }
 
-    pub async fn sealed_control_events(
+    pub async fn decided_control_events(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<SealedControlEventRecord>> {
+    ) -> StoreResult<Vec<DecidedControlEventRecord>> {
         self.control_event_store()
-            .list_sealed(realm_id, cursor, limit)
+            .list_decided(realm_id, cursor, limit)
             .await
     }
 
@@ -1551,7 +1568,7 @@ impl ProjectionService {
     {
         let _authority_guard = self.history_authority_view_cas_guard();
         let digest_suites = self.seal_digest_suites(seal).await?;
-        arkret_state::apply_seal_in_context(
+        let prepared = arkret_state::prepare_seal_in_context(
             seal,
             self.control_event_store(),
             self.seal_store(),
@@ -1562,7 +1579,24 @@ impl ProjectionService {
             |event, digest_suite| self.project_cell_writes_with_digest_suite(event, digest_suite),
             context,
         )
-        .await
+        .await?;
+        let committed = self
+            .event_seal_committer()
+            .commit_if_head(
+                seal,
+                digest_suites.seal_digest_suite,
+                seal.predecessor_ref.as_ref(),
+                &prepared.new_ops,
+                &prepared.covered_event_digests,
+                &[],
+            )
+            .await?;
+        if !committed {
+            return Err(
+                StoreError::Conflict("Realm confirmed Seal head changed".to_owned()).into(),
+            );
+        }
+        Ok(prepared.effect)
     }
 
     /// Verify an incoming Seal completely while leaving every durable store
@@ -1616,7 +1650,7 @@ impl ProjectionService {
     {
         let _authority_guard = self.history_authority_view_cas_guard();
         let digest_suites = self.seal_digest_suites(seal).await?;
-        arkret_state::apply_accepted_seal_in_context(
+        let prepared = arkret_state::prepare_accepted_seal_in_context(
             seal,
             self.control_event_store(),
             self.seal_store(),
@@ -1629,7 +1663,24 @@ impl ProjectionService {
             },
             context,
         )
-        .await
+        .await?;
+        let committed = self
+            .event_seal_committer()
+            .commit_if_head(
+                seal,
+                digest_suites.seal_digest_suite,
+                seal.predecessor_ref.as_ref(),
+                &prepared.new_ops,
+                &prepared.covered_event_digests,
+                &[],
+            )
+            .await?;
+        if !committed {
+            return Err(
+                StoreError::Conflict("Realm confirmed Seal head changed".to_owned()).into(),
+            );
+        }
+        Ok(prepared.effect)
     }
 
     pub async fn seal_digest_suites(&self, seal: &Seal) -> Result<SealDigestSuites, SealReject> {
@@ -1874,9 +1925,24 @@ impl ProjectionService {
         )
         .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
         self.control_event_store()
-            .put_pending_with_ingress(event, ingress, digest_suite)
+            .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
+                event: event.clone(),
+                digest_suite,
+                ingress: ingress.clone(),
+            }])
             .await?;
-        self.control_event_store().mark_sealed(&digest, seal).await
+        if !seal
+            .command_results
+            .iter()
+            .any(|result| result.unit_event_digests.contains(&digest))
+        {
+            return Err(StoreError::Conflict(
+                "test Seal does not decide the pending Control Event".to_owned(),
+            ));
+        }
+        self.control_event_store()
+            .record_seal_command_results(seal)
+            .await
     }
 
     #[must_use]
@@ -3782,7 +3848,7 @@ mod control_governance_health_tests {
             let event = ackless_event(&format!("late-{index}"));
             realm_id = Some(event.realm_id.clone());
             let ack = deadline_ack(&event, received_at);
-            let seal = Seal {
+            let mut seal = Seal {
                 id: SealId::new(format!("ak:seal:sha256:{index:064x}")).unwrap(),
                 realm_id: event.realm_id.clone(),
                 predecessor_ref: None,
@@ -3818,17 +3884,23 @@ mod control_governance_health_tests {
             };
             let store = service.control_event_store();
             store
-                .put_pending_with_ingress(
-                    &event,
-                    &ControlProposalIngress::AckRequired(ack.clone()),
+                .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
+                    event: event.clone(),
+                    digest_suite: arkret_canonical::DigestSuite::Sha256,
+                    ingress: ControlProposalIngress::AckRequired(ack.clone()),
+                }])
+                .await
+                .unwrap();
+            seal.command_results = vec![
+                arkret_wire::SealCommandOutcome::committed(
+                    ack.proposal_digest.clone(),
+                    vec![ack.proposal_digest.clone()],
+                    Vec::new(),
                     arkret_canonical::DigestSuite::Sha256,
                 )
-                .await
-                .unwrap();
-            store
-                .mark_sealed(&ack.proposal_digest, &seal)
-                .await
-                .unwrap();
+                .unwrap(),
+            ];
+            store.record_seal_command_results(&seal).await.unwrap();
             if index == 128 || index == 999 {
                 let health = service
                     .control_governance_health(
@@ -3847,7 +3919,7 @@ mod control_governance_health_tests {
         let mut count = 0;
         loop {
             let page = service
-                .sealed_control_events(&realm_id, cursor.as_ref(), 73)
+                .decided_control_events(&realm_id, cursor.as_ref(), 73)
                 .await
                 .unwrap();
             if page.is_empty() {

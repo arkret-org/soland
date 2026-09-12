@@ -504,39 +504,51 @@ async fn finalize_prepared_batch(
                 reason,
             )
         })?;
-    for event in prepared {
-        // The cascade prepares internally-admitted `ak.member.state` Events,
-        // which are never the Ack-less self-principal PCR class: the submit
-        // lane therefore minted or verified a canonical Ack during
-        // preparation, and its absence here is an invariant violation.
-        let control_proposal_ack = event
-            .command
-            .control_proposal_ingress
-            .as_ref()
-            .and_then(ControlProposalIngress::ack)
-            .cloned()
-            .ok_or_else(|| {
-                cascade_error(
+    let pending_unit = prepared
+        .iter()
+        .map(|event| {
+            // The cascade prepares internally-admitted `ak.member.state` Events,
+            // which are never the Ack-less self-principal PCR class: the submit
+            // lane therefore minted or verified a canonical Ack during
+            // preparation, and its absence here is an invariant violation.
+            let ingress = event
+                .command
+                .control_proposal_ingress
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| {
+                    cascade_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "cascade-prepared Control Move is missing its Control Proposal Ack",
+                    )
+                })?;
+            if ingress.ack().is_none() {
+                return Err(cascade_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
                     "cascade-prepared Control Move is missing its Control Proposal Ack",
-                )
-            })?;
-        state
-            .projections()
-            .put_pending_control_event_with_ack(
-                &event.control_event,
-                &control_proposal_ack,
-                event.digest_suite,
+                ));
+            }
+            Ok(arkret_state::state::ControlUnitIngressMember {
+                event: event.control_event.clone(),
+                digest_suite: event.digest_suite,
+                ingress,
+            })
+        })
+        .collect::<Result<Vec<_>, SubmitOneError>>()?;
+    state
+        .projections()
+        .put_pending_control_unit(&pending_unit)
+        .await
+        .map_err(|error| {
+            cascade_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("accepted cascade pending index unavailable: {error}"),
             )
-            .await
-            .map_err(|error| {
-                cascade_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted cascade pending index unavailable: {error}"),
-                )
-            })?;
+        })?;
+    for event in prepared {
         crate::routing::events::projection::project_membership_operation(
             state,
             &event.actor_id,

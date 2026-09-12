@@ -541,7 +541,13 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
         )
     } else if events.len() == 1
         && events[0].executed_by.as_ref() != Some(&events[0].actor_id)
-        && arkret_bootstrap::materialize_agent_pcr_control(events, &genesis_cell_write_projector)
+        && arkret_bootstrap::agent_pcr_genesis_control_unit(&events[0])
+            .and_then(|unit| {
+                arkret_bootstrap::materialize_agent_pcr_control(
+                    std::slice::from_ref(&unit),
+                    &genesis_cell_write_projector,
+                )
+            })
             .is_ok()
     {
         (

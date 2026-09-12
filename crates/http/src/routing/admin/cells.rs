@@ -17,10 +17,9 @@
 //! never mistaken for security boundaries.
 
 use arkret_identifiers::{CellRef, RealmId};
-use arkret_state::state_model::ResolvedCellState;
+use arkret_state::state_model::{ResolvedCellState, StateModelKind};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
@@ -37,26 +36,11 @@ pub(super) fn router() -> Router {
 /// Response body for `GET /_soland/admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminResolvedCellStateOutcome {
-    /// Canonical wire form of the cell id (`ak:cell:<family>:<subject>`).
-    pub cell_id: String,
-    /// `"value"` when the cell holds a resolved JSON value; `"bottom"` when
-    /// the join produced a `Bottom(_)` diagnostic; `"absent"` when the
-    /// cell exists in the registry but has never been written.
-    pub state: String,
-    /// Resolved JSON value when `state="value"`; absent otherwise.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<Value>,
-    /// Structured bottom diagnostic when `state="bottom"`; absent otherwise.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bottom: Option<Value>,
-    /// State model wire string from the cell registry binding.
-    /// One of `causal_register`, `sequenced_state`, `or_set`, `ordered_log`,
-    /// or `counter`.
-    pub state_model: String,
-    /// Bottom policy wire string from the cell registry binding.
-    /// `"reject"` (safety-critical), `"expose"` (display state) or
-    /// `"inert"` (the bound state model cannot produce Bottom).
-    pub bottom_policy: String,
+    pub cell_id: CellRef,
+    pub state: ResolvedCellState,
+    pub state_model: StateModelKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom_policy: Option<arkret_wire::CausalRegisterBottomPolicy>,
 }
 
 /// Response body for `GET /_soland/admin/cells?...` (list).
@@ -72,31 +56,15 @@ pub struct AdminCellListOutcome {
 /// Map a ResolvedCellState enum into the wire response shape.
 fn state_response_from(
     cell_id: &CellRef,
-    state: Option<&ResolvedCellState>,
-    state_model: &str,
-    bottom_policy: &str,
+    state: &ResolvedCellState,
+    state_model: StateModelKind,
+    bottom_policy: Option<arkret_wire::CausalRegisterBottomPolicy>,
 ) -> AdminResolvedCellStateOutcome {
-    let (state_str, value, bottom) = match state {
-        Some(
-            value @ (ResolvedCellState::Value(_)
-            | ResolvedCellState::Causal(_)
-            | ResolvedCellState::Sequenced(_)),
-        ) => ("value".to_owned(), value.settled_value().cloned(), None),
-        Some(ResolvedCellState::Bottom(b)) => {
-            // Bottom is `Serialize` via SDK; render through serde_json so
-            // we don't have to keep the field list in sync by hand.
-            let bottom_json = serde_json::to_value(b).unwrap_or(Value::Null);
-            ("bottom".to_owned(), None, Some(bottom_json))
-        }
-        None => ("absent".to_owned(), None, None),
-    };
     AdminResolvedCellStateOutcome {
-        cell_id: cell_id.as_str().to_owned(),
-        state: state_str,
-        value,
-        bottom,
-        state_model: state_model.to_owned(),
-        bottom_policy: bottom_policy.to_owned(),
+        cell_id: cell_id.clone(),
+        state: state.clone(),
+        state_model,
+        bottom_policy,
     }
 }
 
@@ -164,17 +132,15 @@ async fn admin_get_cell(
         .projections()
         .resolve_cell(&realm, &cell_ref)
         .map_err(|e| crate::app_error!(NotFound, format!("cell family not registered: {e}"),))?;
-    let state_model_kind = binding.model.kind().as_wire_str();
-    let bottom_policy = binding
-        .bottom_policy
-        .map_or("none", arkret_wire::CausalRegisterBottomPolicy::as_str);
+    let state_model_kind = binding.model.kind();
+    let bottom_policy = binding.bottom_policy;
 
     let cell_state_opt = {
         let proj = state.projections().snapshot();
         proj.realm_cell(realm.as_str(), &cell_ref).cloned()
     };
 
-    if cell_state_opt.is_none() {
+    let Some(cell_state) = cell_state_opt else {
         // Distinguish "registered family but never written" (absent) from
         // "unknown cell" (404). We've already verified the family resolves
         // above, so this is an absent cell — return 404 with the canonical
@@ -184,11 +150,11 @@ async fn admin_get_cell(
             NotFound,
             format!("cell `{}` has no sealed state", cell_ref.as_str()),
         ));
-    }
+    };
 
     json_ok(state_response_from(
         &cell_ref,
-        cell_state_opt.as_ref(),
+        &cell_state,
         state_model_kind,
         bottom_policy,
     ))
@@ -273,15 +239,15 @@ async fn admin_list_cells(
                 continue;
             }
         };
-        let state_model_kind = binding.model.kind().as_wire_str();
-        let bottom_policy = binding
-            .bottom_policy
-            .map_or("none", arkret_wire::CausalRegisterBottomPolicy::as_str);
+        let Some(cell_state) = cell_state else {
+            tracing::warn!(cell = %cell, "confirmed cell is absent from the resolved projection snapshot");
+            continue;
+        };
         cells_out.push(state_response_from(
             &cell,
-            cell_state.as_ref(),
-            state_model_kind,
-            bottom_policy,
+            &cell_state,
+            binding.model.kind(),
+            binding.bottom_policy,
         ));
     }
 
@@ -300,30 +266,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn state_response_value_serializes_with_value_field() {
+    fn state_response_preserves_the_shared_state_model_types() {
         let cell =
             CellRef::new("ak:cell:ak.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let st = ResolvedCellState::Value(json!("join"));
-        let resp = state_response_from(&cell, Some(&st), "transition", "reject");
+        let resp = state_response_from(&cell, &st, StateModelKind::OrSet, None);
         let v = serde_json::to_value(&resp).unwrap();
-        assert_eq!(v["state"], "value");
-        assert_eq!(v["value"], json!("join"));
-        assert!(v.get("bottom").is_none() || v["bottom"].is_null());
-        assert_eq!(v["state_model"], "transition");
-        assert_eq!(v["bottom_policy"], "reject");
+        assert_eq!(v["state"], json!({"value": "join"}));
+        assert_eq!(v["state_model"], "or_set");
+        assert!(v.get("bottom_policy").is_none());
     }
 
     #[test]
-    fn state_response_absent_state_omits_value_and_bottom() {
+    fn state_response_preserves_typed_bottom_policy() {
         let cell =
             CellRef::new("ak:cell:ak.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
-        let resp = state_response_from(&cell, None, "or_set", "expose");
+        let event_id =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [7; 32]);
+        let st = ResolvedCellState::Bottom(arkret_wire::Bottom::conflict(
+            vec![cell.clone()],
+            vec![arkret_wire::CausalHead {
+                event_id,
+                value: json!("candidate"),
+            }],
+        ));
+        let resp = state_response_from(
+            &cell,
+            &st,
+            StateModelKind::CausalRegister,
+            Some(arkret_wire::CausalRegisterBottomPolicy::Expose),
+        );
         let v = serde_json::to_value(&resp).unwrap();
-        assert_eq!(v["state"], "absent");
-        // `Option::None` with skip_serializing_if drops the keys entirely.
-        assert!(v.get("value").is_none());
-        assert!(v.get("bottom").is_none());
+        assert_eq!(v["state_model"], "causal_register");
+        assert_eq!(v["bottom_policy"], "expose");
+        assert_eq!(v["state"]["bottom"]["kind"], "conflict");
     }
 
     #[test]

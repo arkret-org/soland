@@ -218,9 +218,6 @@ pub struct ProjectionState {
     /// (cleared on `ak.agent.key.revoke`).
     /// Agent id -> (active key id -> accepted authorize Event id).
     pub agent_authorized_keys: BTreeMap<String, BTreeMap<String, String>>,
-    /// Latest accepted transition head for each independent call cell. This detects
-    /// same-basis sibling transitions without coupling orthogonal call axes.
-    pub call_transition_heads: BTreeMap<arkret_identifiers::CellRef, CallTransitionHead>,
     /// R3.1 — Realm-link projection. Outer key is the source
     /// `realm_id` (the envelope `realm_id` of a `ak.realm.link` event);
     /// the inner Vec accumulates every directed link the Realm has

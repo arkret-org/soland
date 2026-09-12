@@ -345,7 +345,7 @@ fn origin_binding(
     if let Some(effective) = payload.get("effective_scope") {
         scope = serde_json::from_value(effective.clone()).map_err(invalid)?;
     }
-    if cell.component() == "ak.component.circle.member.v1" {
+    if cell.component() == arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1 {
         let circle = payload
             .get("circle_id")
             .and_then(Value::as_str)
@@ -371,7 +371,7 @@ fn origin_binding(
             .map_err(invalid)?,
         },
         "strand" => {
-            let id = if cell.component() == "ak.component.strand.watch.v1" {
+            let id = if cell.component() == arkret_wire::CellFamilyId::STRAND_WATCH_V1 {
                 payload
                     .get("strand_id")
                     .and_then(Value::as_str)
@@ -427,7 +427,9 @@ async fn lifecycle_values(
     let mut actors = BTreeMap::new();
     for origin in origins {
         let cell = CellRef::new(origin.cell_id.clone()).map_err(invalid)?;
-        if CellId::from_ref(&cell).map_err(invalid)?.component() != "ak.component.agent.status.v1" {
+        if CellId::from_ref(&cell).map_err(invalid)?.component()
+            != arkret_wire::CellFamilyId::AGENT_STATUS_V1
+        {
             continue;
         }
         let Some(state) = cells.get(&cell) else {
@@ -591,7 +593,7 @@ pub(super) async fn publish(
                 }
                 serde_json::json!({"status":"heads","heads":result_heads})
             }
-            Some(state) if family == "ak.component.agent.key.v1" => {
+            Some(state) if family == arkret_wire::CellFamilyId::AGENT_KEY_V1 => {
                 let Some(value) = state.settled_value() else {
                     ready = false;
                     continue;

@@ -765,12 +765,13 @@ impl AppStateTestExt for AppState {
             .and_then(|resources| resources.control_event_store.clone())
             .expect("test Control Event store is unavailable for this AppState");
         store
-            .put_pending_with_ingress(
-                event,
-                &ControlProposalIngress::AckRequired(ack.clone()),
+            .put_pending_unit_with_ingress(&[arkret_state::state::ControlUnitIngressMember {
+                event: event.clone(),
                 digest_suite,
-            )
+                ingress: ControlProposalIngress::AckRequired(ack.clone()),
+            }])
             .await
+            .map(|_| ())
     }
 
     async fn test_append_confirmed_effects(
@@ -1158,11 +1159,9 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             .await
         {
             Ok(true) => {
-                // Match the production memory commit boundary: a sealed Move
-                // must leave the pending queue before another signing pass.
-                for digest in &seal.delta {
-                    self.control_event_store.mark_sealed(digest, seal).await?;
-                }
+                self.control_event_store
+                    .record_seal_command_results(seal)
+                    .await?;
                 Ok(true)
             }
             Ok(false) => {

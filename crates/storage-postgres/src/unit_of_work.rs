@@ -567,6 +567,72 @@ async fn stage_agent_membership_cascade(
     Ok(())
 }
 
+fn command_unit_digests_by_event_id(
+    events: &[EventCommitRequest],
+    cascade: Option<&soland_storage::AgentMembershipCascadeCommit>,
+) -> PersistenceResult<std::collections::BTreeMap<String, Vec<arkret_wire::Hash>>> {
+    let digests_by_event_id = events
+        .iter()
+        .map(|request| {
+            (
+                request.event.event_id.clone(),
+                request.event.canonical_digest.clone(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let ordered_event_ids = match cascade {
+        Some(soland_storage::AgentMembershipCascadeCommit::AtomicSelfLeave {
+            controller_transition_event_id,
+            agent_transition_event_ids,
+            ..
+        }) => std::iter::once(controller_transition_event_id)
+            .chain(agent_transition_event_ids)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        Some(soland_storage::AgentMembershipCascadeCommit::EmergencyTerminal { record }) => {
+            vec![record.controller_terminal_event_id.to_string()]
+        }
+        Some(soland_storage::AgentMembershipCascadeCommit::EmergencyCleanup {
+            agent_transition_event_ids,
+            ..
+        }) => agent_transition_event_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+    let registered_unit = ordered_event_ids
+        .iter()
+        .map(|event_id| {
+            digests_by_event_id.get(event_id).cloned().ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "duplicate_conflict: registered command unit Event set mismatch".to_owned(),
+                )
+            })
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    let mut result = std::collections::BTreeMap::new();
+    for request in events {
+        if request.control_proposal_ingress.is_none() {
+            continue;
+        }
+        let unit = if cascade.is_some() {
+            registered_unit.clone()
+        } else {
+            vec![request.event.canonical_digest.clone()]
+        };
+        result.insert(request.event.event_id.clone(), unit);
+    }
+    if cascade.is_some() && (registered_unit.len() != events.len() || result.len() != events.len())
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: registered Agent command unit contains a non-Control Event"
+                .to_owned(),
+        ));
+    }
+    Ok(result)
+}
+
 enum CommitTransactionOutcome {
     Committed(EventCommitOutcome),
     Collision,
@@ -995,6 +1061,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             &request.events,
             request.agent_approval_nonce.as_ref(),
         )?;
+        let command_units = command_unit_digests_by_event_id(
+            &request.events,
+            request.agent_membership_cascade.as_ref(),
+        )?;
         let mut conn = pg_conn(&self.pool).await?;
         let transaction_outcome = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             if let Some(outcome) = preflight_event_batch(conn, &request.events).await? {
@@ -1235,10 +1305,24 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         "Control Move ingress class encoding failed: {error}"
                     ))
                 })?;
+                let command_unit_event_digests = command_units
+                    .get(&request.event.event_id)
+                    .ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "accepted Control Move is missing its registered command unit"
+                                .to_owned(),
+                        )
+                    })?;
+                let command_unit_event_digests =
+                    serde_json::to_value(command_unit_event_digests).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "registered command unit encoding failed: {error}"
+                        ))
+                    })?;
                 sql_query(
                     "INSERT INTO state_control_events \
-                     (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class, command_unit_event_digests) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7) \
                      ON CONFLICT (event_digest) DO UPDATE SET \
                        control_proposal_ack = COALESCE( \
                          state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
@@ -1247,6 +1331,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                        AND state_control_events.digest_suite = EXCLUDED.digest_suite \
                        AND state_control_events.event_json = EXCLUDED.event_json \
                        AND state_control_events.ingress_class = EXCLUDED.ingress_class \
+                       AND state_control_events.command_unit_event_digests = EXCLUDED.command_unit_event_digests \
                        AND (state_control_events.control_proposal_ack IS NULL \
                          OR EXCLUDED.control_proposal_ack IS NULL \
                          OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
@@ -1257,6 +1342,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .bind::<Jsonb, _>(&request.event.envelope)
                 .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
                 .bind::<Jsonb, _>(&ingress_class)
+                .bind::<Jsonb, _>(&command_unit_event_digests)
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)

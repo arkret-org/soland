@@ -399,8 +399,8 @@ fn require_exact_successful_install_replay(
     requested_digest: &str,
 ) -> Result<(), AppError> {
     if stored_key != requested_key {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::AppletAlreadyRegistered,
+        return Err(crate::app_error!(
+            AppletAlreadyRegistered,
             "applet package is already installed in this scope",
         ));
     }

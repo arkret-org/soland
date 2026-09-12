@@ -210,8 +210,8 @@ pub(in crate::routing) async fn validate_message_authoring_candidate(
         result
     };
     if event.kind != arkret_wire::EventKind::MessageCreate || !event.proofs.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "expected unsigned Message candidate",
         ));
     }
@@ -260,10 +260,10 @@ pub(in crate::routing) async fn validate_message_authoring_candidate(
         event,
         suite,
     )
-    .map_err(|e| AppError::new(ErrorCode::SchemaViolation, e.to_string()))?;
+    .map_err(|e| crate::app_error!(SchemaViolation, e.to_string()))?;
     let operations = std::slice::from_ref(&operation);
     validate_operation_semantics(state, operations)
-        .map_err(|reason| AppError::new(ErrorCode::SchemaViolation, reason))?;
+        .map_err(|reason| crate::app_error!(SchemaViolation, reason))?;
     for result in [
         validate_operation_policy(state, operations).await,
         validate_content_encryption_floor(state, operations).await,

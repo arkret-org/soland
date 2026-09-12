@@ -74,7 +74,7 @@ pub(crate) async fn commit_sources(
             .cmp(right.cell_id.as_str().as_bytes())
     });
     for write in writes {
-        let Some((_, is_mv)) = families.iter().find(|(family, _)| {
+        let Some((_, is_causal_register)) = families.iter().find(|(family, _)| {
             write
                 .cell_id
                 .as_str()
@@ -214,7 +214,7 @@ pub(crate) async fn commit_sources(
             .bind::<Text,_>(write.cell_id.as_str()).bind::<Binary,_>(event.event_id.token_bytes().to_vec())
             .bind::<Text,_>(&digest).bind::<Jsonb,_>(value).bind::<Array<Text>,_>(&causal).bind::<Text,_>(target_kind).bind::<Text,_>(&target_key)
             .execute(&mut *conn).await.map_err(PersistenceError::database)?;
-        if *is_mv {
+        if *is_causal_register {
             sql_query("DELETE FROM current_data_heads h USING current_data_sources s WHERE h.realm_id=$1 AND h.scope_key=$2 AND h.cell_id=$3 AND s.realm_id=h.realm_id AND s.scope_key=h.scope_key AND s.cell_id=h.cell_id AND s.event_id=h.event_id AND s.event_digest=ANY($4)")
                 .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
                 .bind::<Text,_>(write.cell_id.as_str()).bind::<Array<Text>,_>(&causal)
@@ -227,7 +227,7 @@ pub(crate) async fn commit_sources(
         } else {
             if matches!(
                 cell.component(),
-                "ak.component.pin.v1" | "ak.component.message.reactions.v1"
+                arkret_wire::CellFamilyId::PIN_V1 | arkret_wire::CellFamilyId::MESSAGE_REACTIONS_V1
             ) {
                 domain_cells.push((
                     write.cell_id.clone(),

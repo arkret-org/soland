@@ -950,7 +950,21 @@ async fn materialize_agent_realm_control(
     realm_id: &RealmId,
     records: &[soland_services::events::AcceptedEvent],
 ) -> Result<MaterializedRealmControl, AppError> {
-    let mut events = Vec::with_capacity(records.len());
+    let accepted_seal = crate::notary::ensure_realm_seal_head(state, realm_id)
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FrontierUnavailable,
+                format!("accepted Agent PCR Seal is unavailable: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            crate::app_error!(
+                FrontierUnavailable,
+                "Agent PCR has no accepted Seal command history",
+            )
+        })?;
+    let mut events_by_digest = BTreeMap::new();
     let mut event_digest_suites = BTreeMap::new();
     for record in records {
         let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
@@ -997,10 +1011,30 @@ async fn materialize_agent_realm_control(
                 ),
             ));
         }
+        let digest = Hash::new(digest).map_err(|error| {
+            crate::app_error!(
+                StateMismatch,
+                format!("stored Agent PCR Event digest is invalid: {error}"),
+            )
+        })?;
         event_digest_suites.insert(event.event_id.clone(), record.digest_suite);
-        events.push(event);
+        if events_by_digest
+            .insert(digest, (event, record.digest_suite))
+            .is_some()
+        {
+            return Err(crate::app_error!(
+                StateMismatch,
+                "duplicate canonical Event digest in Agent PCR history",
+            ));
+        }
     }
-    let material = arkret_bootstrap::materialize_agent_pcr_control(&events, &|event| {
+    let ordered = crate::routing::identity::agent_pcr::resolve_agent_pcr_ordered_history(
+        state,
+        accepted_seal.clone(),
+        &events_by_digest,
+    )
+    .await?;
+    let material = arkret_bootstrap::materialize_agent_pcr_control(&ordered.units, &|event| {
         let event_digest_suite = event_digest_suites
             .get(&event.event_id)
             .copied()
@@ -1022,23 +1056,43 @@ async fn materialize_agent_realm_control(
             "Agent PCR material resolved to a different Realm",
         ));
     }
-    let seal_view = crate::notary::ensure_materialized_event_seal(
-        state,
-        realm_id,
-        &material.covered_event_digests,
-        &material.state_root,
-        &material.event_ops,
-        true,
-        None,
-    )
-    .await
-    .map_err(|error| {
-        crate::app_error!(
-            FrontierUnavailable,
-            format!("accepted Agent PCR Seal materialization failed: {error}"),
-        )
-    })?;
-    Ok(MaterializedRealmControl { seal_view })
+    if material.command_results != ordered.committed_command_results {
+        return Err(crate::app_error!(
+            StateMismatch,
+            "accepted Agent PCR command results do not match deterministic replay",
+        ));
+    }
+    if accepted_seal.state_root != material.state_root {
+        return Err(crate::app_error!(
+            StateMismatch,
+            "accepted Agent PCR Seal state_root does not match deterministic replay",
+        ));
+    }
+    let accepted_coverage = state
+        .projections()
+        .predecessor_covered_events(Some(&accepted_seal.id))
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FrontierUnavailable,
+                format!("accepted Agent PCR coverage is unavailable: {error}"),
+            )
+        })?;
+    if material
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        != accepted_coverage
+    {
+        return Err(crate::app_error!(
+            StateMismatch,
+            "accepted Agent PCR Seal coverage does not match deterministic replay",
+        ));
+    }
+    Ok(MaterializedRealmControl {
+        seal_view: ordered.seal_view,
+    })
 }
 
 pub(crate) async fn materialize_realm_event_seal(

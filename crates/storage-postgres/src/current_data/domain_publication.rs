@@ -147,7 +147,7 @@ pub(super) async fn materialize(
     let cell = arkret_wire::CellId::from_ref(&selector.cell_id).map_err(projection_error)?;
     // Message existence/redaction is a separate current dependency. Do not
     // expose reactions when that dependency is absent or pending.
-    if cell.component() == "ak.component.message.reactions.v1" {
+    if cell.component() == arkret_wire::CellFamilyId::MESSAGE_REACTIONS_V1 {
         let message = cell
             .subject()
             .parse::<arkret_wire::MessageId>()
@@ -164,18 +164,18 @@ pub(super) async fn materialize(
             redacted: bool,
         }
         let redacted=sql_query("SELECT EXISTS(SELECT 1 FROM current_data_sources s WHERE realm_id=$1 AND scope_key=$2 AND cell_id=$3) AS redacted")
-            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(&scope).bind::<Text,_>(format!("ak:cell:ak.component.object.redaction.v1:{}",cell.subject()))
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(&scope).bind::<Text,_>(format!("ak:cell:{}:{}", arkret_wire::CellFamilyId::OBJECT_REDACTION_V1,cell.subject()))
             .get_result::<Redacted>(&mut *conn).await.map_err(PersistenceError::database)?;
         if redacted.redacted {
             return Ok(None);
         }
     }
     let value = match cell.component() {
-        "ak.component.pin.v1" => {
+        arkret_wire::CellFamilyId::PIN_V1 => {
             domain_fold::validate_pin_admission(&assertions, admitted_id)?;
             domain_fold::pins(&assertions)?
         }
-        "ak.component.message.reactions.v1" => domain_fold::reactions(&assertions)?,
+        arkret_wire::CellFamilyId::MESSAGE_REACTIONS_V1 => domain_fold::reactions(&assertions)?,
         _ => return Ok(None),
     };
     let target = match target_kind {

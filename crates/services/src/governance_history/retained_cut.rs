@@ -122,7 +122,15 @@ pub fn prepare_retained_history_cut(
         .filter(|seal| seal.predecessor_ref.is_none())
     {
         let mut unit = Vec::new();
-        for digest in &seal.delta {
+        let [result] = seal.command_results.as_slice() else {
+            return Err(frontier(
+                "retained anchor must contain exactly one command unit",
+            ));
+        };
+        if result.outcome != arkret_wire::CommandOutcome::Committed {
+            return Err(frontier("retained anchor command unit is not committed"));
+        }
+        for digest in &result.unit_event_digests {
             let event = traversal
                 .pins
                 .iter()
@@ -135,12 +143,8 @@ pub fn prepare_retained_history_cut(
                     _ => None,
                 })
                 .ok_or_else(|| frontier("retained anchor unit is incomplete"))?;
-            unit.push((digest.clone(), event));
+            unit.push(event);
         }
-        let unit = arkret_state::state::deterministic_order(unit)
-            .into_iter()
-            .map(|(_, event)| event)
-            .collect::<Vec<_>>();
         arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&unit)
             .map_err(|error| frontier(error.to_string()))?;
         anchor_events.extend(seal.delta.iter().cloned());

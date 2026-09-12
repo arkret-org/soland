@@ -38,12 +38,12 @@ fn internal(error: impl std::fmt::Display) -> AppError {
     AppError::internal(error.to_string())
 }
 fn cursor_error(error: impl std::fmt::Display) -> AppError {
-    AppError::new(ErrorCode::CursorExpired, error.to_string())
+    crate::app_error!(CursorExpired, error.to_string())
 }
 fn authority_cursor_error(error: arkret_server::CursorAuthorityError) -> AppError {
     match error {
         arkret_server::CursorAuthorityError::Expired => cursor_error("bootstrap cursor expired"),
-        _ => AppError::new(ErrorCode::CursorIntegrityInvalid, error.to_string()),
+        _ => crate::app_error!(CursorIntegrityInvalid, error.to_string()),
     }
 }
 fn context(state: &AppState, traversal: &Traversal) -> Result<CursorBindingContext, AppError> {
@@ -100,12 +100,9 @@ pub(super) async fn serve(
     initial_digest: Option<arkret_wire::Hash>,
 ) -> Result<RealmJoinBootstrapOutcome, AppError> {
     request.validate().map_err(validation)?;
-    let _work = PAGE_WORK.try_acquire().map_err(|_| {
-        AppError::new(
-            ErrorCode::RateLimited,
-            "bootstrap page work already in flight",
-        )
-    })?;
+    let _work = PAGE_WORK
+        .try_acquire()
+        .map_err(|_| crate::app_error!(RateLimited, "bootstrap page work already in flight",))?;
     let (mut traversal, key) = match request {
         RealmJoinBootstrapReadRequest::Initial(request) => {
             if request.applicant_account_id.station_id.as_str() != source {
@@ -127,8 +124,8 @@ pub(super) async fn serve(
             leaves.sort();
             leaves.dedup();
             if leaves.len() != 1 {
-                return Err(AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                return Err(crate::app_error!(
+                    FrontierUnavailable,
                     "bootstrap requires one accepted Realm authority head",
                 ));
             }
@@ -145,8 +142,8 @@ pub(super) async fn serve(
                 .realm_encryption_profile(request.realm_id.as_str())
                 .and_then(|v| serde_json::from_value(serde_json::Value::String(v)).ok())
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
+                    crate::app_error!(
+                        FrontierUnavailable,
                         "bootstrap encryption profile unavailable",
                     )
                 })?;
@@ -258,8 +255,8 @@ pub(super) async fn serve(
             + 1;
         if page_bytes + size > RealmJoinBootstrapOutcome::MAX_CANONICAL_BYTES {
             if page.records.is_empty() {
-                return Err(AppError::new(
-                    ErrorCode::LimitExceeded,
+                return Err(crate::app_error!(
+                    LimitExceeded,
                     "bootstrap record exceeds one page",
                 ));
             }
@@ -270,8 +267,8 @@ pub(super) async fn serve(
             || traversal.bytes + size > MAX_BOOTSTRAP_BYTES
             || traversal.pending.len() + edges.len() > MAX_BOOTSTRAP_RECORDS
         {
-            return Err(AppError::new(
-                ErrorCode::LimitExceeded,
+            return Err(crate::app_error!(
+                LimitExceeded,
                 "bootstrap context budget exhausted; prior cursor remains resumable",
             ));
         }
@@ -287,8 +284,8 @@ pub(super) async fn serve(
         .len()
         + 8192;
     if traversal.bytes + retained_overhead > MAX_BOOTSTRAP_BYTES {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "bootstrap retained context budget exhausted; prior cursor retained",
         ));
     }
@@ -337,8 +334,8 @@ async fn cached(
         return Ok(None);
     };
     if record.request_hash != digest.as_str() {
-        return Err(AppError::new(
-            ErrorCode::DuplicateConflict,
+        return Err(crate::app_error!(
+            DuplicateConflict,
             "bootstrap request identity already bound",
         ));
     }
@@ -361,14 +358,14 @@ fn rate_limit(
         request.realm_id.as_str(),
         &request.applicant_account_id.to_string(),
     ) {
-        return Err(AppError::new(
-            ErrorCode::RateLimited,
+        return Err(crate::app_error!(
+            RateLimited,
             "bootstrap read budget exceeded",
         ));
     }
     if state.realm_join_bootstrap_rate_limited("bootstrap-source", source) {
-        return Err(AppError::new(
-            ErrorCode::RateLimited,
+        return Err(crate::app_error!(
+            RateLimited,
             "bootstrap source budget exceeded",
         ));
     }
@@ -460,9 +457,7 @@ async fn resolve(
                 .seal_by_id(id)
                 .await
                 .map_err(internal)?
-                .ok_or_else(|| {
-                    AppError::new(ErrorCode::DependencyMissing, "bootstrap Seal missing")
-                })?;
+                .ok_or_else(|| crate::app_error!(DependencyMissing, "bootstrap Seal missing"))?;
             edges.extend(seal.predecessor_ref.iter().cloned().map(Pending::Seal));
             edges.extend(seal.delta.iter().cloned().map(Pending::Event));
             edges.extend(
@@ -483,10 +478,7 @@ async fn resolve(
                 .await
                 .map_err(internal)?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::DependencyMissing,
-                        "bootstrap Control Move missing",
-                    )
+                    crate::app_error!(DependencyMissing, "bootstrap Control Move missing",)
                 })?;
             edges.extend(
                 governance_runtime_dependency_selector_coordinates_for_acquisition(
@@ -507,10 +499,7 @@ async fn resolve(
                 .await
                 .map_err(internal)?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::DependencyMissing,
-                        "bootstrap governance dependency missing",
-                    )
+                    crate::app_error!(DependencyMissing, "bootstrap governance dependency missing",)
                 })?;
             edges.extend(
                 dependency

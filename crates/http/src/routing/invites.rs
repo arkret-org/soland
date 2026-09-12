@@ -304,8 +304,8 @@ async fn peer_invites_submit(
             if let salvo::http::ParseError::SerdeJson(serde_error) = &error
                 && serde_error.classify() == serde_json::error::Category::Data
             {
-                return AppError::new(
-                    soland_http::error::ErrorCode::SchemaViolation,
+                return crate::app_error!(
+                    SchemaViolation,
                     format!(
                         "ak.peer.invites.command.submit.v1 request body violates the declared schema: {serde_error}"
                     ),
@@ -2377,7 +2377,7 @@ async fn authenticate_invite_notification(
             .await
             .map(Some)
             .map_err(|error| {
-                AppError::new(
+                AppError::from_rejection(
                     soland_http::error::ErrorCode::from_wire(error.code)
                         .unwrap_or(soland_http::error::ErrorCode::SchemaViolation),
                     error.message,

@@ -5424,7 +5424,11 @@ pub async fn assert_device_revocation_seal_settlement_contract(
 
     stores
         .control_events
-        .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
+        .put_pending_unit_with_ingress(&[arkret_state::state::ControlUnitIngressMember {
+            event: event.clone(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            ingress,
+        }])
         .await
         .expect("admit pending Control Move");
     let outcome = stores
@@ -5460,7 +5464,7 @@ pub async fn assert_device_revocation_seal_settlement_contract(
     let seal = contract_covering_seal(&realm_id, digest.clone(), database_timestamp_now());
     stores
         .control_events
-        .mark_sealed(&digest, &seal)
+        .record_seal_command_results(&seal)
         .await
         .expect("seal the accepted revoke");
 

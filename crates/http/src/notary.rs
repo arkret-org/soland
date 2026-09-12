@@ -36,15 +36,14 @@ use arkret_models_collaboration::objects::realm::{
     AvailabilityEvidenceScope, RealmAvailabilityPolicy,
 };
 use arkret_state::state::{
-    ControlMoveReject, StoreError, compute_state_root, control_event_set_root, join_cell,
+    CommandEventResult, ControlMoveFailureDisposition, OrderedControlBatchAbort,
+    OrderedControlUnit, OrderedControlUnitEvent, StoreError, classify_control_move_reject,
+    compute_state_root, control_event_set_root, execute_ordered_control_units,
 };
 use arkret_state::state_model::ordered_log::IssuedOp;
 use arkret_state::state_model::{ResolvedCellState, StateWrite};
 use arkret_wire::cell::CellId;
-use arkret_wire::{
-    AvailabilityReceipt, ControlProposalDecision, ControlProposalDecisionPolicy,
-    ControlProposalRejectReason, Event, PayloadProof, Seal,
-};
+use arkret_wire::{AvailabilityReceipt, Event, PayloadProof, Seal};
 use tokio::sync::Mutex;
 
 use crate::routing::federation::move_seal::select_jws_verifier;
@@ -97,81 +96,29 @@ pub enum SigningLeaseSlotResolution {
     MixedRecoveryRequiresExternalCoordinator,
 }
 
-/// Why the coordinator rejected one Control Move.
-///
-/// `reason` is what the signed `ControlProposalDecision` carries onto the wire
-/// and eventually into a Seal, so it is derived from the *typed* verifier
-/// outcome at the point of rejection. `detail` is operator diagnostics only:
-/// nothing may re-derive `reason` from it. The previous shape kept only the
-/// `Display` text and recovered the reason with substring heuristics, which
-/// mapped a `PrestateBindingMismatch` (a CAS conflict) and every internal
-/// registry failure onto `schema_violation` -- i.e. it blamed the caller for
-/// this service's own faults.
+/// One deterministic command rejection committed by an accepted Seal.
 #[derive(Clone, Debug)]
 pub struct ControlMoveRejection {
-    pub reason: ControlProposalRejectReason,
+    pub reason: arkret_wire::ReasonCode,
     pub detail: String,
 }
 
 impl ControlMoveRejection {
-    fn new(reason: ControlProposalRejectReason, detail: impl Into<String>) -> Self {
+    fn new(reason: arkret_wire::ReasonCode, detail: impl Into<String>) -> Self {
         Self {
             reason,
             detail: detail.into(),
         }
     }
-
-    /// Classify a verifier rejection.
-    ///
-    /// `ControlMoveReject::Registry` is not a caller fault: it means this
-    /// node could not read its own cell registry. Signing a rejection for it
-    /// would notarise a false statement about the proposer, so it aborts the
-    /// signing pass instead.
-    fn from_verifier(reject: &ControlMoveReject) -> Result<Self, NotaryError> {
-        let reason = match reject {
-            ControlMoveReject::SchemaViolation(_)
-            | ControlMoveReject::SignatureInvalid(_)
-            | ControlMoveReject::ProjectionFailed(_) => {
-                ControlProposalRejectReason::SchemaViolation
-            }
-            ControlMoveReject::CapabilityDenied(_) => ControlProposalRejectReason::CapabilityDenied,
-            ControlMoveReject::FailedPrecondition { .. }
-            | ControlMoveReject::FailedBottom { .. }
-            | ControlMoveReject::PrestateBindingMismatch { .. } => {
-                ControlProposalRejectReason::CasConflict
-            }
-            ControlMoveReject::Registry(detail) => {
-                return Err(NotaryError::Store(format!(
-                    "cell registry unavailable while verifying a Control Move: {detail}"
-                )));
-            }
-        };
-        Ok(Self::new(reason, reject.to_string()))
-    }
 }
 
-/// One Control Move that passed `verify_control_move`, together with the
-/// receiver-derived writes that verification resolved. v1 carries no producer
-/// `effects[]`, so these resolved effects are the only legitimate source of
-/// cell writes when predicting the post-Seal `state_root`.
 #[derive(Clone, Debug)]
-struct AcceptedControlMove {
-    event_digest: Hash,
+struct AvailabilityEvent {
     event: Event,
-    actor_id: arkret_wire::ActorId,
-    effects: Vec<arkret_wire::cbs::ProjectionEffect>,
 }
-
-type RejectedControlMove = (
-    Hash,
-    String,
-    String,
-    Vec<arkret_wire::Precondition>,
-    ControlMoveRejection,
-);
 
 struct PreparedNotaryBatch {
-    pending: Vec<(Hash, Event)>,
+    units: Vec<OrderedControlUnit>,
     predecessor_ref: Option<SealId>,
     event_digest_suite: arkret_canonical::DigestSuite,
 }
@@ -205,7 +152,7 @@ impl From<StoreError> for NotaryError {
 /// Notary worker with an optional fenced scheduler page. All authority and
 /// acceptance checks still read the durable state per call.
 pub struct NotaryWorker {
-    pending_page: Option<Vec<Event>>,
+    pending_page: Option<Vec<arkret_state::state::PendingControlUnitRecord>>,
 }
 
 impl NotaryWorker {
@@ -213,41 +160,58 @@ impl NotaryWorker {
         Self { pending_page: None }
     }
 
-    pub(crate) fn with_pending_page(mut self, pending: Vec<Event>) -> Self {
+    pub(crate) fn with_pending_page(
+        mut self,
+        pending: Vec<arkret_state::state::PendingControlUnitRecord>,
+    ) -> Self {
         self.pending_page = Some(pending);
         self
     }
 
-    async fn pending_events(
+    async fn pending_units(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         limit: usize,
-    ) -> Result<Vec<Event>, NotaryError> {
+    ) -> Result<Vec<arkret_state::state::PendingControlUnitRecord>, NotaryError> {
         if let Some(page) = &self.pending_page {
             let mut pending = Vec::with_capacity(page.len());
-            for event in page {
-                let snapshot = state
-                    .projections()
-                    .control_proposal_snapshot(&event.event_id.event_digest())
-                    .await?
-                    .ok_or_else(|| {
-                        NotaryError::Store("scheduled proposal disappeared".to_owned())
-                    })?;
-                if snapshot.covering_seals.is_empty()
-                    && !snapshot
-                        .decisions
-                        .iter()
-                        .any(ControlProposalDecision::is_reject)
-                {
-                    pending.push(snapshot.event);
+            for unit in page {
+                let mut refreshed = Vec::with_capacity(unit.members.len());
+                for member in &unit.members {
+                    let digest = arkret_state::state::control_event_digest(
+                        &member.event,
+                        member.digest_suite,
+                    )?;
+                    let snapshot = state
+                        .projections()
+                        .control_proposal_snapshot(&digest)
+                        .await?
+                        .ok_or_else(|| {
+                            NotaryError::Store("scheduled command member disappeared".to_owned())
+                        })?;
+                    if !snapshot.command_decisions.is_empty() {
+                        refreshed.clear();
+                        break;
+                    }
+                    refreshed.push(arkret_state::state::PendingControlEventRecord {
+                        event: snapshot.event,
+                        digest_suite: snapshot.digest_suite,
+                        control_proposal_ack: snapshot.control_proposal_ack,
+                        decisions: snapshot.decisions,
+                        ingress_class: snapshot.ingress_class,
+                    });
+                }
+                if !refreshed.is_empty() {
+                    pending
+                        .push(arkret_state::state::PendingControlUnitRecord { members: refreshed });
                 }
             }
             return Ok(pending);
         }
         Ok(state
             .projections()
-            .pending_control_events_for_notary(realm_id, None, limit)
+            .pending_control_units_for_notary(realm_id, None, limit)
             .await?)
     }
 
@@ -262,12 +226,16 @@ impl NotaryWorker {
         realm_id: &RealmId,
         max_control_moves: usize,
     ) -> Result<SigningLeaseSlotResolution, NotaryError> {
-        let pending = self
-            .pending_events(state, realm_id, max_control_moves)
+        let pending_units = self
+            .pending_units(state, realm_id, max_control_moves)
             .await?;
-        if pending.is_empty() {
+        if pending_units.is_empty() {
             return Ok(SigningLeaseSlotResolution::NoPendingMoves);
         }
+        let pending = pending_units
+            .iter()
+            .flat_map(|unit| unit.members.iter().map(|member| member.event.clone()))
+            .collect::<Vec<_>>();
         let predecessor_ref = state.projections().realm_seal_head(realm_id).await?;
         let notary_cell = notary_cell_ref(realm_id)
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
@@ -416,29 +384,38 @@ impl NotaryWorker {
         realm_id: &RealmId,
         max_control_moves: usize,
     ) -> Result<Option<PreparedNotaryBatch>, NotaryError> {
-        let mut pending_events = self
-            .pending_events(state, realm_id, max_control_moves)
+        let mut pending_units = self
+            .pending_units(state, realm_id, max_control_moves)
             .await?;
-        if pending_events.is_empty() {
+        if pending_units.is_empty() {
             return Ok(None);
         }
         let predecessor_ref = state.projections().realm_seal_head(realm_id).await?;
         if predecessor_ref.is_some()
-            && pending_events
-                .iter()
-                .any(|event| event.kind == arkret_wire::EventKind::RealmDigestSuiteTransition)
+            && pending_units.iter().any(|unit| {
+                unit.members.iter().any(|member| {
+                    member.event.kind == arkret_wire::EventKind::RealmDigestSuiteTransition
+                })
+            })
         {
-            if pending_events
-                .iter()
-                .any(|event| event.kind != arkret_wire::EventKind::RealmDigestSuiteTransition)
-            {
-                pending_events.retain(|event| {
-                    event.kind != arkret_wire::EventKind::RealmDigestSuiteTransition
+            if pending_units.iter().any(|unit| {
+                unit.members.iter().all(|member| {
+                    member.event.kind != arkret_wire::EventKind::RealmDigestSuiteTransition
+                })
+            }) {
+                pending_units.retain(|unit| {
+                    unit.members.iter().all(|member| {
+                        member.event.kind != arkret_wire::EventKind::RealmDigestSuiteTransition
+                    })
                 });
             } else {
-                pending_events.truncate(1);
+                pending_units.truncate(1);
             }
         }
+        let pending_events = pending_units
+            .iter()
+            .flat_map(|unit| unit.members.iter().map(|member| member.event.clone()))
+            .collect::<Vec<_>>();
         let event_digest_suite = if predecessor_ref.is_none() {
             genesis_digest_suite(&pending_events)?
         } else {
@@ -453,25 +430,41 @@ impl NotaryWorker {
                 .await
                 .map_err(|error| NotaryError::ApplySeal(error.to_string()))?
         };
-        let mut pending = Vec::with_capacity(pending_events.len());
-        for event in pending_events {
-            let digest = event
-                .event_digest_with_digest_suite(
-                    if predecessor_ref.is_none()
-                        && event.kind == arkret_wire::EventKind::RealmCreate
-                    {
-                        arkret_canonical::DigestSuite::Sha256
-                    } else {
-                        event_digest_suite
-                    },
-                )
-                .map_err(|error| NotaryError::Construction(format!("event digest: {error}")))?;
-            let digest = Hash::new(digest)
-                .map_err(|error| NotaryError::Construction(format!("event digest: {error}")))?;
-            pending.push((digest, event));
-        }
+        let units = pending_units
+            .into_iter()
+            .map(|unit| {
+                unit.members
+                    .into_iter()
+                    .map(|member| {
+                        let expected_suite = if predecessor_ref.is_none()
+                            && member.event.kind == arkret_wire::EventKind::RealmCreate
+                        {
+                            arkret_canonical::DigestSuite::Sha256
+                        } else {
+                            event_digest_suite
+                        };
+                        if member.digest_suite != expected_suite {
+                            return Err(NotaryError::Construction(
+                                "pending command member has a digest suite inconsistent with its Seal position"
+                                    .to_owned(),
+                            ));
+                        }
+                        let digest = arkret_state::state::control_event_digest(
+                            &member.event,
+                            member.digest_suite,
+                        )?;
+                        Ok(OrderedControlUnitEvent {
+                            digest,
+                            event: member.event,
+                            digest_suite: member.digest_suite,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, NotaryError>>()
+                    .map(|events| OrderedControlUnit { events })
+            })
+            .collect::<Result<Vec<_>, NotaryError>>()?;
         Ok(Some(PreparedNotaryBatch {
-            pending,
+            units,
             predecessor_ref,
             event_digest_suite,
         }))
@@ -523,33 +516,6 @@ impl NotaryWorker {
             return Err(NotaryError::NotAuthorized(realm_id.to_string()));
         }
         Ok(())
-    }
-
-    async fn record_control_move_rejections(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-        rejected: &[RejectedControlMove],
-        proposal_policy: ControlProposalDecisionPolicy,
-    ) -> Result<(), NotaryError> {
-        for (digest, event_id, event_kind, preconditions, rejection) in rejected {
-            tracing::warn!(
-                %realm_id,
-                proposal_digest = %digest,
-                %event_id,
-                %event_kind,
-                ?preconditions,
-                reason = ?rejection.reason,
-                detail = %rejection.detail,
-                "control-seal coordinator signed a proposal rejection"
-            );
-        }
-        let signed_rejections = rejected
-            .iter()
-            .map(|(digest, _, _, _, rejection)| (digest.clone(), rejection.clone()))
-            .collect::<Vec<_>>();
-        self.record_signed_rejections(state, realm_id, &signed_rejections, proposal_policy)
-            .await
     }
 
     async fn refresh_cells_and_publish_frontier(
@@ -606,13 +572,12 @@ impl NotaryWorker {
         state: &AppState,
         realm_id: &RealmId,
         max_control_moves: usize,
-        proposal_policy: ControlProposalDecisionPolicy,
     ) -> Result<Option<NotaryOutcome>, NotaryError> {
         // Step 1: list pending Control Moves (oldest first). Control-plane
         // Events are keyed by their canonical `event_digest`, so pair each one
         // with its digest before ordering (§6.3.2).
         let Some(PreparedNotaryBatch {
-            pending,
+            units,
             predecessor_ref,
             event_digest_suite,
         }) = self
@@ -621,6 +586,14 @@ impl NotaryWorker {
         else {
             return Ok(None);
         };
+        let pending = units
+            .iter()
+            .flat_map(|unit| {
+                unit.events
+                    .iter()
+                    .map(|member| (member.digest.clone(), member.event.clone()))
+            })
+            .collect::<Vec<_>>();
 
         // Step 2: resolve the current Seal head. No synthetic empty root is
         // permitted: when it is absent the accepted bootstrap unit in
@@ -655,29 +628,23 @@ impl NotaryWorker {
         let pre_state = self
             .read_effective_state(state, realm_id, predecessor_ref.as_ref())
             .await?;
-        // Step 5: deterministic order + pre-flight verify. The signature
+        // Step 5: staged execution in signed command-unit order. The signature
         // verifier is chosen by `select_jws_verifier` (production
         // Ed25519 vs dev shape-only) — notary must use the same one as
         // peer-event admission, otherwise pending Moves that passed admission
         // could still be rejected at seal time.
         // Advisory display timestamps do not affect pending Move finality.
-        let (accepted, rejected) = self
-            .validate_candidate_moves(
+        let mut executed = self
+            .execute_candidate_units(
                 state,
                 realm_id,
-                pending,
+                &units,
                 predecessor_ref.as_ref(),
                 &pre_state,
                 event_digest_suite,
                 false,
             )
             .await?;
-        self.record_control_move_rejections(state, realm_id, &rejected, proposal_policy)
-            .await?;
-        if accepted.is_empty() {
-            // Everyone rejected — nothing to seal, but record diagnostics.
-            return Ok(None);
-        }
 
         // Step 6: predict the post-state and state_root after applying
         // accepted moves' effects on top of pre_state.
@@ -686,27 +653,37 @@ impl NotaryWorker {
         // canonical_bytes_for_id. Cumulative coverage is derived from
         // predecessor chain plus delta; it is not carried as a required
         // wire field.
-        let mut delta: Vec<Hash> = accepted
-            .iter()
-            .filter(|entry| entry.event.kind.has_security_writes())
-            .map(|entry| entry.event_digest.clone())
-            .collect();
-        delta.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        delta.dedup_by(|a, b| a.as_str() == b.as_str());
+        let delta = executed.committed_event_digests.clone();
         let digest_suites = state
             .projections()
             .seal_digest_suites_for_delta(realm_id, predecessor_ref.as_ref(), &delta)
             .await
             .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
-        let (predicted_state_root, post_state) = self
-            .predict_post_state_root(
-                state,
-                realm_id,
-                &view.covered_event_digests,
-                &accepted,
-                digest_suites.seal_digest_suite,
-            )
-            .await?;
+        if digest_suites.seal_digest_suite != event_digest_suite {
+            executed = self
+                .execute_candidate_units(
+                    state,
+                    realm_id,
+                    &units,
+                    predecessor_ref.as_ref(),
+                    &pre_state,
+                    digest_suites.seal_digest_suite,
+                    false,
+                )
+                .await?;
+            if executed.committed_event_digests != delta {
+                return Err(NotaryError::Construction(
+                    "digest-suite transition changed ordered command outcomes".to_owned(),
+                ));
+            }
+        }
+        let post_state = executed.post_state;
+        let security_post_state = self.security_state(state, realm_id, &post_state)?;
+        let predicted_state_root = compute_state_root(
+            arkret_state::GovernanceView::new(&security_post_state),
+            digest_suites.seal_digest_suite,
+        )
+        .map_err(|error| NotaryError::Construction(format!("compute_state_root: {error}")))?;
         let mut covered: BTreeSet<Hash> = view.covered_event_digests.iter().cloned().collect();
         covered.extend(delta.iter().cloned());
         let control_event_set_root =
@@ -718,6 +695,14 @@ impl NotaryWorker {
         let hlc = Hlc::new(state.hlc().now())
             .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?;
         let sealed_at = chrono::Utc::now();
+        let committed = delta.iter().collect::<BTreeSet<_>>();
+        let accepted = pending
+            .iter()
+            .filter(|(digest, _)| committed.contains(digest))
+            .map(|(_, event)| AvailabilityEvent {
+                event: event.clone(),
+            })
+            .collect::<Vec<_>>();
         let availability_dependencies = self
             .build_availability_dependencies(
                 state,
@@ -751,12 +736,6 @@ impl NotaryWorker {
             },
             realm_id,
         )?;
-        let command_results = command_results_for_accepted(
-            &accepted,
-            &post_state,
-            digest_suites.seal_digest_suite,
-            predecessor_ref.is_none(),
-        )?;
         let unsigned = arkret_wire::UnsignedSeal {
             realm_id: realm_id.clone(),
             predecessor_ref: predecessor_ref.clone(),
@@ -782,7 +761,7 @@ impl NotaryWorker {
             sealed_at,
             hlc,
             configuration_ref,
-            command_results,
+            command_results: executed.command_results,
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
             transaction_records: Vec::new(),
@@ -820,7 +799,7 @@ impl NotaryWorker {
         // generic SDK apply path deliberately remains backend-agnostic and
         // cannot make three stores crash-atomic; production PostgreSQL owns
         // that guarantee in EventSealCommitStore's single transaction.
-        let new_ops = self.derive_sealed_ops(state, realm_id, &accepted).await?;
+        let new_ops = executed.new_security_ops;
         match state
             .projections()
             .commit_event_seal_if_head(
@@ -891,54 +870,85 @@ impl NotaryWorker {
         Ok(Some(NotaryOutcome {
             seal_id: seal.id,
             accepted_event_digests,
-            // `apply_seal` rejects nothing: `SealEffect::rejected_events` is
-            // constructed empty on every SDK path, so the coordinator's own
-            // per-Move verdicts are the whole set.
-            rejected_events: rejected
-                .into_iter()
-                .map(|(digest, _, _, _, rejection)| (digest, rejection))
+            // Publish only rejection outcomes durably accepted with this Seal.
+            rejected_events: seal
+                .command_results
+                .iter()
+                .filter_map(|result| {
+                    if result.outcome != arkret_wire::CommandOutcome::Rejected {
+                        return None;
+                    }
+                    let reason_code = result.reason_code.clone()?;
+                    Some(result.unit_event_digests.iter().cloned().map(|digest| {
+                        (
+                            digest,
+                            ControlMoveRejection::new(
+                                reason_code.clone(),
+                                "rejected by ordered Seal command execution",
+                            ),
+                        )
+                    }))
+                })
+                .flatten()
                 .collect(),
             post_state_root: predicted_state_root,
         }))
     }
 
-    async fn validate_candidate_moves(
+    async fn execute_candidate_units(
         &self,
         state: &AppState,
         realm_id: &RealmId,
-        pending: Vec<(Hash, Event)>,
+        units: &[OrderedControlUnit],
         predecessor_ref: Option<&SealId>,
         pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-        event_digest_suite: arkret_canonical::DigestSuite,
+        result_digest_suite: arkret_canonical::DigestSuite,
         allow_self_principal_ingress: bool,
-    ) -> Result<(Vec<AcceptedControlMove>, Vec<RejectedControlMove>), NotaryError> {
+    ) -> Result<arkret_state::state::OrderedControlBatchEffect, NotaryError> {
         let verifier = select_jws_verifier(state);
-        let ordered = arkret_state::state::deterministic_order(pending);
         if predecessor_ref.is_none() {
-            let anchor_events = ordered
+            if units.len() != 1 {
+                return Err(NotaryError::Construction(
+                    "Realm genesis must be one registered command unit".to_owned(),
+                ));
+            }
+            let anchor_events = units[0]
+                .events
                 .iter()
-                .map(|(_, event)| event.clone())
+                .map(|member| member.event.clone())
                 .collect::<Vec<_>>();
             arkret_policy::realm_bootstrap::validate_accepted_realm_seal_genesis_unit(
                 &anchor_events,
             )
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         }
-        let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
-        let mut rejected: Vec<RejectedControlMove> = Vec::new();
-        let mut staged_anchor_state = (*pre_state).clone();
-        let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
-        let mut ordinary_batch = arkret_wire::control_seal_batch::ControlSealBatch::default();
-        for (digest, event) in ordered {
-            let move_digest_suite =
-                if predecessor_ref.is_none() && event.kind == arkret_wire::EventKind::RealmCreate {
-                    arkret_canonical::DigestSuite::Sha256
-                } else {
-                    event_digest_suite
-                };
-            let ack = state.projections().control_proposal_ack(&digest).await?;
+        if allow_self_principal_ingress {
+            let [unit] = units else {
+                return Err(NotaryError::Construction(
+                    "PCR Seal preparation requires one registered command unit".to_owned(),
+                ));
+            };
+            let [reanchor, authorize] = unit.events.as_slice() else {
+                return Err(NotaryError::Construction(
+                    "PCR recovery requires the exact two-member re-anchor unit".to_owned(),
+                ));
+            };
+            if reanchor.event.kind != arkret_wire::EventKind::DeviceReanchor
+                || authorize.event.kind != arkret_wire::EventKind::DeviceAuthorize
+            {
+                return Err(NotaryError::Construction(
+                    "PCR recovery unit member order is invalid".to_owned(),
+                ));
+            }
+        }
+
+        let mut proof_results = BTreeMap::<Hash, Result<(), String>>::new();
+        for member in units.iter().flat_map(|unit| &unit.events) {
+            let digest = &member.digest;
+            let event = &member.event;
+            let ack = state.projections().control_proposal_ack(digest).await?;
             if let Some(ack) = ack {
-                if ack.proposal_digest != digest || ack.realm_id != *realm_id {
+                if ack.proposal_digest != *digest || ack.realm_id != *realm_id {
                     return Err(NotaryError::Store(format!(
                         "Control Proposal Ack for Control Move {digest} has inconsistent binding"
                     )));
@@ -950,7 +960,7 @@ impl NotaryWorker {
                 })?;
             } else if allow_self_principal_ingress {
                 crate::routing::events::event_log::validate_pcr_prepare_ackless_ingress(
-                    state, &event, &digest,
+                    state, event, digest,
                 )
                 .await
                 .map_err(NotaryError::Store)?;
@@ -959,120 +969,77 @@ impl NotaryWorker {
                     "locally signed Control Move {digest} has no immutable Control Proposal Ack"
                 )));
             }
-            let _writes = match state
-                .projections()
-                .project_accepted_cell_writes_with_digest_suite(&event, move_digest_suite)
-            {
-                Ok(writes) => writes,
-                Err(reason) => {
-                    rejected.push((
-                        digest,
-                        event.event_id.to_string(),
-                        event.kind.as_str().to_owned(),
-                        event.preconditions.clone(),
-                        ControlMoveRejection::new(
-                            ControlProposalRejectReason::SchemaViolation,
-                            format!("reducer_projection_failed: {reason}"),
-                        ),
-                    ));
-                    continue;
-                }
-            };
-            // Advisory HLC does not participate in Control Move authorization or finality.
-            // Ordinary admission and the verifier below own proof and publication validity.
-            let context = if predecessor_ref.is_none() {
-                arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
-            } else {
-                arkret_wire::event_envelope::EventSubmitContext::Standard
-            };
             let proof_result = if allow_self_principal_ingress {
                 crate::routing::events::event_log::governance_proof::verify_retained_control_event_proofs(
-                    state, &event, &digest, move_digest_suite,
+                    state, event, digest, member.digest_suite,
                 ).await
             } else {
-                verifier(&event)
+                verifier(event)
             };
-            match state
-                .projections()
-                .verify_accepted_control_move_in_context_with_digest_suite(
-                    &event,
-                    realm_id,
-                    if predecessor_ref.is_none() {
-                        &staged_anchor_state
-                    } else {
-                        &pre_state
-                    },
-                    move_digest_suite,
-                    |candidate| {
-                        if candidate != &event {
-                            return Err(
-                                "preflight proof result belongs to another Event".to_owned()
-                            );
-                        }
-                        proof_result.clone()
-                    },
-                    context,
-                ) {
-                Ok(effects) => {
-                    if predecessor_ref.is_none() {
-                        for effect in &effects {
-                            let cell_ops =
-                                staged_anchor_ops.entry(effect.cell_id.clone()).or_default();
-                            cell_ops.push(IssuedOp {
-                                issuer_id: event.actor_id.clone(),
-                                op: StateWrite::from_projection(digest.clone(), effect),
-                            });
-                            let binding = state
-                                .projections()
-                                .resolve_cell(realm_id, &effect.cell_id)
-                                .map_err(|error| {
-                                    NotaryError::Store(format!(
-                                        "resolve staged bootstrap cell {}: {error}",
-                                        effect.cell_id
-                                    ))
-                                })?;
-                            let resolved =
-                                join_cell(binding.model.as_ref(), &effect.cell_id, cell_ops)
-                                    .map_err(|error| {
-                                        NotaryError::Construction(format!(
-                                            "anchor cell state resolution failed: {error}"
-                                        ))
-                                    })?;
-                            staged_anchor_state.insert(effect.cell_id.clone(), resolved);
-                        }
-                    }
-                    if predecessor_ref.is_some()
-                        && ordinary_batch
-                            .try_insert(
-                                &event.kind,
-                                effects.iter().map(|effect| effect.cell_id.as_str()),
-                            )
-                            .is_err()
-                    {
-                        // Keep the immutable request pending. The successor pass
-                        // revalidates its own basis and returns a terminal result
-                        // if another accepted write has made it stale.
-                        continue;
-                    }
-                    accepted.push(AcceptedControlMove {
-                        event_digest: digest,
-                        event: event.clone(),
-                        actor_id: event.actor_id.clone(),
-                        effects,
-                    });
-                }
-                Err(reject) => {
-                    rejected.push((
-                        digest,
-                        event.event_id.to_string(),
-                        event.kind.as_str().to_owned(),
-                        event.preconditions.clone(),
-                        ControlMoveRejection::from_verifier(&reject)?,
-                    ));
-                }
-            }
+            proof_results.insert(digest.clone(), proof_result);
         }
-        Ok((accepted, rejected))
+
+        let submit_context = if predecessor_ref.is_none() || allow_self_principal_ingress {
+            arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+        } else {
+            arkret_wire::event_envelope::EventSubmitContext::Standard
+        };
+        execute_ordered_control_units(
+            realm_id,
+            pre_state,
+            state.projections().cell_registry(),
+            units,
+            result_digest_suite,
+            predecessor_ref.is_none(),
+            |member, staged_state| {
+                let proof_result = proof_results.get(&member.digest).cloned().ok_or_else(|| {
+                    OrderedControlBatchAbort::Infrastructure(
+                        "prepared proof result is unavailable".to_owned(),
+                    )
+                })?;
+                match state
+                    .projections()
+                    .verify_accepted_control_move_in_context_with_digest_suite(
+                        &member.event,
+                        realm_id,
+                        staged_state,
+                        member.digest_suite,
+                        |candidate| {
+                            if candidate != &member.event {
+                                return Err(
+                                    "preflight proof result belongs to another Event".to_owned()
+                                );
+                            }
+                            proof_result.clone()
+                        },
+                        submit_context,
+                    ) {
+                    Ok(effects) => Ok(CommandEventResult::Applied(effects)),
+                    Err(reject) => match classify_control_move_reject(&reject) {
+                        ControlMoveFailureDisposition::Rejected(reason) => {
+                            Ok(CommandEventResult::Rejected(reason))
+                        }
+                        ControlMoveFailureDisposition::Pending(reason_code) => {
+                            Err(OrderedControlBatchAbort::Pending {
+                                reason_code,
+                                detail: reject.to_string(),
+                            })
+                        }
+                        ControlMoveFailureDisposition::Invalid => {
+                            Err(OrderedControlBatchAbort::Structural(reject.to_string()))
+                        }
+                        ControlMoveFailureDisposition::Infrastructure => {
+                            Err(OrderedControlBatchAbort::Infrastructure(reject.to_string()))
+                        }
+                    },
+                }
+            },
+        )
+        .map_err(|error| match error {
+            OrderedControlBatchAbort::Pending { .. } => NotaryError::ApplySeal(error.to_string()),
+            OrderedControlBatchAbort::Structural(_) => NotaryError::Construction(error.to_string()),
+            OrderedControlBatchAbort::Infrastructure(_) => NotaryError::Store(error.to_string()),
+        })
     }
 
     /// Prepare only the caller's exact delta using the normal notary preflight.
@@ -1107,26 +1074,54 @@ impl NotaryWorker {
                 "PCR preparation forbids digest transitions".to_owned(),
             ));
         }
-        let (accepted, rejected) = self
-            .validate_candidate_moves(
+        let mut events_by_digest = events.into_iter().collect::<BTreeMap<_, _>>();
+        let unit = OrderedControlUnit {
+            events: request
+                .event_digests
+                .iter()
+                .map(|digest| {
+                    let event = events_by_digest.remove(digest).ok_or_else(|| {
+                        NotaryError::Construction(format!(
+                            "PCR signing intent is missing Event {digest}"
+                        ))
+                    })?;
+                    Ok(OrderedControlUnitEvent {
+                        digest: digest.clone(),
+                        event,
+                        digest_suite: suites.event_digest_suite,
+                    })
+                })
+                .collect::<Result<Vec<_>, NotaryError>>()?,
+        };
+        if !events_by_digest.is_empty() {
+            return Err(NotaryError::Construction(
+                "PCR signing intent resolved unrequested Events".to_owned(),
+            ));
+        }
+        let executed = self
+            .execute_candidate_units(
                 state,
                 realm_id,
-                events,
+                std::slice::from_ref(&unit),
                 Some(&request.predecessor_ref),
                 &pre_state,
-                suites.event_digest_suite,
+                suites.seal_digest_suite,
                 true,
             )
             .await?;
-        let accepted_digests = accepted
+        let accepted_digests = executed
+            .committed_event_digests
             .iter()
-            .map(|entry| entry.event_digest.clone())
+            .cloned()
             .collect::<BTreeSet<_>>();
-        if !rejected.is_empty()
+        if executed
+            .command_results
+            .iter()
+            .any(|result| result.outcome == arkret_wire::CommandOutcome::Rejected)
             || accepted_digests != request.event_digests.iter().cloned().collect()
         {
             return Err(NotaryError::Construction(format!(
-                "PCR signing intent contains a rejected or incompatible Control Move: {rejected:?}"
+                "PCR signing intent contains a rejected or incompatible Control Move"
             )));
         }
         let prior = state
@@ -1134,15 +1129,12 @@ impl NotaryWorker {
             .predecessor_covered_events(Some(&request.predecessor_ref))
             .await
             .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
-        let (state_root, post_state) = self
-            .predict_post_state_root(
-                state,
-                realm_id,
-                &prior.iter().cloned().collect::<Vec<_>>(),
-                &accepted,
-                suites.seal_digest_suite,
-            )
-            .await?;
+        let security_post_state = self.security_state(state, realm_id, &executed.post_state)?;
+        let state_root = compute_state_root(
+            arkret_state::GovernanceView::new(&security_post_state),
+            suites.seal_digest_suite,
+        )
+        .map_err(|error| NotaryError::Construction(format!("compute_state_root: {error}")))?;
         let mut covered = prior;
         covered.extend(accepted_digests);
         let control_event_set_root = control_event_set_root(&covered, suites.seal_digest_suite)
@@ -1162,11 +1154,7 @@ impl NotaryWorker {
         Ok(arkret_wire::UnsignedSeal {
             realm_id: realm_id.clone(),
             predecessor_ref: Some(request.predecessor_ref.clone()),
-            delta: accepted
-                .iter()
-                .filter(|entry| entry.event.kind.has_security_writes())
-                .map(|entry| entry.event_digest.clone())
-                .collect(),
+            delta: executed.committed_event_digests,
             control_event_set_root,
             state_root,
             notary_seq: self
@@ -1179,12 +1167,7 @@ impl NotaryWorker {
             sealed_at,
             hlc: request.hlc.clone(),
             configuration_ref: notary_configuration_ref(&pre_state, realm_id)?,
-            command_results: command_results_for_accepted(
-                &accepted,
-                &post_state,
-                suites.seal_digest_suite,
-                false,
-            )?,
+            command_results: executed.command_results,
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
             transaction_records: Vec::new(),
@@ -1420,81 +1403,6 @@ impl NotaryWorker {
         Ok(Some((notary_value, value)))
     }
 
-    async fn record_signed_rejections(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-        rejected: &[(Hash, ControlMoveRejection)],
-        proposal_policy: ControlProposalDecisionPolicy,
-    ) -> Result<(), NotaryError> {
-        if rejected.is_empty() {
-            return Ok(());
-        }
-        for (digest, rejection) in rejected {
-            let Some(record) = state
-                .projections()
-                .control_proposal_snapshot(digest)
-                .await?
-            else {
-                return Err(NotaryError::Store(format!(
-                    "rejected Control Move {digest} has no pending record"
-                )));
-            };
-            let Some(ack) = record.control_proposal_ack.as_ref() else {
-                if soland_storage::has_self_principal_pcr_device_authorized_shape(
-                    &record.event,
-                    record.digest_suite,
-                ) && state
-                    .projections()
-                    .snapshot()
-                    .realm_is_principal_control(record.event.realm_id.as_str())
-                {
-                    // A current Human PCR device, rather than this service,
-                    // owns the successor-Seal decision. There is no external
-                    // proposal Ack against which to record a signed rejection.
-                    continue;
-                }
-                return Err(NotaryError::Store(format!(
-                    "rejected Control Move {digest} has no Control Proposal Ack"
-                )));
-            };
-            if record
-                .decisions
-                .iter()
-                .any(ControlProposalDecision::is_reject)
-            {
-                continue;
-            }
-            let reason_code = rejection.reason;
-            let (notary, _) = self
-                .current_notary_value_for_events(
-                    state,
-                    realm_id,
-                    std::slice::from_ref(&record.event),
-                )
-                .await?
-                .ok_or_else(|| {
-                    NotaryError::Construction(
-                        "current proposal notary profile is unavailable".to_owned(),
-                    )
-                })?;
-            let decision = crate::control_proposal::sign_control_proposal_reject(
-                state,
-                ack,
-                &record.decisions,
-                &notary,
-                reason_code,
-                chrono::Utc::now(),
-            )
-            .map_err(NotaryError::Construction)?;
-            state
-                .projections()
-                .record_control_proposal_decision(digest, &decision, proposal_policy)
-                .await?;
-        }
-        Ok(())
-    }
-
     /// Read current effective state per cell from the cell_store, joining
     /// ops through each cell's state model. Mirrors SDK `effective_state_at`
     /// but exposed here so we can reuse the resulting map for verify_move.
@@ -1536,135 +1444,32 @@ impl NotaryWorker {
         Ok(security)
     }
 
-    /// Derive only sequenced security writes for Seal persistence.
-    async fn derive_sealed_ops(
+    fn security_state(
         &self,
         state: &AppState,
         realm_id: &RealmId,
-        accepted: &[AcceptedControlMove],
-    ) -> Result<Vec<(CellRef, IssuedOp)>, NotaryError> {
-        let mut out = Vec::new();
-        for entry in accepted {
-            for effect in &entry.effects {
-                let binding = state
-                    .projections()
-                    .cell_registry()
-                    .resolve(realm_id, &effect.cell_id)
-                    .map_err(|error| NotaryError::Store(format!("cell registry: {error}")))?;
-                if binding.execution != arkret_wire::EventCellExecution::Security {
-                    continue;
-                }
-                if binding.state_model != arkret_state::state_model::StateModelKind::SequencedState
-                {
-                    return Err(NotaryError::Construction(format!(
-                        "Control Move targets non-sequenced security cell {}",
-                        effect.cell_id
-                    )));
-                }
-                out.push((
-                    effect.cell_id.clone(),
-                    IssuedOp {
-                        issuer_id: entry.actor_id.clone(),
-                        op: StateWrite::from_projection(entry.event_digest.clone(), effect),
-                    },
-                ));
-            }
-        }
-        Ok(out)
-    }
-
-    /// Predict the state_root after the accepted Moves' effects are
-    /// appended on top of the current per-cell op log. Replicates the
-    /// SDK's apply_seal steps 6-7 in memory without persisting.
-    async fn predict_post_state_root(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-        covered_event_digests: &[Hash],
-        accepted: &[AcceptedControlMove],
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> Result<(Hash, BTreeMap<CellRef, ResolvedCellState>), NotaryError> {
-        // Build per-cell Seal batches plus the candidate batch.
-        let mut batches_by_cell: BTreeMap<CellRef, Vec<Vec<IssuedOp>>> = BTreeMap::new();
-        let covered: BTreeSet<Hash> = covered_event_digests.iter().cloned().collect();
-        // Seed with all currently-known cells.
-        for cell in state.projections().realm_cells(realm_id).await? {
-            let batches = state
-                .projections()
-                .confirmed_write_batches_for_cell(realm_id, &cell)
-                .await?
-                .into_iter()
-                .filter_map(|(_, ops)| {
-                    let ops = ops
-                        .into_iter()
-                        .filter(|issued| covered.contains(&issued.op.event_id.event_digest()))
-                        .collect::<Vec<_>>();
-                    (!ops.is_empty()).then_some(ops)
-                })
-                .collect::<Vec<_>>();
-            if !batches.is_empty() {
-                batches_by_cell.insert(cell, batches);
-            }
-        }
-        // Layer on the newly accepted Control Moves' receiver-derived writes.
-        // These are the resolved effects `verify_control_move` returned, not a
-        // producer-supplied array — v1 has none.
-        let mut candidate_ops: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
-        // The same derived `supersedes` the commit will persist. Predicting
-        // against bare projections would compute a root the store can never
-        // reproduce, because a `causal_register` cell's heads depend on it.
-        for entry in accepted {
-            for effect in &entry.effects {
-                candidate_ops
-                    .entry(effect.cell_id.clone())
-                    .or_default()
-                    .push(IssuedOp {
-                        issuer_id: entry.actor_id.clone(),
-                        op: StateWrite::from_projection(entry.event_digest.clone(), effect),
-                    });
-            }
-        }
-        for (cell, ops) in candidate_ops {
-            batches_by_cell.entry(cell).or_default().push(ops);
-        }
-        // Run state model.join per cell to get predicted ResolvedCellState.
-        let mut post_state: BTreeMap<CellRef, ResolvedCellState> = BTreeMap::new();
-        for (cell, batches) in batches_by_cell {
+        resolved: &BTreeMap<CellRef, ResolvedCellState>,
+    ) -> Result<BTreeMap<CellRef, ResolvedCellState>, NotaryError> {
+        let mut security = BTreeMap::new();
+        for (cell, value) in resolved {
             let binding = state
                 .projections()
-                .resolve_cell(realm_id, &cell)
-                .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
-            if binding.execution == arkret_wire::EventCellExecution::Security
-                && binding.state_model != arkret_state::state_model::StateModelKind::SequencedState
+                .cell_registry()
+                .resolve(realm_id, cell)
+                .map_err(|error| NotaryError::Store(format!("cell registry: {error}")))?;
+            if binding.execution != arkret_wire::EventCellExecution::Security {
+                continue;
+            }
+            if binding.state_model != arkret_state::state_model::StateModelKind::SequencedState
+                || !matches!(value, ResolvedCellState::Sequenced(_))
             {
                 return Err(NotaryError::Construction(format!(
                     "security cell {cell} is not sequenced_state"
                 )));
             }
-            let resolved =
-                arkret_state::join_cell_seal_batches(binding.model.as_ref(), &cell, &batches)
-                    .map_err(|error| {
-                        NotaryError::Construction(format!("predict cell state resolution: {error}"))
-                    })?;
-            post_state.insert(cell, resolved);
+            security.insert(cell.clone(), value.clone());
         }
-        // canonical Merkle state_root.
-        let mut security_state = BTreeMap::new();
-        for (cell, value) in &post_state {
-            let binding = state
-                .projections()
-                .resolve_cell(realm_id, cell)
-                .map_err(|error| NotaryError::Store(format!("cell registry: {error}")))?;
-            if binding.execution == arkret_wire::EventCellExecution::Security {
-                security_state.insert(cell.clone(), value.clone());
-            }
-        }
-        let root = compute_state_root(
-            arkret_state::GovernanceView::new(&security_state),
-            digest_suite,
-        )
-        .map_err(|e| NotaryError::Construction(format!("compute_state_root: {e}")))?;
-        Ok((root, post_state))
+        Ok(security)
     }
 
     pub(crate) async fn issue_availability_dependencies(
@@ -1680,11 +1485,8 @@ impl NotaryWorker {
     ) -> Result<Vec<GovernanceDependency>, NotaryError> {
         let accepted = events
             .iter()
-            .map(|(event_digest, event)| AcceptedControlMove {
-                event_digest: event_digest.clone(),
+            .map(|(_, event)| AvailabilityEvent {
                 event: event.clone(),
-                actor_id: event.actor_id.clone(),
-                effects: Vec::new(),
             })
             .collect::<Vec<_>>();
         self.build_availability_dependencies(
@@ -1708,7 +1510,7 @@ impl NotaryWorker {
         predecessor_ref: Option<&SealId>,
         predecessor_state: &BTreeMap<CellRef, ResolvedCellState>,
         predecessor_covered_events: &[Hash],
-        accepted: &[AcceptedControlMove],
+        accepted: &[AvailabilityEvent],
         event_digest_suite: arkret_canonical::DigestSuite,
         sealed_at: chrono::DateTime<chrono::Utc>,
         minimum_retention_floor_ms: u64,
@@ -2128,70 +1930,6 @@ fn notary_configuration_ref(
     }
 }
 
-fn command_results_for_accepted(
-    accepted: &[AcceptedControlMove],
-    post_state: &BTreeMap<CellRef, ResolvedCellState>,
-    digest_suite: arkret_canonical::DigestSuite,
-    is_genesis: bool,
-) -> Result<Vec<arkret_wire::SealCommandOutcome>, NotaryError> {
-    let recovery_unit = accepted.len() == 2
-        && accepted[0].event.kind == arkret_wire::EventKind::DeviceReanchor
-        && accepted[1].event.kind == arkret_wire::EventKind::DeviceAuthorize;
-    let units = if is_genesis || recovery_unit {
-        vec![accepted]
-    } else {
-        accepted.iter().map(std::slice::from_ref).collect()
-    };
-    units
-        .into_iter()
-        .map(|unit| {
-            let event_digest = unit
-                .first()
-                .ok_or_else(|| NotaryError::Construction("empty command unit".to_owned()))?
-                .event_digest
-                .clone();
-            let unit_event_digests = unit
-                .iter()
-                .map(|entry| entry.event_digest.clone())
-                .collect::<Vec<_>>();
-            let mut revisions = BTreeMap::<CellRef, arkret_wire::EventId>::new();
-            for entry in unit {
-                for effect in &entry.effects {
-                    revisions.insert(effect.cell_id.clone(), entry.event.event_id.clone());
-                }
-            }
-            let effects = revisions
-                .into_iter()
-                .map(|(cell_id, revision_event_id)| {
-                    let value = post_state
-                        .get(&cell_id)
-                        .and_then(ResolvedCellState::settled_value)
-                        .cloned()
-                        .ok_or_else(|| {
-                            NotaryError::Construction(format!(
-                                "command effect cell {cell_id} has no complete post-state"
-                            ))
-                        })?;
-                    Ok(arkret_wire::CommandResultEffect {
-                        cell_id,
-                        state: arkret_wire::CommandResultCellState {
-                            revision_event_id,
-                            value,
-                        },
-                    })
-                })
-                .collect::<Result<Vec<_>, NotaryError>>()?;
-            arkret_wire::SealCommandOutcome::committed(
-                event_digest,
-                unit_event_digests,
-                effects,
-                digest_suite,
-            )
-            .map_err(|error| NotaryError::Construction(format!("derive command result: {error}")))
-        })
-        .collect()
-}
-
 // Materialization holds this process-wide CAS boundary across durable store
 // I/O. Use an async mutex so concurrent frontier reads yield instead of
 // parking a Tokio worker and starving the HTTP runtime.
@@ -2429,18 +2167,14 @@ pub async fn run_one_signing_pass(
 ) -> Result<Option<NotaryOutcome>, NotaryError> {
     let pending = state
         .projections()
-        .pending_control_events_for_notary(realm_id, None, max_control_moves)
+        .pending_control_units_for_notary(realm_id, None, max_control_moves)
         .await?;
     if pending.is_empty() {
         return Ok(None);
     }
-    let proposal_policy =
-        crate::control_proposal::control_proposal_policy(state, realm_id, &pending)
-            .await
-            .map_err(NotaryError::Construction)?;
-    let worker = NotaryWorker::for_service(state.service_id().clone());
+    let worker = NotaryWorker::for_service(state.service_id().clone()).with_pending_page(pending);
     worker
-        .sign_pending_for_realm(state, realm_id, max_control_moves, proposal_policy)
+        .sign_pending_for_realm(state, realm_id, max_control_moves)
         .await
 }
 

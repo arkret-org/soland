@@ -720,8 +720,8 @@ pub(super) async fn register_package_install(
             )
             .with_wire_code("duplicate_conflict"));
         }
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::AppletAlreadyRegistered,
+        return Err(crate::app_error!(
+            AppletAlreadyRegistered,
             "applet package is already installed in this scope",
         ));
     }
@@ -1110,10 +1110,7 @@ pub(super) fn validate_applet_package(
     package
         .validate_with_epoch_evidence(registration_epoch_evidence)
         .map_err(|error| {
-            AppError::new(
-                arkret_wire::ErrorCode::SchemaViolation,
-                format!("applet package invalid: {error}"),
-            )
+            crate::app_error!(SchemaViolation, format!("applet package invalid: {error}"),)
         })?;
     if let Some(expires_at) = package.expires_at
         && expires_at <= chrono::Utc::now()
@@ -1125,8 +1122,8 @@ pub(super) fn validate_applet_package(
         .compute_package_digest()
         .map_err(|error| AppError::internal(format!("package digest failed: {error}")))?;
     if package.package_digest.as_ref() != Some(&expected_digest) {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "applet package_digest does not match package body",
         ));
     }
@@ -1167,8 +1164,8 @@ pub(super) fn validate_applet_package(
 
 fn validate_applet_controller_principal(package: &AppletPackage) -> Result<(), AppError> {
     if package.controller_principal_id == package.service_id {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "applet runtime service_id cannot be used as controller_principal_id",
         ));
     }
@@ -1220,7 +1217,7 @@ fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), 
         match arkret_schema::capability_action(action) {
             Some(_) => {}
             None => {
-                return Err(AppError::new(arkret_wire::ErrorCode::SchemaViolation, format!(
+                return Err(crate::app_error!(SchemaViolation, format!(
                     "applet package requested_scopes contains unknown capability action: {action}"
                 ))
                 .with_reason_detail("capability_action_unknown"));

@@ -557,7 +557,7 @@ impl ProjectionState {
         if self.cell_value(&state_cell).and_then(Value::as_str) == Some(initial_state) {
             return ProjectionEffect::CallStateProjected { call_id };
         }
-        let (Some(next), transition_head) = (match project_call_transition_transition(
+        let Some(next) = (match project_call_transition(
             self,
             &state_cell,
             arkret_wire::CellFamilyId::CALL_STATE_V1,
@@ -576,10 +576,7 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        self.cells.insert(state_cell.clone(), next);
-        if let Some(head) = transition_head {
-            self.call_transition_heads.insert(state_cell, head);
-        }
+        self.cells.insert(state_cell, next);
         ProjectionEffect::CallStateProjected { call_id }
     }
 
@@ -700,9 +697,9 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
                 };
             }
-            let (next, transition_head) = match op.op_type {
+            let next = match op.op_type {
                 arkret_wire::cbs::LatticeOpType::Transition => {
-                    match project_call_transition_transition(
+                    match project_call_transition(
                         self,
                         &cell_id,
                         family,
@@ -719,13 +716,32 @@ impl ProjectionState {
                     }
                 }
                 arkret_wire::cbs::LatticeOpType::Set => {
-                    (op.value.clone().map(ResolvedCellState::Value), None)
+                    (arkret_state::state_model::SequencedState::new(
+                        arkret_wire::EventCellValueShape::Register,
+                    )
+                    .apply(
+                        self.cells.get(&cell_id),
+                        &arkret_state::state_model::StateWrite::new(
+                            operation.context.event_id.clone(),
+                            op.clone(),
+                        ),
+                    )
+                    .ok())
                 }
-                arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => (
-                    project_call_or_set(self.cells.get(&cell_id), op).map(ResolvedCellState::Value),
-                    None,
-                ),
-                _ => (None, None),
+                arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => {
+                    (arkret_state::state_model::SequencedState::new(
+                        arkret_wire::EventCellValueShape::Set,
+                    )
+                    .apply(
+                        self.cells.get(&cell_id),
+                        &arkret_state::state_model::StateWrite::new(
+                            operation.context.event_id.clone(),
+                            op.clone(),
+                        ),
+                    )
+                    .ok())
+                }
+                _ => None,
             };
             let Some(next) = next else {
                 return ProjectionEffect::Rejected {
@@ -735,27 +751,18 @@ impl ProjectionState {
             if family == arkret_wire::CellFamilyId::CALL_FOCUS_V1
                 && !focus_write_preserves_committed(
                     self.cells.get(&cell_id),
-                    match &next {
-                        ResolvedCellState::Value(value) => value,
-                        ResolvedCellState::Bottom(_)
-                        | ResolvedCellState::Causal(_)
-                        | ResolvedCellState::Sequenced(_) => {
-                            unreachable!("focus is not an transition cell")
-                        }
-                    },
+                    next.settled_value()
+                        .expect("call safety projection is sequenced"),
                 )
             {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
                 };
             }
-            updates.push((cell_id, next, transition_head));
+            updates.push((cell_id, next));
         }
-        for (cell_id, state, transition_head) in updates {
-            self.cells.insert(cell_id.clone(), state);
-            if let Some(head) = transition_head {
-                self.call_transition_heads.insert(cell_id, head);
-            }
+        for (cell_id, state) in updates {
+            self.cells.insert(cell_id, state);
         }
         ProjectionEffect::CallStateProjected { call_id }
     }
@@ -1211,14 +1218,14 @@ fn call_cell_family_allowed(family: &str, recording_start: bool) -> bool {
     )
 }
 
-fn project_call_transition_transition(
+fn project_call_transition(
     state: &ProjectionState,
     cell_id: &arkret_identifiers::CellRef,
     family: &str,
     op: &arkret_wire::cbs::LatticeOp,
     operation: &Operation,
     recording_start: bool,
-) -> Result<(Option<ResolvedCellState>, Option<CallTransitionHead>), &'static str> {
+) -> Result<Option<ResolvedCellState>, &'static str> {
     let from = match op.from.as_ref() {
         Some(Value::Null) => None,
         Some(Value::String(value)) if !value.is_empty() => Some(value.as_str()),
@@ -1234,20 +1241,11 @@ fn project_call_transition_transition(
     };
     validate_call_transition_edge(family, from, to, recording_start)?;
 
-    let basis = call_transition_conflict_basis(operation);
-    if let Some(head) = state.call_transition_heads.get(cell_id)
-        && head.basis == basis
-    {
-        if head.value == to {
-            return Ok((state.cells.get(cell_id).cloned(), None));
-        }
-        return Err(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED);
-    }
-
-    let current = state.cells.get(cell_id).and_then(|cell| match cell {
-        ResolvedCellState::Value(Value::String(value)) => Some(value.as_str()),
-        _ => None,
-    });
+    let current = state
+        .cells
+        .get(cell_id)
+        .and_then(ResolvedCellState::settled_value)
+        .and_then(Value::as_str);
     match (current, from) {
         (None, None) => {}
         (Some(current), Some(from)) if current == from => {}
@@ -1266,14 +1264,12 @@ fn project_call_transition_transition(
         }
     }
 
-    Ok((
-        Some(ResolvedCellState::Value(Value::String(to.to_owned()))),
-        Some(CallTransitionHead {
-            basis,
-            operation_id: operation.operation_id.to_string(),
-            value: to.to_owned(),
-        }),
-    ))
+    Ok(Some(ResolvedCellState::Sequenced(
+        arkret_state::state_model::SequencedStateValue {
+            revision_event_id: operation.context.event_id.clone(),
+            value: Value::String(to.to_owned()),
+        },
+    )))
 }
 
 fn validate_call_transition_edge(
@@ -1342,56 +1338,6 @@ fn validate_call_transition_edge(
     }
 }
 
-fn call_transition_conflict_basis(operation: &Operation) -> String {
-    operation
-        .context
-        .seal_basis
-        .as_ref()
-        .and_then(|basis| arkret_canonical::canonical_sha256(basis).ok())
-        .unwrap_or_else(|| operation.operation_id.to_string())
-}
-
-fn project_call_or_set(
-    existing: Option<&ResolvedCellState>,
-    op: &arkret_wire::cbs::LatticeOp,
-) -> Option<Value> {
-    let tag = op.tag.as_deref()?;
-    let mut entries = existing
-        .and_then(|state| match state {
-            ResolvedCellState::Value(Value::Array(entries)) => Some(entries.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
-    match op.op_type {
-        arkret_wire::cbs::LatticeOpType::Add => {
-            let value = op.value.clone()?;
-            if let Some(entry) = entries
-                .iter()
-                .find(|entry| entry.get("tag").and_then(Value::as_str) == Some(tag))
-            {
-                return (entry.get("value") == Some(&value)).then_some(Value::Array(entries));
-            }
-            entries.push(serde_json::json!({"tag": tag, "value": value}));
-            entries.sort_by(|left, right| {
-                left.get("tag")
-                    .and_then(Value::as_str)
-                    .cmp(&right.get("tag").and_then(Value::as_str))
-            });
-            Some(Value::Array(entries))
-        }
-        arkret_wire::cbs::LatticeOpType::Remove => {
-            let entry = entries
-                .iter_mut()
-                .find(|entry| entry.get("tag").and_then(Value::as_str) == Some(tag))?;
-            entry
-                .as_object_mut()?
-                .insert("removed".to_owned(), Value::Bool(true));
-            Some(Value::Array(entries))
-        }
-        _ => None,
-    }
-}
-
 fn call_observed_remove_matches(
     family: &str,
     existing: Option<&ResolvedCellState>,
@@ -1404,31 +1350,47 @@ fn call_observed_remove_matches(
     let Some(tag) = op.tag.as_deref() else {
         return false;
     };
-    let Some(value) = existing.and_then(|state| match state {
-        ResolvedCellState::Value(Value::Array(entries)) => entries.iter().find_map(|entry| {
-            (entry.get("tag").and_then(Value::as_str) == Some(tag))
+    let Some(value) = existing.and_then(|state| {
+        let ResolvedCellState::Sequenced(state) = state else {
+            return None;
+        };
+        state.value.as_array()?.iter().find_map(|entry| {
+            (entry.get("tag_id").and_then(Value::as_str) == Some(tag))
                 .then(|| entry.get("value"))
                 .flatten()
-        }),
-        _ => None,
+        })
     }) else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::call::CallStatePayload,
+    >(payload.clone()) else {
         return false;
     };
     match family {
         arkret_wire::CellFamilyId::CALL_ROSTER_V1 => {
-            let Some(delta) = payload.get("roster_delta") else {
+            let Some(arkret_models_collaboration::events_payloads::call::CallRosterDelta::Leave {
+                actor_id,
+                device_id,
+                ..
+            }) = payload.roster_delta
+            else {
                 return false;
             };
-            delta.get("op").and_then(Value::as_str) == Some("leave")
-                && delta.get("actor_id") == value.get("actor_id")
-                && delta.get("device_id") == value.get("device_id")
+            value.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
+                && value.get("device_id").and_then(Value::as_str) == Some(device_id.as_str())
         }
         arkret_wire::CellFamilyId::CALL_MODERATION_V1 => {
-            let Some(delta) = payload.get("moderation_delta") else {
+            let Some(
+                arkret_models_collaboration::events_payloads::call::CallModerationDelta::RestoreParticipant {
+                    actor_id,
+                    ..
+                },
+            ) = payload.moderation_delta
+            else {
                 return false;
             };
-            delta.get("op").and_then(Value::as_str) == Some("restore_participant")
-                && delta.get("actor_id") == value.get("actor_id")
+            value.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
                 && value.get("action").and_then(Value::as_str) == Some("ban")
         }
         _ => false,
@@ -1436,10 +1398,7 @@ fn call_observed_remove_matches(
 }
 
 fn focus_write_preserves_committed(existing: Option<&ResolvedCellState>, next: &Value) -> bool {
-    let Some(existing) = existing.and_then(|state| match state {
-        ResolvedCellState::Value(value) => Some(value),
-        _ => None,
-    }) else {
+    let Some(existing) = existing.and_then(ResolvedCellState::settled_value) else {
         return true;
     };
     match existing.get("session_focus").and_then(Value::as_str) {

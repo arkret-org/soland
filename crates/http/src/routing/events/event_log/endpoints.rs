@@ -334,15 +334,17 @@ async fn pcr_pending_control(
     }
     let mut pending = state
         .projections()
-        .pending_control_events_for_notary(&request.realm_id, None, request.limit as usize + 1)
+        .pending_control_units_for_notary(&request.realm_id, None, request.limit as usize + 1)
         .await
         .map_err(|error| AppError::internal(format!("pending PCR read: {error}")))?;
     let has_more = pending.len() > request.limit as usize;
     pending.truncate(request.limit as usize);
     let mut event_digests = pending
         .into_iter()
-        .map(|event| event.event_id.event_digest())
-        .collect::<Vec<_>>();
+        .flat_map(|unit| unit.members)
+        .map(|member| arkret_state::state::control_event_digest(&member.event, member.digest_suite))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::internal(format!("pending PCR digest: {error}")))?;
     event_digests.sort();
     let mut after = state
         .projections()

@@ -551,20 +551,19 @@ async fn assert_link_moves_are_sealed_once(state: &AppState, realm_id: &str, lea
 
     let pending = state
         .test_projections()
-        .pending_control_events_for_notary(&realm_id, None, 100)
+        .pending_control_units_for_notary(&realm_id, None, 100)
         .await
         .unwrap();
-    for event in pending {
-        let digest = arkret_wire::Hash::new(
-            event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(
-            !accepted_links.contains(&digest),
-            "a covered Realm Link Move must not remain pending: {digest}"
-        );
+    for unit in pending {
+        for member in unit.members {
+            let digest =
+                arkret_state::state::control_event_digest(&member.event, member.digest_suite)
+                    .unwrap();
+            assert!(
+                !accepted_links.contains(&digest),
+                "a covered Realm Link Move must not remain pending: {digest}"
+            );
+        }
     }
 
     let mut seals = vec![leaf.clone()];

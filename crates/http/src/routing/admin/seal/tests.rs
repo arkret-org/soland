@@ -71,25 +71,34 @@ fn notary_value_from_cell_reads_authoritative_f1_quorum_form() {
 
 #[test]
 fn bottom_entry_from_reads_the_kind_the_sdk_emits() {
-    // `BottomKind` is `#[serde(rename_all = "snake_case")]`, so the wire form
-    // already is what sodmin expects and the helper passes it through. These
-    // cases used to feed PascalCase and assert a normalisation step that the
-    // helper no longer does — and that the SDK never needed.
-    let bottom = json!({
-        "kind": "conflict",
-        "heads": [
-            {"event_id": "ak:event:a", "value": "a"},
-            {"event_id": "ak:event:b", "value": "b"}
-        ]
-    });
-    let entry = bottom_entry_from(
-        "ak:space:Aas_EcgKHABrLEjI4EJvOxHIXQVfHYZ_oP4Q_u3xuXRF",
-        "ak:cell:ak.component.space.title.v1:ak:space:Aas_EcgKHABrLEjI4EJvOxHIXQVfHYZ_oP4Q_u3xuXRF",
-        &bottom,
+    let realm = arkret_wire::RealmId::new(
+        "ak:realm:Aas_EcgKHABrLEjI4EJvOxHIXQVfHYZ_oP4Q_u3xuXRF".to_owned(),
+    )
+    .unwrap();
+    let cell = arkret_wire::CellRef::new(format!(
+        "ak:cell:ak.component.space.title.v1:{}",
+        realm.as_str()
+    ))
+    .unwrap();
+    let first = arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [1; 32]);
+    let second = arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [2; 32]);
+    let bottom = arkret_wire::Bottom::conflict(
+        vec![cell.clone()],
+        vec![
+            arkret_wire::CausalHead {
+                event_id: first.clone(),
+                value: json!("a"),
+            },
+            arkret_wire::CausalHead {
+                event_id: second,
+                value: json!("b"),
+            },
+        ],
     );
-    assert_eq!(entry.kind, "conflict");
+    let entry = bottom_entry_from(&realm, &cell, &bottom);
+    assert_eq!(entry.kind, arkret_wire::BottomKind::Conflict);
     assert_eq!(entry.candidate_heads.len(), 2);
-    assert_eq!(entry.candidate_heads[0].event_id, "ak:event:a");
+    assert_eq!(entry.candidate_heads[0].event_id, first);
     assert_eq!(entry.candidate_heads[0].value, json!("a"));
 }
 

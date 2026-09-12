@@ -871,7 +871,7 @@ async fn require_prepare_device_active(
 }
 
 fn validation(error: arkret_wire::WireError) -> AppError {
-    AppError::new(
+    AppError::from_rejection(
         error.error_code().unwrap_or(ErrorCode::SchemaViolation),
         error.to_string(),
     )
@@ -1003,8 +1003,8 @@ async fn prepare(
         })?;
     let authenticated_actor = ActorId::account(authenticated_account.clone());
     let request_hash = arkret_canonical::canonical_sha256(&body).map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
+        crate::app_error!(
+            SchemaViolation,
             format!("Realm join preparation request cannot be canonicalized: {error}"),
         )
     })?;

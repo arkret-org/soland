@@ -767,6 +767,7 @@ async fn insert_pending_control_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
     control_proposal_ack: &arkret_wire::ControlProposalAck,
+    command_unit_event_digests: &[arkret_wire::Hash],
 ) -> PersistenceResult<()> {
     let event =
         serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).map_err(|error| {
@@ -796,10 +797,27 @@ async fn insert_pending_control_event(
                     "Control Move ingress class encoding failed: {error}"
                 ))
             })?;
+    if command_unit_event_digests.is_empty()
+        || command_unit_event_digests.len() > arkret_wire::seal::MAX_SEAL_DELTA
+        || !command_unit_event_digests.contains(&digest)
+        || command_unit_event_digests
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != command_unit_event_digests.len()
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: invalid registered command unit".to_owned(),
+        ));
+    }
+    let command_unit_event_digests =
+        serde_json::to_value(command_unit_event_digests).map_err(|error| {
+            PersistenceError::Internal(format!("registered command unit encoding failed: {error}"))
+        })?;
     let affected = sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class, command_unit_event_digests) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
          ON CONFLICT (event_digest) DO UPDATE SET \
            control_proposal_ack = COALESCE( \
              state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
@@ -808,6 +826,7 @@ async fn insert_pending_control_event(
            AND state_control_events.digest_suite = EXCLUDED.digest_suite \
            AND state_control_events.event_json = EXCLUDED.event_json \
            AND state_control_events.ingress_class = EXCLUDED.ingress_class \
+           AND state_control_events.command_unit_event_digests = EXCLUDED.command_unit_event_digests \
            AND (state_control_events.control_proposal_ack IS NULL \
              OR EXCLUDED.control_proposal_ack IS NULL \
              OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
@@ -818,6 +837,7 @@ async fn insert_pending_control_event(
     .bind::<Jsonb, _>(&record.envelope)
     .bind::<Jsonb, _>(&control_proposal_ack)
     .bind::<Jsonb, _>(&ingress_class)
+    .bind::<Jsonb, _>(&command_unit_event_digests)
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
@@ -1233,6 +1253,10 @@ impl EventStore for PgEventStore {
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<soland_storage::RealmBootstrapCommitOutcome> {
         let acks = super::control_proposal_acks_by_digest(&records, control_proposal_acks, true)?;
+        let command_unit_event_digests = records
+            .iter()
+            .map(|record| record.canonical_digest.clone())
+            .collect::<Vec<_>>();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -1274,7 +1298,13 @@ impl EventStore for PgEventStore {
                             .to_owned(),
                     )
                         })?;
-                    insert_pending_control_event(conn, &record, control_proposal_ack).await?;
+                    insert_pending_control_event(
+                        conn,
+                        &record,
+                        control_proposal_ack,
+                        &command_unit_event_digests,
+                    )
+                    .await?;
                     dependency_count += insert_control_event_governance_dependencies(
                         conn,
                         &record,
@@ -1334,6 +1364,10 @@ impl EventStore for PgEventStore {
             ));
         }
         let acks = super::control_proposal_acks_by_digest(&records, control_proposal_acks, true)?;
+        let command_unit_event_digests = records
+            .iter()
+            .map(|record| record.canonical_digest.clone())
+            .collect::<Vec<_>>();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -1412,7 +1446,13 @@ impl EventStore for PgEventStore {
                             .to_owned(),
                     )
                 })?;
-                insert_pending_control_event(conn, &record, ack).await?;
+                insert_pending_control_event(
+                    conn,
+                    &record,
+                    ack,
+                    &command_unit_event_digests,
+                )
+                .await?;
                 dependency_count += insert_control_event_governance_dependencies(
                     conn,
                     &record,
@@ -1493,6 +1533,10 @@ impl EventStore for PgEventStore {
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
+        let command_unit_event_digests = records
+            .iter()
+            .map(|record| record.canonical_digest.clone())
+            .collect::<Vec<_>>();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -1640,6 +1684,7 @@ impl EventStore for PgEventStore {
                                             .to_owned(),
                                     )
                                 })?,
+                            &command_unit_event_digests,
                         )
                         .await?;
                         dependency_count += insert_control_event_governance_dependencies(

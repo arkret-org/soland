@@ -133,7 +133,7 @@ async fn expired_agent_current_result_refreshes_atomically_and_partial_view_stay
     )
     .unwrap();
     let realm = event.realm_id.clone();
-    sql_query("INSERT INTO state_control_events(event_digest,digest_suite,realm_id,event_json,ingress_class,is_pending) VALUES($1,'sha256',$2,$3,'{}',FALSE)")
+    sql_query("INSERT INTO state_control_events(event_digest,digest_suite,realm_id,event_json,ingress_class,command_unit_event_digests,is_pending) VALUES($1,'sha256',$2,$3,'{}',jsonb_build_array($1),FALSE)")
         .bind::<Text,_>(event.event_id.event_digest().as_str()).bind::<Text,_>(realm.as_str())
         .bind::<Jsonb,_>(serde_json::to_value(&event).unwrap()).execute(&mut *conn).await.unwrap();
     let status = CellRef::new(format!(

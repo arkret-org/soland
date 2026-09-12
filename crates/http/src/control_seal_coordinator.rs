@@ -7,7 +7,10 @@
 use std::time::Duration;
 
 use arkret_identifiers::RealmId;
-use arkret_state::state::{ControlSealAttemptOutcome, ControlSealScheduleClaim};
+use arkret_state::state::{
+    ControlSealAttemptOutcome, ControlSealScheduleClaim, PendingControlUnitRecord,
+    control_event_digest,
+};
 use tokio::task::JoinSet;
 
 use crate::notary::{NotaryWorker, SigningLeaseSlotResolution};
@@ -22,7 +25,7 @@ const SCHEDULE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
 const SCHEDULE_STORE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REALM_ATTEMPTS_PER_PASS: usize = 512;
 const MAX_SCHEDULE_REPAIRS_PER_PASS: usize = 512;
-const MAX_CONTROL_MOVES_PER_REALM: usize = 256;
+const MAX_CONTROL_UNITS_PER_REALM: usize = 256;
 const MAX_DEVICE_REVOCATION_CLEANUPS_PER_PASS: usize = 512;
 // A full Station can have many independent Realms become pending at
 // once. Processing them serially lets an otherwise healthy queue age beyond
@@ -377,12 +380,12 @@ async fn run_realm_pass(
             control_seal_page_limit(predecessor_ref.is_none(), claim.isolate_candidates);
         let mut pending = state
             .projections()
-            .pending_control_events_for_notary(realm_id, cursor, page_limit)
+            .pending_control_units_for_notary(realm_id, cursor, page_limit)
             .await?;
         if pending.is_empty() && cursor.is_some() {
             pending = state
                 .projections()
-                .pending_control_events_for_notary(realm_id, None, page_limit)
+                .pending_control_units_for_notary(realm_id, None, page_limit)
                 .await?;
         }
         Ok::<_, arkret_state::state::StoreError>((pending, predecessor_ref.is_some()))
@@ -395,10 +398,21 @@ async fn run_realm_pass(
             return ControlSealAttemptOutcome::TransientStoreFailure;
         }
     };
-    run_fault_isolated_batch(pending, can_split, |pending: Vec<arkret_wire::Event>| async move {
+    run_fault_isolated_batch(pending, can_split, |pending: Vec<PendingControlUnitRecord>| async move {
         // Persist before each attempt, including isolated retries. A timeout or
         // crash resumes after the last attempted item instead of pinning it.
-        let cursor = pending.last().map(|event| event.event_id.event_digest());
+        let cursor = pending
+            .last()
+            .and_then(|unit| unit.members.first())
+            .map(|member| control_event_digest(&member.event, member.digest_suite))
+            .transpose();
+        let cursor = match cursor {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                tracing::error!(%error, %realm_id, "stored control command unit has an invalid digest");
+                return ControlSealAttemptOutcome::TransientStoreFailure;
+            }
+        };
         match state.projections().advance_control_seal_scan(
             claim, cursor.as_ref(), chrono::Utc::now().timestamp_millis(),
         ).await {
@@ -415,7 +429,7 @@ fn control_seal_page_limit(genesis: bool, isolate_candidates: bool) -> usize {
     if !genesis && isolate_candidates {
         1
     } else {
-        MAX_CONTROL_MOVES_PER_REALM
+        MAX_CONTROL_UNITS_PER_REALM
     }
 }
 
@@ -454,14 +468,18 @@ where
 async fn run_pending_realm_pass(
     state: &AppState,
     claim: &ControlSealScheduleClaim,
-    pending: Vec<arkret_wire::Event>,
+    pending: Vec<PendingControlUnitRecord>,
 ) -> ControlSealAttemptOutcome {
     let realm_id = &claim.realm_id;
     let holder = &claim.holder;
     let worker =
         NotaryWorker::for_service(state.service_id().clone()).with_pending_page(pending.clone());
+    let pending_events = pending
+        .iter()
+        .flat_map(|unit| unit.members.iter().map(|member| member.event.clone()))
+        .collect::<Vec<_>>();
     let slot = match worker
-        .signing_lease_slot(state, realm_id, MAX_CONTROL_MOVES_PER_REALM)
+        .signing_lease_slot(state, realm_id, MAX_CONTROL_UNITS_PER_REALM)
         .await
     {
         Ok(SigningLeaseSlotResolution::Ready(slot)) => slot,
@@ -486,7 +504,9 @@ async fn run_pending_realm_pass(
         }
     };
     let proposal_policy = match crate::control_proposal::control_proposal_policy(
-        state, realm_id, &pending,
+        state,
+        realm_id,
+        &pending_events,
     )
     .await
     {
@@ -518,12 +538,7 @@ async fn run_pending_realm_pass(
     };
 
     let attempt_outcome = match worker
-        .sign_pending_for_realm(
-            state,
-            realm_id,
-            MAX_CONTROL_MOVES_PER_REALM,
-            proposal_policy,
-        )
+        .sign_pending_for_realm(state, realm_id, MAX_CONTROL_UNITS_PER_REALM)
         .await
     {
         Ok(Some(outcome)) => {
@@ -602,7 +617,7 @@ async fn defer_due_proposals_after_failed_signing(
         chrono::Duration::from_std(RECONCILIATION_INTERVAL).map_err(|error| error.to_string())?;
     let records = state
         .projections()
-        .pending_control_records(realm_id, MAX_CONTROL_MOVES_PER_REALM)
+        .pending_control_records(realm_id, MAX_CONTROL_UNITS_PER_REALM)
         .await
         .map_err(|error| error.to_string())?;
     for record in records {
@@ -710,7 +725,7 @@ mod isolation_tests {
         );
         assert_eq!(
             control_seal_page_limit(true, true),
-            MAX_CONTROL_MOVES_PER_REALM
+            MAX_CONTROL_UNITS_PER_REALM
         );
     }
 

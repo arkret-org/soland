@@ -1601,6 +1601,7 @@ pub(crate) async fn apply_agent_event_seal(
             )
         })?;
     let mut events = Vec::with_capacity(records.len());
+    let mut events_by_digest = BTreeMap::new();
     let mut event_digest_suites = BTreeMap::new();
     for record in records {
         let stored_digest = Hash::new(record.canonical_digest.clone())
@@ -1629,9 +1630,23 @@ pub(crate) async fn apply_agent_event_seal(
             )));
         }
         event_digest_suites.insert(event.event_id.clone(), record.digest_suite);
+        if events_by_digest
+            .insert(stored_digest, (event.clone(), record.digest_suite))
+            .is_some()
+        {
+            return Err(seal_admission_error(
+                "duplicate canonical Event digest in Agent PCR history",
+            ));
+        }
         events.push(event);
     }
-    let material = arkret_bootstrap::materialize_agent_pcr_control(&events, &|event| {
+    let ordered = crate::routing::identity::agent_pcr::resolve_agent_pcr_ordered_history(
+        state,
+        seal.clone(),
+        &events_by_digest,
+    )
+    .await?;
+    let material = arkret_bootstrap::materialize_agent_pcr_control(&ordered.units, &|event| {
         let event_digest_suite = event_digest_suites
             .get(&event.event_id)
             .copied()
@@ -1669,6 +1684,11 @@ pub(crate) async fn apply_agent_event_seal(
     {
         return Err(device_generation_fenced(
             "Agent PCR Seal authority differs from the accepted Agent delegation",
+        ));
+    }
+    if material.command_results != ordered.committed_command_results {
+        return Err(seal_admission_error(
+            "Agent PCR signed command results do not match deterministic replay",
         ));
     }
 
@@ -1895,8 +1915,18 @@ pub(crate) async fn apply_inbound_seal(
     verify_realm_notary_seal(state, seal).await?;
     let verifier = select_jws_verifier(state);
     let context = if seal.predecessor_ref.is_none() {
-        let mut events_with_digests = Vec::with_capacity(seal.delta.len());
-        for digest in &seal.delta {
+        let [result] = seal.command_results.as_slice() else {
+            return Err(seal_admission_error(
+                "first Seal must contain one registered command unit",
+            ));
+        };
+        if result.outcome != arkret_wire::CommandOutcome::Committed {
+            return Err(seal_admission_error(
+                "first Seal command unit must be committed",
+            ));
+        }
+        let mut events = Vec::with_capacity(result.unit_event_digests.len());
+        for digest in &result.unit_event_digests {
             let event = state
                 .projections()
                 .control_event(digest)
@@ -1910,12 +1940,8 @@ pub(crate) async fn apply_inbound_seal(
                 .ok_or_else(|| {
                     seal_admission_error(format!("first Seal is missing Control Move {digest}"))
                 })?;
-            events_with_digests.push((digest.clone(), event));
+            events.push(event);
         }
-        let events = arkret_state::deterministic_order(events_with_digests)
-            .into_iter()
-            .map(|(_, event)| event)
-            .collect::<Vec<_>>();
         arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events)
             .map_err(|error| seal_admission_error(error.to_string()))?;
         arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
@@ -1999,10 +2025,8 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RejectedControlEventEntry {
     pub event_digest: String,
-    /// The reason the signed `ControlProposalDecision` carries. Operators and
-    /// tests read this; `reason` below is free-form diagnostics that must not
-    /// be parsed.
-    pub reason_code: arkret_wire::ControlProposalRejectReason,
+    /// The exact registered reason committed by the Seal command outcome.
+    pub reason_code: arkret_wire::ReasonCode,
     pub reason: String,
 }
 

@@ -6,18 +6,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arkret_identifiers::{CellRef, EventId, Hash, RealmId, SealId};
-use arkret_state::state::store::ControlProposalIngress;
+use arkret_state::state::store::{ControlProposalIngress, ControlUnitIngressMember};
 use arkret_state::state::{
     CellStateRegistry, CellStore, ControlEventStore, ControlProposalSnapshot,
     ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
-    ControlSealScheduleRepairStats, PendingControlEventRecord, SealStore, SealedControlEventRecord,
-    StoreError, StoreResult, compute_state_root, control_event_digest,
+    ControlSealScheduleRepairStats, DecidedControlEventRecord, PendingControlEventRecord,
+    PendingControlUnitRecord, SealCommandEventDecision, SealStore, StoreError, StoreResult,
+    compute_state_root, control_event_digest,
 };
 use arkret_state::state_model::ordered_log::IssuedOp;
 use arkret_state::state_model::{ResolvedCellState, StateWrite};
 use arkret_wire::{
-    ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event, LatticeOp,
-    Seal,
+    CommandOutcome, ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy,
+    Event, LatticeOp, ReasonCode, Seal,
 };
 use async_trait::async_trait;
 use diesel::sql_types::{Array, BigInt, Binary, Bool, Jsonb, Nullable, Text, Timestamptz};
@@ -252,13 +253,15 @@ struct TextRow {
 }
 
 #[derive(QueryableByName)]
-struct SealedControlEventRow {
+struct DecidedControlEventRow {
     #[diesel(sql_type = Text)]
     digest_suite: String,
     #[diesel(sql_type = Jsonb)]
     event_json: Value,
     #[diesel(sql_type = Array<Text>)]
     covering_seal_ids: Vec<String>,
+    #[diesel(sql_type = Jsonb)]
+    command_decisions: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
     control_proposal_ack: Option<Value>,
     #[diesel(sql_type = Jsonb)]
@@ -284,6 +287,36 @@ struct PendingControlEventRow {
 }
 
 #[derive(QueryableByName)]
+struct PendingControlUnitRow {
+    #[diesel(sql_type = Jsonb)]
+    unit_event_digests: Value,
+    #[diesel(sql_type = Jsonb)]
+    members: Value,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPendingControlUnitMember {
+    event_digest: Hash,
+    digest_suite: String,
+    event: Event,
+    control_proposal_ack: Option<ControlProposalAck>,
+    decisions: Vec<ControlProposalDecision>,
+    ingress_class: arkret_state::state::ControlProposalIngressClass,
+    is_pending: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredSealCommandEventDecision {
+    seal_id: String,
+    command_index: u32,
+    member_index: u32,
+    outcome: CommandOutcome,
+    reason_code: Option<ReasonCode>,
+}
+
+#[derive(QueryableByName)]
 struct ControlProposalStateRow {
     #[diesel(sql_type = Nullable<Jsonb>)]
     control_proposal_ack: Option<Value>,
@@ -303,6 +336,8 @@ struct ControlEventSealStateRow {
     control_proposal_ack: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     proposal_decisions: Value,
+    #[diesel(sql_type = Jsonb)]
+    command_unit_event_digests: Value,
 }
 
 #[derive(QueryableByName)]
@@ -319,6 +354,8 @@ struct ControlProposalSnapshotRow {
     proposal_decisions: Value,
     #[diesel(sql_type = Array<Text>)]
     covering_seal_ids: Vec<String>,
+    #[diesel(sql_type = Jsonb)]
+    command_decisions: Value,
     #[diesel(sql_type = Bool)]
     decision_overdue: bool,
 }
@@ -421,8 +458,16 @@ struct EventCellOpRow {
 
 #[derive(QueryableByName)]
 struct SealControlEventBindingRow {
+    #[diesel(sql_type = Text)]
+    seal_id: String,
     #[diesel(sql_type = BigInt)]
-    delta_index: i64,
+    command_index: i64,
+    #[diesel(sql_type = BigInt)]
+    member_index: i64,
+    #[diesel(sql_type = Text)]
+    outcome: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    reason_code: Option<String>,
     #[diesel(sql_type = Text)]
     accepted_event_bytes_digest: String,
     #[diesel(sql_type = Binary)]
@@ -439,16 +484,20 @@ async fn pg_conn(pool: &PgPool) -> StoreResult<Object<AsyncPgConnection>> {
         .map_err(|error| StoreError::Backend(format!("database pool error: {error}")))
 }
 
-async fn mark_control_event_sealed_in_transaction(
+async fn record_control_event_decision_in_transaction(
     conn: &mut AsyncPgConnection,
     digest: &str,
     seal_id: &str,
     realm_id: &str,
-    delta_index: i64,
+    command_index: i64,
+    member_index: i64,
+    outcome: CommandOutcome,
+    reason_code: Option<&ReasonCode>,
+    unit_event_digests: &[Hash],
     sealed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), EventSealCommitError> {
     let row = sql_query(
-        "SELECT realm_id, event_json, control_proposal_ack, proposal_decisions \
+        "SELECT realm_id, event_json, control_proposal_ack, proposal_decisions, command_unit_event_digests \
          FROM state_control_events WHERE event_digest = $1 FOR UPDATE",
     )
     .bind::<Text, _>(digest)
@@ -461,6 +510,14 @@ async fn mark_control_event_sealed_in_transaction(
         return Err(StoreError::Conflict(format!(
             "Control Event {digest} Realm {} does not match Seal {seal_id} Realm {realm_id}",
             row.realm_id
+        ))
+        .into());
+    }
+    let registered_unit = serde_json::from_value::<Vec<Hash>>(row.command_unit_event_digests)
+        .map_err(serde_to_store)?;
+    if registered_unit != unit_event_digests {
+        return Err(StoreError::Conflict(format!(
+            "Seal {seal_id} command result does not match the registered unit for {digest}"
         ))
         .into());
     }
@@ -483,12 +540,6 @@ async fn mark_control_event_sealed_in_transaction(
         })?
         .to_vec();
     let accepted_event_bytes_digest = arkret_canonical::sha256_digest(&availability_preimage);
-    if decisions.iter().any(ControlProposalDecision::is_reject) {
-        return Err(StoreError::Conflict(format!(
-            "signed-rejected control Event {digest} cannot be sealed"
-        ))
-        .into());
-    }
     let mut overdue = false;
     if let Some(ack) = row.control_proposal_ack {
         let ack = serde_json::from_value::<ControlProposalAck>(ack).map_err(serde_to_store)?;
@@ -499,49 +550,64 @@ async fn mark_control_event_sealed_in_transaction(
         }
         overdue |= sealed_at > previous_due_at;
     }
-    let affected = sql_query(
-        "INSERT INTO state_seal_control_events \
-         (seal_id, realm_id, event_digest, delta_index, accepted_event_bytes_digest, \
-          accepted_event_bytes, sealed_at, decision_overdue) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-         ON CONFLICT (seal_id, event_digest) DO NOTHING",
+    let existing = sql_query(
+        "SELECT seal_id, command_index, member_index, outcome, reason_code, \
+                accepted_event_bytes_digest, accepted_event_bytes, sealed_at, decision_overdue \
+         FROM state_seal_control_events WHERE event_digest = $1",
     )
-    .bind::<Text, _>(seal_id)
-    .bind::<Text, _>(realm_id)
     .bind::<Text, _>(digest)
-    .bind::<BigInt, _>(delta_index)
-    .bind::<Text, _>(&accepted_event_bytes_digest)
-    .bind::<Binary, _>(&accepted_event_bytes)
-    .bind::<Timestamptz, _>(sealed_at)
-    .bind::<Bool, _>(overdue)
-    .execute(conn)
-    .await?;
-    if affected == 0 {
-        let binding = sql_query(
-            "SELECT delta_index, accepted_event_bytes_digest, accepted_event_bytes, \
-                    sealed_at, decision_overdue \
-             FROM state_seal_control_events WHERE seal_id = $1 AND event_digest = $2",
-        )
-        .bind::<Text, _>(seal_id)
-        .bind::<Text, _>(digest)
-        .get_result::<SealControlEventBindingRow>(&mut *conn)
-        .await?;
-        if binding.delta_index != delta_index
+    .get_result::<SealControlEventBindingRow>(&mut *conn)
+    .await
+    .optional()?;
+    if let Some(binding) = existing {
+        if binding.seal_id != seal_id
+            || binding.command_index != command_index
+            || binding.member_index != member_index
+            || binding.outcome
+                != match outcome {
+                    CommandOutcome::Committed => "committed",
+                    CommandOutcome::Rejected => "rejected",
+                }
+            || binding.reason_code.as_deref() != reason_code.map(ReasonCode::as_str)
             || binding.accepted_event_bytes_digest != accepted_event_bytes_digest
             || binding.accepted_event_bytes != accepted_event_bytes
             || binding.sealed_at != sealed_at
             || binding.decision_overdue != overdue
         {
             return Err(StoreError::Conflict(format!(
-                "duplicate_conflict: Seal {seal_id} coverage binding for {digest} differs"
+                "duplicate_conflict: control Event {digest} already has a different Seal command decision"
             ))
             .into());
         }
         return Ok(());
     }
-    crate::stage_sealed_revocation_in_transaction(conn, digest, seal_id, sealed_at)
-        .await
-        .map_err(|error| StoreError::Backend(error.to_string()))?;
+    sql_query(
+        "INSERT INTO state_seal_control_events \
+         (seal_id, realm_id, event_digest, command_index, member_index, outcome, reason_code, \
+          accepted_event_bytes_digest, accepted_event_bytes, sealed_at, decision_overdue) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+    )
+    .bind::<Text, _>(seal_id)
+    .bind::<Text, _>(realm_id)
+    .bind::<Text, _>(digest)
+    .bind::<BigInt, _>(command_index)
+    .bind::<BigInt, _>(member_index)
+    .bind::<Text, _>(match outcome {
+        CommandOutcome::Committed => "committed",
+        CommandOutcome::Rejected => "rejected",
+    })
+    .bind::<Nullable<Text>, _>(reason_code.map(ReasonCode::as_str))
+    .bind::<Text, _>(&accepted_event_bytes_digest)
+    .bind::<Binary, _>(&accepted_event_bytes)
+    .bind::<Timestamptz, _>(sealed_at)
+    .bind::<Bool, _>(overdue)
+    .execute(conn)
+    .await?;
+    if outcome == CommandOutcome::Committed {
+        crate::stage_sealed_revocation_in_transaction(conn, digest, seal_id, sealed_at)
+            .await
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+    }
     Ok(())
 }
 
@@ -959,6 +1025,23 @@ fn covering_seal_ids(ids: Vec<String>) -> StoreResult<Vec<SealId>> {
         .collect()
 }
 
+fn command_event_decisions(value: Value) -> StoreResult<Vec<SealCommandEventDecision>> {
+    serde_json::from_value::<Vec<StoredSealCommandEventDecision>>(value)
+        .map_err(serde_to_store)?
+        .into_iter()
+        .map(|decision| {
+            Ok(SealCommandEventDecision {
+                seal_id: SealId::new(decision.seal_id)
+                    .map_err(|error| StoreError::Backend(error.to_string()))?,
+                command_index: decision.command_index,
+                member_index: decision.member_index,
+                outcome: decision.outcome,
+                reason_code: decision.reason_code,
+            })
+        })
+        .collect()
+}
+
 #[async_trait]
 impl ControlEventStore for PgControlEventStore {
     async fn advance_control_seal_scan(
@@ -990,179 +1073,151 @@ impl ControlEventStore for PgControlEventStore {
             Ok(updated == 1)
         })
     }
-    async fn put_pending_with_ingress(
+    async fn put_pending_unit_with_ingress(
         &self,
-        event: &Event,
-        ingress: &ControlProposalIngress,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        let pool = self.pool.clone();
-        let value = serde_json::to_value(event).map_err(serde_to_store)?;
-        // A Control Move has no identity of its own in v1: it is an Event, and
-        // the control log is keyed by its canonical control-event digest.
-        let digest = control_event_digest(event, digest_suite)
-            .map_err(|error| StoreError::Backend(error.to_string()))?
-            .as_str()
-            .to_owned();
-        let realm_id = event.realm_id.as_str().to_owned();
-        let control_proposal_ack = ingress.ack();
-        if let Some(ack) = control_proposal_ack
-            && (ack.proposal_digest.as_str() != digest || ack.realm_id != event.realm_id)
-        {
+        members: &[ControlUnitIngressMember],
+    ) -> StoreResult<Vec<Hash>> {
+        let Some(first) = members.first() else {
             return Err(StoreError::Conflict(
-                "Control Proposal Ack does not bind the pending Control Move".to_owned(),
+                "registered control command unit is empty".to_owned(),
+            ));
+        };
+        if members.len() > arkret_wire::seal::MAX_SEAL_DELTA {
+            return Err(StoreError::Conflict(
+                "registered control command unit exceeds the protocol member limit".to_owned(),
             ));
         }
-        if let Some(ack) = control_proposal_ack {
-            ack.validate_protocol_bounds()
-                .map_err(|error| StoreError::Conflict(error.to_string()))?;
+        let pool = self.pool.clone();
+        let realm_id = first.event.realm_id.clone();
+        let mut digests = Vec::with_capacity(members.len());
+        let mut seen = BTreeSet::new();
+        let mut prepared = Vec::with_capacity(members.len());
+        for member in members {
+            if member.event.realm_id != realm_id {
+                return Err(StoreError::Conflict(
+                    "registered control command unit crosses Realm boundaries".to_owned(),
+                ));
+            }
+            let digest = control_event_digest(&member.event, member.digest_suite)?;
+            if !seen.insert(digest.clone()) {
+                return Err(StoreError::Conflict(
+                    "registered control command unit contains a duplicate Event digest".to_owned(),
+                ));
+            }
+            if let Some(ack) = member.ingress.ack() {
+                if ack.proposal_digest != digest || ack.realm_id != member.event.realm_id {
+                    return Err(StoreError::Conflict(
+                        "Control Proposal Ack does not bind its pending Control Event".to_owned(),
+                    ));
+                }
+                ack.validate_protocol_bounds()
+                    .map_err(|error| StoreError::Conflict(error.to_string()))?;
+            }
+            prepared.push((
+                digest.as_str().to_owned(),
+                member.digest_suite.as_str().to_owned(),
+                serde_json::to_value(&member.event).map_err(serde_to_store)?,
+                member
+                    .ingress
+                    .ack()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(serde_to_store)?,
+                serde_json::to_value(member.ingress.class()).map_err(serde_to_store)?,
+            ));
+            digests.push(digest);
         }
-        let control_proposal_ack = control_proposal_ack
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(serde_to_store)?;
-        let ingress_class = serde_json::to_value(ingress.class()).map_err(serde_to_store)?;
+        let command_unit_event_digests = serde_json::to_value(&digests).map_err(serde_to_store)?;
+        let realm_id_text = realm_id.as_str().to_owned();
+        let result = digests.clone();
         await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
-                lock_seal_realm(conn, &realm_id).await?;
-                if realm_has_seal_collision(conn, &realm_id).await? {
+                lock_seal_realm(conn, &realm_id_text).await?;
+                if realm_has_seal_collision(conn, &realm_id_text).await? {
                     return Err(StoreError::Conflict(format!(
-                        "seal_collision_quarantine: Realm {realm_id} is blocked"
+                        "seal_collision_quarantine: Realm {realm_id_text} is blocked"
                     ))
                     .into());
                 }
-                let affected = sql_query(
-                    "INSERT INTO state_control_events \
-                     (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (event_digest) DO UPDATE SET \
-                       control_proposal_ack = COALESCE( \
-                         state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
-                       ) \
-                     WHERE state_control_events.realm_id = EXCLUDED.realm_id \
-                       AND state_control_events.digest_suite = EXCLUDED.digest_suite \
-                       AND state_control_events.event_json = EXCLUDED.event_json \
-                       AND state_control_events.ingress_class = EXCLUDED.ingress_class \
-                       AND (state_control_events.control_proposal_ack IS NULL \
-                         OR EXCLUDED.control_proposal_ack IS NULL \
-                         OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
-                )
-                .bind::<Text, _>(&digest)
-                .bind::<Text, _>(digest_suite.as_str())
-                .bind::<Text, _>(&realm_id)
-                .bind::<Jsonb, _>(&value)
-                .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
-                .bind::<Jsonb, _>(&ingress_class)
-                .execute(&mut *conn)
-                .await?;
-                if affected == 0 {
-                    return Err(StoreError::Conflict(
-                        "pending Control Move already has different canonical bytes, ingress class or Control Proposal Ack"
-                            .to_owned(),
+                for (digest, digest_suite, value, control_proposal_ack, ingress_class) in prepared {
+                    let affected = sql_query(
+                        "INSERT INTO state_control_events \
+                         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class, command_unit_event_digests) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                         ON CONFLICT (event_digest) DO UPDATE SET \
+                           control_proposal_ack = COALESCE( \
+                             state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
+                           ) \
+                         WHERE state_control_events.realm_id = EXCLUDED.realm_id \
+                           AND state_control_events.digest_suite = EXCLUDED.digest_suite \
+                           AND state_control_events.event_json = EXCLUDED.event_json \
+                           AND state_control_events.ingress_class = EXCLUDED.ingress_class \
+                           AND state_control_events.command_unit_event_digests = EXCLUDED.command_unit_event_digests \
+                           AND (state_control_events.control_proposal_ack IS NULL \
+                             OR EXCLUDED.control_proposal_ack IS NULL \
+                             OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
                     )
-                    .into());
+                    .bind::<Text, _>(&digest)
+                    .bind::<Text, _>(&digest_suite)
+                    .bind::<Text, _>(&realm_id_text)
+                    .bind::<Jsonb, _>(&value)
+                    .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
+                    .bind::<Jsonb, _>(&ingress_class)
+                    .bind::<Jsonb, _>(&command_unit_event_digests)
+                    .execute(&mut *conn)
+                    .await?;
+                    if affected == 0 {
+                        return Err(StoreError::Conflict(
+                            "pending control command unit conflicts with stored bytes, boundary, ingress class or Ack"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
                 }
-                control_seal_schedule::upsert_for_control_event(&mut *conn, &realm_id).await?;
-                Ok(())
+                control_seal_schedule::upsert_for_control_event(&mut *conn, &realm_id_text)
+                    .await?;
+                Ok(result)
             })
             .await
             .map_err(EventSealCommitError::into_store)
         })
     }
 
-    async fn mark_sealed(&self, event_digest: &Hash, seal: &Seal) -> StoreResult<()> {
+    async fn record_seal_command_results(&self, seal: &Seal) -> StoreResult<()> {
+        seal.validate_structural()
+            .map_err(|error| StoreError::Conflict(error.to_string()))?;
         let pool = self.pool.clone();
-        let digest = event_digest.as_str().to_owned();
-        let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
-        let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
-            StoreError::Backend(format!("Seal ID canonical encoding failed: {error}"))
-        })?;
-        let accepted_seal_bytes =
-            arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
-                StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
-            })?;
-        let seal_for_validation = seal.clone();
-        let predecessor_ref = seal_predecessor_ref_value(seal);
+        let command_results = seal.command_results.clone();
         let seal_id = seal.id.as_str().to_owned();
-        let error_seal_id = seal_id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
-        let is_genesis = seal.predecessor_ref.is_none();
-        let delta_index = seal
-            .delta
-            .iter()
-            .position(|candidate| candidate == event_digest)
-            .ok_or_else(|| {
-                StoreError::Conflict(format!(
-                    "Seal {seal_id} does not include control Event {digest} in delta"
-                ))
-            })? as i64;
         let sealed_at = seal.sealed_at;
-        let outcome = await_store!(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
-                lock_seal_identity(conn, &seal_id).await?;
-                let digest_suite = sql_query(
-                    "SELECT digest_suite AS value FROM state_control_events \
-                     WHERE event_digest = $1",
-                )
-                .bind::<Text, _>(&digest)
-                .get_result::<TextRow>(&mut *conn)
-                .await
-                .optional()?
-                .ok_or_else(|| {
-                    StoreError::NotFound(format!("control Event {digest} not in store"))
-                })?
-                .value;
-                let digest_suite = arkret_canonical::digest_suite(&digest_suite)
-                    .map_err(|error| StoreError::Backend(error.to_string()))?;
-                seal_for_validation
-                    .validate_id(digest_suite)
-                    .map_err(|error| StoreError::Conflict(error.to_string()))?;
-                let insert = StateSealInsert {
-                    id: &seal_id,
-                    digest_suite,
-                    realm_id: &realm_id,
-                    seal_id_preimage_bytes: &seal_id_preimage_bytes,
-                    accepted_seal_bytes: &accepted_seal_bytes,
-                    seal_json: &seal_json,
-                    predecessor_ref: predecessor_ref.as_deref(),
-                    is_genesis,
-                };
-                let outcome = preflight_state_seal(conn, &insert).await?;
-                if outcome == SealInsertOutcome::Collision {
-                    return Ok(outcome);
-                }
                 lock_seal_realm(conn, &realm_id).await?;
-                if realm_has_seal_collision(conn, &realm_id).await? {
-                    return Err(StoreError::Conflict(format!(
-                        "seal_collision_quarantine: Realm {realm_id} is blocked"
-                    ))
-                    .into());
+                for (command_index, result) in command_results.iter().enumerate() {
+                    for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
+                        record_control_event_decision_in_transaction(
+                            conn,
+                            digest.as_str(),
+                            &seal_id,
+                            &realm_id,
+                            i64::try_from(command_index).expect("Seal command bound"),
+                            i64::try_from(member_index).expect("Seal member bound"),
+                            result.outcome,
+                            result.reason_code.as_ref(),
+                            &result.unit_event_digests,
+                            sealed_at,
+                        )
+                        .await?;
+                    }
                 }
-                if outcome == SealInsertOutcome::Inserted {
-                    insert_new_state_seal(conn, &insert).await?;
-                }
-                mark_control_event_sealed_in_transaction(
-                    conn,
-                    &digest,
-                    &seal_id,
-                    &realm_id,
-                    delta_index,
-                    sealed_at,
-                )
-                .await?;
-                Ok(outcome)
+                Ok(())
             })
             .await
             .map_err(EventSealCommitError::into_store)
-        })?;
-        if outcome == SealInsertOutcome::Collision {
-            return Err(StoreError::Conflict(format!(
-                "seal_hash_collision: Seal {error_seal_id} is quarantined"
-            )));
-        }
-        Ok(())
+        })
     }
 
     async fn get(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
@@ -1207,6 +1262,25 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
+    async fn registered_unit_members(&self, event_digest: &Hash) -> StoreResult<Option<Vec<Hash>>> {
+        let pool = self.pool.clone();
+        let digest = event_digest.as_str().to_owned();
+        await_store!(async move {
+            let mut conn = pg_conn(&pool).await?;
+            sql_query(
+                "SELECT command_unit_event_digests AS value \
+                 FROM state_control_events WHERE event_digest = $1",
+            )
+            .bind::<Text, _>(&digest)
+            .get_result::<JsonRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?
+            .map(|row| serde_json::from_value(row.value).map_err(serde_to_store))
+            .transpose()
+        })
+    }
+
     async fn covering_seals(&self, event_digest: &Hash) -> StoreResult<Vec<SealId>> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
@@ -1214,7 +1288,7 @@ impl ControlEventStore for PgControlEventStore {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT b.seal_id AS value FROM state_seal_control_events b \
-                 WHERE b.event_digest = $1 AND NOT EXISTS ( \
+                 WHERE b.event_digest = $1 AND b.outcome = 'committed' AND NOT EXISTS ( \
                    SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = b.seal_id \
                  ) ORDER BY b.seal_id",
             )
@@ -1261,9 +1335,20 @@ impl ControlEventStore for PgControlEventStore {
                 "SELECT c.digest_suite, c.event_json, c.control_proposal_ack, c.ingress_class, c.proposal_decisions, \
                         COALESCE( \
                           array_agg(b.seal_id ORDER BY b.seal_id) \
-                            FILTER (WHERE b.seal_id IS NOT NULL), \
+                            FILTER (WHERE b.seal_id IS NOT NULL AND b.outcome = 'committed'), \
                           ARRAY[]::text[] \
                         ) AS covering_seal_ids, \
+                        COALESCE( \
+                          jsonb_agg(jsonb_build_object( \
+                            'seal_id', b.seal_id, \
+                            'command_index', b.command_index, \
+                            'member_index', b.member_index, \
+                            'outcome', b.outcome, \
+                            'reason_code', b.reason_code \
+                          ) ORDER BY b.seal_id, b.command_index, b.member_index) \
+                            FILTER (WHERE b.seal_id IS NOT NULL), \
+                          '[]'::jsonb \
+                        ) AS command_decisions, \
                         COALESCE(bool_or(b.decision_overdue), false) AS decision_overdue \
                  FROM state_control_events c \
                  LEFT JOIN state_seal_control_events b ON b.event_digest = c.event_digest \
@@ -1292,6 +1377,7 @@ impl ControlEventStore for PgControlEventStore {
                     decisions: serde_json::from_value(row.proposal_decisions)
                         .map_err(serde_to_store)?,
                     covering_seals: covering_seal_ids(row.covering_seal_ids)?,
+                    command_decisions: command_event_decisions(row.command_decisions)?,
                     decision_overdue: row.decision_overdue,
                 })
             })
@@ -1479,12 +1565,12 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    async fn list_pending_for_notary(
+    async fn list_pending_units_for_notary(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<Event>> {
+    ) -> StoreResult<Vec<PendingControlUnitRecord>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let cursor = cursor.map(|digest| digest.as_str().to_owned());
@@ -1492,38 +1578,108 @@ impl ControlEventStore for PgControlEventStore {
         await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json AS value \
-                 FROM state_control_events c \
-                 WHERE realm_id = $1 \
-                   AND c.is_pending \
-                   AND ( \
-                     $2 IS NULL OR \
-                     (c.inserted_at, c.event_digest) > ( \
-                       SELECT inserted_at, event_digest FROM state_control_events \
-                       WHERE event_digest = $2 \
+                "WITH candidate_units AS ( \
+                   SELECT c.command_unit_event_digests, c.inserted_at, c.event_digest \
+                   FROM state_control_events c \
+                   WHERE c.realm_id = $1 AND c.is_pending \
+                     AND c.event_digest = c.command_unit_event_digests->>0 \
+                     AND ( \
+                       $2 IS NULL OR \
+                       (c.inserted_at, c.event_digest) > ( \
+                         SELECT anchor.inserted_at, anchor.event_digest \
+                         FROM state_control_events cursor_event \
+                         JOIN state_control_events anchor \
+                           ON anchor.event_digest = cursor_event.command_unit_event_digests->>0 \
+                         WHERE cursor_event.event_digest = $2 AND cursor_event.realm_id = $1 \
+                       ) \
                      ) \
-                   ) \
-                 ORDER BY inserted_at ASC, event_digest ASC \
-                 LIMIT $3",
+                   ORDER BY c.inserted_at ASC, c.event_digest ASC \
+                   LIMIT $3 \
+                 ), selected_units AS ( \
+                   SELECT command_unit_event_digests, \
+                          row_number() OVER (ORDER BY inserted_at, event_digest) AS unit_position \
+                   FROM candidate_units \
+                 ) \
+                 SELECT selected_units.command_unit_event_digests AS unit_event_digests, \
+                        jsonb_agg(jsonb_build_object( \
+                          'event_digest', member.event_digest, \
+                          'digest_suite', member.digest_suite, \
+                          'event', member.event_json, \
+                          'control_proposal_ack', member.control_proposal_ack, \
+                          'decisions', member.proposal_decisions, \
+                          'ingress_class', member.ingress_class, \
+                          'is_pending', member.is_pending \
+                        ) ORDER BY unit_member.ordinality) AS members \
+                 FROM selected_units \
+                 CROSS JOIN LATERAL jsonb_array_elements_text( \
+                   selected_units.command_unit_event_digests \
+                 ) WITH ORDINALITY AS unit_member(event_digest, ordinality) \
+                 JOIN state_control_events member \
+                   ON member.event_digest = unit_member.event_digest \
+                 GROUP BY selected_units.unit_position, selected_units.command_unit_event_digests \
+                 ORDER BY selected_units.unit_position",
             )
             .bind::<Text, _>(&realm_id)
             .bind::<Nullable<Text>, _>(cursor.as_deref())
             .bind::<BigInt, _>(limit)
-            .load::<JsonRow>(&mut *conn)
+            .load::<PendingControlUnitRow>(&mut *conn)
             .await
             .map_err(diesel_to_store)?;
             rows.into_iter()
-                .map(|row| control_event_from_value(row.value))
+                .map(|row| {
+                    let expected = serde_json::from_value::<Vec<Hash>>(row.unit_event_digests)
+                        .map_err(serde_to_store)?;
+                    let members =
+                        serde_json::from_value::<Vec<StoredPendingControlUnitMember>>(row.members)
+                            .map_err(serde_to_store)?;
+                    if expected.len() != members.len()
+                        || members
+                            .iter()
+                            .map(|member| &member.event_digest)
+                            .ne(expected.iter())
+                        || members.iter().any(|member| {
+                            !member.is_pending || member.event.realm_id.as_str() != realm_id
+                        })
+                    {
+                        return Err(StoreError::Conflict(
+                            "stored pending control command unit is incomplete or inconsistent"
+                                .to_owned(),
+                        ));
+                    }
+                    let members = members
+                        .into_iter()
+                        .map(|member| {
+                            let digest_suite = arkret_canonical::digest_suite(&member.digest_suite)
+                                .map_err(|error| StoreError::Backend(error.to_string()))?;
+                            if control_event_digest(&member.event, digest_suite)?
+                                != member.event_digest
+                            {
+                                return Err(StoreError::Conflict(
+                                    "stored control Event does not match its registered digest"
+                                        .to_owned(),
+                                ));
+                            }
+                            Ok(PendingControlEventRecord {
+                                event: member.event,
+                                digest_suite,
+                                control_proposal_ack: member.control_proposal_ack,
+                                decisions: member.decisions,
+                                ingress_class: member.ingress_class,
+                            })
+                        })
+                        .collect::<StoreResult<Vec<_>>>()?;
+                    Ok(PendingControlUnitRecord { members })
+                })
                 .collect()
         })
     }
 
-    async fn list_sealed(
+    async fn list_decided(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<SealedControlEventRecord>> {
+    ) -> StoreResult<Vec<DecidedControlEventRecord>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let cursor = cursor.map(|digest| digest.as_str().to_owned());
@@ -1531,7 +1687,19 @@ impl ControlEventStore for PgControlEventStore {
         await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT c.digest_suite, c.event_json, array_agg(b.seal_id ORDER BY b.seal_id) AS covering_seal_ids, \
+                "SELECT c.digest_suite, c.event_json, \
+                        COALESCE( \
+                          array_agg(b.seal_id ORDER BY b.seal_id) \
+                            FILTER (WHERE b.outcome = 'committed'), \
+                          ARRAY[]::text[] \
+                        ) AS covering_seal_ids, \
+                        jsonb_agg(jsonb_build_object( \
+                          'seal_id', b.seal_id, \
+                          'command_index', b.command_index, \
+                          'member_index', b.member_index, \
+                          'outcome', b.outcome, \
+                          'reason_code', b.reason_code \
+                        ) ORDER BY b.seal_id, b.command_index, b.member_index) AS command_decisions, \
                         c.control_proposal_ack, c.proposal_decisions, \
                         bool_or(b.decision_overdue) AS decision_overdue, c.ingress_class \
                  FROM state_control_events c \
@@ -1554,17 +1722,18 @@ impl ControlEventStore for PgControlEventStore {
             .bind::<Text, _>(&realm_id)
             .bind::<Nullable<Text>, _>(cursor.as_deref())
             .bind::<BigInt, _>(limit)
-            .load::<SealedControlEventRow>(&mut *conn)
+            .load::<DecidedControlEventRow>(&mut *conn)
             .await
             .map_err(diesel_to_store)?;
             rows.into_iter()
                 .map(|row| {
                     let event = control_event_from_value(row.event_json)?;
-                    Ok(SealedControlEventRecord {
+                    Ok(DecidedControlEventRecord {
                         digest_suite: arkret_canonical::digest_suite(&row.digest_suite)
                             .map_err(|error| StoreError::Backend(error.to_string()))?,
                         event,
                         covering_seals: covering_seal_ids(row.covering_seal_ids)?,
+                        command_decisions: command_event_decisions(row.command_decisions)?,
                         control_proposal_ack: row
                             .control_proposal_ack
                             .map(|value| serde_json::from_value(value).map_err(serde_to_store))
@@ -1994,6 +2163,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .iter()
             .map(|digest| digest.as_str().to_owned())
             .collect::<Vec<_>>();
+        let command_results = seal.command_results.clone();
         let sealed_at = seal.sealed_at;
         let declared_state_root = seal.state_root.clone();
         let is_genesis = seal.predecessor_ref.is_none();
@@ -2098,6 +2268,23 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                                 .to_owned(),
                         )
                         .into());
+                    }
+                    for (command_index, result) in command_results.iter().enumerate() {
+                        for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
+                            record_control_event_decision_in_transaction(
+                                conn,
+                                digest.as_str(),
+                                &seal_id,
+                                &realm_id,
+                                i64::try_from(command_index).expect("Seal command bound"),
+                                i64::try_from(member_index).expect("Seal member bound"),
+                                result.outcome,
+                                result.reason_code.as_ref(),
+                                &result.unit_event_digests,
+                                sealed_at,
+                            )
+                            .await?;
+                        }
                     }
                     return Ok(outcome);
                 }
@@ -2332,16 +2519,22 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         .await
                         .map_err(persistence_to_store)?;
                 }
-                for (delta_index, digest) in delta.iter().enumerate() {
-                    mark_control_event_sealed_in_transaction(
-                        conn,
-                        digest,
-                        &seal_id,
-                        &realm_id,
-                        delta_index as i64,
-                        sealed_at,
-                    )
-                    .await?;
+                for (command_index, result) in command_results.iter().enumerate() {
+                    for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
+                        record_control_event_decision_in_transaction(
+                            conn,
+                            digest.as_str(),
+                            &seal_id,
+                            &realm_id,
+                            i64::try_from(command_index).expect("Seal command bound"),
+                            i64::try_from(member_index).expect("Seal member bound"),
+                            result.outcome,
+                            result.reason_code.as_ref(),
+                            &result.unit_event_digests,
+                            sealed_at,
+                        )
+                        .await?;
+                    }
                 }
                 account_summary::register_delta_members(conn, &realm_id, &delta).await?;
                 if expected.iter().all(|leaf| predecessor_seal_ids.contains(leaf)) {
@@ -2525,14 +2718,11 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                         state: post_state,
                     },
                 );
-                // Match the PostgreSQL transaction: accepted delta Events
-                // leave the pending queue at the same acceptance boundary as
-                // their Seal and cell effects. In particular, the basis-free
-                // Human PCR create+authorize pair becomes final when its
-                // rooted bootstrap Seal is accepted.
-                for digest in &seal.delta {
-                    self.control_event_store.mark_sealed(digest, seal).await?;
-                }
+                // The memory backend mirrors the signed command boundary:
+                // every committed or rejected unit becomes terminal together.
+                self.control_event_store
+                    .record_seal_command_results(seal)
+                    .await?;
                 Ok(true)
             }
             Ok(false) => {
@@ -3186,7 +3376,11 @@ mod event_seal_commit_tests {
         });
         stores
             .control_event_store
-            .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
+            .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
+                event: event.clone(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                ingress: ingress.clone(),
+            }])
             .await
             .unwrap();
         assert!(
@@ -3305,11 +3499,19 @@ mod event_seal_commit_tests {
             seal_basis_digest: "sha256:fixture".to_owned(),
         });
         control_event_store
-            .put_pending_with_ingress(&left.3, &ackless, arkret_canonical::DigestSuite::Sha256)
+            .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
+                event: left.3.clone(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                ingress: ackless.clone(),
+            }])
             .await
             .unwrap();
         control_event_store
-            .put_pending_with_ingress(&right.3, &ackless, arkret_canonical::DigestSuite::Sha256)
+            .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
+                event: right.3.clone(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                ingress: ackless.clone(),
+            }])
             .await
             .unwrap();
         let barrier = Arc::new(Barrier::new(3));

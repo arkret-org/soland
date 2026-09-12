@@ -585,23 +585,31 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 ),
             )
         })?;
-    for ((event, ack), parsed) in accepted_typed_events
+    let pending_unit = accepted_typed_events
         .iter()
         .zip(&control_proposal_acks)
         .zip(&validated)
-    {
-        state
-            .projections()
-            .put_pending_control_event_with_ack(event, ack, parsed.digest_suite)
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted Realm bootstrap pending index unavailable: {error}"),
-                )
-            })?;
-    }
+        .map(
+            |((event, ack), parsed)| arkret_state::state::ControlUnitIngressMember {
+                event: event.clone(),
+                digest_suite: parsed.digest_suite,
+                ingress: arkret_state::state::store::ControlProposalIngress::AckRequired(
+                    ack.clone(),
+                ),
+            },
+        )
+        .collect::<Vec<_>>();
+    state
+        .projections()
+        .put_pending_control_unit(&pending_unit)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("accepted Realm bootstrap pending index unavailable: {error}"),
+            )
+        })?;
     state.wake_control_seal_coordinator();
     for operation in &operations {
         crate::routing::events::projection::ensure_projected_realm(

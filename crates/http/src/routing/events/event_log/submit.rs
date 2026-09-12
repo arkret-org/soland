@@ -320,11 +320,14 @@ fn stamp_projection_operation_received_at(
 fn is_agent_pcr_create(event: &arkret_wire::Event) -> bool {
     event.kind == arkret_wire::EventKind::RealmCreate
         && event.executed_by.as_ref() != Some(&event.actor_id)
-        && arkret_bootstrap::materialize_agent_pcr_control(
-            std::slice::from_ref(event),
-            &genesis_cell_write_projector,
-        )
-        .is_ok()
+        && arkret_bootstrap::agent_pcr_genesis_control_unit(event)
+            .and_then(|unit| {
+                arkret_bootstrap::materialize_agent_pcr_control(
+                    std::slice::from_ref(&unit),
+                    &genesis_cell_write_projector,
+                )
+            })
+            .is_ok()
 }
 
 fn batch_is_agent_pcr_create(envelopes: &[Value]) -> bool {

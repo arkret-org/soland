@@ -42,10 +42,10 @@ fn priorities(request: &CurrentDetailRequest) -> PersistenceResult<Vec<String>> 
         realm_id: request.realm_id.clone(),
     };
     let cells = [
-        "ak.component.realm.genesis.v1",
-        "ak.component.realm.policy.v1",
-        "ak.component.realm.policy_bundle.v1",
-        "ak.component.realm.set_default_strand.v1",
+        arkret_wire::CellFamilyId::REALM_GENESIS_V1,
+        arkret_wire::CellFamilyId::REALM_POLICY_V1,
+        arkret_wire::CellFamilyId::REALM_POLICY_BUNDLE_V1,
+        arkret_wire::CellFamilyId::REALM_SET_DEFAULT_STRAND_V1,
     ]
     .into_iter()
     .map(|family| format!("ak:cell:{family}:null"))

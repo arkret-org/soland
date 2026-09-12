@@ -6,8 +6,7 @@ use arkret_identifiers::{CellRef, RealmId};
 use arkret_state::state_model::ResolvedCellState;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
-use serde_json::Value;
-use soland_contracts::admin::seal::{BottomCandidateHead, BottomEntry};
+use soland_contracts::admin::seal::BottomEntry;
 
 use super::AuthArgs;
 use crate::state::AppState;
@@ -15,37 +14,17 @@ use crate::{JsonResult, app_error, json_ok};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Fold a `ResolvedCellState::Bottom(_)` JSON envelope into a `BottomEntry`.
-///
-/// The SDK serializes `Bottom` as `{kind, ...}` with `kind` already in the
-/// snake_case wire form, so callers (sodmin) can pattern-match it against
-/// `BottomKind::from_wire` directly.
-pub(super) fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEntry {
-    let raw_kind = bottom
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or("conflict");
-    let kind = raw_kind.to_owned();
-    let candidate_heads = bottom
-        .get("heads")
-        .and_then(Value::as_array)
-        .map(|heads| {
-            heads
-                .iter()
-                .filter_map(|head| {
-                    Some(BottomCandidateHead {
-                        event_id: head.get("event_id")?.as_str()?.to_owned(),
-                        value: head.get("value")?.clone(),
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+/// Preserve the SDK's closed causal-register Bottom diagnostic in the admin response.
+pub(super) fn bottom_entry_from(
+    realm_id: &RealmId,
+    cell_id: &CellRef,
+    bottom: &arkret_wire::Bottom,
+) -> BottomEntry {
     BottomEntry {
-        realm_id: realm_id.to_owned(),
-        cell_id: cell_id.to_owned(),
-        kind,
-        candidate_heads,
+        realm_id: realm_id.clone(),
+        cell_id: cell_id.clone(),
+        kind: bottom.kind,
+        candidate_heads: bottom.heads.clone(),
     }
 }
 
@@ -81,8 +60,7 @@ async fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> V
             continue;
         };
         if let ResolvedCellState::Bottom(bottom) = cell_state {
-            let bottom_json = serde_json::to_value(bottom).unwrap_or(Value::Null);
-            out.push(bottom_entry_from(realm_id, cell.as_str(), &bottom_json));
+            out.push(bottom_entry_from(&realm, &cell, bottom));
         }
     }
     out

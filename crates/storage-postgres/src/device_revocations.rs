@@ -175,6 +175,7 @@ async fn target_rows(
                     bool_or(binding.decision_overdue) OVER () AS decision_overdue \
              FROM state_seal_control_events binding \
              WHERE binding.event_digest = c.event_digest \
+               AND binding.outcome = 'committed' \
                AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
                                WHERE q.seal_id = binding.seal_id) \
              ORDER BY binding.sealed_at, binding.seal_id LIMIT 1 \

@@ -66,6 +66,21 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
 
 static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
 
+async fn put_pending_control_singleton(
+    store: &dyn arkret_state::state::ControlEventStore,
+    event: &arkret_wire::Event,
+    ingress: &arkret_state::state::store::ControlProposalIngress,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> arkret_state::state::StoreResult<Vec<arkret_wire::Hash>> {
+    store
+        .put_pending_unit_with_ingress(&[arkret_state::state::ControlUnitIngressMember {
+            event: event.clone(),
+            digest_suite,
+            ingress: ingress.clone(),
+        }])
+        .await
+}
+
 #[tokio::test]
 async fn postgres_notification_relay_delivers_large_payload_by_committed_reference() {
     use diesel::sql_query;
@@ -1459,15 +1474,14 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
         seal_basis_digest: format!("sha256:{}", "a".repeat(64)),
     });
     let (first_event, _) = seal_dependency_contract_event(&realm_id, "schedule-first");
-    stores
-        .control_event_store
-        .put_pending_with_ingress(
-            &first_event,
-            &ingress,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .await
-        .unwrap();
+    put_pending_control_singleton(
+        stores.control_event_store.as_ref(),
+        &first_event,
+        &ingress,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .await
+    .unwrap();
     prioritize_control_seal_schedule_test_realm(&pool, realm_id.as_str()).await;
     let now_ms = chrono::Utc::now().timestamp_millis().saturating_add(1_000);
     let first_claim = stores
@@ -1496,15 +1510,14 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
             .unwrap()
     );
 
-    stores
-        .control_event_store
-        .put_pending_with_ingress(
-            &first_event,
-            &ingress,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .await
-        .unwrap();
+    put_pending_control_singleton(
+        stores.control_event_store.as_ref(),
+        &first_event,
+        &ingress,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         stores
             .control_event_store
@@ -1538,15 +1551,14 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
     );
 
     let (second_event, _) = seal_dependency_contract_event(&realm_id, "schedule-second");
-    stores
-        .control_event_store
-        .put_pending_with_ingress(
-            &second_event,
-            &ingress,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .await
-        .unwrap();
+    put_pending_control_singleton(
+        stores.control_event_store.as_ref(),
+        &second_event,
+        &ingress,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .await
+    .unwrap();
     prioritize_control_seal_schedule_test_realm(&pool, realm_id.as_str()).await;
     assert_eq!(
         stores
@@ -1880,21 +1892,20 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
 
     let (genesis_event, genesis_digest) =
         seal_dependency_contract_event(&realm_id, "genesis-success");
-    stores
-        .control_event_store
-        .put_pending_with_ingress(
-            &genesis_event,
-            &ingress,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .await
-        .unwrap();
+    put_pending_control_singleton(
+        stores.control_event_store.as_ref(),
+        &genesis_event,
+        &ingress,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .await
+    .unwrap();
     let genesis_dependency =
         seal_dependency_contract_availability(&genesis_event, "genesis-success");
     assert_eq!(
         stores
             .control_event_store
-            .list_pending_for_notary(&realm_id, None, 1)
+            .list_pending_units_for_notary(&realm_id, None, 1)
             .await
             .unwrap()
             .len(),
@@ -1946,7 +1957,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert!(
         restarted
             .control_event_store
-            .list_pending_for_notary(&realm_id, None, 1)
+            .list_pending_units_for_notary(&realm_id, None, 1)
             .await
             .unwrap()
             .is_empty(),
@@ -2036,11 +2047,14 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     for failure in ["realm", "source", "index", "object"] {
         let marker = format!("binding-failure-{failure}");
         let (event, event_digest) = seal_dependency_contract_event(&realm_id, &marker);
-        stores
-            .control_event_store
-            .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
-            .await
-            .unwrap();
+        put_pending_control_singleton(
+            stores.control_event_store.as_ref(),
+            &event,
+            &ingress,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .await
+        .unwrap();
         let mut dependency = seal_dependency_contract_availability(&event, &marker);
         if failure == "object" {
             let GovernanceDependency::AvailabilityReceipt { selector, .. } = &mut dependency else {
@@ -2101,11 +2115,12 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         assert!(
             stores
                 .control_event_store
-                .list_pending_for_notary(&realm_id, None, 1024)
+                .list_pending_units_for_notary(&realm_id, None, 1024)
                 .await
                 .unwrap()
                 .iter()
-                .any(|pending| pending.event_id == event.event_id),
+                .flat_map(|unit| &unit.members)
+                .any(|pending| pending.event.event_id == event.event_id),
             "{failure} rollback lost pending work"
         );
         assert_eq!(counts.cell_ops, 0, "{failure} failure leaked cell ops");
@@ -2136,11 +2151,14 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     }
 
     let (cas_event, cas_digest) = seal_dependency_contract_event(&realm_id, "cas-loss");
-    stores
-        .control_event_store
-        .put_pending_with_ingress(&cas_event, &ingress, arkret_canonical::DigestSuite::Sha256)
-        .await
-        .unwrap();
+    put_pending_control_singleton(
+        stores.control_event_store.as_ref(),
+        &cas_event,
+        &ingress,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .await
+    .unwrap();
     let cas_dependency = seal_dependency_contract_availability(&cas_event, "cas-loss");
     let cas_object_digest = seal_dependency_contract_digest(&cas_dependency);
     let cas_covered = [genesis_digest, cas_digest.clone()]
@@ -2188,6 +2206,160 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_rejected_command_unit_is_terminal_atomically_and_never_coverage() {
+    use arkret_state::state::store::{
+        AcklessSelfPrincipalIngress, ControlProposalIngress, ControlUnitIngressMember,
+    };
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let registry = std::sync::Arc::new(
+        soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+    );
+    let stores =
+        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), registry);
+    let suite = arkret_canonical::DigestSuite::Sha256;
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("rejected-unit:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+        device_authorize_event_id: format!("ak:event:{}", "b".repeat(43)),
+        device_generation_ref: 1,
+        seal_basis_digest: format!("sha256:{}", "c".repeat(64)),
+    });
+    let (genesis_event, genesis_digest) = seal_dependency_contract_event(&realm_id, "genesis");
+    put_pending_control_singleton(
+        stores.control_event_store.as_ref(),
+        &genesis_event,
+        &ingress,
+        suite,
+    )
+    .await
+    .unwrap();
+    let covered = [genesis_digest.clone()].into_iter().collect();
+    let mut genesis = seal_dependency_contract_seal(
+        &realm_id,
+        None,
+        genesis_digest.clone(),
+        &covered,
+        genesis_digest,
+    );
+    genesis.availability_receipt_digests.clear();
+    genesis.id = genesis.derive_id(suite).unwrap();
+    assert!(
+        stores
+            .event_seal_committer
+            .commit_if_head(&genesis, suite, None, &[], &covered, &[])
+            .await
+            .unwrap()
+    );
+
+    // An atomic self-leave may have 257 members, exceeding the old Event page.
+    let members = (0..257)
+        .map(|index| ControlUnitIngressMember {
+            event: seal_dependency_contract_event(&realm_id, &format!("unit-{index}")).0,
+            ingress: ingress.clone(),
+            digest_suite: suite,
+        })
+        .collect::<Vec<_>>();
+    let digests = stores
+        .control_event_store
+        .put_pending_unit_with_ingress(&members)
+        .await
+        .unwrap();
+    let page = stores
+        .control_event_store
+        .list_pending_units_for_notary(&realm_id, None, 1)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].members.len(), 257);
+    assert!(
+        stores
+            .control_event_store
+            .list_pending_units_for_notary(&realm_id, Some(&digests[128]), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let reason = arkret_wire::ReasonCode::CallStateTransitionInvalid;
+    let mut rejected = genesis.clone();
+    rejected.predecessor_ref = Some(genesis.id.clone());
+    rejected.notary_seq = 1;
+    rejected.delta.clear();
+    rejected.command_results = vec![
+        arkret_wire::SealCommandOutcome::rejected(
+            digests[0].clone(),
+            digests.clone(),
+            reason.clone(),
+            suite,
+        )
+        .unwrap(),
+    ];
+    rejected.id = rejected.derive_id(suite).unwrap();
+    assert!(
+        stores
+            .event_seal_committer
+            .commit_if_head(&rejected, suite, None, &[], &covered, &[])
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        stores
+            .control_event_store
+            .list_pending_units_for_notary(&realm_id, None, 1)
+            .await
+            .unwrap()[0]
+            .members
+            .len(),
+        257
+    );
+    assert!(
+        stores
+            .event_seal_committer
+            .commit_if_head(&rejected, suite, Some(&genesis.id), &[], &covered, &[])
+            .await
+            .unwrap()
+    );
+    let restarted = soland_storage_postgres::build_state_resolution_stores(
+        Some(pool),
+        stores.cell_registry.clone(),
+    );
+    assert!(
+        restarted
+            .control_event_store
+            .list_pending_units_for_notary(&realm_id, None, 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for (index, digest) in digests.iter().enumerate() {
+        assert!(
+            restarted
+                .control_event_store
+                .covering_seals(digest)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let snapshot = restarted
+            .control_event_store
+            .control_proposal_snapshot(digest)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.command_decisions.len(), 1);
+        let decision = &snapshot.command_decisions[0];
+        assert_eq!(decision.seal_id, rejected.id);
+        assert_eq!(decision.command_index, 0);
+        assert_eq!(decision.member_index, index as u32);
+        assert_eq!(decision.outcome, arkret_wire::CommandOutcome::Rejected);
+        assert_eq!(decision.reason_code.as_ref(), Some(&reason));
+    }
 }
 
 #[tokio::test]
@@ -2645,8 +2817,8 @@ async fn postgres_adapter_settles_sealed_device_revocations() {
     // fixture, never a second admitted or accepted canonical Event.
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
-         SELECT $1, digest_suite, realm_id, event_json, '{}'::jsonb, ingress_class \
+         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class, command_unit_event_digests) \
+         SELECT $1, digest_suite, realm_id, event_json, '{}'::jsonb, ingress_class, jsonb_build_array($1) \
          FROM state_control_events WHERE event_digest = $2",
     )
     .bind::<Text, _>(&damaged_digest)
@@ -3249,8 +3421,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     assert_eq!(projections, 0, "unsealed projection must be withdrawn");
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, digest_suite, realm_id, event_json, ingress_class) \
-         VALUES ($1, 'sha256', $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb)",
+         (event_digest, digest_suite, realm_id, event_json, ingress_class, command_unit_event_digests) \
+         VALUES ($1, 'sha256', $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb, jsonb_build_array($1))",
     )
     .bind::<Text, _>(&canonical_digest)
     .bind::<Text, _>(&realm_id)
@@ -3271,9 +3443,9 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     .unwrap();
     sql_query(
         "INSERT INTO state_seal_control_events \
-         (seal_id, realm_id, event_digest, delta_index, accepted_event_bytes_digest, \
+         (seal_id, realm_id, event_digest, command_index, member_index, outcome, reason_code, accepted_event_bytes_digest, \
           accepted_event_bytes, sealed_at, decision_overdue) \
-         VALUES ($1, $2, $3, 0, $3, decode('00', 'hex'), $4, false)",
+         VALUES ($1, $2, $3, 0, 0, 'committed', NULL, $3, decode('00', 'hex'), $4, false)",
     )
     .bind::<Text, _>(&seal_id)
     .bind::<Text, _>(&realm_id)
@@ -3860,8 +4032,8 @@ mod control_move_ingress_negatives {
             let mut conn = pool.get().await.unwrap();
             sql_query(
                 "INSERT INTO state_control_events \
-                 (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
-                 VALUES ($1, $2, $3, $4, NULL, $5)",
+                 (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class, command_unit_event_digests) \
+                 VALUES ($1, $2, $3, $4, NULL, $5, jsonb_build_array($1))",
             )
             .bind::<Text, _>(fixture.proposal_digest.as_str())
             .bind::<Text, _>(arkret_canonical::DigestSuite::Sha256.as_str())
@@ -3921,15 +4093,14 @@ mod control_move_ingress_negatives {
             std::sync::Arc::new(arkret_state::state::MemoryCellStateRegistry::default()),
         );
 
-        stores
-            .control_event_store
-            .put_pending_with_ingress(
-                &fixture.event,
-                &ControlProposalIngress::AckRequired(fixture.ack.clone()),
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .await
-            .unwrap();
+        put_pending_control_singleton(
+            stores.control_event_store.as_ref(),
+            &fixture.event,
+            &ControlProposalIngress::AckRequired(fixture.ack.clone()),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .await
+        .unwrap();
         let snapshot = stores
             .control_event_store
             .control_proposal_snapshot(&fixture.proposal_digest)
@@ -3953,27 +4124,25 @@ mod control_move_ingress_negatives {
         });
         assert!(
             matches!(
-                stores
-                    .control_event_store
-                    .put_pending_with_ingress(
-                        &fixture.event,
-                        &ackless,
-                        arkret_canonical::DigestSuite::Sha256,
-                    )
-                    .await,
+                put_pending_control_singleton(
+                    stores.control_event_store.as_ref(),
+                    &fixture.event,
+                    &ackless,
+                    arkret_canonical::DigestSuite::Sha256,
+                )
+                .await,
                 Err(StoreError::Conflict(_))
             ),
             "an Ack-required Move cannot be replayed as Ack-less"
         );
-        stores
-            .control_event_store
-            .put_pending_with_ingress(
-                &fixture.event,
-                &ControlProposalIngress::AckRequired(fixture.ack.clone()),
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .await
-            .expect("the byte-identical class and Ack remain idempotent");
+        put_pending_control_singleton(
+            stores.control_event_store.as_ref(),
+            &fixture.event,
+            &ControlProposalIngress::AckRequired(fixture.ack.clone()),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .await
+        .expect("the byte-identical class and Ack remain idempotent");
         cleanup_control_schedule_test_actor(&pool, &fixture.event.actor_id.to_string()).await;
     }
 }
@@ -4113,8 +4282,8 @@ async fn fork_seal_pin(pool: &PgPool, record: &soland_storage::CanonicalEventRec
     let mut conn = pool.get().await.unwrap();
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, digest_suite, realm_id, event_json, ingress_class) \
-         VALUES ($1, 'sha256', $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb)",
+         (event_digest, digest_suite, realm_id, event_json, ingress_class, command_unit_event_digests) \
+         VALUES ($1, 'sha256', $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb, jsonb_build_array($1))",
     )
     .bind::<Text, _>(&record.canonical_digest)
     .bind::<Text, _>(&realm_id)
@@ -4135,9 +4304,9 @@ async fn fork_seal_pin(pool: &PgPool, record: &soland_storage::CanonicalEventRec
     .unwrap();
     sql_query(
         "INSERT INTO state_seal_control_events \
-         (seal_id, realm_id, event_digest, delta_index, accepted_event_bytes_digest, \
+         (seal_id, realm_id, event_digest, command_index, member_index, outcome, reason_code, accepted_event_bytes_digest, \
           accepted_event_bytes, sealed_at, decision_overdue) \
-         VALUES ($1, $2, $3, 0, $3, $4, $5, false)",
+         VALUES ($1, $2, $3, 0, 0, 'committed', NULL, $3, $4, $5, false)",
     )
     .bind::<Text, _>(&seal_id)
     .bind::<Text, _>(&realm_id)

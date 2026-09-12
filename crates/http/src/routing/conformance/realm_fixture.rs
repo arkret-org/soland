@@ -75,6 +75,7 @@ pub async fn install(
     let received_at = chrono::Utc::now();
     let mut projected = 0;
     let mut staged_bootstrap = Vec::new();
+    let mut pending_bootstrap_unit = Vec::new();
     let genesis_live_digest_suite = (!already_has_realm)
         .then(|| arkret::declared_genesis_live_digest_suite(&body.events[0]))
         .transpose()
@@ -101,11 +102,22 @@ pub async fn install(
                     event.event_id
                 ))
             })?;
-            state
-                .projections()
-                .put_pending_control_event_with_ack(event, ack, digest_suite)
-                .await
-                .map_err(|error| AppError::param_invalid(error.to_string()))?;
+            let member = arkret_state::state::ControlUnitIngressMember {
+                event: event.clone(),
+                digest_suite,
+                ingress: arkret_state::state::store::ControlProposalIngress::AckRequired(
+                    (*ack).clone(),
+                ),
+            };
+            if already_has_realm {
+                state
+                    .projections()
+                    .put_pending_control_unit(std::slice::from_ref(&member))
+                    .await
+                    .map_err(|error| AppError::param_invalid(error.to_string()))?;
+            } else {
+                pending_bootstrap_unit.push(member);
+            }
         }
         let envelope = serde_json::to_value(event)
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -179,6 +191,11 @@ pub async fn install(
         projected += 1;
     }
     if !already_has_realm {
+        state
+            .projections()
+            .put_pending_control_unit(&pending_bootstrap_unit)
+            .await
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let staged = state
             .projections()
             .stage_realm_bootstrap(&staged_bootstrap, false)
