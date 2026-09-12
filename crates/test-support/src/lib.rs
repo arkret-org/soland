@@ -642,7 +642,7 @@ pub async fn sign_test_seal(
     };
     let command_results = if predecessor_ref.is_none() {
         vec![
-            arkret_wire::CommandResult::committed(
+            arkret_wire::SealCommandOutcome::committed(
                 delta[0].clone(),
                 delta.clone(),
                 Vec::new(),
@@ -655,7 +655,7 @@ pub async fn sign_test_seal(
             .iter()
             .cloned()
             .map(|digest| {
-                arkret_wire::CommandResult::committed(
+                arkret_wire::SealCommandOutcome::committed(
                     digest.clone(),
                     vec![digest],
                     Vec::new(),

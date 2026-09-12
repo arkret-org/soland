@@ -3023,7 +3023,7 @@ mod event_seal_commit_tests {
         )
         .unwrap();
         let placeholder_hash = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-        let command_result = arkret_wire::CommandResult::committed(
+        let command_result = arkret_wire::SealCommandOutcome::committed(
             event_id.clone(),
             vec![event_id.clone()],
             Vec::new(),

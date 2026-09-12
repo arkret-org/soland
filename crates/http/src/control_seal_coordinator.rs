@@ -385,7 +385,7 @@ async fn run_realm_pass(
                 .pending_control_events_for_notary(realm_id, None, page_limit)
                 .await?;
         }
-        Ok::<_, arkret_state::state::StoreError>((pending, !leaves.is_empty()))
+        Ok::<_, arkret_state::state::StoreError>((pending, predecessor_ref.is_some()))
     }
     .await;
     let (pending, can_split) = match page {

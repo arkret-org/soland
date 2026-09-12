@@ -1708,6 +1708,7 @@ fn peer_submit_body(event: &Value) -> Value {
         // the bundle, reachable from the transported Event's basis, never as a
         // bare `seals[]` rail.
         cbs_proof_bundles: vec![arkret_wire::CbsProofBundle {
+            conclusion_set: None,
             target_seal_ref: basis_seal.id.clone(),
             seals: vec![basis_seal],
             control_moves: Vec::new(),

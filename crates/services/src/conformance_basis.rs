@@ -465,7 +465,7 @@ pub fn build_realm_basis(
     })
     .map_err(|error| error.to_string())?;
     let command_results = vec![
-        arkret_wire::CommandResult::committed(
+        arkret_wire::SealCommandOutcome::committed(
             delta[0].clone(),
             delta.clone(),
             Vec::new(),

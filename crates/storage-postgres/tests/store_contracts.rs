@@ -1760,7 +1760,7 @@ fn seal_dependency_contract_seal(
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
-    let command_result = arkret_wire::CommandResult::committed(
+    let command_result = arkret_wire::SealCommandOutcome::committed(
         delta.clone(),
         vec![delta.clone()],
         Vec::new(),

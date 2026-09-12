@@ -1382,7 +1382,7 @@ async fn insert_ordinary_event_seal_with(
         .iter()
         .cloned()
         .map(|digest| {
-            arkret_wire::CommandResult::committed(
+            arkret_wire::SealCommandOutcome::committed(
                 digest.clone(),
                 vec![digest],
                 Vec::new(),
@@ -1593,7 +1593,7 @@ async fn insert_ordinary_event_revocation_successor(
         configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
             .unwrap(),
         command_results: vec![
-            arkret_wire::CommandResult::committed(
+            arkret_wire::SealCommandOutcome::committed(
                 move_id.clone(),
                 vec![move_id.clone()],
                 Vec::new(),

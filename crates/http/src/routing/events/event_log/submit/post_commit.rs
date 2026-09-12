@@ -466,6 +466,7 @@ pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
             left.cmp(&right)
         });
         bundles.push(arkret_wire::CbsProofBundle {
+            conclusion_set: None,
             target_seal_ref: target_seal_ref.clone(),
             seals: by_id.into_values().collect(),
             control_moves,

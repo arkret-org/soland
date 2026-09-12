@@ -2133,7 +2133,7 @@ fn command_results_for_accepted(
     post_state: &BTreeMap<CellRef, ResolvedCellState>,
     digest_suite: arkret_canonical::DigestSuite,
     is_genesis: bool,
-) -> Result<Vec<arkret_wire::CommandResult>, NotaryError> {
+) -> Result<Vec<arkret_wire::SealCommandOutcome>, NotaryError> {
     let recovery_unit = accepted.len() == 2
         && accepted[0].event.kind == arkret_wire::EventKind::DeviceReanchor
         && accepted[1].event.kind == arkret_wire::EventKind::DeviceAuthorize;
@@ -2181,7 +2181,7 @@ fn command_results_for_accepted(
                     })
                 })
                 .collect::<Result<Vec<_>, NotaryError>>()?;
-            arkret_wire::CommandResult::committed(
+            arkret_wire::SealCommandOutcome::committed(
                 event_digest,
                 unit_event_digests,
                 effects,

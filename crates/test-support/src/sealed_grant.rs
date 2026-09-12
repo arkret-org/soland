@@ -135,7 +135,7 @@ pub async fn seal_accepted_capability_grant(
         .cloned()
         .expect("fixture grant effect has a complete value");
     let command_results = vec![
-        arkret_wire::CommandResult::committed(
+        arkret_wire::SealCommandOutcome::committed(
             move_id.clone(),
             vec![move_id.clone()],
             vec![arkret_wire::CommandResultEffect {

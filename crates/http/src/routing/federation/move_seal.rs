@@ -2448,8 +2448,10 @@ mod seal_delta_tests {
             },
             sealed_at: chrono::Utc::now(),
             hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
-                .unwrap(),
+            configuration_ref: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0; 32],
+            ),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),

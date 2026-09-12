@@ -1,7 +1,7 @@
 //! Moderation user-facing endpoints.
 //!
 //! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report.v1`) — submit the
-//!   caller-authored signed report ordinary Event through ordinary Event admission.
+//!   caller-authored signed report Event through ordinary Event admission.
 
 use std::collections::BTreeSet;
 
@@ -957,7 +957,8 @@ async fn materialize_franking_seal_observation(
             else {
                 continue;
             };
-            observation = Some((seal.clone(), anchor.clone(), ancestry_events));
+            let anchor = anchor.clone();
+            observation = Some((seal, anchor, ancestry_events));
             break;
         }
         if observation.is_some() {
@@ -1579,6 +1580,34 @@ mod report_safety_tests {
         assert_eq!(
             error.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
+    }
+
+    #[test]
+    fn franking_existence_anchor_requires_retained_event_ancestry() {
+        let proof = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [1; 32]);
+        let anchor = arkret_wire::ExistenceAnchor {
+            authorization_event_id: EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [2; 32],
+            ),
+            generation_event_id: EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [3; 32],
+            ),
+            frontier: vec![proof.clone()],
+        };
+        assert!(
+            existence_anchor_closure(&anchor, &proof, &std::collections::BTreeMap::new())
+                .unwrap()
+                .is_none()
+        );
+        let invalid = arkret_wire::ExistenceAnchor {
+            frontier: vec![],
+            ..anchor
+        };
+        assert!(
+            existence_anchor_closure(&invalid, &proof, &std::collections::BTreeMap::new()).is_err()
         );
     }
 }

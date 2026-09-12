@@ -5363,7 +5363,7 @@ fn contract_covering_seal(
     sealed_at: chrono::DateTime<Utc>,
 ) -> arkret_wire::Seal {
     let placeholder = Hash::new(format!("sha256:{}", "0".repeat(64))).expect("placeholder hash");
-    let command_result = arkret_wire::CommandResult::committed(
+    let command_result = arkret_wire::SealCommandOutcome::committed(
         delta.clone(),
         vec![delta.clone()],
         Vec::new(),
