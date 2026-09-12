@@ -1082,6 +1082,16 @@ impl NotaryWorker {
             result_digest_suite,
             predecessor_ref.is_none(),
             |member, staged_state, unit_entry_state| {
+                // Approval requires a verified ordinary publication, its cross-Realm
+                // security read set and an atomic publication outbox. The current
+                // command executor supplies none of these capabilities; a valid
+                // controller signature alone cannot finalize this command.
+                if member.event.kind == arkret_wire::EventKind::AgentActionApprove {
+                    return Err(OrderedControlBatchAbort::Pending {
+                        reason_code: arkret_wire::ReasonCode::DependencyMissing,
+                        detail: "Agent approval requires verified publication dependencies and atomic publication persistence".to_owned(),
+                    });
+                }
                 let proof_result = proof_results.get(&member.digest).cloned().ok_or_else(|| {
                     OrderedControlBatchAbort::Infrastructure(
                         "prepared proof result is unavailable".to_owned(),
