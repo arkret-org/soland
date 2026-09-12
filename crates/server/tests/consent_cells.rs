@@ -109,7 +109,7 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
             "holder_account_id": fixture_account_actor(&state, bob_did)
                 .as_account_id()
                 .expect("fixture account actor"),
-            "consent_scope": "direct_message",
+            "consent_scope": "voice_call",
         }))
         .send(&app)
         .await;
@@ -129,7 +129,7 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
     cell_url
         .query_pairs_mut()
         .append_pair("peer", &serde_json::to_string(&peer).unwrap())
-        .append_pair("consent_scope", "direct_message");
+        .append_pair("consent_scope", "voice_call");
     let response = TestClient::get(cell_url.as_str())
         .add_header("Authorization", format!("Bearer {bob_token}"), true)
         .add_header(

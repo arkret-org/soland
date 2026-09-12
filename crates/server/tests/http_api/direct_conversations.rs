@@ -1,7 +1,5 @@
 //! Contract tests for spec-canonical contacts and direct conversation resolve.
 
-use std::collections::BTreeMap;
-
 use chrono::Utc;
 
 use super::common::*;
@@ -341,57 +339,6 @@ async fn seed_remote_claim_prerequisites(
     );
     let authorize_event_id = remote_authorize.event_id.to_string();
     seed_accepted_direct_message_contact(state, BOB_DID, BOB_DEVICE, Some(source_id)).await;
-    let now = chrono::Utc::now();
-    let consent_grant = signed_canonical_event(
-        "direct-peer-claim-consent-grant",
-        arkret_wire::EventKind::ConsentGrant.as_str(),
-        BOB_DID,
-        BOB_DEVICE,
-        demo_realm_id(),
-        9_003,
-        vec![],
-        serde_json::json!({
-            "peer": alice,
-            "scope": "direct_message"
-        }),
-    );
-    let grant_dot =
-        arkret_identifiers::EventId::new(consent_grant["event_id"].as_str().unwrap().to_owned())
-            .unwrap()
-            .to_string();
-    state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
-        cell_id: arkret_identifiers::CellRef::new(
-            "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-0000000000c1"
-                .to_owned(),
-        )
-        .unwrap(),
-        holder_account_id: arkret_wire::AccountId::new(
-            core_id(BOB_DID),
-            state.service_core_id().clone(),
-        ),
-        // Alice is an ordinary remote Account, so her consent peer is the
-        // complete ActorId including her hosting Station. The pairwise branch
-        // is reserved for a minimal-metadata Realm's Realm-local actor and
-        // would never match her.
-        peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
-            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                core_id(alice),
-                arkret_wire::DidCoreId::new(source_id).unwrap(),
-            )),
-        },
-        consent_scope: "direct_message".to_owned(),
-        active_grants: BTreeMap::from([(
-            grant_dot.clone(),
-            soland_services::identity::ConsentGrantDot {
-                dot: grant_dot,
-                not_before: None,
-                expires_at: None,
-                granted_at: now,
-            },
-        )]),
-        revoked_grants: BTreeMap::new(),
-        updated_at: now,
-    });
     (signing_key, authorize_event_id)
 }
 

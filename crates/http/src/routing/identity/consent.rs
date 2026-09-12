@@ -732,7 +732,7 @@ async fn request_consent_cell(
     // `ConsentRequestScope` has no invite variant, so an invite-scope request is
     // refused by body deserialization rather than being stored as a branch the
     // schema forbids. Caller-shape rejection is not a holder signal.
-    let consent_scope = body.consent_scope.unwrap_or(ConsentRequestScope::DEFAULT);
+    let consent_scope = body.consent_scope;
     body.holder_account_id.validate().map_err(|error| {
         AppError::param_invalid(format!("holder_account_id is invalid: {error}"))
     })?;
@@ -961,13 +961,8 @@ async fn submit_caller_signed_consent_event(
 // ────────────────────────────────────────────────────────────────────────
 
 /// Concrete action scopes a `consent_scope=any` grant can satisfy.
-pub const CONSENT_ACTION_SCOPE_CASCADE: &[&str] = &[
-    "invite",
-    "direct_message",
-    "voice_call",
-    "video_call",
-    "presence",
-];
+pub const CONSENT_ACTION_SCOPE_CASCADE: &[&str] =
+    &["invite", "voice_call", "video_call", "presence"];
 
 /// Spec section 4.1.2 — downstream cache scopes a consent revoke MUST eagerly
 /// invalidate.
@@ -1013,15 +1008,14 @@ impl ConsentRevokeInvalidationChannel {
 /// Read-surface `consent_scope` query parameter. The enum is closed, so an
 /// unlisted value is rejected rather than coerced.
 pub(super) fn normalize_scope(input: Option<&str>) -> Result<String, AppError> {
-    let raw = input.unwrap_or("direct_message").trim();
-    if raw.is_empty() {
-        return Ok("direct_message".to_owned());
-    }
+    let raw = input
+        .ok_or_else(|| AppError::param_missing("consent_scope is required"))?
+        .trim();
     raw.parse::<ConsentScope>()
         .map(|scope| scope.as_str().to_owned())
         .map_err(|_| {
             AppError::param_invalid(
-                "consent_scope must be invite, direct_message, voice_call, video_call, presence, or any",
+                "consent_scope must be invite, voice_call, video_call, presence, or any",
             )
         })
 }
@@ -1548,7 +1542,9 @@ mod tests {
 
     #[test]
     fn only_the_closed_consent_scope_enum_is_accepted() {
-        assert_eq!(normalize_scope(None).unwrap(), "direct_message");
+        assert!(normalize_scope(None).is_err());
+        assert!(normalize_scope(Some("direct_message")).is_err());
+        assert!(normalize_scope(Some("")).is_err());
         assert_eq!(normalize_scope(Some("any")).unwrap(), "any");
         // Unregistered values fail at both query and signed-payload boundaries.
         normalize_scope(Some("dm")).expect_err("dm is not a consent_scope");
@@ -1606,7 +1602,7 @@ mod tests {
             .install_committed_cell(granted_cell(CONSENT_ID, PEER, "invite", "seed:0"));
         for payload in [
             grant_payload(OTHER_PEER, "invite"),
-            grant_payload(PEER, "direct_message"),
+            grant_payload(PEER, "voice_call"),
         ] {
             let operation = consent_operation(
                 arkret_wire::EventKind::ConsentGrant.as_str(),
@@ -2008,7 +2004,7 @@ mod consent_request_admission_tests {
             &state,
             &holder_account(&state),
             &requester,
-            ConsentRequestScope::DirectMessage,
+            ConsentRequestScope::VoiceCall,
         )
         .await
         .expect("consent request admission");
@@ -2024,7 +2020,7 @@ mod consent_request_admission_tests {
             entry.surface_kind(),
             HolderQuarantineSurfaceKind::ConsentRequest
         );
-        assert_eq!(entry.consent_scope(), ConsentScope::DirectMessage);
+        assert_eq!(entry.consent_scope(), ConsentScope::VoiceCall);
         assert_eq!(entry.source_peer_principal_id, requester);
         // The branch carries no Event reference and neither digest: the type has
         // no place to put one, and the wire form must not grow one either.
@@ -2051,7 +2047,7 @@ mod consent_request_admission_tests {
                 &state,
                 &holder_account(&state),
                 &requester,
-                ConsentRequestScope::DirectMessage,
+                ConsentRequestScope::VoiceCall,
             )
             .await
             .expect("consent request admission");
@@ -2093,7 +2089,7 @@ mod consent_request_admission_tests {
             &state,
             &unknown,
             &requester,
-            ConsentRequestScope::DirectMessage,
+            ConsentRequestScope::VoiceCall,
         )
         .await
         .expect("an unknown holder is not an error the requester can see");
@@ -2106,7 +2102,7 @@ mod consent_request_admission_tests {
             &state,
             &foreign,
             &requester,
-            ConsentRequestScope::DirectMessage,
+            ConsentRequestScope::VoiceCall,
         )
         .await
         .expect("a holder hosted elsewhere is not this Station's cell");
@@ -2116,7 +2112,7 @@ mod consent_request_admission_tests {
             &state,
             &holder_account(&state),
             &holder_principal,
-            ConsentRequestScope::DirectMessage,
+            ConsentRequestScope::VoiceCall,
         )
         .await
         .expect("a self-addressed request needs no consent");
@@ -2136,7 +2132,7 @@ mod consent_request_admission_tests {
             &state,
             &holder,
             &DidCoreId::new(REQUESTER.to_owned()).unwrap(),
-            ConsentRequestScope::DirectMessage,
+            ConsentRequestScope::VoiceCall,
         )
         .await
         .expect("a policy deny is not visible to the requester");
@@ -2180,7 +2176,7 @@ mod consent_request_admission_tests {
             &state,
             &holder,
             &DidCoreId::new(REQUESTER.to_owned()).unwrap(),
-            ConsentRequestScope::DirectMessage,
+            ConsentRequestScope::VoiceCall,
         )
         .await
         .expect("first source fits the ceiling");
@@ -2188,7 +2184,7 @@ mod consent_request_admission_tests {
             &state,
             &holder,
             &DidCoreId::new(OTHER_REQUESTER.to_owned()).unwrap(),
-            ConsentRequestScope::DirectMessage,
+            ConsentRequestScope::VoiceCall,
         )
         .await
         .expect("the second source is dropped, not rejected");

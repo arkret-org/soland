@@ -1293,7 +1293,7 @@ pub async fn assert_mimi_consent_correlation_store_contract(
         holder_account_id: format!(
             "{{\"principal_id\":\"ak:did_core:web:{namespace}-holder.example\",\"station_id\":\"ak:did_core:web:{namespace}-holder-station.example\"}}"
         ),
-        purpose: "direct_message".to_owned(),
+        purpose: "voice_call".to_owned(),
         strand_id: None,
         source_id: Some(format!("ak:did_core:web:{namespace}-provider.example")),
         created_at: now,

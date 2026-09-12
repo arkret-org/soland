@@ -929,7 +929,6 @@ async fn verify_mimi_consent_update_authority(
 fn mimi_consent_purpose(purpose: MimiConsentPurpose) -> &'static str {
     match purpose {
         MimiConsentPurpose::Invite => "invite",
-        MimiConsentPurpose::DirectMessage => "direct_message",
         MimiConsentPurpose::VoiceCall => "voice_call",
         MimiConsentPurpose::VideoCall => "video_call",
         MimiConsentPurpose::Presence => "presence",
@@ -1917,7 +1916,7 @@ mod consent_proof_tests {
                         },
                     },
                 },
-                "consent_scope": "direct_message"
+                "consent_scope": "voice_call"
             }),
             now(),
         )
@@ -2138,7 +2137,7 @@ mod consent_proof_tests {
                 consent_id: request.consent_id.to_string(),
                 requester_actor_id: canonical_json(&test_requester_actor(state)),
                 holder_account_id: canonical_json(holder_account_id),
-                purpose: "direct_message".to_owned(),
+                purpose: "voice_call".to_owned(),
                 strand_id: None,
                 source_id: None,
                 created_at: now(),
@@ -2178,7 +2177,7 @@ mod consent_proof_tests {
         let mut body = MimiRequestConsentRequestBody {
             requester_actor_id: holder_request.actor_id.clone(),
             holder_account_id: test_requester_actor(state).as_account_id().unwrap().clone(),
-            purpose: MimiConsentPurpose::DirectMessage,
+            purpose: MimiConsentPurpose::VoiceCall,
             strand_id: None,
             expires_at: None,
             proofs: vec![holder_request.signature],
@@ -2539,7 +2538,7 @@ mod consent_proof_tests {
                 DidCoreId::new("ak:did_core:web:mimi-holder-test.invalid").unwrap(),
                 DidCoreId::new("ak:did_core:web:mimi-holder-station.invalid").unwrap(),
             ),
-            purpose: MimiConsentPurpose::DirectMessage,
+            purpose: MimiConsentPurpose::VoiceCall,
             strand_id: None,
             expires_at: None,
             proofs: vec![unsigned_request_proof(state, method)],
