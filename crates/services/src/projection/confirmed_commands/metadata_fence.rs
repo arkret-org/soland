@@ -406,7 +406,10 @@ impl ProjectionService {
                         serde_json::from_value(serde_json::to_value(&event.payload)
                             .map_err(|error| StoreError::Backend(error.to_string()))?)
                             .map_err(|error| StoreError::Conflict(error.to_string()))?;
-                    backups.insert((record.actor_id.to_string(), record.backup_kind.to_string()));
+                    backups.insert((
+                        record.actor_id.to_string(),
+                        record.backup_kind.as_str().to_owned(),
+                    ));
                 }
                 _ => {}
             }
