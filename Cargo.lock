@@ -6057,6 +6057,7 @@ dependencies = [
 name = "soland-storage"
 version = "0.3.0"
 dependencies = [
+ "arkret",
  "arkret-canonical",
  "arkret-event-draft",
  "arkret-identifiers",
@@ -6084,16 +6085,20 @@ name = "soland-storage-postgres"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "arkret",
+ "arkret-bootstrap",
  "arkret-canonical",
  "arkret-event-draft",
  "arkret-identifiers",
  "arkret-identity",
+ "arkret-lattice-registry",
  "arkret-mls",
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-identity",
  "arkret-models-integration",
  "arkret-schema",
+ "arkret-signatures",
  "arkret-state",
  "arkret-wire",
  "async-trait",
@@ -6103,6 +6108,7 @@ dependencies = [
  "diesel",
  "diesel-async",
  "diesel_migrations",
+ "ed25519-dalek 3.0.0",
  "parking_lot",
  "serde",
  "serde_json",
