@@ -13,53 +13,6 @@ fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
-fn push_gateway_description() -> serde_json::Value {
-    let description = arkret_models_discovery::ServiceDescribe::development(
-        arkret_wire::Did::new("did:webvh:z6mkfixture:push.example").unwrap(),
-        arkret_wire::TrustDomainId::new("ak:trust_domain:push.example").unwrap(),
-        arkret_wire::ServiceKind::PushGateway,
-        vec![
-            "ak.operation_bundle.push_gateway.describe.v1".to_owned(),
-            "ak.operation_bundle.push_gateway.http_notify.v1".to_owned(),
-        ],
-        vec![arkret_models_discovery::TransportBinding::HttpJson {
-            base_url: "https://push.example".to_owned(),
-            extension_profile_required: (),
-        }],
-    );
-    description.validate().unwrap();
-    serde_json::to_value(description).unwrap()
-}
-
-async fn seed_push_gateway_snapshot(
-    state: &AppState,
-    push_gateway_url: &str,
-    digest: &str,
-    observed_at: chrono::DateTime<chrono::Utc>,
-) {
-    state
-        .test_persistence()
-        .push_bridge_cache()
-        .put(
-            "https://push.example/_arkret/describe",
-            soland_storage::OutboundPushBridgeCacheRecord {
-                push_gateway_url: push_gateway_url.to_owned(),
-                service_base_url: "https://push.example".to_owned(),
-                bridge_describe_url: "https://push.example/_arkret/describe".to_owned(),
-                fetch_state: "test_seed".to_owned(),
-                cache_state: "durable_cached".to_owned(),
-                contract_digest: digest.to_owned(),
-                fetched_at: observed_at,
-                remote_contract: push_gateway_description(),
-                trust_level: "trusted".to_owned(),
-                freshness_at: observed_at,
-                etag: digest.to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-}
-
 /// A `session`-class Realm-scoped Signal from Alice's seeded device.
 ///
 /// `profiles-presence.md` §3.4/§3.5 put presence and typing on exactly this
@@ -478,7 +431,7 @@ async fn push_profile_and_moderation_contracts_work_body() {
     // push-notifications.md §3.1: the registration response MUST carry the
     // HMAC-derived pairwise pseudonym (ak:pseudonym:push:...) — it is the only
     // contractual path a caller gets it from. Cross-check it against the
-    // stored registration the notify path resolves.
+    // authoritative Station registration.
     let push_target = soland_test_support::registered_push_target_id(
         &state,
         fixture_actor_core_id(ALICE).as_str(),
@@ -511,7 +464,7 @@ async fn push_profile_and_moderation_contracts_work_body() {
                     "conditions": {
                         "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
                         "wakeup_kind": "message",
-                        "timing_profile_hint": "default"
+
                     }
                 }]
             },
@@ -528,37 +481,6 @@ async fn push_profile_and_moderation_contracts_work_body() {
     assert!(
         account_data_entry(&listed_rules, "ak.push_rules").is_none(),
         "rejected plaintext push rules must not appear as account_data: {listed_rules}"
-    );
-
-    let notify_after_rejected_rule: arkret_models_integration::models_push::PushNotifyOutcome =
-        TestClient::post("http://server/_arkret/edge/push/notify")
-            .add_header("content-type", "application/json", true)
-            .body(canonical_body(&serde_json::json!({
-                "notification": {
-                    "push_target_id": push_target,
-                    "wakeup_kind": "message",
-                    "timing_profile_hint": "default",
-                    "devices": [{"device_id": ALICE_DEVICE}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
-                }
-            })))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    let rejected = notify_after_rejected_rule
-        .outcomes
-        .iter()
-        .filter(|outcome| outcome.reason_code.is_some())
-        .collect::<Vec<_>>();
-    assert_eq!(rejected.len(), 1);
-    assert_eq!(
-        rejected[0].device_id.as_str(),
-        "ak:device:01904100-0000-7000-8000-71551c000004"
-    );
-    assert_eq!(
-        rejected[0].reason_code,
-        Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown)
     );
 
     let reporter_id = fixture_actor_core_id(ALICE);
@@ -1398,26 +1320,19 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
 }
 
 #[test]
-fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify() {
+fn push_unregister_removes_station_registration_and_is_idempotent() {
     run_on_deep_stack(
-        "push_unregister_mutates_registration_and_gateway_snapshot_gates_notify",
-        push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_body,
+        "push_unregister_removes_station_registration_and_is_idempotent",
+        push_unregister_removes_station_registration_and_is_idempotent_body,
     );
 }
 
-async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_body() {
+async fn push_unregister_removes_station_registration_and_is_idempotent_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let push_gateway = "https://push.example/_arkret/edge/push/notify";
-    let stale_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
-        (chrono::Utc::now() - chrono::Duration::hours(25)).timestamp_millis(),
-    )
-    .unwrap();
-
-    seed_push_gateway_snapshot(&state, push_gateway, "sha256:stale", stale_at).await;
-
     let registered: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
@@ -1448,54 +1363,24 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
         Some(push_target.as_str())
     );
 
-    let stale_notify: arkret_models_integration::models_push::PushNotifyOutcome =
-        TestClient::post("http://server/_arkret/edge/push/notify")
-            .add_header("content-type", "application/json", true)
-            .body(canonical_body(&serde_json::json!({
-                "notification": {
-                    "push_target_id": push_target.clone(),
-                    "wakeup_kind": "message",
-                    "timing_profile_hint": "default",
-                    "devices": [{"device_id": device_id}]
-                }
-            })))
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let stored = state
+        .test_persistence()
+        .push_devices()
+        .snapshot_all()
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0]["device_id"], device_id);
+    assert_eq!(stored[0]["push_key"], "opaque-token");
+
+    let notify = TestClient::post("http://server/_arkret/edge/push/notify")
+        .json(&serde_json::json!({}))
+        .send(&service)
+        .await;
     assert_eq!(
-        stale_notify.outcomes[0].reason_code,
-        Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushGatewayUnreachable)
-    );
-
-    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .unwrap();
-    seed_push_gateway_snapshot(&state, push_gateway, "sha256:fresh", now).await;
-
-    let fresh_notify: arkret_models_integration::models_push::PushNotifyOutcome =
-        TestClient::post("http://server/_arkret/edge/push/notify")
-            .add_header("content-type", "application/json", true)
-            .body(canonical_body(&serde_json::json!({
-                "notification": {
-                    "push_target_id": push_target.clone(),
-                    "wakeup_kind": "message",
-                    "timing_profile_hint": "default",
-                    "devices": [{"device_id": device_id}]
-                }
-            })))
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert!(
-        fresh_notify
-            .outcomes
-            .iter()
-            .all(|outcome| outcome.reason_code.is_none())
+        notify.status_code,
+        Some(StatusCode::NOT_FOUND),
+        "Station must not expose the gateway notify operation"
     );
 
     let unregistered = TestClient::post("http://server/_arkret/edge/push/unregister-device")
@@ -1510,24 +1395,33 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
         .await;
     assert_eq!(unregistered.status_code, Some(StatusCode::NO_CONTENT));
 
-    let after_unregister: arkret_models_integration::models_push::PushNotifyOutcome =
-        TestClient::post("http://server/_arkret/edge/push/notify")
-            .add_header("content-type", "application/json", true)
-            .body(canonical_body(&serde_json::json!({
-                "notification": {
-                    "push_target_id": push_target.clone(),
-                    "wakeup_kind": "message",
-                    "timing_profile_hint": "default",
-                    "devices": [{"device_id": device_id}]
-                }
-            })))
-            .send(&service)
+    assert!(
+        state
+            .test_persistence()
+            .push_devices()
+            .snapshot_all()
             .await
-            .take_json()
+            .unwrap()
+            .is_empty()
+    );
+    let repeated = TestClient::post("http://server/_arkret/edge/push/unregister-device")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
+            "device_id": device_id,
+            "push_key": "opaque-token",
+            "app_id": "inkson"
+        })))
+        .send(&service)
+        .await;
+    assert_eq!(repeated.status_code, Some(StatusCode::NO_CONTENT));
+    assert!(
+        state
+            .test_persistence()
+            .push_devices()
+            .snapshot_all()
             .await
-            .unwrap();
-    assert_eq!(
-        after_unregister.outcomes[0].reason_code,
-        Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown)
+            .unwrap()
+            .is_empty()
     );
 }

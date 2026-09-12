@@ -1193,7 +1193,7 @@ fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
 }
 
 #[tokio::test]
-async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
+async fn push_registration_returns_only_the_station_pairwise_target() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(
         state.clone(),
@@ -1224,7 +1224,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
     assert!(
         registered["registration_id"]
             .as_str()
-            .expect("register-device returns a gateway-local registration id")
+            .expect("register-device returns a Station-local registration id")
             .starts_with("push_registration:"),
         "registration_id is an opaque_correlation handle, not the push target pseudonym"
     );
@@ -1242,78 +1242,16 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         Some(push_target_id.as_str()),
         "register-device response must carry the service-derived push_target_id"
     );
-    let mut rejected = TestClient::post("http://server/_arkret/edge/push/notify")
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1,
-            true,
-        )
-        .json(&json!({
-            "notification": {
-                "push_target_id": push_target_id.as_str(),
-                "wakeup_kind": "message",
-                "timing_profile_hint": "default",
-                "event_id": "ak:event:AT4Mf1sJBtwy4lOrQHfsPt7KtsUYo1LogrjcZnl5oAco",
-                "realm_id": "ak:realm:AWRb-Bbhs1lJYMdAAkBJQ7GGxWqzFGTYiQRGUA3wq0Z5",
-                "sender_actor_id": "ak:did_core:web:bob.example",
-                "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    let rejected_status = rejected.status_code;
-    let rejected_body: Value = rejected.take_json().await.unwrap();
-    assert_eq!(
-        rejected_status,
-        Some(StatusCode::BAD_REQUEST),
-        "{rejected_body}"
-    );
-
-    // `push-operations.schema.json#/$defs/push_notify_outcome` is a closed
-    // response whose only members are `push_target_id` and a conserved
-    // `outcomes[]` — one entry per requested device, each carrying its own
-    // `gateway_status`. There is no top-level rejected array to read, and the
-    // per-device status is the stronger assertion anyway: it says the sanitized
-    // blind wakeup was accepted *for this device*, not merely that some list
-    // stayed empty.
-    let accepted: arkret_models_integration::models_push::PushNotifyOutcome =
-        TestClient::post("http://server/_arkret/edge/push/notify")
-            .add_header(
-                "Arkret-Operation",
-                arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1,
-                true,
-            )
-            .json(&json!({
-                "notification": {
-                    "push_target_id": push_target_id.as_str(),
-                    "wakeup_kind": "message",
-                    "timing_profile_hint": "default",
-                    "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
-                }
-            }))
-            .send(&app_from_state(state))
-            .await
-            .take_json()
-            .await
-            .expect("typed push notify outcome");
-    assert_eq!(accepted.push_target_id, push_target_id);
-    assert_eq!(
-        accepted
-            .outcomes
-            .iter()
-            .map(|outcome| (outcome.device_id.as_str(), outcome.gateway_status))
-            .collect::<Vec<_>>(),
-        vec![(
-            "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            arkret_models_integration::models_push::PushNotifyGatewayStatus::Accepted
-        )]
-    );
-    assert!(
-        accepted
-            .outcomes
-            .iter()
-            .all(|outcome| outcome.reason_code.is_none()),
-        "{:?}",
-        accepted.outcomes
-    );
+    for private_field in [
+        "push_key",
+        "account_id",
+        "principal_id",
+        "recipient_id",
+        "device_id",
+    ] {
+        assert!(
+            registered.get(private_field).is_none(),
+            "registration response leaked {private_field}"
+        );
+    }
 }
