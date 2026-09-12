@@ -862,6 +862,17 @@ impl NotaryWorker {
             );
         }
 
+        if let Err(error) =
+            crate::routing::events::event_log::publish_confirmed_realm_bootstrap(state, realm_id)
+                .await
+        {
+            tracing::error!(%realm_id, %error, "confirmed bootstrap projection remains pending");
+        }
+        if let Err(error) =
+            crate::routing::events::projection::publish_confirmed_seal_commands(state, &seal).await
+        {
+            tracing::error!(%realm_id, %error, "confirmed command projection remains pending");
+        }
         self.refresh_cells_and_publish_frontier(state, realm_id, &seal, &predicted_state_root)
             .await;
 

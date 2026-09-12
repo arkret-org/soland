@@ -209,6 +209,7 @@ mod agent_membership_cascade;
 pub(in crate::routing) use agent_membership_cascade::submit_agent_membership_cascade;
 use agent_membership_cascade::submit_agent_membership_cascade_federation;
 pub(in crate::routing::events::event_log) mod realm_bootstrap;
+pub(crate) use realm_bootstrap::publish_confirmed_realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
 
 fn rejected_item(

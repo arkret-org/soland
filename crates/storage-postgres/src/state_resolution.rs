@@ -604,6 +604,10 @@ async fn record_control_event_decision_in_transaction(
     .execute(conn)
     .await?;
     if outcome == CommandOutcome::Committed {
+        let event_suite = event.event_id.digest_suite_code().digest_suite();
+        crate::current_data::commit_sources(conn, &event, event_suite)
+            .await
+            .map_err(persistence_to_store)?;
         crate::stage_sealed_revocation_in_transaction(conn, digest, seal_id, sealed_at)
             .await
             .map_err(|error| StoreError::Backend(error.to_string()))?;

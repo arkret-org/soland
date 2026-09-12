@@ -2069,7 +2069,14 @@ pub(super) async fn submit_event_value_with_context(
         };
     let received_at = now();
     let control_event_for_proposal =
-        Some(submitted_event.clone()).filter(|event| event.kind.is_control_plane());
+        (arkret_schema::classify_event_execution(&submitted_event).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                error.to_string(),
+            )
+        })? == Some(arkret_wire::CbsEffectPlane::Control))
+        .then(|| submitted_event.clone());
     let ackless_self_principal_ingress = if let Some(evidence) =
         context.ackless_self_principal_admission_evidence
     {
@@ -2312,12 +2319,15 @@ pub(super) async fn submit_event_value_with_context(
     let accepted_control_event_for_proposal = control_event_for_proposal
         .is_some()
         .then(|| accepted_event.clone());
-    let projected_event = projection_operation.as_ref().map(|operation| {
-        crate::routing::events::projection::projection_event_from_operation(
-            operation,
-            Some(&actor_key),
-        )
-    });
+    let projected_event = projection_operation
+        .as_ref()
+        .filter(|_| accepted_control_event_for_proposal.is_none())
+        .map(|operation| {
+            crate::routing::events::projection::projection_event_from_operation(
+                operation,
+                Some(&actor_key),
+            )
+        });
     // Built before the commit and committed with it. Failing to construct the
     // delivery intent rejects the admission rather than accepting an Event this
     // service can never route (`sync/federation.md` §4.1).

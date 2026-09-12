@@ -68,15 +68,23 @@ async fn retained_federation_submission(
         .control_proposal_ack_for_digest(event_digest.as_str())
         .await
         .map_err(|error| AppError::internal(format!("Control Proposal Ack lookup: {error}")))?;
-    let ackless_self_principal_admission_evidence = if event.kind.is_control_plane() {
-        let snapshot = state
-            .projections()
-            .control_proposal_snapshot(event_digest)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Control admission evidence lookup: {error}"))
-            })?
-            .ok_or_else(|| AppError::internal("accepted Control Event has no ingress snapshot"))?;
+    let snapshot = state
+        .projections()
+        .control_proposal_snapshot(event_digest)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Control admission evidence lookup: {error}"))
+        })?;
+    if snapshot.is_none()
+        && arkret_schema::classify_event_execution(event)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            == Some(arkret_wire::CbsEffectPlane::Control)
+    {
+        return Err(AppError::internal(
+            "accepted Control Event has no ingress snapshot",
+        ));
+    }
+    let ackless_self_principal_admission_evidence = if let Some(snapshot) = snapshot {
         match snapshot.ingress_class {
             arkret_state::state::store::ControlProposalIngressClass::AckRequired => {
                 if control_proposal_ack.is_none() {
@@ -2135,7 +2143,15 @@ fn history_access_allows(
 }
 
 fn record_requires_private_plaintext_visibility(record: &AcceptedEvent) -> bool {
-    if arkret_wire::EventKind::from_wire(&record.kind).is_control_plane() {
+    if serde_json::from_value::<Event>(record.envelope.clone())
+        .ok()
+        .and_then(|event| {
+            arkret_schema::classify_event_execution(&event)
+                .ok()
+                .flatten()
+        })
+        == Some(arkret_wire::CbsEffectPlane::Control)
+    {
         // Control-plane payloads are the signed governance carriers needed
         // for federation admission and frontier repair. They are not private
         // content delegated to an auxiliary plaintext-processing service.

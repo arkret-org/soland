@@ -1971,6 +1971,19 @@ pub(crate) async fn apply_inbound_seal(
             if state.storage_mode() == "memory" {
                 validate_accepted_fork_resolution_records(state, seal, digest_suite).await?;
             }
+            crate::routing::events::event_log::publish_confirmed_realm_bootstrap(
+                state,
+                &seal.realm_id,
+            )
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("confirmed bootstrap projection: {error}"))
+            })?;
+            crate::routing::events::projection::publish_confirmed_seal_commands(state, seal)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("confirmed command projection: {error}"))
+                })?;
             Ok(prepared.effect)
         }
         Ok(false) => Err(crate::app_error!(

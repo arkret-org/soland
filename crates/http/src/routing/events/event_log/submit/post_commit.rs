@@ -76,71 +76,76 @@ pub(super) async fn apply_accepted_event_post_commit(
             })?;
         state.wake_control_seal_coordinator();
     }
-    if let Some(admission) = consent_admission {
-        // The cell row and its invalidation are already durable; publish the
-        // runtime projection and the holder's notifications.
-        crate::routing::identity::consent::apply_committed_consent_admission(state, admission)
-            .await;
-    }
-    if let Some(operation) = projection_operation {
-        crate::routing::events::projection::project_accepted_canonical_event_from_device(
-            state,
-            parsed.actor_id.as_str(),
-            parsed.device_id_str(),
-            &operation,
-            projected_cell_writes,
-        )
-        .await;
-        resolve_moderation_dismiss_queue_item(state, &operation, parsed.event_id.as_str()).await;
-    }
-    if (parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
-        || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
-        && let Err(error) = persist_principal_resolution_projection(state, accepted_event).await
-    {
-        // This index is rebuildable from canonical Events. The Event is
-        // already committed, so never misreport it as rejected; surface the
-        // drift for repair and let public reads fail closed meanwhile.
-        tracing::error!(%error, event_id = %parsed.event_id, "principal resolution read-index update failed");
-    }
-    if let Some(event) = projected_event {
-        let _ = state.publish_event_notification(crate::state::EventNotification::event(
-            event.realm_id.clone(),
-            event.event_id.clone(),
-            crate::routing::events::projection::projection_event_json(&event),
-        ));
-    } else {
-        // Actor-scoped streams consume durable control history even when the
-        // Event has no timeline projection. Its canonical envelope supplies
-        // only a wake-up hint; subscribers reload the accepted record.
-        let _ = state.publish_event_notification(crate::state::EventNotification::event(
-            parsed.realm_id.to_string(),
-            parsed.event_id.to_string(),
-            envelope.clone(),
-        ));
-    }
-    if parsed.kind == arkret_wire::event_kind_str::REALM_CREATE
-        && let Some(envelope_object) = envelope.as_object()
-    {
-        bootstrap_realm_member_index(
-            state,
-            parsed.realm_id.as_str(),
-            parsed.actor_id.as_str(),
-            envelope_object,
-        )
-        .await;
-        organizations::record_realm_organizations_from_event(
-            state,
-            parsed.realm_id.as_str(),
-            envelope,
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("Realm organization projection persistence failed: {error}"),
+    // Canonical Control admission is pending; all business publication belongs
+    // to its exact committed Seal command result.
+    if accepted_control_event.is_none() {
+        if let Some(admission) = consent_admission {
+            // The cell row and its invalidation are already durable; publish the
+            // runtime projection and the holder's notifications.
+            crate::routing::identity::consent::apply_committed_consent_admission(state, admission)
+                .await;
+        }
+        if let Some(operation) = projection_operation {
+            crate::routing::events::projection::project_accepted_canonical_event_from_device(
+                state,
+                parsed.actor_id.as_str(),
+                parsed.device_id_str(),
+                &operation,
+                projected_cell_writes,
             )
-        })?;
+            .await;
+            resolve_moderation_dismiss_queue_item(state, &operation, parsed.event_id.as_str())
+                .await;
+        }
+        if (parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
+            || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
+            && let Err(error) = persist_principal_resolution_projection(state, accepted_event).await
+        {
+            // This index is rebuildable from canonical Events. The Event is
+            // already committed, so never misreport it as rejected; surface the
+            // drift for repair and let public reads fail closed meanwhile.
+            tracing::error!(%error, event_id = %parsed.event_id, "principal resolution read-index update failed");
+        }
+        if let Some(event) = projected_event {
+            let _ = state.publish_event_notification(crate::state::EventNotification::event(
+                event.realm_id.clone(),
+                event.event_id.clone(),
+                crate::routing::events::projection::projection_event_json(&event),
+            ));
+        } else {
+            // Actor-scoped streams consume durable control history even when the
+            // Event has no timeline projection. Its canonical envelope supplies
+            // only a wake-up hint; subscribers reload the accepted record.
+            let _ = state.publish_event_notification(crate::state::EventNotification::event(
+                parsed.realm_id.to_string(),
+                parsed.event_id.to_string(),
+                envelope.clone(),
+            ));
+        }
+        if parsed.kind == arkret_wire::event_kind_str::REALM_CREATE
+            && let Some(envelope_object) = envelope.as_object()
+        {
+            bootstrap_realm_member_index(
+                state,
+                parsed.realm_id.as_str(),
+                parsed.actor_id.as_str(),
+                envelope_object,
+            )
+            .await;
+            organizations::record_realm_organizations_from_event(
+                state,
+                parsed.realm_id.as_str(),
+                envelope,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("Realm organization projection persistence failed: {error}"),
+                )
+            })?;
+        }
     }
     append_audit_log(
         state,
@@ -394,9 +399,6 @@ pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
     for record in canonical_events {
         let event: Event = serde_json::from_value(record.envelope)
             .map_err(|error| format!("stored canonical Event is invalid: {error}"))?;
-        if !event.kind.is_control_plane() {
-            continue;
-        }
         let digest = arkret_wire::Hash::new(record.canonical_digest)
             .map_err(|error| format!("stored Control Event digest is invalid: {error}"))?;
         if control_moves_by_digest.insert(digest, event).is_some() {
@@ -428,7 +430,11 @@ pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
             .ok_or_else(|| "federation CBS target Seal is unavailable".to_owned())?;
         let covered = by_id
             .values()
-            .flat_map(|seal| seal.delta.iter().cloned())
+            .flat_map(|seal| {
+                seal.command_results
+                    .iter()
+                    .flat_map(|result| result.unit_event_digests.iter().cloned())
+            })
             .collect::<BTreeSet<_>>();
         if covered.len() > arkret_wire::cbs_proof_bundle::MAX_BUNDLE_CONTROL_MOVES {
             return Err("federation Control Move closure exceeds the v1 limit".to_owned());
@@ -571,30 +577,22 @@ async fn federation_submissions(
     let mut submissions = Vec::with_capacity(events.len());
     for (event, digest) in events.iter().zip(digests) {
         let record = by_digest.get(&digest);
-        let is_control_move = event.kind.is_control_plane();
-        let proposal_digest = is_control_move
-            .then(|| arkret_identifiers::Hash::new(digest.clone()))
-            .transpose()
-            .map_err(|error| {
-                format!(
-                    "Control Move {} digest is not a typed Hash: {error}",
-                    event.event_id
-                )
-            })?;
-        let durable_snapshot = if let Some(digest) = proposal_digest.as_ref() {
-            state
-                .projections()
-                .control_proposal_snapshot(digest)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "failed to read Control Move {} ingress evidence for federation: {error}",
-                        event.event_id
-                    )
-                })?
-        } else {
-            None
-        };
+        let proposal_digest =
+            arkret_identifiers::Hash::new(digest.clone()).map_err(|error| error.to_string())?;
+        let durable_snapshot = state
+            .projections()
+            .control_proposal_snapshot(&proposal_digest)
+            .await
+            .map_err(|error| error.to_string())?;
+        let is_control_move = durable_snapshot.is_some()
+            || pending_control_proposal_acks
+                .iter()
+                .any(|ack| ack.proposal_digest == proposal_digest)
+            || current_control_proposal_ack
+                .is_some_and(|ack| ack.proposal_digest == proposal_digest)
+            || arkret_schema::classify_event_execution(event).map_err(|error| error.to_string())?
+                == Some(arkret_wire::CbsEffectPlane::Control);
+        let proposal_digest = is_control_move.then_some(proposal_digest);
         let ackless_self_principal_admission_evidence = durable_snapshot
             .as_ref()
             .and_then(|snapshot| match &snapshot.ingress_class {
@@ -1078,7 +1076,6 @@ pub(super) async fn peer_event_fanout_records(
                 )
             })?;
         peer_events.push(event.clone());
-        peer_events.sort_by_key(|event| u8::from(!event.kind.is_control_plane()));
         let cbs_proof_bundles = federation_cbs_proof_bundles(state, &peer_events)
             .await
             .map_err(|error| {

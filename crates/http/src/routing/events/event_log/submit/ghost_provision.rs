@@ -246,8 +246,16 @@ async fn prepare_ghost_event(
         && envelope
             .as_object()
             .is_some_and(|object| admission.matches(session, object));
-    let control_event_for_proposal = Some(typed.clone())
-        .filter(|event| event.kind.is_control_plane() && !is_applet_managed_pcr_genesis);
+    let control_event_for_proposal =
+        (arkret_schema::classify_event_execution(&typed).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                error.to_string(),
+            )
+        })? == Some(arkret_wire::CbsEffectPlane::Control)
+            && !is_applet_managed_pcr_genesis)
+            .then(|| typed.clone());
     let control_proposal_ack = if is_applet_managed_pcr_genesis {
         let mut acks = crate::control_proposal::mint_control_proposal_acks(
             state,

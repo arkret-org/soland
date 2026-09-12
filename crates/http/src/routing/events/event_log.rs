@@ -232,7 +232,6 @@ pub(crate) async fn validate_pcr_prepare_ackless_ingress(
     Ok(())
 }
 pub(crate) use endpoints::{VerifiedActorPredecessors, load_realm_actor_frontier};
-pub(crate) use submit::accepted_event_digest_suites;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
@@ -252,6 +251,7 @@ use submit::{
     IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
     event_validation_error, events_submit_outcome, render_submit_one_error,
 };
+pub(crate) use submit::{accepted_event_digest_suites, publish_confirmed_realm_bootstrap};
 
 mod validation;
 use validation::*;

@@ -178,6 +178,11 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .map(|(event, envelope)| canonical_record(event, envelope, received_at))
         .collect::<Vec<_>>();
     if let Some(mut outcome) = identical_historical_retry(state, &retry_candidates).await? {
+        publish_confirmed_realm_bootstrap(state, &unit.realm_id)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?;
         outcome.ingress_receipts = ingress_receipts;
         return Ok(outcome);
     }
@@ -259,7 +264,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     // facet kinds can be applied. The create reducer's own authority-root
     // reason codes are surfaced verbatim so a genesis that cannot establish an
     // owner is distinguishable from an out-of-order unit.
-    let staged_projection = match state
+    let _staged_projection = match state
         .projections()
         .stage_realm_bootstrap(&projected_operations, context.direct_conversation_founding)
     {
@@ -289,24 +294,15 @@ pub(super) async fn submit_realm_bootstrap_batch(
         // Another Station worker may have committed this exact unit after the
         // point-in-time retry lookup above. Re-read the durable identities
         // before classifying the Realm-create uniqueness hit: byte-identical
-        // bootstrap replay is `duplicate`, not `realm_already_exists`. Pending
-        // recovery deliberately does not wake the coordinator until this
-        // AppState has installed the accepted genesis projection.
+        // bootstrap replay is `duplicate`, not `realm_already_exists`.
+        // Recovery publishes only a complete, confirmed command unit.
         if let Some(mut outcome) =
             identical_historical_retry_without_wake(state, &retry_candidates).await?
         {
-            state
-                .projections()
-                .install_staged_realm_bootstrap(staged_projection)
+            publish_confirmed_realm_bootstrap(state, &unit.realm_id)
+                .await
                 .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!(
-                            "concurrently accepted Realm bootstrap could not merge into the live projection: {}",
-                            error.reason
-                        ),
-                    )
+                    SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
                 })?;
             state.wake_control_seal_coordinator();
             outcome.ingress_receipts = ingress_receipts;
@@ -433,17 +429,13 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 // lookup, decides whether this worker inserted or replayed the
                 // unit. Install before pending-index recovery wakes the Seal
                 // coordinator, then return the original duplicate receipt.
-                state
-                    .projections()
-                    .install_staged_realm_bootstrap(staged_projection)
+                publish_confirmed_realm_bootstrap(state, &unit.realm_id)
+                    .await
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "internal_error",
-                            format!(
-                                "durably replayed Realm bootstrap could not merge into the live projection: {}",
-                                error.reason
-                            ),
+                            error,
                         )
                     })?;
                 let pending_delivery_count =
@@ -474,17 +466,13 @@ pub(super) async fn submit_realm_bootstrap_batch(
             if let Some(mut outcome) =
                 identical_historical_retry_without_wake(state, &retry_candidates).await?
             {
-                state
-                    .projections()
-                    .install_staged_realm_bootstrap(staged_projection)
+                publish_confirmed_realm_bootstrap(state, &unit.realm_id)
+                    .await
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "internal_error",
-                            format!(
-                                "concurrently committed Realm bootstrap could not merge into the live projection: {}",
-                                error.reason
-                            ),
+                            error,
                         )
                     })?;
                 state.wake_control_seal_coordinator();
@@ -522,20 +510,11 @@ pub(super) async fn submit_realm_bootstrap_batch(
         soland_storage::DirectConversationFoundingCommitOutcome::ExactRetry(existing) => {
             // A different worker may have won the durable Direct Conversation
             // founding slot while this AppState had not projected it yet.
-            // Install before the duplicate recovery path restores the pending
-            // index and wakes the coordinator.
-            state
-                .projections()
-                .install_staged_realm_bootstrap(staged_projection)
+            // Recover confirmed effects before returning the exact retry.
+            publish_confirmed_realm_bootstrap(state, &unit.realm_id)
+                .await
                 .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!(
-                            "accepted Direct Conversation bootstrap could not merge into the live projection: {}",
-                            error.reason
-                        ),
-                    )
+                    SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
                 })?;
             let pending_delivery_count =
                 durable_pending_delivery_count(state, &existing.event_ids).await?;
@@ -567,23 +546,11 @@ pub(super) async fn submit_realm_bootstrap_batch(
             ));
         }
     }
-    // Install the accepted unit before making it visible to the background
-    // Seal coordinator. The coordinator consumes the pending-control index and
-    // may project the genesis Seal immediately; waking it first would race this
-    // staged install against the same accepted create and turn success into a
-    // post-commit `realm_already_exists`/500.
-    state
-        .projections()
-        .install_staged_realm_bootstrap(staged_projection)
+    // Admission leaves bootstrap effects pending until its complete unit commits.
+    publish_confirmed_realm_bootstrap(state, &unit.realm_id)
+        .await
         .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!(
-                    "committed Realm bootstrap could not merge into the live projection: {}",
-                    error.reason
-                ),
-            )
+            SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
         })?;
     let pending_unit = accepted_typed_events
         .iter()
@@ -611,43 +578,6 @@ pub(super) async fn submit_realm_bootstrap_batch(
             )
         })?;
     state.wake_control_seal_coordinator();
-    for operation in &operations {
-        crate::routing::events::projection::ensure_projected_realm(
-            state,
-            unit.actor_id.signing_principal_id().as_str(),
-            operation,
-        )
-        .await;
-        let projected = crate::routing::events::projection::projection_event_from_operation(
-            operation,
-            Some(unit.actor_id.signing_principal_id().as_str()),
-        );
-        if let Err(error) =
-            crate::routing::events::projection::persist_and_publish_projection_event(
-                state, projected,
-            )
-            .await
-        {
-            tracing::error!(
-                %error,
-                operation_id = %operation.operation_id,
-                "failed to persist accepted Realm bootstrap projection event"
-            );
-        }
-    }
-    organizations::record_realm_organizations_from_event(
-        state,
-        unit.realm_id.as_str(),
-        &envelopes[0],
-    )
-    .await
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("Realm organization projection persistence failed: {error}"),
-        )
-    })?;
     for parsed in &validated {
         append_audit_log(
             state,
@@ -713,4 +643,87 @@ fn validate_actor_chain(events: &[ValidatedEventEnvelope]) -> Result<(), SubmitO
         }
     }
     Ok(())
+}
+
+/// Rebuild genesis projections only from the locally confirmed command unit.
+/// Admission, including exact retries, cannot make bootstrap effects visible.
+pub(crate) async fn publish_confirmed_realm_bootstrap(
+    state: &AppState,
+    realm_id: &arkret_wire::RealmId,
+) -> Result<bool, String> {
+    let Some(events) = state
+        .projections()
+        .confirmed_genesis_unit(realm_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    let Some(create) = events.first() else {
+        return Err("confirmed genesis is empty".to_owned());
+    };
+    let payload: arkret_models_collaboration::events_payloads::RealmCreatePayload =
+        serde_json::from_value(
+            serde_json::to_value(&create.payload).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    let direct = match payload.object.purpose {
+        arkret_models_collaboration::events_payloads::RealmPurpose::Collaboration => false,
+        arkret_models_collaboration::events_payloads::RealmPurpose::DirectConversation => true,
+        _ => return Ok(false),
+    };
+    arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events)
+        .map_err(|error| error.to_string())?;
+    let projected = events
+        .iter()
+        .map(|event| {
+            let envelope = serde_json::to_value(event).map_err(|error| error.to_string())?;
+            let operation = super::super::projection_operation_from_envelope(&envelope)
+                .ok_or_else(|| "confirmed bootstrap has no projection operation".to_owned())?;
+            let cell_writes =
+                genesis_cell_write_projector(event).map_err(|error| error.to_string())?;
+            Ok(soland_services::projection::ProjectedOperation {
+                operation,
+                cell_writes,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let staged = match state
+        .projections()
+        .stage_realm_bootstrap(&projected, direct)
+    {
+        Ok(staged) => Some(staged),
+        Err(error) if error.reason == "realm_already_exists" => None,
+        Err(error) => return Err(error.reason),
+    };
+    if let Some(staged) = staged {
+        state
+            .projections()
+            .install_staged_realm_bootstrap(staged)
+            .map_err(|error| error.reason)?;
+    }
+    for projected in &projected {
+        let operation = &projected.operation;
+        crate::routing::events::projection::ensure_projected_realm(
+            state,
+            create.actor_id.signing_principal_id().as_str(),
+            operation,
+        )
+        .await;
+        let record = crate::routing::events::projection::projection_event_from_operation(
+            operation,
+            Some(create.actor_id.signing_principal_id().as_str()),
+        );
+        crate::routing::events::projection::persist_and_publish_projection_event(state, record)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    organizations::record_realm_organizations_from_event(
+        state,
+        realm_id.as_str(),
+        &serde_json::to_value(create).map_err(|error| error.to_string())?,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(true)
 }

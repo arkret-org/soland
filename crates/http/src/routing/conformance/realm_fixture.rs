@@ -93,7 +93,11 @@ pub async fn install(
         let event_digest = event
             .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        if event.kind.is_control_plane() {
+        if arkret_schema::classify_event_execution(event)
+            .map_err(|error| AppError::param_invalid(error.to_string()))?
+            == Some(arkret_wire::CbsEffectPlane::Control)
+            || genesis_live_digest_suite.is_some()
+        {
             let proposal_digest = arkret_wire::Hash::new(event_digest.clone())
                 .map_err(|error| AppError::param_invalid(error.to_string()))?;
             let ack = ack_by_digest.get(&proposal_digest).ok_or_else(|| {

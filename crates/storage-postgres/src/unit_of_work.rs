@@ -1245,17 +1245,18 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 ))
             })?;
             commit_holder_account_data(conn, &typed_event).await?;
-            crate::current_data::commit_sources(conn, &typed_event, request.event.digest_suite).await?;
+            if request.control_proposal_ingress.is_none() {
+                crate::current_data::commit_sources(conn, &typed_event, request.event.digest_suite).await?;
+            }
             if let Some(contact_projection) = request.contact_projection {
                 commit_contact_projection(conn, contact_projection).await?;
             }
             if let Some(consent_projection) = request.consent_projection {
                 commit_consent_projection(conn, consent_projection).await?;
             }
-            // Control/Data routing is defined by the typed Event plane. A
-            // closed genesis anchor is a basis-free Control Move; an ordinary Event
-            // instead carries `auth_context` with its authority references.
-            let is_control_move = typed_event.kind.is_control_plane();
+            let is_control_move = arkret_schema::classify_event_execution(&typed_event)
+                .map_err(|error| PersistenceError::SchemaViolation(format!("invalid Event execution: {error}")))?
+                == Some(arkret_wire::CbsEffectPlane::Control) || request.control_proposal_ingress.is_some();
             if is_control_move {
                 let event_digest = typed_event
                     .event_digest_with_digest_suite(request.event.digest_suite)
@@ -1425,7 +1426,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     put_governance_dependency_exact_in_transaction(conn, dependency).await?;
                 }
 
-            for projection in request.projections {
+            for projection in request.projections.iter().filter(|_| request.control_proposal_ingress.is_none()) {
                 // The projection no longer carries its own copy of the Event
                 // identity -- it is reached through `event_pk`. Admitting a
                 // projection that names a different Event than the one this

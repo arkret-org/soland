@@ -391,3 +391,218 @@ async fn pin_assertions_converge_causally_and_cross_cell_withdrawal_marks_pendin
         .unwrap();
     assert_eq!(absent.count, 0);
 }
+
+#[tokio::test]
+async fn conditional_space_metadata_is_published_without_a_seal() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"ordinary conditional Space"),
+    ));
+    let actor = ActorId::account(AccountId::new(
+        "ak:did_core:web:current.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    ));
+    let create = source(
+        "ak.space.create",
+        &realm,
+        &actor,
+        1,
+        json!({"object":{"schema":"ak.schema.space.v1","realm_id":realm,"title":"before"}}),
+        &[],
+    );
+    persist(&pool, create.clone()).await.unwrap();
+    let space_id = arkret_wire::SpaceId::from_event_id(&create.event_id);
+    let update = source(
+        "ak.space.update",
+        &realm,
+        &actor,
+        2,
+        json!({"space_id":space_id,"patch":{"title":{"$op":"set","value":"after"}}}),
+        &[&create],
+    );
+    assert_eq!(
+        arkret_schema::classify_event_execution(&update).unwrap(),
+        Some(arkret_wire::CbsEffectPlane::Data)
+    );
+    persist(&pool, update.clone()).await.unwrap();
+    let mut conn = pool.get().await.unwrap();
+    let value = sql_query("SELECT source_value FROM current_data_sources WHERE event_digest=$1")
+        .bind::<Text, _>(
+            update
+                .event_digest_with_digest_suite(DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .get_result::<SourceRow>(&mut conn)
+        .await
+        .unwrap()
+        .source_value;
+    assert_eq!(value["title"], "after");
+}
+
+/// Exercise the real composite Seal transaction, including a Data-only member
+/// after the command leader. Admission and rejected outcomes cannot leak it.
+#[tokio::test]
+async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publishes_nothing() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    use arkret_state::state::store::{
+        AcklessSelfPrincipalIngress, ControlProposalIngress, ControlUnitIngressMember,
+    };
+    use arkret_wire::{CommandOutcome, Seal, SealCommandOutcome};
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let registry = Arc::new(
+        soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+    );
+    let stores = crate::build_state_resolution_stores(Some(pool.clone()), registry);
+    let actor = ActorId::account(AccountId::new(
+        "ak:did_core:web:current.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    ));
+    for (index, outcome) in [CommandOutcome::Committed, CommandOutcome::Rejected]
+        .into_iter()
+        .enumerate()
+    {
+        let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(format!("current unit {index}")),
+        ));
+        let command = source(
+            "ak.test.control",
+            &realm,
+            &actor,
+            (index * 2 + 10) as u64,
+            json!({}),
+            &[],
+        );
+        let data = source(
+            "ak.space.create",
+            &realm,
+            &actor,
+            (index * 2 + 11) as u64,
+            json!({"object":{"schema":"ak.schema.space.v1","realm_id":realm,"title":"sealed"}}),
+            &[],
+        );
+        let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+            device_id: "fixture".into(),
+            device_authorize_event_id: "fixture".into(),
+            device_generation_ref: 1,
+            seal_basis_digest: "fixture".into(),
+        });
+        let digests = stores
+            .control_event_store
+            .put_pending_unit_with_ingress(
+                &[command.clone(), data.clone()]
+                    .into_iter()
+                    .map(|event| ControlUnitIngressMember {
+                        event,
+                        digest_suite: DigestSuite::Sha256,
+                        ingress: ingress.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
+        persist(&pool, command.clone()).await.unwrap();
+        persist(&pool, data.clone()).await.unwrap();
+        let count_sources = async || {
+            let mut conn = pool.get().await.unwrap();
+            #[derive(QueryableByName)]
+            struct Count {
+                #[diesel(sql_type=diesel::sql_types::BigInt)]
+                count: i64,
+            }
+            sql_query(
+                "SELECT count(*)::bigint AS count FROM current_data_sources WHERE realm_id=$1",
+            )
+            .bind::<Text, _>(realm.as_str())
+            .get_result::<Count>(&mut conn)
+            .await
+            .unwrap()
+            .count
+        };
+        assert_eq!(
+            count_sources().await,
+            0,
+            "a registered Data member is pending with its whole unit"
+        );
+        let result = match outcome {
+            CommandOutcome::Committed => SealCommandOutcome::committed(
+                digests[0].clone(),
+                digests.clone(),
+                Vec::new(),
+                DigestSuite::Sha256,
+            )
+            .unwrap(),
+            CommandOutcome::Rejected => SealCommandOutcome::rejected(
+                digests[0].clone(),
+                digests.clone(),
+                "state_mismatch".parse().unwrap(),
+                DigestSuite::Sha256,
+            )
+            .unwrap(),
+        };
+        let covered = BTreeSet::new();
+        let placeholder = arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        let mut seal = Seal {
+            id: format!("ak:seal:{placeholder}").parse().unwrap(),
+            realm_id: realm.clone(),
+            predecessor_ref: None,
+            delta: vec![],
+            control_event_set_root: arkret_state::state::control_event_set_root(
+                &covered,
+                DigestSuite::Sha256,
+            )
+            .unwrap(),
+            state_root: arkret_state::state::compute_state_root(
+                arkret_state::GovernanceView::new(&BTreeMap::new()),
+                DigestSuite::Sha256,
+            )
+            .unwrap(),
+            notary_seq: 0,
+            availability_receipt_digests: vec![],
+            covered_event_digests: vec![],
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            notary_signature: arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                view: 0,
+                signatures: vec![arkret_wire::SealSignature {
+                    verification_method: "did:web:station.example#notary".parse().unwrap(),
+                    payload_digest: placeholder,
+                    jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".into(),
+                }],
+            },
+            sealed_at: chrono::Utc::now(),
+            hlc: "019f00000000-0000-00000001".parse().unwrap(),
+            configuration_ref: command.event_id.clone(),
+            command_results: vec![result],
+            authorization_closures: vec![],
+            existence_anchors: vec![],
+            transaction_records: vec![],
+        };
+        seal.id = seal.derive_id(DigestSuite::Sha256).unwrap();
+        assert!(
+            stores
+                .event_seal_committer
+                .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &covered, &[])
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            count_sources().await > 0,
+            outcome == CommandOutcome::Committed
+        );
+        let decided = stores
+            .control_event_store
+            .control_proposal_snapshot(&digests[1])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(decided.command_decisions[0].member_index, 1);
+        assert_eq!(decided.command_decisions[0].outcome, outcome);
+    }
+}

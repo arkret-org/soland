@@ -17,7 +17,8 @@ pub async fn project_accepted_operations_from_device(
     source_device_id: &str,
     operations: &[Operation],
 ) {
-    project_accepted_operations_inner(state, origin, source_device_id, operations, None).await;
+    project_accepted_operations_inner(state, origin, source_device_id, operations, None, None)
+        .await;
 }
 
 /// Apply the domain/read-model effects of one canonical Event after its
@@ -42,6 +43,7 @@ pub async fn project_accepted_canonical_event_from_device(
         source_device_id,
         std::slice::from_ref(operation),
         Some(cell_writes),
+        None,
     )
     .await;
 }
@@ -423,7 +425,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 
 #[cfg(any(test, feature = "test-support"))]
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
-    project_accepted_operations_inner(state, origin, "", operations, None).await;
+    project_accepted_operations_inner(state, origin, "", operations, None, None).await;
 }
 
 async fn project_accepted_operations_inner(
@@ -432,6 +434,7 @@ async fn project_accepted_operations_inner(
     source_device_id: &str,
     operations: &[Operation],
     canonical_cell_writes: Option<&[arkret_wire::cbs::ProjectedCellWrite]>,
+    applied_effect: Option<&ProjectionEffectView>,
 ) {
     debug_assert!(canonical_cell_writes.is_none() || operations.len() == 1);
     for operation in operations {
@@ -513,23 +516,24 @@ async fn project_accepted_operations_inner(
             }
         };
         let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
-        let reducer_effect =
-            if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
-                let cell_writes = canonical_cell_writes
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| accepted_operation_cell_writes(state, origin, operation));
-                if kinds::canonical_kind(operation) == arkret_wire::EventKind::ReadCursorAdvance {
-                    Some(state.projections().apply_read_cursor(reducer_operation))
-                } else {
-                    Some(state.projections().apply_via_state_model_registry(
-                        reducer_operation,
-                        &cell_writes,
-                        state.hlc(),
-                    ))
-                }
+        let reducer_effect = if let Some(effect) = applied_effect {
+            Some(effect.clone())
+        } else if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
+            let cell_writes = canonical_cell_writes
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| accepted_operation_cell_writes(state, origin, operation));
+            if kinds::canonical_kind(operation) == arkret_wire::EventKind::ReadCursorAdvance {
+                Some(state.projections().apply_read_cursor(reducer_operation))
             } else {
-                None
-            };
+                Some(state.projections().apply_via_state_model_registry(
+                    reducer_operation,
+                    &cell_writes,
+                    state.hlc(),
+                ))
+            }
+        } else {
+            None
+        };
         if let Some(effect) = reducer_effect {
             if let ProjectionEffectView::Rejected { reason } = &effect {
                 tracing::error!(
@@ -1313,4 +1317,106 @@ mod tests {
             .typed_payload::<arkret_wire::event_spec::MemberState>()
             .expect("closed typed membership payload");
     }
+}
+
+/// Publish only exact locally confirmed command units, preserving member order.
+/// Domain state is installed atomically before any derived mirror or timeline.
+pub(crate) async fn publish_confirmed_seal_commands(
+    state: &AppState,
+    seal: &arkret_wire::Seal,
+) -> Result<(), String> {
+    if seal.predecessor_ref.is_none() {
+        return Ok(());
+    }
+    if state
+        .projections()
+        .seal_by_id(&seal.id)
+        .await
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        != Some(seal)
+    {
+        return Err("command publication requires the exact durable Seal".into());
+    }
+    let confirmed = state
+        .projections()
+        .confirmed_command_events(&seal.realm_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|event| (event.event_id.event_digest(), event))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for result in &seal.command_results {
+        if result.outcome != arkret_wire::CommandOutcome::Committed {
+            continue;
+        }
+        let events = result
+            .unit_event_digests
+            .iter()
+            .map(|digest| {
+                confirmed
+                    .get(digest)
+                    .ok_or_else(|| "Seal command is outside the confirmed prefix".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut all_published = true;
+        for event in &events {
+            all_published &= state
+                .event_queries()
+                .projected_event(event.event_id.as_str())
+                .await
+                .map_err(|error| error.to_string())?
+                .is_some();
+        }
+        if all_published {
+            continue;
+        }
+        let projected = events
+            .iter()
+            .map(|event| {
+                let envelope = serde_json::to_value(event).map_err(|error| error.to_string())?;
+                let operation =
+                    super::super::event_log::projection_operation_from_envelope(&envelope)
+                        .ok_or_else(|| "committed command has no domain projection".to_owned())?;
+                let writes = arkret_schema::project_registered_cell_writes(
+                    event,
+                    event.event_id.digest_suite_code().digest_suite(),
+                )
+                .map_err(|error| error.to_string())?;
+                Ok((operation, writes))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let contextual = projected
+            .iter()
+            .map(|(operation, _)| match &operation.event_kind {
+                arkret_wire::EventKind::MemberState => {
+                    accepted_member_state_reducer_operation(operation)
+                }
+                arkret_wire::EventKind::CircleMemberState => {
+                    accepted_circle_member_reducer_operation(operation)
+                }
+                _ => operation.clone(),
+            })
+            .collect::<Vec<_>>();
+        let staged = contextual
+            .iter()
+            .zip(&projected)
+            .map(|(operation, (_, writes))| (operation, writes.as_slice()))
+            .collect::<Vec<_>>();
+        let effects = state
+            .projections()
+            .apply_operations_with_effects_atomic(&staged, state.hlc())?;
+        for (((operation, _), event), effect) in projected.iter().zip(&events).zip(&effects) {
+            project_accepted_operations_inner(
+                state,
+                event.actor_id.signing_principal_id().as_str(),
+                "",
+                std::slice::from_ref(operation),
+                None,
+                Some(effect),
+            )
+            .await;
+        }
+    }
+    Ok(())
 }

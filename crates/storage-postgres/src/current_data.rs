@@ -8,7 +8,7 @@ mod publication;
 
 use arkret_wire::cbs::{ProjectedCellWrite, ProjectedOp};
 use arkret_wire::patch::Patch;
-use diesel::sql_types::{Array, Binary, Jsonb, Text};
+use diesel::sql_types::{Array, Binary, Bool, Jsonb, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
@@ -20,15 +20,31 @@ struct SourceRow {
     source_value: Value,
 }
 
-/// Runs inside EventCommitUnitOfWork after the accepted canonical row exists.
-/// Only non-log data cells are admitted here; sealed governance cells have a
-/// separate publication boundary.
+/// Publishes current Data sources in the ordinary Event transaction or the
+/// exact committed command-unit transaction. Pending and rejected units cannot
+/// publish even when a member has only Data writes.
 pub(crate) async fn commit_sources(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     suite: arkret_canonical::DigestSuite,
 ) -> PersistenceResult<()> {
-    if !event.kind.is_data_plane() {
+    let digest = event
+        .event_digest_with_digest_suite(suite)
+        .map_err(projection_error)?;
+    #[derive(QueryableByName)]
+    struct PublicationState {
+        #[diesel(sql_type = Bool)]
+        registered: bool,
+        #[diesel(sql_type = Bool)]
+        committed: bool,
+    }
+    let state = sql_query("SELECT EXISTS(SELECT 1 FROM state_control_events WHERE event_digest=$1) AS registered, EXISTS(SELECT 1 FROM state_seal_control_events b WHERE b.event_digest=$1 AND b.outcome='committed' AND NOT EXISTS(SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=b.seal_id)) AS committed")
+        .bind::<Text, _>(&digest).get_result::<PublicationState>(&mut *conn).await.map_err(PersistenceError::database)?;
+    if !data_sources_publishable(
+        state.registered,
+        state.committed,
+        arkret_schema::classify_event_execution(event).map_err(projection_error)?,
+    ) {
         return Ok(());
     }
     let Some(descriptor) = event.kind.descriptor() else {
@@ -39,6 +55,9 @@ pub(crate) async fn commit_sources(
         .iter()
         .filter_map(|write| {
             let family = write.cell_family?;
+            if write.execution != Some(arkret_wire::EventCellExecution::Data) {
+                return None;
+            }
             match write.state_model?.as_str() {
                 "causal_register" => Some((family.as_str(), true)),
                 "or_set" => Some((family.as_str(), false)),
@@ -53,10 +72,6 @@ pub(crate) async fn commit_sources(
         arkret_canonical::canonical_json_bytes(&event.scope_ref).map_err(projection_error)?,
     )
     .map_err(projection_error)?;
-    let digest = event
-        .event_digest_with_digest_suite(suite)
-        .map_err(projection_error)?
-        .to_string();
     let causal = event
         .causal_refs
         .iter()
@@ -292,6 +307,18 @@ pub(crate) async fn commit_sources(
     Ok(())
 }
 
+fn data_sources_publishable(
+    registered_unit: bool,
+    committed: bool,
+    execution: Option<arkret_wire::CbsEffectPlane>,
+) -> bool {
+    if registered_unit {
+        committed
+    } else {
+        execution == Some(arkret_wire::CbsEffectPlane::Data)
+    }
+}
+
 fn projection_error(message: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("reducer_projection_failed: {message}"))
 }
@@ -354,6 +381,17 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn registered_data_member_waits_for_its_committed_unit() {
+        use arkret_wire::CbsEffectPlane::{Control, Data};
+        assert!(data_sources_publishable(false, false, Some(Data)));
+        assert!(!data_sources_publishable(false, false, Some(Control)));
+        for plane in [Some(Data), Some(Control)] {
+            assert!(!data_sources_publishable(true, false, plane));
+            assert!(data_sources_publishable(true, true, plane));
+        }
+    }
 
     fn update(patch: Value) -> ProjectedCellWrite {
         ProjectedCellWrite {
