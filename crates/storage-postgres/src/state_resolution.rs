@@ -3054,8 +3054,7 @@ mod proposal_decision_tests {
 
 #[cfg(test)]
 mod event_seal_commit_tests {
-    /// Attach a fixed issuer to a fixture op. These cases exercise counter /
-    /// transition cells, where the issuer travels but is not part of the slot key.
+    /// Attach a fixed issuer to a confirmed security write fixture.
     fn test_issued(op: super::StateWrite) -> super::IssuedOp {
         super::IssuedOp {
             issuer_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -3273,20 +3272,17 @@ mod event_seal_commit_tests {
                 .unwrap();
         let join_move = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
         let ban_move = Hash::new(format!("sha256:{}", "f".repeat(64))).unwrap();
-        // The ban write's own verified basis observed the join write, so it
-        // supersedes it (`event-auth-state-resolution.md` §9.3.1.7 item 4).
-        // `transition` is a causal register since §9.3.1.5: order in this list carries
-        // no causality, and without the edge these are two concurrent writes
-        // with different `to` and the cell reads `⊥`.
+        // The registered command order determines the safety revision. Safety
+        // writes carry no causal-register supersession edges.
         let ops = [
-            (join_move.clone(), "leave", "join", Vec::new()),
-            (ban_move.clone(), "join", "ban", vec![join_move.clone()]),
+            (join_move.clone(), "leave", "join"),
+            (ban_move.clone(), "join", "ban"),
         ]
         .into_iter()
-        .map(|(event_id, from, to, supersedes)| {
+        .map(|(event_id, from, to)| {
             (
                 cell.clone(),
-                test_issued(StateWrite::superseding(
+                test_issued(StateWrite::new(
                     event_id,
                     LatticeOp {
                         op_type: LatticeOpType::Transition,
@@ -3297,11 +3293,11 @@ mod event_seal_commit_tests {
                         reason: None,
                         issuer_seq: None,
                     },
-                    supersedes,
                 )),
             )
         })
         .collect::<Vec<_>>();
+        let revision_event_id = arkret_wire::EventId::from_event_digest(&ban_move).unwrap();
         let covered = [join_move, ban_move].into_iter().collect::<BTreeSet<_>>();
 
         let state = effective_state_with_new_ops(&cell_store, &registry, &realm, &covered, &ops)
@@ -3310,7 +3306,12 @@ mod event_seal_commit_tests {
 
         assert_eq!(
             state.get(&cell),
-            Some(&ResolvedCellState::Value(json!("ban"))),
+            Some(&ResolvedCellState::Sequenced(
+                arkret_state::state_model::SequencedStateValue {
+                    revision_event_id,
+                    value: json!("ban"),
+                }
+            )),
         );
     }
 
