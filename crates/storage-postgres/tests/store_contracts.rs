@@ -1806,8 +1806,10 @@ fn seal_dependency_contract_seal(
         },
         sealed_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         hlc: arkret_wire::Hlc::new("019f00000000-0000-00000002").unwrap(),
-        configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
-            .unwrap(),
+        configuration_ref: arkret_wire::EventId::from_event_digest(
+            &arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+        )
+        .unwrap(),
         command_results: vec![command_result],
         authorization_closures: Vec::new(),
         existence_anchors: Vec::new(),

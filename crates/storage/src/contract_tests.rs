@@ -5395,8 +5395,10 @@ fn contract_covering_seal(
         },
         sealed_at,
         hlc: arkret_wire::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).expect("fixture HLC"),
-        configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
-            .unwrap(),
+        configuration_ref: arkret_wire::EventId::from_event_digest(
+            &arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+        )
+        .unwrap(),
         command_results: vec![command_result],
         authorization_closures: Vec::new(),
         existence_anchors: Vec::new(),
