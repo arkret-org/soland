@@ -490,7 +490,7 @@ async fn seed_peer_station_membership(state: &AppState) {
         );
     }
     // The receiving peer has already accepted the Realm's control basis, so a
-    // transported DataEvent's `seal_ref` resolves locally. Without it every
+    // transported DataEvent's authority reference resolves locally. Without it every
     // inbound Event is deferred as `federation_dependencies_pending` before the
     // check under test is ever reached.
     seed_test_realm_basis_seal_for_station(
@@ -1702,7 +1702,7 @@ fn peer_submit_body(event: &Value) -> Value {
             destination_kind: "station".to_owned(),
         },
         events: vec![peer_event_submission(event)],
-        // The DataEvent's `seal_ref` is a receiver-side prerequisite: a peer
+        // The DataEvent's authority reference is a receiver-side prerequisite: a peer
         // that has not accepted that Seal cannot resolve the authorization
         // pre-state. `event-auth-state-resolution.md` §8 disclosure travels in
         // the bundle, reachable from the transported Event's basis, never as a

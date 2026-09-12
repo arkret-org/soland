@@ -1429,9 +1429,9 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     realm_id: &str,
     event: &mut Value,
 ) {
-    // A DataEvent's `seal_ref` MUST resolve to a verified control-plane Seal of
-    // this Realm (`event-auth-state-resolution.md` §4.3(1)), so the basis Seal
-    // the envelope builder named has to be accepted before the Event is sent.
+    // A DataEvent's `auth_context.authority_refs` must resolve to verified
+    // governance state in this Realm, so the referenced basis Seal has to be
+    // accepted before the Event is sent.
     seed_test_realm_basis_seal(state, realm_id, actor).await;
     let actor_core = arkret_wire::project_did_to_core_id(
         &Did::new(actor.to_owned()).expect("fixture frontier actor DID"),
@@ -1974,8 +1974,8 @@ pub(crate) async fn set_test_device_authorization_window(
 /// The additional data-plane actions this suite's DataEvents exercise.
 ///
 /// `capability_refs.rs::validate_data_event_capability_refs` decides coverage
-/// per receiver-derived cell, over the effective grants the governance basis at
-/// `seal_ref` yields for the actor — so the basis has to name every data-plane
+/// per receiver-derived cell, over the effective grants referenced by
+/// `auth_context.authority_refs`, so the basis has to name every data-plane
 /// kind a test submits, and nothing beyond it. The owner bootstrap grant
 /// already covers `ak.message.create`; a second, explicit grant carries only
 /// the other actions instead of masking owner-message authorization with a
@@ -1998,10 +1998,9 @@ const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
 /// The accepted Seal a fixture Event names, plus the sealed cell effects that
 /// Seal's coverage produces.
 ///
-/// A `seal_ref` is not a token: `event-auth-state-resolution.md` §4.1(3) /
-/// §4.3(2) make the verifier resolve the actor's whole effective capability set
-/// from the state at that Seal, and soland does exactly that
-/// (`capability_refs.rs::data_event_state_at_seal_ref` →
+/// An authority reference is not a token: the verifier resolves the actor's
+/// whole effective capability set from the state at the referenced Seal, and
+/// soland does exactly that (`capability_refs.rs::data_event_state_at_seal_ref` →
 /// `arkret_state::effective_state_at`, which joins the cell log filtered by the
 /// Seal's covered Control-Move digests). An empty Seal therefore authorizes
 /// nothing, and no per-test patch can fix that — the Realm has to have sealed a
@@ -2244,7 +2243,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
 /// The stateless envelope builders (`signed_space_event`,
 /// `signed_strand_event`, `signed_morph_event`, …) all author demo-Realm
 /// DataEvents as `did:web:alice.example` and name that Realm's basis Seal in
-/// `seal_ref`; a test that POSTs one has to put the Seal and the governance
+/// `auth_context.authority_refs`; a test that POSTs one has to put the Seal and the governance
 /// state it covers in place first. Tests that instead make the *server*
 /// materialize the demo Realm's first canonical Seal must not call this — see
 /// [`test_realm_uncovered_basis_seal`].

@@ -1918,7 +1918,7 @@ async fn data_event_without_authorized_by_refs_uses_the_derived_capability_set()
         false,
     )
     .await
-    .expect("a DataEvent citing no grant is authorized by the basis at seal_ref");
+    .expect("a DataEvent citing no grant is authorized by its authority basis");
 }
 
 #[tokio::test]
@@ -2076,7 +2076,7 @@ async fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
         false,
     )
     .await
-    .expect("DataEvent authz must evaluate the seal_ref pre-state, not the live authz index");
+    .expect("DataEvent authz must evaluate its referenced pre-state, not the live authz index");
 }
 
 #[tokio::test]
