@@ -463,31 +463,16 @@ async fn reproject_admitted_collision_winner(
     Ok(())
 }
 
-/// Map an SDK [`SealReject`] onto an [`AppError`].
-///
-/// Every reject reason routes through the canonical Arkret error
-/// registry:
-///
-/// - `UnknownPredecessor`, coverage mismatches, `Structural`, `MissingControlEvent`,
-///   `ControlMoveRejected`, `seal_basis` rejects, `StateRootMismatch` ->
-///   [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally invalid seal
-///   envelope).
-/// - `Store` → [`ErrorCode::InternalError`] (durable-store IO failure).
-///
-/// The resulting `AppError` is rendered with HTTP `409 Conflict` to match
-/// the peer-event admission mapping — the registry default for
-/// `SchemaViolation` is `422`, but seal rejects are conceptually a causal /
-/// state-machine conflict, so `409` remains the wire status here. Call sites
-/// that need a different status can override after conversion via
-/// ``.
+/// Missing replay dependencies remain pending. A concurrent head change is a
+/// state mismatch; malformed Seal conclusions are structural rejections.
 fn app_error_from_seal_reject(reject: SealReject) -> AppError {
     let code = match &reject {
         SealReject::UnknownPredecessor
-        | SealReject::ConfirmedHeadChanged
-        | SealReject::DeltaAlreadyCovered
-        | SealReject::Structural(_)
         | SealReject::MissingControlEvent { .. }
-        | SealReject::ControlMoveRejected { .. }
+        | SealReject::CommandPending { .. } => ErrorCode::FrontierUnavailable,
+        SealReject::ConfirmedHeadChanged => ErrorCode::StateMismatch,
+        SealReject::DeltaAlreadyCovered
+        | SealReject::Structural(_)
         | SealReject::MissingSealBasis { .. }
         | SealReject::SealBasisOutsideClosure { .. }
         | SealReject::ControlEventSetRootMismatch { .. }

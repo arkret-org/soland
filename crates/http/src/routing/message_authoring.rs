@@ -2,7 +2,7 @@
 use arkret_models_collaboration::message_authoring::{
     MessageAuthoringContent, MessagePrepareOutcome, MessagePrepareRequestBody,
 };
-use arkret_wire::{ActorId, AuthContext, AuthorizationRef, ErrorCode, ScopeRef};
+use arkret_wire::{ActorId, AuthContext, AuthorizationRef, ScopeRef};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use soland_http::error::AppError;

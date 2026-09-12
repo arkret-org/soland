@@ -34,7 +34,7 @@ mod realm;
 mod store;
 mod timeline;
 
-pub use account_data::*;
+use account_data::*;
 pub use apply::*;
 pub use event_json::*;
 use invite::*;

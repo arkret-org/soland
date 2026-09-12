@@ -879,15 +879,21 @@ impl NotaryWorker {
                         return None;
                     }
                     let reason_code = result.reason_code.clone()?;
-                    Some(result.unit_event_digests.iter().cloned().map(|digest| {
-                        (
-                            digest,
-                            ControlMoveRejection::new(
-                                reason_code.clone(),
-                                "rejected by ordered Seal command execution",
-                            ),
-                        )
-                    }))
+                    Some(
+                        result
+                            .unit_event_digests
+                            .iter()
+                            .cloned()
+                            .map(move |digest| {
+                                (
+                                    digest,
+                                    ControlMoveRejection::new(
+                                        reason_code.clone(),
+                                        "rejected by ordered Seal command execution",
+                                    ),
+                                )
+                            }),
+                    )
                 })
                 .flatten()
                 .collect(),
