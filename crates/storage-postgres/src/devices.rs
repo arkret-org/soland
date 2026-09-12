@@ -1,3 +1,5 @@
+mod confirmed_history;
+
 use super::{
     AsyncConnection, BTreeMap, BTreeSet, BigInt, Bool, DeviceInventoryRecord, DeviceInventoryStore,
     DeviceKeyStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
@@ -616,6 +618,13 @@ pub struct PgDeviceInventoryStore {
 }
 #[async_trait]
 impl DeviceInventoryStore for PgDeviceInventoryStore {
+    async fn install_confirmed_history(
+        &self,
+        history: &arkret::DeviceAuthorizationHistory,
+    ) -> PersistenceResult<()> {
+        confirmed_history::install(&self.pool, history).await
+    }
+
     async fn get(
         &self,
         actor: &str,
@@ -636,7 +645,45 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
             .map_err(PersistenceError::database)
     }
 
-    async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
+    async fn put_metadata(
+        &self,
+        record: &soland_storage::DeviceInventoryMetadata,
+    ) -> PersistenceResult<()> {
+        let mut payload = serde_json::json!({"device_id": record.device_id});
+        let object = payload.as_object_mut().expect("metadata is an object");
+        if let Some(value) = &record.display_name {
+            object.insert("display_name".into(), serde_json::json!(value));
+        }
+        if let Some(value) = record.last_seen_at {
+            object.insert("last_seen_at".into(), serde_json::json!(value));
+        }
+        if let Some(value) = record.last_key_upload_at {
+            object.insert("last_key_upload_at".into(), serde_json::json!(value));
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("INSERT INTO devices(id,actor_id,device_id,payload,verification_state,created_at,updated_at) VALUES($1,$2,$3,$4,'unverified',$5,$5) ON CONFLICT(actor_id,device_id) DO UPDATE SET payload=devices.payload || EXCLUDED.payload,updated_at=GREATEST(devices.updated_at,EXCLUDED.updated_at)")
+            .bind::<sql_types::Uuid,_>(Uuid::now_v7()).bind::<Text,_>(&record.actor)
+            .bind::<Text,_>(&record.device_id).bind::<Jsonb,_>(payload).bind::<Timestamptz,_>(record.updated_at)
+            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        Ok(())
+    }
+
+    async fn revoke_actor(
+        &self,
+        actor: &str,
+        revoked_at: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("UPDATE devices SET revoked_at=$2,updated_at=GREATEST(updated_at,$2) WHERE actor_id=$1 AND revoked_at IS NULL")
+            .bind::<Text,_>(actor).bind::<Timestamptz,_>(revoked_at).execute(&mut *conn).await.map_err(PersistenceError::database)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    async fn seed_test_record(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -660,6 +707,13 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
     }
 
     async fn put_if_absent(&self, record: &DeviceInventoryRecord) -> PersistenceResult<bool> {
+        if record.verification_state != "unverified"
+            || record.payload.get("device_authorize_event_id").is_some()
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "device placeholder cannot carry authorization".into(),
+            ));
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -873,3 +927,7 @@ impl OneTimeKeyStore for PgOneTimeKeyStore {
         .map_err(PersistenceError::database)
     }
 }
+
+#[cfg(test)]
+#[path = "devices/confirmed_history_tests.rs"]
+mod confirmed_history_tests;

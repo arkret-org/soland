@@ -636,7 +636,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
     state
         .test_persistence()
         .devices()
-        .put(&DeviceInventoryRecord {
+        .seed_test_record(&DeviceInventoryRecord {
             actor: actor_core,
             device_id: device_id.to_owned(),
             display_name: Some("Production Test Device".to_owned()),

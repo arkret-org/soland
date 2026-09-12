@@ -690,6 +690,33 @@ impl PersistenceHandle {
     /// `ak.member.identity.update` events plus the local handle-claim evidence
     /// cache). `AppState` writes accepted projections through to this store
     /// and rebuilds its in-memory registry from it during startup hydration.
+    pub async fn revoke_local_devices(
+        &self,
+        actor: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<usize> {
+        self.persistence.devices().revoke_actor(actor, at).await
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub async fn seed_device_fixture(
+        &self,
+        record: &soland_storage::DeviceInventoryRecord,
+    ) -> PersistenceResult<()> {
+        self.persistence.devices().seed_test_record(record).await
+    }
+
+    pub async fn install_confirmed_device_history(
+        &self,
+        history: &arkret::DeviceAuthorizationHistory,
+    ) -> PersistenceResult<()> {
+        self.persistence
+            .devices()
+            .install_confirmed_history(history)
+            .await
+    }
+
     pub fn member_identity_store(&self) -> &dyn soland_storage::MemberIdentityStore {
         self.persistence.member_identity()
     }

@@ -790,7 +790,9 @@ pub(crate) async fn stage_sealed_revocation_in_transaction(
             "UPDATE devices d SET revoked_at = COALESCE(d.revoked_at, $2), \
                                   updated_at = GREATEST(d.updated_at, $2) \
              FROM device_revocation_targets t \
-             WHERE t.proposal_digest=$1 AND d.actor_id=t.principal_id AND d.device_id=t.device_id",
+             WHERE t.proposal_digest=$1 AND d.actor_id=t.principal_id AND d.station_id=t.station_id AND d.device_id=t.device_id \
+               AND d.payload->>'device_authorize_event_id'=t.target_device_authorize_event_id \
+               AND d.payload->>'authorized_generation_ref'=t.target_device_generation_ref::text",
         )
         .bind::<Text, _>(proposal_digest)
         .bind::<Timestamptz, _>(sealed_at)

@@ -608,6 +608,35 @@ async fn record_control_event_decision_in_transaction(
         .await
         .map_err(persistence_to_store)?;
     if outcome == CommandOutcome::Committed {
+        // The durable head and the active authorization mirror must never
+        // expose different generations. Reconstruction installs only a fully
+        // verified history under this same Realm lock.
+        if matches!(
+            event.kind,
+            arkret_wire::EventKind::DeviceAuthorize | arkret_wire::EventKind::DeviceReanchor
+        ) {
+            let account = event.actor_id.as_account_id().ok_or_else(|| {
+                StoreError::Conflict("device command actor is not an Account".into())
+            })?;
+            let target = if event.kind == arkret_wire::EventKind::DeviceAuthorize {
+                Some(
+                    event
+                        .payload
+                        .get("device_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            StoreError::Conflict("device authorization omits its target".into())
+                        })?,
+                )
+            } else {
+                None
+            };
+            sql_query("UPDATE devices SET verification_state='unverified' WHERE actor_id=$1 AND station_id=$2 AND ($3::text IS NULL OR device_id=$3) AND payload ? 'device_authorize_event_id'")
+                .bind::<Text,_>(account.principal_id.as_str())
+                .bind::<Text,_>(account.station_id.as_str())
+                .bind::<Nullable<Text>,_>(target)
+                .execute(&mut *conn).await?;
+        }
         let event_suite = event.event_id.digest_suite_code().digest_suite();
         crate::current_data::commit_sources(conn, &event, event_suite)
             .await

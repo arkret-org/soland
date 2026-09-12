@@ -563,15 +563,35 @@ impl crate::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
     ) -> crate::ServiceResult<()> {
         self.0
             .devices()
-            .put(&soland_storage::DeviceInventoryRecord {
+            .put_metadata(&soland_storage::DeviceInventoryMetadata {
                 actor: command.actor_id,
                 device_id: command.device_id,
                 display_name: command.display_name,
-                verification_state: command.device.verification_state,
-                payload: command.device.payload,
-                created_at: command.device.created_at,
+                last_seen_at: command
+                    .device
+                    .payload
+                    .get("last_seen_at")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|e| {
+                        crate::ServiceError::SchemaViolation(format!(
+                            "invalid device last_seen_at: {e}"
+                        ))
+                    })?,
+                last_key_upload_at: command
+                    .device
+                    .payload
+                    .get("last_key_upload_at")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|e| {
+                        crate::ServiceError::SchemaViolation(format!(
+                            "invalid device last_key_upload_at: {e}"
+                        ))
+                    })?,
                 updated_at: command.device.updated_at,
-                revoked_at: command.device.revoked_at,
             })
             .await?;
         Ok(())

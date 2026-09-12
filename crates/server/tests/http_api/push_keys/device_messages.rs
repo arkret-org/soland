@@ -85,7 +85,7 @@ async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target
     state
         .test_persistence()
         .devices()
-        .put(&target_record)
+        .seed_test_record(&target_record)
         .await
         .unwrap();
     let target_token = dev_token_for_device(
@@ -199,7 +199,7 @@ async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target
     state
         .test_persistence()
         .devices()
-        .put(&revoked_target)
+        .seed_test_record(&revoked_target)
         .await
         .unwrap();
     let replay_after_revoke: Value = TestClient::post("http://server/_arkret/self/device_messages")

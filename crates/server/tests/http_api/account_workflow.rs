@@ -937,7 +937,7 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body
     state
         .test_persistence()
         .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
+        .seed_test_record(&soland_storage::DeviceInventoryRecord {
             actor: principal_id.to_string(),
             device_id: device_id.to_owned(),
             display_name: None,
@@ -1035,7 +1035,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
     state
         .test_persistence()
         .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
+        .seed_test_record(&soland_storage::DeviceInventoryRecord {
             verification_state: "verified".to_owned(),
             payload: serde_json::json!({
                 "device_id": device_id,

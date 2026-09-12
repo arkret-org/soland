@@ -1891,7 +1891,7 @@ pub(crate) async fn project_test_authorized_device(
     state
         .test_persistence()
         .devices()
-        .put(&projected_device)
+        .seed_test_record(&projected_device)
         .await
         .expect("persist fixture authorized device generation");
     assert_eq!(
@@ -1958,7 +1958,11 @@ pub(crate) async fn set_test_device_authorization_window(
         .await
         .unwrap();
     device.payload["device_authorize_event_id"] = serde_json::json!(event.event_id);
-    persistence.devices().put(&device).await.unwrap();
+    persistence
+        .devices()
+        .seed_test_record(&device)
+        .await
+        .unwrap();
 }
 
 // ── Signal Extension rail (`sync/signal.md`) test fixtures ──────────────────

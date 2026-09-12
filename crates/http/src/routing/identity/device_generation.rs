@@ -1,12 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+mod confirmed;
+
 use std::hash::{Hash as _, Hasher};
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{Hash, RealmId, SealId};
+use arkret_identifiers::{RealmId, SealId};
 pub use arkret_models_crypto::keys::DeviceGenerationStatus;
+pub(crate) use confirmed::load_confirmed_device_history;
 use serde_json::Value;
 use soland_services::ServiceError;
-use soland_services::events::AcceptedEvent;
 
 use crate::state::AppState;
 
@@ -42,19 +43,68 @@ pub async fn current_device_generation(
         })?;
     let station_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| ServiceError::Internal(format!("local Station id is invalid: {error}")))?;
-    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        principal_id.clone(),
-        station_id,
-    ));
-    let records = state
-        .event_queries()
-        .accepted_events_for_actor(&actor_id.to_string())
+    let account = arkret_wire::AccountId::new(principal_id, station_id);
+    let history = load_confirmed_device_history(state, &account)
         .await
-        .map_err(|error| ServiceError::internal(error.to_string()))?
-        .into_iter()
-        .map(persistence_event_record)
-        .collect::<Vec<_>>();
-    generation_view_from_records(state, &actor_id.to_string(), &records).await
+        .map_err(|error| {
+            ServiceError::Conflict(format!("confirmed device history unavailable: {error}"))
+        })?;
+    if let Some(history) = &history {
+        state
+            .persistence()
+            .install_confirmed_device_history(history)
+            .await
+            .map_err(|error| {
+                ServiceError::Conflict(format!("confirmed device mirror unavailable: {error}"))
+            })?;
+    }
+    Ok(history.map(|history| DeviceGenerationView {
+        current_ref: history.current_generation().number(),
+        status: DeviceGenerationStatus::Active,
+    }))
+}
+
+/// Recover the device mirror independently of generic timeline progress. No
+/// individual member of a mixed unit is published by this source-only rebuild.
+pub(crate) async fn recover_confirmed_device_projection(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<(), String> {
+    let Some(events) = state
+        .projections()
+        .confirmed_genesis_unit(realm_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let Some(genesis) = events.first() else {
+        return Err("confirmed genesis is empty".into());
+    };
+    let create: arkret_models_collaboration::events_payloads::RealmCreatePayload =
+        serde_json::from_value(serde_json::to_value(&genesis.payload).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    if create.object.purpose
+        != arkret_models_collaboration::events_payloads::RealmPurpose::PrincipalControl
+    {
+        return Ok(());
+    }
+    let account = genesis
+        .actor_id
+        .as_account_id()
+        .ok_or_else(|| "PCR genesis has no Account".to_owned())?;
+    if account.station_id != state.service_core_id() {
+        return Ok(());
+    }
+    let history = load_confirmed_device_history(state, account)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "confirmed PCR has no authenticated device history".to_owned())?;
+    state
+        .persistence()
+        .install_confirmed_device_history(&history)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Resolve the exact accepted device authorization tuple used by every
@@ -73,6 +123,10 @@ pub async fn active_device_revocation_gate_selector(
         .map_err(|error| ServiceError::Internal(format!("local Station id is invalid: {error}")))?;
     let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned())
         .map_err(|error| ServiceError::SchemaViolation(format!("device id is invalid: {error}")))?;
+    let generation = current_device_generation(state, principal_id.as_str())
+        .await?
+        .filter(|generation| generation.status == DeviceGenerationStatus::Active)
+        .ok_or_else(|| ServiceError::Conflict("device generation is not active".to_owned()))?;
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
@@ -113,10 +167,6 @@ pub async fn active_device_revocation_gate_selector(
                 .to_owned(),
         ));
     }
-    let generation = current_device_generation(state, principal_id.as_str())
-        .await?
-        .filter(|generation| generation.status == DeviceGenerationStatus::Active)
-        .ok_or_else(|| ServiceError::Conflict("device generation is not active".to_owned()))?;
     let target_device_generation_ref = generation.current_ref;
     if authorized_generation_ref != target_device_generation_ref {
         return Err(ServiceError::Conflict(
@@ -198,303 +248,31 @@ pub(crate) fn verified_device_authorization_binding(
     )))
 }
 
-async fn generation_view_from_records(
-    _state: &AppState,
-    actor_id: &str,
-    records: &[AcceptedEvent],
-) -> Result<Option<DeviceGenerationView>, ServiceError> {
-    let Some(mut last_unconflicted) = bootstrap_generation_ref(actor_id, records) else {
-        return Ok(None);
-    };
-    let mut status = DeviceGenerationStatus::Active;
-    let mut slots = BTreeMap::<u64, Vec<&AcceptedEvent>>::new();
-    for record in records.iter().filter(|record| {
-        record.actor_id == actor_id && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
-    }) {
-        let Some(new_generation) = record
-            .envelope
-            .pointer("/payload/new_device_generation")
-            .and_then(Value::as_u64)
-        else {
-            continue;
-        };
-        slots.entry(new_generation).or_default().push(record);
-    }
-    for candidates in slots.into_values() {
-        let fingerprints = candidates
-            .iter()
-            .filter_map(|record| reanchor_unit_fingerprint(record, records))
-            .collect::<BTreeSet<_>>();
-        if fingerprints.len() != 1 {
-            status = DeviceGenerationStatus::Conflicted;
-            continue;
-        }
-        let candidate = candidates[0];
-        let previous = candidate
-            .envelope
-            .pointer("/payload/previous_device_generation")
-            .and_then(Value::as_u64);
-        let next = candidate
-            .envelope
-            .pointer("/payload/new_device_generation")
-            .and_then(Value::as_u64);
-        if previous == Some(last_unconflicted)
-            && let Some(next) = next
-        {
-            last_unconflicted = next;
-            status = DeviceGenerationStatus::Active;
-        }
-    }
-    Ok(Some(DeviceGenerationView {
-        current_ref: last_unconflicted,
-        status,
-    }))
-}
-
-fn bootstrap_generation_ref(actor_id: &str, records: &[AcceptedEvent]) -> Option<u64> {
-    let bootstrap = records.iter().find(|record| {
-        record.actor_id == actor_id
-            && record.kind == arkret_wire::EventKind::RealmCreate.as_str()
-            && record
-                .envelope
-                .pointer("/payload/object/purpose")
-                .and_then(Value::as_str)
-                == Some("principal_control")
-            && record
-                .envelope
-                .get("refs")
-                .and_then(Value::as_array)
-                .is_some_and(|refs| {
-                    refs.iter().any(|reference| {
-                        reference.get("role").and_then(Value::as_str) == Some("did_inception")
-                    })
-                })
-    });
-    let bootstrap = bootstrap?;
-    let paired = records.iter().any(|record| {
-        record.actor_id == actor_id
-            && record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
-            && record
-                .envelope
-                .get("prev_refs")
-                .and_then(Value::as_array)
-                .is_some_and(|refs| {
-                    refs.len() == 1 && refs[0].as_str() == Some(bootstrap.event_id.as_str())
-                })
-    });
-    if !paired {
-        return None;
-    }
-    Some(1)
-}
-
-fn reanchor_unit_fingerprint(
-    reanchor: &AcceptedEvent,
-    records: &[AcceptedEvent],
-) -> Option<String> {
-    let authorize = soland_services::events::paired_replacement_authorize(reanchor, records)?;
-    let actor_id = serde_json::from_str::<arkret_wire::ActorId>(&reanchor.actor_id).ok()?;
-    let station_id = actor_id.as_account_id()?.station_id.as_str();
-    Some(format!(
-        "{}\u{0}{}\u{0}{}",
-        station_id, reanchor.canonical_digest, authorize.canonical_digest,
-    ))
-}
-
-pub async fn authorized_generation_for_event(
-    state: &AppState,
-    record: &AcceptedEvent,
-) -> Result<Option<u64>, ServiceError> {
-    let records = state
-        .event_queries()
-        .accepted_events_for_actor(&record.actor_id)
-        .await
-        .map_err(|error| ServiceError::internal(error.to_string()))?
-        .into_iter()
-        .map(persistence_event_record)
-        .collect::<Vec<_>>();
-    let predecessor = record
-        .envelope
-        .get("prev_refs")
-        .and_then(Value::as_array)
-        .and_then(|refs| (refs.len() == 1).then(|| refs[0].as_str()).flatten());
-    if let Some(predecessor) = predecessor
-        && let Some(reanchor) = records.iter().find(|candidate| {
-            candidate.event_id == predecessor
-                && candidate.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
-        })
-    {
-        return Ok(reanchor
-            .envelope
-            .pointer("/payload/new_device_generation")
-            .and_then(Value::as_u64));
-    }
-    Ok(
-        generation_view_from_records(state, &record.actor_id, &records)
-            .await?
-            .filter(|view| view.status == DeviceGenerationStatus::Active)
-            .map(|view| view.current_ref),
-    )
-}
-
-pub async fn quarantined_generation_event_digests(
-    state: &AppState,
-    principal_id: &str,
-) -> Result<BTreeSet<String>, ServiceError> {
-    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
-            ServiceError::SchemaViolation(format!("principal id is invalid: {error}"))
-        })?,
-        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-            ServiceError::Internal(format!("local Station id is invalid: {error}"))
-        })?,
-    ));
-    let records = state
-        .event_queries()
-        .accepted_events_for_actor(&actor_id.to_string())
-        .await
-        .map_err(|error| ServiceError::internal(error.to_string()))?
-        .into_iter()
-        .map(persistence_event_record)
-        .collect::<Vec<_>>();
-    Ok(quarantined_generation_event_digests_from_records(
-        &actor_id.to_string(),
-        &records,
-    ))
-}
-
-fn persistence_event_record(record: soland_services::events::AcceptedEvent) -> AcceptedEvent {
-    AcceptedEvent {
-        event_id: record.event_id,
-        actor_id: record.actor_id,
-        actor_seq: record.actor_seq,
-        realm_id: record.realm_id,
-        kind: record.kind,
-        schema_id: record.schema_id,
-        digest_suite: record.digest_suite,
-        canonical_digest: record.canonical_digest,
-        canonical_bytes: record.canonical_bytes,
-        envelope: record.envelope,
-        received_at: record.received_at,
-    }
-}
-
-fn quarantined_generation_event_digests_from_records(
-    actor_id: &str,
-    records: &[AcceptedEvent],
-) -> BTreeSet<String> {
-    let mut slots = BTreeMap::<u64, Vec<&AcceptedEvent>>::new();
-    for record in records.iter().filter(|record| {
-        record.actor_id == actor_id && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
-    }) {
-        let Some(new_generation) = record
-            .envelope
-            .pointer("/payload/new_device_generation")
-            .and_then(Value::as_u64)
-        else {
-            continue;
-        };
-        slots.entry(new_generation).or_default().push(record);
-    }
-    let mut quarantined_ids = BTreeSet::new();
-    for candidates in slots.into_values() {
-        let fingerprints = candidates
-            .iter()
-            .filter_map(|record| reanchor_unit_fingerprint(record, records))
-            .collect::<BTreeSet<_>>();
-        if fingerprints.len() == 1 && candidates.len() == 1 {
-            continue;
-        }
-        for candidate in candidates {
-            quarantined_ids.insert(candidate.event_id.clone());
-            if let Some(authorize) =
-                soland_services::events::paired_replacement_authorize(candidate, records)
-            {
-                quarantined_ids.insert(authorize.event_id.clone());
-            }
-        }
-    }
-    loop {
-        let descendants = records
-            .iter()
-            .filter(|record| !quarantined_ids.contains(&record.event_id))
-            .filter(|record| {
-                record
-                    .envelope
-                    .get("prev_refs")
-                    .and_then(Value::as_array)
-                    .is_some_and(|refs| {
-                        refs.iter().any(|reference| {
-                            reference
-                                .as_str()
-                                .is_some_and(|id| quarantined_ids.contains(id))
-                        })
-                    })
-            })
-            .map(|record| record.event_id.clone())
-            .collect::<Vec<_>>();
-        if descendants.is_empty() {
-            break;
-        }
-        quarantined_ids.extend(descendants);
-    }
-    records
-        .iter()
-        .filter(|record| quarantined_ids.contains(&record.event_id))
-        .map(|record| record.canonical_digest.clone())
-        .collect()
-}
-
+/// Return the unique confirmed head. Pending competing commands cannot erase
+/// or rewind an already authenticated prefix.
 pub async fn accepted_device_generation_seal_head(
     state: &AppState,
     principal_id: &str,
     realm_id: &RealmId,
 ) -> Result<Option<SealId>, ServiceError> {
-    let quarantined = quarantined_generation_event_digests(state, principal_id).await?;
-    let mut head = state
-        .projections()
-        .realm_seal_head(realm_id)
+    let principal = arkret_identifiers::DidCoreId::new(principal_id.to_owned())
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let account = arkret_wire::AccountId::new(principal, state.service_core_id().clone());
+    let history = load_confirmed_device_history(state, &account)
         .await
-        .map_err(|error| ServiceError::internal(format!("Seal frontier unavailable: {error}")))?;
-    if head.is_none() {
-        return Ok(None);
-    }
-    if quarantined.is_empty() {
-        return Ok(head);
-    }
-    let quarantined = quarantined
-        .into_iter()
-        .map(Hash::new)
-        .collect::<Result<BTreeSet<_>, _>>()
         .map_err(|error| {
-            ServiceError::internal(format!("quarantined Event digest is invalid: {error}"))
+            ServiceError::Conflict(format!("confirmed device history unavailable: {error}"))
         })?;
-    let mut visited = BTreeSet::new();
-    while let Some(seal_id) = head {
-        if !visited.insert(seal_id.clone()) {
-            return Err(ServiceError::internal(
-                "Seal predecessor chain contains a cycle",
-            ));
-        }
-        let coverage = state
-            .projections()
-            .predecessor_covered_events(Some(&seal_id))
-            .await
-            .map_err(|error| ServiceError::internal(format!("Seal coverage unavailable: {error}")))?
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        if coverage.is_disjoint(&quarantined) {
-            return Ok(Some(seal_id));
-        }
-        let seal = state
-            .projections()
-            .seal_by_id(&seal_id)
-            .await
-            .map_err(|error| ServiceError::internal(format!("Seal lookup unavailable: {error}")))?
-            .ok_or_else(|| ServiceError::internal(format!("Seal {seal_id} is missing")))?;
-        head = seal.predecessor_ref;
-    }
-    Ok(None)
+    history
+        .map(|history| {
+            if history.realm_id() != realm_id {
+                return Err(ServiceError::Conflict(
+                    "device history belongs to another PCR".to_owned(),
+                ));
+            }
+            Ok(history.confirmed_head().clone())
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -645,104 +423,5 @@ mod tests {
         .expect("well-formed verified projection")
         .expect("verified device carries a binding");
         assert_eq!(binding.1, 3);
-    }
-
-    fn fixture_account_actor() -> arkret_wire::ActorId {
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_identifiers::DidCoreId::new(
-                "ak:did_core:webvh:z6mkfixture:alice.example".to_owned(),
-            )
-            .unwrap(),
-            arkret_identifiers::DidCoreId::new(TUPLE_STATION.to_owned()).unwrap(),
-        ))
-    }
-
-    fn record(id: &str, kind: &str, digest: &str, envelope: Value) -> AcceptedEvent {
-        AcceptedEvent {
-            event_id: id.to_owned(),
-            actor_id: fixture_account_actor().to_string(),
-            actor_seq: 1,
-            realm_id: None,
-            kind: kind.to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest: digest.to_owned(),
-            canonical_bytes: Vec::new(),
-            envelope,
-            received_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn same_height_siblings_and_causal_successors_are_all_quarantined() {
-        let actor = fixture_account_actor().to_string();
-        let reanchor_a = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
-        let authorize_a = "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1";
-        let reanchor_b = "ak:event:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
-        let authorize_b = "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM";
-        let successor = "ak:event:AVWVGlDqGwJJ7DILnxJ4oq7JGdtoXGIQaK4PoiEf2yBZ";
-        let higher = "ak:event:AWgGCEbMHnelRQfzqg1C_onV9Ej_FdpdAZyM_JoFgAd3";
-        let records = vec![
-            record(
-                reanchor_a,
-                "ak.device.reanchor",
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                json!({"payload": {
-                    "new_device_generation": 2,
-                }}),
-            ),
-            record(
-                authorize_a,
-                "ak.device.authorize",
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                json!({"prev_refs": [reanchor_a]}),
-            ),
-            record(
-                reanchor_b,
-                "ak.device.reanchor",
-                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                json!({"payload": {
-                    "new_device_generation": 2,
-                }}),
-            ),
-            record(
-                authorize_b,
-                "ak.device.authorize",
-                "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-                json!({"prev_refs": [reanchor_b]}),
-            ),
-            record(
-                successor,
-                "ak.profile.update",
-                "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-                json!({"prev_refs": [authorize_a]}),
-            ),
-            record(
-                higher,
-                "ak.device.reanchor",
-                "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-                json!({"payload": {
-                    "new_device_generation": 3,
-                }}),
-            ),
-            record(
-                "ak:event:ATFrN4sYtiDvJD5G4wKxYY3xMKfo-Xqa_o9Xkb-XnzFN",
-                "ak.device.authorize",
-                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                json!({"prev_refs": [higher]}),
-            ),
-        ];
-        let quarantined = quarantined_generation_event_digests_from_records(&actor, &records);
-        assert_eq!(quarantined.len(), 5);
-        assert!(
-            quarantined.contains(
-                "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-            )
-        );
-        assert!(
-            !quarantined.contains(
-                "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-            )
-        );
     }
 }

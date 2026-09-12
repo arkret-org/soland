@@ -384,7 +384,7 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
     state
         .test_persistence()
         .devices()
-        .put(&device)
+        .seed_test_record(&device)
         .await
         .unwrap();
 

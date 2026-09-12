@@ -487,26 +487,10 @@ pub(super) async fn submit_identity_anchor_batch(
         canonical_record(&first, accepted_envelopes[0].clone(), received_at),
         canonical_record(&second, accepted_envelopes[1].clone(), received_at),
     ];
-    let authorized_generation_ref = if reanchor_conflict {
-        None
-    } else if is_reanchor {
-        Some(typed_device_reanchor_payload(&envelopes[0])?.new_device_generation)
-    } else {
-        bootstrap_generation_ref(&envelopes[0])?
-    };
     let device_projection = if reanchor_conflict {
         None
     } else {
-        Some(
-            identity_anchor_device_projection(
-                state,
-                &second,
-                &envelopes[1],
-                authorized_generation_ref,
-                received_at,
-            )
-            .await?,
-        )
+        Some(identity_anchor_device_projection(state, &second, &envelopes[1], received_at).await?)
     };
     let receipt = if is_bootstrap {
         Some(build_pcr_genesis_batch_receipt(
@@ -1702,27 +1686,10 @@ pub(super) fn canonical_record(
     }
 }
 
-fn bootstrap_generation_ref(create_envelope: &Value) -> Result<Option<u64>, SubmitOneError> {
-    create_envelope
-        .get("refs")
-        .and_then(Value::as_array)
-        .and_then(|references| {
-            references.iter().find(|reference| {
-                reference.get("role").and_then(Value::as_str)
-                    == Some(arkret_bootstrap::DID_INCEPTION_REF_ROLE)
-            })
-        })
-        .and_then(|reference| reference.get("id"))
-        .and_then(Value::as_str)
-        .map(|_| Some(1))
-        .ok_or_else(|| unit_error("PCR bootstrap is missing its validated DID inception ref"))
-}
-
 async fn identity_anchor_device_projection(
     state: &AppState,
     authorize: &ValidatedEventEnvelope,
     envelope: &Value,
-    authorized_generation_ref: Option<u64>,
     accepted_at: DateTime<Utc>,
 ) -> Result<soland_services::events::IdentityAnchorDeviceState, SubmitOneError> {
     let typed = typed_device_authorize_payload(envelope)?;
@@ -1747,58 +1714,16 @@ async fn identity_anchor_device_projection(
                 format!("device projection lookup failed: {error}"),
             )
         })?;
-    let mut payload = existing
-        .as_ref()
-        .map(|record| record.payload.clone())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
-    let payload_object = payload
-        .as_object_mut()
-        .expect("device payload is an object");
-    payload_object.insert("device_id".to_owned(), Value::String(device_id.to_owned()));
-    payload_object.insert(
-        "device_public_key_did".to_owned(),
-        Value::String(typed.device_public_key_did.to_string()),
-    );
-    payload_object.insert(
-        "hpke_key".to_owned(),
-        Value::String(typed.hpke_key.to_string()),
-    );
-    payload_object.insert(
-        "algorithms".to_owned(),
-        Value::Array(
-            typed
-                .algorithms
-                .iter()
-                .map(|algorithm| Value::String(algorithm.to_string()))
-                .collect(),
-        ),
-    );
-    payload_object.insert("device_authorize_projected".to_owned(), Value::Bool(true));
-    payload_object.insert(
-        "device_authorize_event_id".to_owned(),
-        Value::String(authorize.event_id.to_string()),
-    );
-    if let Some(generation_ref) = authorized_generation_ref {
-        payload_object.insert(
-            "authorized_generation_ref".to_owned(),
-            Value::Number(generation_ref.into()),
-        );
-    } else {
-        payload_object.remove("authorized_generation_ref");
-    }
-    payload_object.insert(
-        "authorization_binding_kind".to_owned(),
-        serde_json::to_value(typed.authorization_binding_kind)
-            .expect("device authorization binding kind is serializable"),
-    );
+    // Admission may reserve a local endpoint, but cannot install authority.
+    // Storage inserts this minimal placeholder only when no row exists.
+    let payload = json!({"device_id": device_id});
     Ok(soland_services::events::IdentityAnchorDeviceState {
         actor: principal_id.to_owned(),
         device_id: device_id.to_owned(),
         display_name: existing
             .as_ref()
             .and_then(|record| record.display_name.clone()),
-        verification_state: "verified".to_owned(),
+        verification_state: "unverified".to_owned(),
         payload,
         created_at: existing
             .as_ref()
@@ -2249,12 +2174,6 @@ mod tests {
             context.identity_anchor_event_id.as_deref(),
             Some(create.event_id.as_str())
         );
-    }
-
-    #[test]
-    fn genesis_generation_comes_from_closed_unit_inception_ref() {
-        let envelopes = sdk_canonical_self_principal_bootstrap_unit();
-        assert_eq!(bootstrap_generation_ref(&envelopes[0]).unwrap(), Some(1));
     }
 
     #[test]

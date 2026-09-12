@@ -1206,18 +1206,6 @@ async fn try_apply_device_generation_event_seal(
     }
     verify_device_seal_signature(seal, signer_public_key, digest_suites.seal_digest_suite)?;
 
-    let quarantined =
-        crate::routing::identity::device_generation::quarantined_generation_event_digests(
-            state,
-            context.principal_id.as_str(),
-        )
-        .await
-        .map_err(|error| {
-            crate::app_error!(
-                FrontierUnavailable,
-                format!("device generation quarantine state unavailable: {error}"),
-            )
-        })?;
     let admitted_generation_ref = context.current_generation_ref;
     let admitted_head_ref = context.accepted_head_ref.clone();
     let admitted_cas_head_ref = context.cas_head_ref.clone();
@@ -1242,10 +1230,10 @@ async fn try_apply_device_generation_event_seal(
         .filter_map(|digest| records_by_digest.get(digest.as_str()))
         .map(|record| record.event_id.clone())
         .collect::<BTreeSet<_>>();
-    for record in records_by_digest.values().filter(|record| {
-        record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
-            && !quarantined.contains(&record.canonical_digest)
-    }) {
+    for record in records_by_digest
+        .values()
+        .filter(|record| record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR)
+    {
         anchor_event_ids.insert(record.event_id.clone());
         if let Some(authorize) = soland_services::events::paired_replacement_authorize(
             record,
@@ -1272,11 +1260,6 @@ async fn try_apply_device_generation_event_seal(
             ))
         })?;
     for digest in &seal.delta {
-        if quarantined.contains(digest.as_str()) {
-            return Err(device_generation_fenced(
-                "B-model Event Seal delta contains quarantined generation history",
-            ));
-        }
         let record = records_by_digest.get(digest.as_str()).ok_or_else(|| {
             seal_admission_error(format!(
                 "B-model Event Seal delta digest {} is not a canonical Event",

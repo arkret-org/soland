@@ -142,7 +142,7 @@ async fn signal_peer_roles_body() {
     destination
         .test_persistence()
         .devices()
-        .put(&local_device)
+        .seed_test_record(&local_device)
         .await
         .unwrap();
     assert!(
@@ -405,7 +405,7 @@ async fn signal_peer_roles_body() {
     source
         .test_persistence()
         .devices()
-        .put(&device)
+        .seed_test_record(&device)
         .await
         .unwrap();
     for field in ["device_authorize_event_id", "authorized_generation_ref"] {
@@ -414,7 +414,7 @@ async fn signal_peer_roles_body() {
         source
             .test_persistence()
             .devices()
-            .put(&incomplete)
+            .seed_test_record(&incomplete)
             .await
             .unwrap();
         assert!(
@@ -428,14 +428,14 @@ async fn signal_peer_roles_body() {
     source
         .test_persistence()
         .devices()
-        .put(&device)
+        .seed_test_record(&device)
         .await
         .unwrap();
     device.revoked_at = Some(Utc::now());
     source
         .test_persistence()
         .devices()
-        .put(&device)
+        .seed_test_record(&device)
         .await
         .unwrap();
     assert!(

@@ -595,28 +595,6 @@ async fn materialize_realm_control_with_transported_seals(
     } else {
         BTreeSet::new()
     };
-    let mut quarantined_digests = BTreeSet::new();
-    for actor in realm_records
-        .iter()
-        .filter(|record| record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR)
-        .map(|record| record.actor_id.as_str())
-        .collect::<BTreeSet<_>>()
-    {
-        let actor = canonical_actor(actor)?;
-        quarantined_digests.extend(
-            crate::routing::identity::device_generation::quarantined_generation_event_digests(
-                state,
-                actor.signing_principal_id().as_str(),
-            )
-            .await
-            .map_err(|error| {
-                crate::app_error!(
-                    FrontierUnavailable,
-                    format!("device generation quarantine state unavailable: {error}"),
-                )
-            })?,
-        );
-    }
     let mut events = Vec::new();
     // Candidate Events are replayed on top of the accepted predecessor Seal
     // state. The Event query only supplies envelopes; the Cell store is the
@@ -654,10 +632,7 @@ async fn materialize_realm_control_with_transported_seals(
     let mut covered = BTreeSet::new();
     let mut identity_anchor_event_ids = realm_records
         .iter()
-        .filter(|record| {
-            record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
-                && !quarantined_digests.contains(&record.canonical_digest)
-        })
+        .filter(|record| record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR)
         .flat_map(|record| {
             std::iter::once(record.event_id.clone()).chain(
                 soland_services::events::paired_replacement_authorize(record, realm_records.iter())
@@ -696,9 +671,6 @@ async fn materialize_realm_control_with_transported_seals(
     // bases must be reduced in causal acceptance order. Move digests are
     // content hashes and therefore cannot be used as transition ordering.
     for record in realm_records.iter().rev() {
-        if quarantined_digests.contains(&record.canonical_digest) {
-            continue;
-        }
         if let (Some(principal_id), Some(generation)) =
             (&principal_control_actor, &active_device_generation)
             && record.actor_id == principal_id.to_string()

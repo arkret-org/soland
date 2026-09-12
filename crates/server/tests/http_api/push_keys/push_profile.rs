@@ -129,7 +129,7 @@ async fn signal_requires_active_authorized_device_signature_body() {
     state
         .test_persistence()
         .devices()
-        .put(&device)
+        .seed_test_record(&device)
         .await
         .unwrap();
 
@@ -151,7 +151,7 @@ async fn signal_requires_active_authorized_device_signature_body() {
     state
         .test_persistence()
         .devices()
-        .put(&device)
+        .seed_test_record(&device)
         .await
         .unwrap();
     let mut revoked = post_signal(

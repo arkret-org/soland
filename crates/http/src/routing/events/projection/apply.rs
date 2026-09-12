@@ -485,14 +485,6 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::SelfModerationReport {
             materialize_moderation_report(state, operation).await;
         }
-        // Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
-        // `payload.device_public_key_did` into the devices table so the
-        // `keys/query` signing-key directory resolves devices that were
-        // authorized but never opened a session (previously the key only
-        // landed via the session-grant exchange path).
-        if kinds::canonical_kind(operation) == arkret_wire::EventKind::DeviceAuthorize {
-            project_device_authorize(state, operation).await;
-        }
         // Also apply to the deterministic reducer.
         // The canonical `ak.circle.member.state` payload is closed and does
         // not carry executor/capability verdict fields. For the already
@@ -827,167 +819,6 @@ async fn project_mls_welcome_to_device(
     Ok(())
 }
 
-/// Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
-/// authoritative `device_public_key` into the devices inventory so the
-/// `keys/query` signing-key directory (`device-lifecycle.md` §8.2) can resolve
-/// a device that was authorized but never opened a session. Idempotent and
-/// non-destructive: an existing row keeps its `created_at`, `display_name`,
-/// revocation, any already-recorded `device_public_key`, and an atomically
-/// projected generation binding; a verified state is never downgraded. The
-/// device possession proof was already verified at ingest.
-async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
-    use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
-    let typed = match operation.typed_payload::<arkret_wire::event_spec::DeviceAuthorize>() {
-        Ok(typed) => typed,
-        Err(error) => {
-            tracing::warn!(%error, "accepted ak.device.authorize payload is not the typed wire shape; skipping projection");
-            return;
-        }
-    };
-    // This table is the local Station Account device directory, not a remote
-    // principal mirror. Keep foreign accepted Events in the Event/reducer rail
-    // without allowing their devices to overwrite a local same-DID Account.
-    let Some(account_id) = operation.context.sender.as_account_id() else {
-        return;
-    };
-    if account_id.station_id != state.service_core_id() {
-        return;
-    }
-    let principal_id = account_id.principal_id.as_str();
-    let device_id = typed.device_id.as_str();
-    let device_public_key = typed.device_public_key_did.trim();
-    if device_public_key.is_empty() {
-        // No key to project; nothing the directory needs from this event.
-        return;
-    }
-    let existing = state
-        .identities()
-        .find_device(FindDeviceQuery {
-            actor_id: principal_id.to_owned(),
-            device_id: device_id.to_owned(),
-        })
-        .await
-        .ok()
-        .flatten();
-    let updated_at = now();
-    let created_at = existing
-        .as_ref()
-        .map(|device| device.created_at)
-        .unwrap_or(updated_at);
-    let display_name = existing
-        .as_ref()
-        .and_then(|device| device.display_name.clone());
-    // An accepted device.authorize confirms the device; never downgrade an
-    // already-verified row, and treat a fresh authorize as verified.
-    let verification_state = "verified".to_owned();
-    let revoked_at = existing.as_ref().and_then(|device| device.revoked_at);
-    // The accepted Event's own id, not the Operation id retyped into one. An
-    // `ak:operation:` id is producer-allocated and an `ak:event:` id is derived
-    // from Event content, so retyping across those two id forms produces a
-    // value no Event can ever have: the `canonical_event` lookup below always
-    // missed, and `GET /_arkret/self/account/viewer` answered 500 parsing the
-    // stored result back as an `EventId`.
-    let authorize_event_id = super::event_json::operation_event_id(operation);
-    if !authorize_event_id.starts_with("ak:event:") {
-        tracing::error!(
-            operation_id = %operation.operation_id,
-            "accepted device.authorize carries no Event id; device authorization is not projected"
-        );
-        return;
-    }
-    let authorized_generation_ref = match state
-        .event_queries()
-        .canonical_event(&authorize_event_id)
-        .await
-    {
-        Ok(Some(record)) => {
-            crate::routing::identity::device_generation::authorized_generation_for_event(
-                state, &record,
-            )
-            .await
-            .ok()
-            .flatten()
-        }
-        _ => None,
-    };
-    let mut device_payload = existing
-        .as_ref()
-        .map(|device| device.payload.clone())
-        .unwrap_or_else(|| json!({ "device_id": device_id }));
-    if !device_payload.is_object() {
-        device_payload = json!({ "device_id": device_id });
-    }
-    if let Some(map) = device_payload.as_object_mut() {
-        map.insert(
-            "device_public_key_did".to_owned(),
-            Value::String(device_public_key.to_owned()),
-        );
-        map.entry("device_id".to_owned())
-            .or_insert_with(|| Value::String(device_id.to_owned()));
-        // §5.2: hpke_key and canonical algorithms are part of the authorized
-        // device record; project them verbatim (services MUST NOT substitute
-        // these values in projection).
-        if !typed.hpke_key.trim().is_empty() {
-            map.insert(
-                "hpke_key".to_owned(),
-                Value::String(typed.hpke_key.to_string()),
-            );
-        }
-        map.insert(
-            "algorithms".to_owned(),
-            Value::Array(
-                typed
-                    .algorithms
-                    .iter()
-                    .map(|algorithm| Value::String(algorithm.to_string()))
-                    .collect(),
-            ),
-        );
-        map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
-        map.insert(
-            "device_authorize_event_id".to_owned(),
-            Value::String(authorize_event_id),
-        );
-        if let Some(generation_ref) = authorized_generation_ref {
-            map.insert(
-                "authorized_generation_ref".to_owned(),
-                Value::Number(generation_ref.into()),
-            );
-        }
-        if let Some(binding_kind) = operation.payload.get("authorization_binding_kind") {
-            map.insert(
-                "authorization_binding_kind".to_owned(),
-                binding_kind.clone(),
-            );
-        }
-        if let Some(authorized_by) = operation.payload.get("authorized_by") {
-            map.insert("authorized_by".to_owned(), authorized_by.clone());
-        }
-    }
-    let device = DeviceIdentity {
-        actor_id: principal_id.to_owned(),
-        device_id: device_id.to_owned(),
-        display_name,
-        verification_state,
-        payload: device_payload,
-        created_at,
-        updated_at,
-        revoked_at,
-    };
-    if let Err(error) = state
-        .identities()
-        .save_device(SaveDeviceCommand {
-            actor_id: principal_id.to_owned(),
-            device_id: device_id.to_owned(),
-            display_name: device.display_name.clone(),
-            device,
-        })
-        .await
-    {
-        tracing::warn!(%error, "failed to project ak.device.authorize device_public_key");
-    }
-}
-
 /// P1 — fold a projected capability grant cell back into the
 /// `SolandAuthzEngine` read index after the reducer wrote it. Called per
 /// accepted capability event. The grant cell
@@ -1143,64 +974,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn foreign_device_authorization_cannot_pollute_the_local_account_directory() {
+    async fn foreign_device_history_cannot_pollute_the_local_account_directory() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
-        let device = "ak:device:01904100-0000-7000-8000-000000000001";
-        let key = "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ";
-        let mut operation = accepted_test_operation(
-            arkret_wire::OperationId::new("ak:operation:0196419b-1000-7000-8000-000000000204")
-                .unwrap(),
-            arkret_wire::RealmId::new("ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p")
-                .unwrap(),
-            principal.as_str(),
-            0,
-            arkret_wire::EventKind::DeviceAuthorize,
-            json!({
-                "device_id": device, "device_public_key_did": key,
-                "hpke_key": "z6LSDeviceHpkeKey", "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1"],
-                "device_key_algorithm": "Ed25519", "authorized_by": principal,
-                "not_before": "2026-08-31T00:00:00.000Z", "authorization_binding_kind": "registration_anchor",
-                "device_signature": "AA"
-            }),
-            chrono::Utc::now(),
+        let account = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap(),
         );
-        operation.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal.clone(),
-            state.service_core_id().clone(),
-        ));
-        project_device_authorize(&state, &operation).await;
-        let query = || soland_services::identity::FindDeviceQuery {
-            actor_id: principal.to_string(),
-            device_id: device.into(),
-        };
-        let local = state
-            .identities()
-            .find_device(query())
+        assert!(
+            crate::routing::identity::device_generation::load_confirmed_device_history(
+                &state, &account
+            )
             .await
-            .unwrap()
-            .expect("local device projected");
-        assert_eq!(local.payload["device_public_key_did"], key);
-        let foreign = arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
-        for actor in [
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), foreign)),
-            arkret_wire::ActorId::service(principal.clone()),
-        ] {
-            operation.context.sender = actor;
-            operation.payload["device_public_key_did"] = json!("did:key:foreign-key");
-            project_device_authorize(&state, &operation).await;
-            let unchanged = state
+            .is_err()
+        );
+        assert!(
+            state
                 .identities()
-                .find_device(query())
+                .find_device(soland_services::identity::FindDeviceQuery {
+                    actor_id: account.principal_id.to_string(),
+                    device_id: "ak:device:01904100-0000-7000-8000-000000000001".into(),
+                })
                 .await
                 .unwrap()
-                .unwrap();
-            assert_eq!(unchanged.payload, local.payload);
-            assert_eq!(unchanged.updated_at, local.updated_at);
-        }
+                .is_none()
+        );
     }
 
     fn accepted_test_operation(
@@ -1392,6 +1192,11 @@ pub(crate) async fn publish_confirmed_seal_commands(
     state: &AppState,
     seal: &arkret_wire::Seal,
 ) -> Result<(), String> {
+    crate::routing::identity::device_generation::recover_confirmed_device_projection(
+        state,
+        &seal.realm_id,
+    )
+    .await?;
     if seal.predecessor_ref.is_none() {
         return Ok(());
     }

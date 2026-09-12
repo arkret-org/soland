@@ -849,7 +849,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
     state
         .test_persistence()
         .devices()
-        .put(&revoked)
+        .seed_test_record(&revoked)
         .await
         .unwrap();
 
@@ -1046,7 +1046,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding_body() 
     state
         .test_persistence()
         .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
+        .seed_test_record(&soland_storage::DeviceInventoryRecord {
             actor: alice_core.to_string(),
             device_id: alice_device.to_owned(),
             display_name: None,
@@ -1375,7 +1375,7 @@ async fn keys_query_hides_revoked_device_body() {
     state
         .test_persistence()
         .devices()
-        .put(&revoked)
+        .seed_test_record(&revoked)
         .await
         .unwrap();
 
@@ -1460,7 +1460,7 @@ async fn revoked_device_blocks_encrypted_writes_body() {
     state
         .test_persistence()
         .devices()
-        .put(&revoked)
+        .seed_test_record(&revoked)
         .await
         .unwrap();
 

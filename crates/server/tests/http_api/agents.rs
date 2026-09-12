@@ -203,7 +203,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
     state
         .test_persistence()
         .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
+        .seed_test_record(&soland_storage::DeviceInventoryRecord {
             actor: actor_id,
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
@@ -502,7 +502,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     state
         .test_persistence()
         .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
+        .seed_test_record(&soland_storage::DeviceInventoryRecord {
             actor: controller_principal_id.to_string(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),

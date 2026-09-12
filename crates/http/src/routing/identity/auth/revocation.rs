@@ -1,4 +1,4 @@
-use soland_services::identity::{FindDeviceQuery, SaveDeviceCommand};
+use soland_services::identity::FindDeviceQuery;
 
 use super::*;
 
@@ -24,32 +24,11 @@ pub async fn active_delegated_sessions_for_actor(
 
 /// Revoke every active device record for an actor.
 pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
-    let revoked_at = now();
-    let devices = state
-        .identities()
-        .devices_for_actor(actor)
+    state
+        .persistence()
+        .revoke_local_devices(actor, now())
         .await
-        .map_err(|error| error.to_string())?;
-    let mut count = 0usize;
-    for mut device in devices
-        .into_iter()
-        .filter(|device| device.revoked_at.is_none())
-    {
-        device.revoked_at = Some(revoked_at);
-        device.updated_at = revoked_at;
-        state
-            .identities()
-            .save_device(SaveDeviceCommand {
-                actor_id: device.actor_id.clone(),
-                device_id: device.device_id.clone(),
-                display_name: device.display_name.clone(),
-                device,
-            })
-            .await
-            .map_err(|error| error.to_string())?;
-        count += 1;
-    }
-    Ok(count)
+        .map_err(|error| error.to_string())
 }
 
 /// Returns true if the persistent device record has a `revoked_at` timestamp,

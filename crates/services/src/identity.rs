@@ -3040,8 +3040,6 @@ mod tests {
 
     struct NoAgents;
 
-    struct NoSidecars;
-
     struct StaticDidDocuments;
 
     struct NoDidResolver;
@@ -3098,8 +3096,6 @@ mod tests {
             Err("DID resolver is unused in this test".to_owned())
         }
     }
-
-    struct AcceptPairing;
 
     struct CurrentRecoveryPolicy;
 
@@ -3258,46 +3254,6 @@ mod tests {
             select_did_webvh_state_at(&did, &history, "2026-07-01T12:00:00Z".parse().unwrap(),)
                 .is_ok()
         );
-    }
-
-    #[async_trait]
-    impl SidecarPort for NoSidecars {
-        async fn ensure_sidecar(
-            &self,
-            _sidecar: AgentSidecarState,
-        ) -> ServiceResult<AgentSidecarState> {
-            panic!("unused test port")
-        }
-        async fn sidecar(&self, _sidecar_id: &str) -> ServiceResult<Option<AgentSidecarState>> {
-            Ok(None)
-        }
-        async fn sidecar_for_realm_controller(
-            &self,
-            _realm_id: &str,
-            _controller_account_id: &arkret_wire::AccountId,
-        ) -> ServiceResult<Option<AgentSidecarState>> {
-            Ok(None)
-        }
-        async fn sidecars_for_controller(
-            &self,
-            _controller_account_id: &arkret_wire::AccountId,
-            _realm_id: Option<&str>,
-        ) -> ServiceResult<Vec<AgentSidecarState>> {
-            Ok(Vec::new())
-        }
-        async fn ensure_context(
-            &self,
-            _context: AgentSidecarContextState,
-        ) -> ServiceResult<AgentSidecarContextState> {
-            panic!("unused test port")
-        }
-        async fn context(
-            &self,
-            _sidecar_id: &str,
-            _digest: &str,
-        ) -> ServiceResult<Option<AgentSidecarContextState>> {
-            Ok(None)
-        }
     }
 
     #[async_trait]
@@ -3525,80 +3481,6 @@ mod tests {
             _event: DidLogEvent,
         ) -> ServiceResult<DidLogCommitResult> {
             Ok(DidLogCommitResult::Conflict)
-        }
-    }
-
-    #[async_trait]
-    impl AgentPairingPort for AcceptPairing {
-        async fn pairing_receipt(
-            &self,
-            _: &str,
-        ) -> ServiceResult<Option<soland_storage::AgentPairingReceipt>> {
-            Ok(None)
-        }
-        async fn pending_pairings_after(
-            &self,
-            _: &str,
-            _: usize,
-        ) -> ServiceResult<Vec<AgentPairingState>> {
-            Ok(Vec::new())
-        }
-        async fn pairing_record(
-            &self,
-            _pairing_request_id: &str,
-        ) -> ServiceResult<Option<AgentPairingState>> {
-            Ok(None)
-        }
-
-        async fn agent(&self, _agent_id: &str) -> ServiceResult<Option<AgentPairingState>> {
-            Ok(None)
-        }
-
-        async fn agents_for_controller(
-            &self,
-            _controller_principal_id: &str,
-        ) -> ServiceResult<Vec<AgentPairingState>> {
-            Ok(Vec::new())
-        }
-
-        async fn save_agent(&self, _agent: AgentPairingState) -> ServiceResult<()> {
-            Ok(())
-        }
-
-        async fn store_runtime_approval(
-            &self,
-            _command: &StoreAgentRuntimeApprovalCommand,
-        ) -> ServiceResult<Option<AgentPairingState>> {
-            Ok(None)
-        }
-
-        async fn activate_runtime_if_current(
-            &self,
-            command: &ActivateAgentRuntimeCommand,
-        ) -> ServiceResult<bool> {
-            Ok(command.pairing_request_id.as_str() == "pairing-1")
-        }
-
-        async fn record_pairing_commit_intent(
-            &self,
-            _command: &RecordAgentPairingCommitIntentCommand,
-        ) -> ServiceResult<Option<AgentPairingState>> {
-            Ok(None)
-        }
-
-        async fn clear_approval_notification_if_current(
-            &self,
-            _agent_id: &str,
-            _approval_request_id: &str,
-        ) -> ServiceResult<bool> {
-            Ok(true)
-        }
-
-        async fn enqueue_runtime_message_if_current(
-            &self,
-            _command: &EnqueueAgentRuntimeMessage,
-        ) -> ServiceResult<AgentRuntimeEnqueueOutcome> {
-            Ok(soland_storage::AgentRuntimeEnqueueOutcome::SnapshotConflict)
         }
     }
 

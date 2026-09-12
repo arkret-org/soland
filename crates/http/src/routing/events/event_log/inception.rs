@@ -160,84 +160,15 @@ pub(super) async fn resolve_event_root_anchor_method(
     }
 
     let (role, anchor_id, _) = refs[0];
-    let kind = object
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let valid_shape = match role {
-        DID_INCEPTION_REF_ROLE => principal_control_genesis_shape(object, actor_id),
-        DID_RECOVERY_ANCHOR_REF_ROLE => {
-            kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
-                && object
-                    .get("payload")
-                    .and_then(|payload| payload.get("principal_id"))
-                    .and_then(Value::as_str)
-                    == Some(actor_id)
-        }
-        _ => false,
-    };
-    if !valid_shape {
+    if role != DID_INCEPTION_REF_ROLE || !principal_control_genesis_shape(object, actor_id) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "failed_precondition",
-            "identity-root proof is outside the closed PCR genesis and device re-anchor allowlist",
+            "identity-root Event proof is restricted to the Account's PCR genesis",
         ));
     }
-    if role == DID_RECOVERY_ANCHOR_REF_ROLE
-        && object
-            .get("payload")
-            .and_then(|payload| payload.get("did_version_id"))
-            .and_then(Value::as_str)
-            != Some(anchor_id)
-    {
-        return Err(event_validation_error(
-            StatusCode::CONFLICT,
-            "device_reanchor_entry_not_head",
-            "device re-anchor DID anchor reference must equal payload.did_version_id",
-        ));
-    }
-    // Event actor_id and the notary cell are stable core state. did:webvh
-    // history lookup uses the DID frozen in the PCR create's
-    // initial_resolution.  The Event proof is deliberately signed by the
-    // cold did:key identity root selected by the referenced inception entry;
-    // it is not a did:webvh signer and MUST NOT be used as DID resolution.
-    let principal_did = if role == DID_INCEPTION_REF_ROLE {
-        principal_control_genesis_resolution_did(object, &actor_core_id)?
-    } else {
-        let realm_id = object
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "param_missing",
-                    "root-anchored Event must carry realm_id",
-                )
-            })?;
-        state
-            .projections()
-            .snapshot()
-            .principal_resolution_for_realm(realm_id)
-            .and_then(|resolution| resolution.get("did"))
-            .and_then(Value::as_str)
-            .and_then(|did| arkret_wire::Did::new(did.to_owned()).ok())
-            .ok_or_else(|| {
-                event_validation_error(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "stale_did_document",
-                    "selected PCR DID resolution is unavailable",
-                )
-            })?
-    };
-    if principal_did.method() != "webvh" {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "failed_precondition",
-            "root-anchored Event requires a verifiable did:webvh history",
-        ));
-    }
-
-    let mut records = state
+    let principal_did = principal_control_genesis_resolution_did(object, &actor_core_id)?;
+    let records = state
         .dids()
         .log_events(principal_did.as_str())
         .await
@@ -245,107 +176,47 @@ pub(super) async fn resolve_event_root_anchor_method(
             event_validation_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "stale_did_document",
-                format!("DID history is unavailable for root-anchor verification: {error}"),
+                format!("original DID inception is unavailable: {error}"),
             )
         })?;
-    records.sort_by_key(|record| record.seq);
-    let log = records
-        .iter()
-        .map(|record| {
-            crate::routing::identity::webvh_validation::WebvhLogEntry::new(record.operation.clone())
-        })
-        .collect::<Vec<_>>();
-    crate::routing::identity::webvh_validation::validate_log_chain(&log).map_err(|error| {
+    let mut entries = records.iter().filter(|entry| entry.seq == 1);
+    let entry = entries.next().ok_or_else(|| {
         event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            format!("root-anchor DID history validation failed: {error}"),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "stale_did_document",
+            "original DID inception is missing",
         )
     })?;
-    crate::routing::identity::webvh_validation::verify_scid_against_did(
-        principal_did.as_str(),
-        &log[0],
-    )
-    .map_err(|error| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            format!("root-anchor DID SCID validation failed: {error}"),
-        )
-    })?;
-    crate::routing::identity::webvh_validation::verify_log_subject(principal_did.as_str(), &log)
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                format!("root-anchor DID subject validation failed: {error}"),
-            )
-        })?;
-    crate::routing::identity::webvh_validation::validate_witness_policy_for_log(&log).map_err(
-        |error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                format!("root-anchor DID witness validation failed: {error}"),
-            )
-        },
-    )?;
-    crate::routing::identity::webvh_validation::validate_rotation_authorization_for_log(&log)
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                format!("root-anchor DID controller validation failed: {error}"),
-            )
-        })?;
-
-    let referenced = match role {
-        DID_INCEPTION_REF_ROLE => log
-            .first()
-            .filter(|entry| entry.version_id() == Some(anchor_id)),
-        DID_RECOVERY_ANCHOR_REF_ROLE => log
-            .iter()
-            .find(|entry| entry.version_id() == Some(anchor_id)),
-        _ => None,
-    }
-    .ok_or_else(|| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            if role == DID_RECOVERY_ANCHOR_REF_ROLE {
-                "device_reanchor_entry_not_head"
-            } else {
-                "invalid_proof"
-            },
-            "DID anchor reference does not resolve to the required history entry",
-        )
-    })?;
-    if role == DID_RECOVERY_ANCHOR_REF_ROLE
-        && log.last().and_then(|entry| entry.version_id()) != referenced.version_id()
+    if entries.next().is_some()
+        || entry.operation.get("versionId").and_then(Value::as_str) != Some(anchor_id)
     {
         return Err(event_validation_error(
-            StatusCode::CONFLICT,
-            "device_reanchor_entry_not_head",
-            "device re-anchor DID entry is not the accepted registry head",
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "critical inception reference does not select the unique original DID entry",
         ));
     }
-    crate::routing::identity::webvh_validation::validate_active_controller_proof(referenced)
+    let inception = arkret_models_identity::DidOperationSubmitRequestBody {
+        did: principal_did,
+        did_method: arkret_models_identity::DidMethodName::Webvh,
+        seq: Some(1),
+        prev_event_digest: None,
+        operation: serde_json::from_value(entry.operation.clone()).map_err(|error| {
+            event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
+        })?,
+    };
+    let root = arkret_signatures::webvh::validate_principal_inception_operation(&inception)
         .map_err(|error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                format!("referenced DID entry active-controller proof is invalid: {error}"),
-            )
+            event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
         })?;
-    let methods =
-        crate::routing::identity::webvh_validation::active_update_verification_methods(referenced);
-    if methods.len() != 1 {
+    if root.principal_id != actor_core_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            "root-anchor DID entry must expose exactly one active update authority",
+            "verified inception root does not bind the Event Account",
         ));
     }
-    Ok(methods.into_iter().next())
+    Ok(Some(root.root_verification_method.to_string()))
 }
 
 fn principal_control_genesis_resolution_did(

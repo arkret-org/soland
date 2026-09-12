@@ -1738,11 +1738,13 @@ impl EventStore for PgEventStore {
                 if !reanchor_conflict
                     && let Some(device) = device
                 {
+                    if device.verification_state != "unverified"
+                        || device.payload != serde_json::json!({"device_id": device.device_id}) {
+                        return Err(PersistenceError::SchemaViolation("identity admission may only insert an unverified endpoint placeholder".into()).into());
+                    }
                     sql_query(
                         "INSERT INTO devices (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                         ON CONFLICT (actor_id, device_id) DO UPDATE SET payload = EXCLUDED.payload, \
-                         verification_state = EXCLUDED.verification_state, updated_at = EXCLUDED.updated_at, revoked_at = EXCLUDED.revoked_at",
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (actor_id, device_id) DO NOTHING",
                     )
                     .bind::<sql_types::Uuid, _>(Uuid::now_v7())
                     .bind::<Text, _>(&device.actor)

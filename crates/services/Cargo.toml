@@ -11,7 +11,7 @@ description = "Transport- and adapter-independent Soland application use cases."
 
 [features]
 default = []
-test-support = []
+test-support = ["soland-storage/test-support"]
 
 [dependencies]
 arkret.workspace = true

@@ -1385,7 +1385,7 @@ pub async fn project_authorized_principal_device(
     state
         .test_persistence()
         .devices()
-        .put(&projected_device)
+        .seed_test_record(&projected_device)
         .await
         .unwrap();
     authorize_event_id

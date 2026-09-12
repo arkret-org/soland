@@ -6,15 +6,42 @@ use super::{
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord,
     DeviceRevocationGateSelector, PersistenceResult, Utc, Uuid, Value, async_trait,
 };
+/// Local presentation/activity fields. Protocol authorization is deliberately
+/// absent: only authenticated history may install it.
+#[derive(Clone, Debug)]
+pub struct DeviceInventoryMetadata {
+    pub actor: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub last_seen_at: Option<chrono::DateTime<Utc>>,
+    pub last_key_upload_at: Option<chrono::DateTime<Utc>>,
+    pub updated_at: chrono::DateTime<Utc>,
+}
+
 /// Trait for durable device inventory operations.
 #[async_trait]
 pub trait DeviceInventoryStore: Send + Sync {
+    /// Install only SDK-authenticated history, checking its exact confirmed
+    /// head under the same durable Realm lock as Seal publication.
+    /// This changes the device mirror, not timeline/unit completion.
+    async fn install_confirmed_history(
+        &self,
+        history: &arkret::DeviceAuthorizationHistory,
+    ) -> PersistenceResult<()>;
     async fn get(
         &self,
         actor: &str,
         device_id: &str,
     ) -> PersistenceResult<Option<DeviceInventoryRecord>>;
-    async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
+    async fn put_metadata(&self, record: &DeviceInventoryMetadata) -> PersistenceResult<()>;
+    async fn revoke_actor(
+        &self,
+        actor: &str,
+        revoked_at: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<usize>;
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    async fn seed_test_record(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
     /// Insert a placeholder only when the actor/device row does not exist.
     ///
     /// Account registration is idempotent and may be replayed after an

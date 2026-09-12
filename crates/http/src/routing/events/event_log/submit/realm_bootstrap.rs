@@ -651,6 +651,10 @@ pub(crate) async fn publish_confirmed_realm_bootstrap(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
 ) -> Result<bool, String> {
+    crate::routing::identity::device_generation::recover_confirmed_device_projection(
+        state, realm_id,
+    )
+    .await?;
     let Some(events) = state
         .projections()
         .confirmed_genesis_unit(realm_id)

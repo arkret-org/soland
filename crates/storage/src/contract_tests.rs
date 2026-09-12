@@ -342,7 +342,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
     let device_b = format!("ak:device:{}", uuid::Uuid::now_v7());
     for device_id in [&device_a, &device_b] {
         inventory
-            .put(&DeviceInventoryRecord {
+            .seed_test_record(&DeviceInventoryRecord {
                 actor: actor.clone(),
                 device_id: device_id.clone(),
                 display_name: None,
@@ -401,7 +401,10 @@ pub async fn assert_device_message_snapshot_guard_contract(
         .expect("target exists");
     revoked.revoked_at = Some(now + Duration::seconds(1));
     revoked.updated_at = now + Duration::seconds(1);
-    inventory.put(&revoked).await.expect("revoke target device");
+    inventory
+        .seed_test_record(&revoked)
+        .await
+        .expect("revoke target device");
     assert_eq!(
         messages
             .commit_batch(batch.clone())
@@ -421,7 +424,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
     revoked.revoked_at = None;
     revoked.updated_at = now;
     inventory
-        .put(&revoked)
+        .seed_test_record(&revoked)
         .await
         .expect("restore original snapshot");
     let stored = messages
@@ -433,7 +436,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
     revoked.revoked_at = Some(now + Duration::seconds(2));
     revoked.updated_at = now + Duration::seconds(2);
     inventory
-        .put(&revoked)
+        .seed_test_record(&revoked)
         .await
         .expect("revoke after durable commit");
     let replay = messages
