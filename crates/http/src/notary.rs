@@ -1842,21 +1842,16 @@ async fn local_service_is_eligible_availability_holder(
     for (cell, cell_state) in predecessor_state {
         let cell_id =
             CellId::from_ref(cell).map_err(|error| NotaryError::Construction(error.to_string()))?;
+        let ResolvedCellState::Sequenced(membership) = cell_state else {
+            continue;
+        };
         if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
-            || !matches!(cell_state, ResolvedCellState::Sequenced(state) if state.value.as_str() == Some("join"))
+            || membership.value.as_str() != Some("join")
         {
             continue;
         }
-        let ops = state
-            .projections()
-            .state_writes_for_cell(realm_id, cell)
-            .await?
-            .into_iter()
-            .filter(|issued| covered.contains(&issued.op.event_id.event_digest()))
-            .collect::<Vec<_>>();
-        let Some(join_digest) = effective_membership_join_digest(&ops)? else {
-            continue;
-        };
+        // The confirmed security revision names the current join instance.
+        let join_digest = membership.revision_event_id.event_digest();
         let event = durable_control_event_by_digest(state, &join_digest).await?;
         // Invite acceptance can project the member transition to `join` from the
         // accepted ak.invite.accept Event itself. That Event is not a
@@ -1899,29 +1894,6 @@ pub(crate) async fn durable_control_event_by_digest(
         )));
     }
     Ok(event)
-}
-
-fn effective_membership_join_digest(ops: &[IssuedOp]) -> Result<Option<Hash>, NotaryError> {
-    // One membership fold, in the SDK, shared with the MLS governance proof
-    // replay. This Station used to carry its own copy with its own hardcoded
-    // initial state, which meant the notary and the proof replay could drift
-    // apart on the same cell without anything noticing. Since §9.3.1.5 it is the
-    // same causal-heads read the state model itself performs, so there is no separate
-    // fold left to drift.
-    // §9.3.1.6 keeps every concurrent identity, so more than one write can put
-    // the cell in `join`. This caller needs a single digest and MUST NOT pick
-    // one: the head order fixes bytes and selects no winner.
-    let heads = arkret_state::state_model::membership_transition_heads_into(ops, "join")
-        .map_err(NotaryError::Construction)?;
-    match heads.as_slice() {
-        [] => Ok(None),
-        [head] => Ok(Some(head.clone())),
-        many => Err(NotaryError::Construction(format!(
-            "member cell resolves to join through {} concurrent writes ({}); the notary needs one identity and MUST NOT choose",
-            many.len(),
-            many.iter().map(Hash::as_str).collect::<Vec<_>>().join(", "),
-        ))),
-    }
 }
 
 /// Strip the envelope-only `paused` flag that rides alongside the
@@ -2225,110 +2197,6 @@ mod tests {
 
         let predecessor = SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
         assert!(!availability_authority_is_genesis(Some(&predecessor)));
-    }
-
-    /// The availability scan needs one join identity; §9.3.1.6 does not promise
-    /// one.
-    ///
-    /// The SDK fold returns the whole active head set, and each size means
-    /// something different to this caller: empty is a cell that does not resolve
-    /// to `join` at all, one head is a settled history, and two same-`to` heads
-    /// are two writers who independently put the cell there. The head order
-    /// fixes bytes and selects no winner, so taking the first would settle by
-    /// digest what the protocol leaves unsettled.
-    mod membership_join_digest {
-        use arkret_state::state_model::ordered_log::IssuedOp;
-
-        use super::*;
-
-        fn move_of(byte: u8) -> Hash {
-            Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
-        }
-
-        fn issued(id: u8, from: &str, to: &str, saw: &[u8]) -> IssuedOp {
-            IssuedOp {
-                issuer_id: arkret_wire::ActorId::service(
-                    arkret_wire::DidCoreId::new("ak:did_core:web:fixture.example".to_owned())
-                        .unwrap(),
-                ),
-                op: arkret_state::StateWrite::superseding(
-                    move_of(id),
-                    arkret_wire::LatticeOp {
-                        op_type: arkret_wire::LatticeOpType::Transition,
-                        from: Some(json!(from)),
-                        to: Some(json!(to)),
-                        ..arkret_wire::LatticeOp::empty()
-                    },
-                    saw.iter().copied().map(move_of),
-                ),
-            }
-        }
-
-        #[test]
-        fn a_cell_outside_join_has_no_digest() {
-            assert_eq!(effective_membership_join_digest(&[]).unwrap(), None);
-
-            let left = vec![
-                issued(1, "leave", "join", &[]),
-                issued(2, "join", "leave", &[1]),
-            ];
-            assert_eq!(effective_membership_join_digest(&left).unwrap(), None);
-
-            // A genuine sibling with a different `to` is `⊥`, which resolves to
-            // no target either — including this one.
-            let sibling = vec![
-                issued(1, "leave", "join", &[]),
-                issued(2, "leave", "ban", &[]),
-            ];
-            assert_eq!(effective_membership_join_digest(&sibling).unwrap(), None);
-        }
-
-        #[test]
-        fn a_settled_history_yields_the_write_that_entered_join() {
-            // Re-entry: the digest is the causal head, not the last element of
-            // the list, and the same set in any order is the same answer.
-            let reentered = vec![
-                issued(1, "leave", "join", &[]),
-                issued(2, "join", "leave", &[1]),
-                issued(3, "leave", "join", &[2]),
-            ];
-            assert_eq!(
-                effective_membership_join_digest(&reentered).unwrap(),
-                Some(move_of(3)),
-            );
-
-            let mut shuffled = reentered.clone();
-            shuffled.reverse();
-            assert_eq!(
-                effective_membership_join_digest(&shuffled).unwrap(),
-                Some(move_of(3)),
-            );
-        }
-
-        #[test]
-        fn concurrent_joins_fail_closed_naming_every_identity() {
-            let converged = vec![
-                issued(1, "leave", "join", &[]),
-                issued(2, "leave", "join", &[]),
-            ];
-            let rendered = effective_membership_join_digest(&converged)
-                .unwrap_err()
-                .to_string();
-            assert!(rendered.contains("MUST NOT choose"), "{rendered}");
-            assert!(rendered.contains(move_of(1).as_str()), "{rendered}");
-            assert!(rendered.contains(move_of(2).as_str()), "{rendered}");
-        }
-
-        #[test]
-        fn a_history_that_does_not_resolve_is_an_error() {
-            // One write identity carrying two different transitions is a
-            // verification error or a digest collision, never a choice.
-            let forked = vec![
-                issued(1, "leave", "join", &[]),
-                issued(1, "leave", "ban", &[]),
-            ];
-            assert!(effective_membership_join_digest(&forked).is_err());
-        }
     }
 
     fn test_signer_descriptor(did: &str, seed: u8) -> arkret_wire::NotarySignerDescriptor {

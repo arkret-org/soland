@@ -76,7 +76,7 @@ async fn retained_federation_submission(
             AppError::internal(format!("Control admission evidence lookup: {error}"))
         })?;
     if snapshot.is_none()
-        && arkret_schema::classify_event_execution(event)
+        && arkret_schema::classify_event_execution(&event)
             .map_err(|error| AppError::internal(error.to_string()))?
             == Some(arkret_wire::CbsEffectPlane::Control)
     {
@@ -2143,7 +2143,7 @@ fn history_access_allows(
 }
 
 fn record_requires_private_plaintext_visibility(record: &AcceptedEvent) -> bool {
-    if serde_json::from_value::<Event>(record.envelope.clone())
+    if serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
         .ok()
         .and_then(|event| {
             arkret_schema::classify_event_execution(&event)

@@ -684,6 +684,11 @@ async fn submit_event_seal(
     } else {
         crate::routing::federation::move_seal::apply_inbound_seal(state, &seal).await?
     };
+    crate::routing::events::projection::publish_confirmed_seal_commands(state, &seal)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("confirmed principal command projection: {error}"))
+        })?;
     state
         .projections()
         .reload_cells_from_store(&seal.realm_id)
