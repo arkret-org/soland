@@ -358,7 +358,7 @@ fn full_station_gap_summary() -> Vec<Value> {
         "status": "not_claimed",
         "first_batch_landed": [
             "artifact-derived supported operation advertisement",
-            "SDK-backed lattice family/kind/bottom registry bindings",
+            "SDK-backed state model family/kind/bottom registry bindings",
             "outbound Move/Seal fanout signed intent evidence",
             "per-peer retry/durability transcript metadata"
         ],

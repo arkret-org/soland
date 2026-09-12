@@ -276,11 +276,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         .proofs
         .iter()
         .chain(profile.proofs.iter())
-        .any(|proof| {
-            proof
-                .as_producer()
-                .is_none_or(|proof| proof.verification_method != registration_verification_method)
-        })
+        .any(|proof| proof.verification_method != registration_verification_method)
     {
         return Err(AppError::capability_denied(
             "Ghost provisioning Event proofs must use the installed registration-epoch key",
@@ -465,11 +461,16 @@ async fn validate_ghost_managed_actor_unit(
             AppError::param_invalid(format!("Ghost PCR genesis object is invalid: {error}"))
                 .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
-    let expected_host_notary = arkret_wire::NotaryValue::single_signer(
-        state
-            .service_notary_signer_descriptor()
-            .map_err(AppError::internal)?,
-    );
+    let expected_host_notary = arkret_wire::NotaryValue::new(
+        vec![
+            state
+                .service_notary_signer_descriptor()
+                .map_err(AppError::internal)?,
+        ],
+        0,
+        0,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
     super::install::validate_hosted_applet_pcr_notary(
         &genesis_object.notary,
         &expected_host_notary,

@@ -39,8 +39,8 @@ pub(crate) async fn commit_sources(
         .iter()
         .filter_map(|write| {
             let family = write.cell_family?;
-            match write.lattice?.as_str() {
-                "mv_register" => Some((family.as_str(), true)),
+            match write.state_model?.as_str() {
+                "causal_register" => Some((family.as_str(), true)),
                 "or_set" => Some((family.as_str(), false)),
                 _ => None,
             }
@@ -64,7 +64,7 @@ pub(crate) async fn commit_sources(
         .collect::<Vec<_>>();
     let mut writes =
         arkret_schema::project_registered_cell_writes(event, suite).map_err(projection_error)?;
-    let mut mv_cells = Vec::new();
+    let mut causal_cells = Vec::new();
     let mut domain_cells = Vec::new();
     let mut pending_current = false;
     writes.sort_by(|left, right| {
@@ -223,7 +223,7 @@ pub(crate) async fn commit_sources(
                 .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
                 .bind::<Text,_>(write.cell_id.as_str()).bind::<Binary,_>(event.event_id.token_bytes().to_vec())
                 .execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            mv_cells.push(write.cell_id.clone());
+            causal_cells.push(write.cell_id.clone());
         } else {
             if matches!(
                 cell.component(),
@@ -245,10 +245,10 @@ pub(crate) async fn commit_sources(
                 .map_err(PersistenceError::database)?;
         }
     }
-    if !mv_cells.is_empty() || !domain_cells.is_empty() {
+    if !causal_cells.is_empty() || !domain_cells.is_empty() {
         let revision = crate::current_results::next_revision(conn).await?;
         let mut entries = Vec::new();
-        for cell_id in mv_cells {
+        for cell_id in causal_cells {
             entries.push(
                 publication::materialized_heads(
                     conn,

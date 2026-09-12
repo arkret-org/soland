@@ -360,7 +360,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         &mut authorize,
         &controller_signer,
         &controller_verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(created_at),
     )
     .unwrap();
     let authorize = authorize.into_event();
@@ -457,13 +457,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     // everything, so only the combination of both outcomes below proves the
     // verification is live). ────────────────────────────────────────────────
     let mut forged_body = serde_json::to_value(&key_pair_body).unwrap();
-    let proof = key_pair_body
-        .authorize_event
-        .event
-        .proofs
-        .iter()
-        .find_map(arkret_wire::EventProof::as_producer)
-        .unwrap();
+    let proof = key_pair_body.authorize_event.event.proofs.first().unwrap();
     let proof_transcript = proof
         .canonical_binding_bytes(&key_pair_body.authorize_event.event.actor_id)
         .unwrap();
@@ -553,7 +547,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let availability_request =
         arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody {
             realm_id: agent_pcr_realm.clone(),
-            predecessor_refs: vec![genesis_seal.id.clone()],
+            predecessor_ref: genesis_seal.id.clone(),
             event_digests: target.difference(&predecessor_covered).cloned().collect(),
             hlc: arkret_wire::Hlc::new(format!("{timestamp_hex}-0009-a13f9c2e")).unwrap(),
         };
@@ -809,9 +803,12 @@ async fn verify_owned_agent_direct_founding(
         let create_payload = direct_conversation_realm_create_payload(
             arkret_wire::GenesisSalt::generate().unwrap(),
             state.config().trust_domain.clone(),
-            arkret_wire::NotaryValue::single_signer(
-                state.service_notary_signer_descriptor().unwrap(),
-            ),
+            arkret_wire::NotaryValue::new(
+                vec![state.service_notary_signer_descriptor().unwrap()],
+                0,
+                0,
+            )
+            .unwrap(),
             created_at,
         )
         .unwrap();

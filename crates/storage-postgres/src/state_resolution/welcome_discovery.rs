@@ -11,6 +11,8 @@ fn invalid(message: impl std::fmt::Display) -> diesel::result::Error {
 
 #[cfg(test)]
 mod tests {
+    use arkret_wire::EventId;
+
     use super::*;
 
     async fn transition_event(
@@ -104,25 +106,15 @@ mod tests {
         let cells = |head: &MlsEpochHead| {
             BTreeMap::from([(
                 cell.clone(),
-                CellState::Value(serde_json::to_value(head).unwrap()),
+                ResolvedCellState::Value(serde_json::to_value(head).unwrap()),
             )])
         };
-        publish(
-            &mut conn,
-            realm.as_str(),
-            &cells(&heads[0]),
-            &Default::default(),
-        )
-        .await
-        .unwrap();
-        publish(
-            &mut conn,
-            realm.as_str(),
-            &cells(&heads[1]),
-            &Default::default(),
-        )
-        .await
-        .unwrap();
+        publish(&mut conn, realm.as_str(), &cells(&heads[0]))
+            .await
+            .unwrap();
+        publish(&mut conn, realm.as_str(), &cells(&heads[1]))
+            .await
+            .unwrap();
         let id = crate::ids::parse_event_id(heads[1].transition_ref.as_str()).unwrap();
         sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
             .bind::<Binary, _>(id.to_vec())
@@ -139,14 +131,9 @@ mod tests {
             .execute(&mut *conn)
             .await
             .unwrap();
-        publish(
-            &mut conn,
-            realm.as_str(),
-            &cells(&heads[1]),
-            &Default::default(),
-        )
-        .await
-        .unwrap();
+        publish(&mut conn, realm.as_str(), &cells(&heads[1]))
+            .await
+            .unwrap();
         let restored = sql_query("SELECT head FROM mls_welcome_discovery_scopes WHERE available")
             .get_result::<DiscoveryHeadRow>(&mut *conn)
             .await
@@ -163,32 +150,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn membership_revision_tracks_cas_identity_and_not_unrelated_publication() {
+    async fn membership_revision_tracks_sequenced_identity_and_not_unrelated_publication() {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let mut conn = pg_conn(&pool).await.unwrap();
         let cell = CellRef::new("ak:cell:ak.component.member.state.v1:alice").unwrap();
-        let cells = BTreeMap::from([(cell.clone(), CellState::Value(serde_json::json!("join")))]);
-        let head = |marker: char| {
-            serde_json::from_value::<Vec<arkret_state::lattice::cas_register::CasHead>>(
-                serde_json::json!([
-                    {"move_id":format!("sha256:{}",marker.to_string().repeat(64)),"value":"join"}
-                ]),
-            )
-            .unwrap()
+        let cells = |revision_event_id: &str| {
+            BTreeMap::from([(
+                cell.clone(),
+                ResolvedCellState::Sequenced(arkret_state::SequencedStateValue {
+                    revision_event_id: EventId::new(revision_event_id).unwrap(),
+                    value: serde_json::json!("join"),
+                }),
+            )])
         };
-        let mut heads = arkret_state::CasHeadsByCell::from([(cell.clone(), head('a'))]);
-        publish(&mut conn, "realm", &cells, &heads).await.unwrap();
+        let first = cells("ak:event:AT33EWBTXdTx5CjY-ogbIIF2T4vh-v7jCMCQ80Fss2Rq");
+        publish(&mut conn, "realm", &first).await.unwrap();
         invalidate(&mut conn, "realm").await.unwrap();
-        publish(&mut conn, "realm", &cells, &heads).await.unwrap();
+        publish(&mut conn, "realm", &first).await.unwrap();
         let revision = sql_query("SELECT revision AS value FROM mls_welcome_discovery_membership")
             .get_result::<CountRow>(&mut conn)
             .await
             .unwrap()
             .value;
         assert_eq!(revision, 1);
-        heads.insert(cell.clone(), head('b'));
-        publish(&mut conn, "realm", &cells, &heads).await.unwrap();
+        let second = cells("ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk");
+        publish(&mut conn, "realm", &second).await.unwrap();
         let revision = sql_query("SELECT revision AS value FROM mls_welcome_discovery_membership")
             .get_result::<CountRow>(&mut conn)
             .await
@@ -198,8 +185,7 @@ mod tests {
             revision, 2,
             "equal join values with different sources are distinct incarnations"
         );
-        heads.insert(cell, head('a'));
-        publish(&mut conn, "realm", &cells, &heads).await.unwrap();
+        publish(&mut conn, "realm", &first).await.unwrap();
         let revision = sql_query("SELECT revision AS value FROM mls_welcome_discovery_membership")
             .get_result::<CountRow>(&mut conn)
             .await
@@ -254,8 +240,7 @@ pub(super) async fn invalidate(
 pub(super) async fn publish(
     conn: &mut AsyncPgConnection,
     realm: &str,
-    cells: &BTreeMap<CellRef, CellState>,
-    cas_heads: &arkret_state::CasHeadsByCell,
+    cells: &BTreeMap<CellRef, ResolvedCellState>,
 ) -> Result<(), diesel::result::Error> {
     for (cell, state) in cells {
         if !(cell
@@ -267,15 +252,16 @@ pub(super) async fn publish(
         {
             continue;
         }
-        let (value, available) = match state {
-            CellState::Value(value) => (Some(value), true),
-            CellState::Bottom(_) => (None, false),
+        let (value, revision_event_id, available) = match state {
+            ResolvedCellState::Sequenced(value) => (
+                Some(&value.value),
+                Some(value.revision_event_id.as_str()),
+                true,
+            ),
+            _ => (None, None, false),
         };
-        let heads = cas_heads.get(cell).map(Vec::as_slice).unwrap_or_default();
-        let available = available && heads.len() == 1;
-        let heads = serde_json::to_value(heads).map_err(invalid)?;
-        sql_query("INSERT INTO mls_welcome_discovery_membership(realm_id,cell_id,current_value,available,cas_heads) VALUES($1,$2,$3,$4,$5) ON CONFLICT(realm_id,cell_id) DO UPDATE SET current_value=EXCLUDED.current_value,available=EXCLUDED.available,cas_heads=EXCLUDED.cas_heads,revision=mls_welcome_discovery_membership.revision+CASE WHEN mls_welcome_discovery_membership.current_value IS DISTINCT FROM EXCLUDED.current_value OR mls_welcome_discovery_membership.cas_heads IS DISTINCT FROM EXCLUDED.cas_heads THEN 1 ELSE 0 END")
-            .bind::<Text,_>(realm).bind::<Text,_>(cell.as_str()).bind::<Nullable<Jsonb>,_>(value).bind::<Bool,_>(available).bind::<Jsonb,_>(heads).execute(&mut *conn).await?;
+        sql_query("INSERT INTO mls_welcome_discovery_membership(realm_id,cell_id,current_value,available,revision_event_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(realm_id,cell_id) DO UPDATE SET current_value=EXCLUDED.current_value,available=EXCLUDED.available,revision_event_id=EXCLUDED.revision_event_id,revision=mls_welcome_discovery_membership.revision+CASE WHEN mls_welcome_discovery_membership.current_value IS DISTINCT FROM EXCLUDED.current_value OR mls_welcome_discovery_membership.revision_event_id IS DISTINCT FROM EXCLUDED.revision_event_id THEN 1 ELSE 0 END")
+            .bind::<Text,_>(realm).bind::<Text,_>(cell.as_str()).bind::<Nullable<Jsonb>,_>(value).bind::<Bool,_>(available).bind::<Nullable<Text>,_>(revision_event_id).execute(&mut *conn).await?;
     }
     // Unresolved or absent epoch cells remain unavailable. Other Seal changes
     // do not increment the MLS eligibility revision when the head is unchanged.
@@ -286,10 +272,10 @@ pub(super) async fn publish(
         {
             continue;
         }
-        let CellState::Value(value) = value else {
+        let ResolvedCellState::Sequenced(value) = value else {
             continue;
         };
-        let current: MlsEpochHead = serde_json::from_value(value.clone()).map_err(invalid)?;
+        let current: MlsEpochHead = serde_json::from_value(value.value.clone()).map_err(invalid)?;
         current.validate().map_err(invalid)?;
         let expected_cell = arkret_state::mls_cells::mls_epoch_cell_id(
             &current.effective_scope,
@@ -309,7 +295,7 @@ pub(super) async fn publish(
             .bind::<Jsonb,_>(&scope).bind::<Text,_>(group).bind::<Text,_>(realm).execute(&mut *conn).await?;
         let previous = sql_query("SELECT head FROM mls_welcome_discovery_scopes WHERE scope=$1 AND group_id=$2 FOR UPDATE")
             .bind::<Jsonb,_>(&scope).bind::<Text,_>(group).get_result::<DiscoveryHeadRow>(&mut *conn).await?;
-        if previous.head.as_ref() != Some(value) {
+        if previous.head.as_ref() != Some(&value.value) {
             let mut head = current.clone();
             loop {
                 let known = sql_query("SELECT EXISTS(SELECT 1 FROM mls_welcome_discovery_chain WHERE scope=$1 AND group_id=$2 AND epoch=$3 AND event_ref=$4) AS present")
@@ -414,7 +400,7 @@ pub(super) async fn publish(
             sql_query("WITH removed AS (DELETE FROM mls_welcome_discovery_chain WHERE scope=$1 AND group_id=$2 AND epoch>$3 RETURNING event_ref) UPDATE mls_welcome_discovery_entries SET eligible=FALSE WHERE scope=$1 AND group_id=$2 AND commit_ref IN (SELECT event_ref FROM removed)")
                 .bind::<Jsonb,_>(&scope).bind::<Text,_>(group).bind::<BigInt,_>(i64::try_from(current.next_epoch).map_err(invalid)?).execute(&mut *conn).await?;
             sql_query("UPDATE mls_welcome_discovery_scopes SET revision=revision+1,head=$3 WHERE scope=$1 AND group_id=$2")
-                .bind::<Jsonb,_>(&scope).bind::<Text,_>(group).bind::<Jsonb,_>(value).execute(&mut *conn).await?;
+                .bind::<Jsonb,_>(&scope).bind::<Text,_>(group).bind::<Jsonb,_>(&value.value).execute(&mut *conn).await?;
         }
         sql_query(
             "UPDATE mls_welcome_discovery_scopes SET available=TRUE WHERE scope=$1 AND group_id=$2",

@@ -27,7 +27,7 @@ fn state_with_successor() -> ProjectionState {
             REALM.to_owned(),
             arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ),
-        CellState::Value(serde_json::to_value(value).unwrap()),
+        ResolvedCellState::Value(serde_json::to_value(value).unwrap()),
     );
     let now = chrono::Utc::now();
     let successor = account_actor_string(SUCCESSOR);
@@ -156,7 +156,7 @@ fn successor_counter_overflow_fails_closed_without_mutation() {
             REALM.to_owned(),
             arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ),
-        arkret_state::lattice::CellState::Value(serde_json::to_value(&root).unwrap()),
+        arkret_state::state_model::ResolvedCellState::Value(serde_json::to_value(&root).unwrap()),
     );
     let effect = state.apply_realm_authority_transition(
         &operation(

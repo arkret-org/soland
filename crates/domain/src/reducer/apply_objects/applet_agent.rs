@@ -125,8 +125,8 @@ impl ProjectionState {
     }
 
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — apply
-    /// an `ak.agent.{pause,resume,deactivate}` FSM transition. The
-    /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
+    /// an `ak.agent.{pause,resume,deactivate}` transition transition. The
+    /// state model is `transition` with `bottom=reject`; allowed transitions are:
     ///   - Active → Paused                 via `ak.self.agent.pause`
     ///   - Paused → Active                 via `ak.self.agent.resume`
     ///   - {Active,Paused} → Deactivated   via `ak.self.agent.deactivate`
@@ -154,14 +154,14 @@ impl ProjectionState {
             .get(&agent_actor_id)
             .copied()
             .unwrap_or_default();
-        // FSM guard. Terminal `Deactivated` rejects any transition.
+        // transition guard. Terminal `Deactivated` rejects any transition.
         let allowed = match (current, target) {
             (AgentLifecycleState::Active, AgentLifecycleState::Paused)
             | (AgentLifecycleState::Paused, AgentLifecycleState::Active)
             | (AgentLifecycleState::Active, AgentLifecycleState::Deactivated)
             | (AgentLifecycleState::Paused, AgentLifecycleState::Deactivated) => true,
             // Idempotent identity transitions are accepted as no-op
-            // (the FSM lattice deduplicates redundant pause/resume).
+            // (the transition state model deduplicates redundant pause/resume).
             (a, b) if a == b => true,
             // Bottom=reject; specifically deactivate is terminal so
             // any resume/pause after deactivate is rejected with the

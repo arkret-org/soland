@@ -64,7 +64,7 @@ async fn checkpoint(
 }
 
 #[tokio::test]
-async fn current_mv_cache_keeps_concurrent_sources_and_rejects_missing_or_stale_basis() {
+async fn current_causal_cache_keeps_concurrent_sources_and_rejects_missing_or_stale_basis() {
     let database = crate::test_database::TestDatabase::lease().await;
     let mut conn = pg_conn(&database.pool()).await.unwrap();
     let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
@@ -77,7 +77,7 @@ async fn current_mv_cache_keeps_concurrent_sources_and_rejects_missing_or_stale_
     };
     let mut leaves = Vec::new();
     for byte in [1, 2] {
-        let head = CurrentMvHead {
+        let head = CurrentCausalHead {
             event_id: arkret_wire::EventId::from_digest(
                 arkret_canonical::DigestSuite::Sha256,
                 [byte; 32],
@@ -87,24 +87,23 @@ async fn current_mv_cache_keeps_concurrent_sources_and_rejects_missing_or_stale_
         let covered = vec![head.event_id.event_digest().to_string()];
         let view = StoredCheckpointView {
             cells: BTreeMap::new(),
-            cas_heads: Default::default(),
             rule_context: context.clone(),
-            current_mv_heads: BTreeMap::from([(cell.clone(), vec![head])]),
-            current_mv_ready: true,
+            causal_heads: BTreeMap::from([(cell.clone(), vec![head])]),
+            causal_ready: true,
         };
         leaves.push(checkpoint(&mut conn, &realm, byte, &view, &covered).await);
     }
-    let (heads, ready) = advance_mv_heads(&mut conn, realm.as_str(), &leaves, &[], &context)
+    let (heads, ready) = advance_causal_heads(&mut conn, realm.as_str(), &leaves, &[], &context)
         .await
         .unwrap();
     assert!(ready);
     assert_eq!(heads[&cell].len(), 2);
     let missing = format!("ak:seal:sha256:{}", "33".repeat(32));
-    let (_, ready) = advance_mv_heads(&mut conn, realm.as_str(), &[missing], &[], &context)
+    let (_, ready) = advance_causal_heads(&mut conn, realm.as_str(), &[missing], &[], &context)
         .await
         .unwrap();
     assert!(!ready);
-    let (_, ready) = advance_mv_heads(
+    let (_, ready) = advance_causal_heads(
         &mut conn,
         realm.as_str(),
         &leaves,
@@ -166,19 +165,21 @@ async fn expired_agent_current_result_refreshes_atomically_and_partial_view_stay
         &["https://station.example"]
     )]);
     let cells = BTreeMap::from([
-        (status, CellState::Value(Value::String("active".into()))),
-        (key.clone(), CellState::Value(raw.clone())),
+        (
+            status,
+            ResolvedCellState::Value(Value::String("active".into())),
+        ),
+        (key.clone(), ResolvedCellState::Value(raw.clone())),
     ]);
     let registry =
-        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+        soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry().unwrap();
     let context = CheckpointRuleContext::capture(&registry, &realm).unwrap();
     assert!(context.reusable_with(&context));
     let view = StoredCheckpointView {
         cells,
-        cas_heads: Default::default(),
         rule_context: context,
-        current_mv_heads: Default::default(),
-        current_mv_ready: true,
+        causal_heads: Default::default(),
+        causal_ready: true,
     };
     checkpoint(
         &mut conn,
@@ -192,7 +193,7 @@ async fn expired_agent_current_result_refreshes_atomically_and_partial_view_stay
         &raw,
         &BTreeMap::from([(
             principal.to_string(),
-            CellState::Value(Value::String("active".into())),
+            ResolvedCellState::Value(Value::String("active".into())),
         )]),
         expiry - chrono::Duration::seconds(1),
     )
@@ -235,7 +236,7 @@ async fn expired_agent_current_result_refreshes_atomically_and_partial_view_stay
 }
 
 #[tokio::test]
-async fn stale_mv_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order() {
+async fn stale_causal_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order() {
     let database = crate::test_database::TestDatabase::lease().await;
     let pool = database.pool();
     let mut conn = pg_conn(&pool).await.unwrap();
@@ -256,10 +257,9 @@ async fn stale_mv_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order() {
     ));
     let empty = StoredCheckpointView {
         cells: Default::default(),
-        cas_heads: Default::default(),
         rule_context: old,
-        current_mv_heads: Default::default(),
-        current_mv_ready: false,
+        causal_heads: Default::default(),
+        causal_ready: false,
     };
     let mut seals = Vec::<String>::new();
     let mut coverage = Vec::<Vec<String>>::new();
@@ -290,13 +290,13 @@ async fn stale_mv_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order() {
                 }
             })
             .unwrap_or_default();
-        let parents: Vec<String> = parent.map(|p| vec![seals[p].clone()]).unwrap_or_default();
+        let predecessor_ref = parent.map(|p| seals[p].clone());
         let closure = ancestors
             .into_iter()
             .chain(std::iter::once(seal.clone()))
             .collect::<Vec<_>>();
-        sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_refs) VALUES($1,'sha256',$2,$3,$3,'{}',$4)")
-            .bind::<Text,_>(&seal).bind::<Text,_>(realm.as_str()).bind::<Binary,_>(vec![index as u8+11]).bind::<Jsonb,_>(serde_json::json!(parents)).execute(&mut *conn).await.unwrap();
+        sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_ref) VALUES($1,'sha256',$2,$3,$3,'{}',$4)")
+            .bind::<Text,_>(&seal).bind::<Text,_>(realm.as_str()).bind::<Binary,_>(vec![index as u8+11]).bind::<Nullable<Text>,_>(predecessor_ref.as_deref()).execute(&mut *conn).await.unwrap();
         sql_query("INSERT INTO state_seal_effective_checkpoints(seal_id,realm_id,covered_event_digests,covered_seal_ids,state_json) VALUES($1,$2,$3,$4,$5)")
             .bind::<Text,_>(&seal).bind::<Text,_>(realm.as_str()).bind::<Array<Text>,_>(&covered).bind::<Array<Text>,_>(&closure).bind::<Jsonb,_>(serde_json::to_value(&empty).unwrap()).execute(&mut *conn).await.unwrap();
         for (offset, source) in sources.into_iter().enumerate() {
@@ -312,7 +312,7 @@ async fn stale_mv_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order() {
         vec![seals[2].clone(), seals[3].clone()],
         vec![seals[3].clone(), seals[2].clone()],
     ] {
-        let (heads, ready) = advance_mv_heads(&mut conn, realm.as_str(), &parents, &[], &fresh)
+        let (heads, ready) = advance_causal_heads(&mut conn, realm.as_str(), &parents, &[], &fresh)
             .await
             .unwrap();
         assert!(ready);
@@ -328,7 +328,7 @@ async fn stale_mv_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order() {
     let mut missing = seals.clone();
     missing.push(format!("ak:seal:sha256:{}", "ff".repeat(32)));
     assert!(
-        rebuild_mv_heads(&mut conn, realm.as_str(), &missing, &coverage[2], &fresh)
+        rebuild_causal_heads(&mut conn, realm.as_str(), &missing, &coverage[2], &fresh)
             .await
             .unwrap()
             .is_none()

@@ -53,6 +53,9 @@ pub struct AgentPrincipalRecord {
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
     pub authorized_key_event: Option<arkret_wire::Event>,
+    pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
+    pub current_signer_evidence:
+        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -99,6 +102,8 @@ impl AgentPrincipalRecord {
             authorized_verification_method: None,
             authorized_public_key_digest: None,
             authorized_key_event: None,
+            signer_resolution_evidence_ref: None,
+            current_signer_evidence: None,
             state_changed_at: Some(created_at),
             created_at,
             updated_at: created_at,

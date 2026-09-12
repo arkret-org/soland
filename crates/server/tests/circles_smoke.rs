@@ -135,7 +135,7 @@ fn seed_realm_projection(
             realm_id.to_owned(),
             arkret_wire::REALM_GENESIS_CELL.to_owned(),
         ),
-        arkret_state::lattice::CellState::Value(json!({
+        arkret_state::state_model::ResolvedCellState::Value(json!({
             "purpose": "collaboration",
             "encryption_profile": encryption_profile,
             "schema_refs": ["ak.schema.realm.v1"]
@@ -254,7 +254,7 @@ fn circle_content_floor_below_realm_rejected() {
     // exercises Circle floor enforcement, not policy-bundle admission.
     state.realm_policy_bundle_cells.insert(
         REALM_A.to_owned(),
-        arkret_state::lattice::CellState::Value(json!({
+        arkret_state::state_model::ResolvedCellState::Value(json!({
             "policy_revision": 1,
             "content_encryption_floor": "e2ee_required"
         })),

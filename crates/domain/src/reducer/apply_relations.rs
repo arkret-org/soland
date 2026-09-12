@@ -666,7 +666,7 @@ impl ProjectionState {
                 };
             }
         };
-        if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+        if matches!(self.cells.get(&cell_id), Some(ResolvedCellState::Bottom(_))) {
             return ProjectionEffect::Rejected {
                 reason: "cell_in_bottom_state".to_owned(),
             };
@@ -690,7 +690,7 @@ impl ProjectionState {
         let item_ref = payload.item_ref.clone();
         self.cells.insert(
             cell_id,
-            CellState::Value(serde_json::json!({
+            ResolvedCellState::Value(serde_json::json!({
                 "item_ref": payload.item_ref,
                 "container_ref": payload.container_ref,
                 "relation_kind": payload.relation_kind,
@@ -721,7 +721,10 @@ impl ProjectionState {
                 };
             }
         };
-        if matches!(self.cells.get(&order_cell_id), Some(CellState::Bottom(_))) {
+        if matches!(
+            self.cells.get(&order_cell_id),
+            Some(ResolvedCellState::Bottom(_))
+        ) {
             return ProjectionEffect::Rejected {
                 reason: "cell_in_bottom_state".to_owned(),
             };
@@ -738,7 +741,7 @@ impl ProjectionState {
         let position_count = payload.positions.len();
         self.cells.insert(
             order_cell_id,
-            CellState::Value(serde_json::json!({
+            ResolvedCellState::Value(serde_json::json!({
                 "container_ref": payload.container_ref,
                 "relation_kind": payload.relation_kind,
                 "positions": payload.positions
@@ -766,10 +769,9 @@ fn container_order_cell_id(container_ref: &str) -> Option<CellRef> {
     .ok()
 }
 
-fn container_cell_digest(state: Option<&CellState>) -> Option<String> {
+fn container_cell_digest(state: Option<&ResolvedCellState>) -> Option<String> {
     let value = match state {
-        Some(CellState::Value(value)) => value,
-        Some(CellState::Bottom(_)) => return None,
+        Some(state) => state.settled_value()?,
         None => &Value::Null,
     };
     arkret_canonical::canonical_json_bytes(value)

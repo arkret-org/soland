@@ -47,9 +47,9 @@ pub enum EventNotificationKind {
     },
     /// MLS epoch shift detected on `ak.component.mls.epoch.v1` cell.
     EpochRotation {
-        /// Old epoch value (the previous CellState::Value if known).
+        /// Old epoch value (the previous ResolvedCellState::Value if known).
         previous_epoch: Option<Value>,
-        /// New epoch value (current CellState::Value after the
+        /// New epoch value (current ResolvedCellState::Value after the
         /// triggering apply_seal).
         new_epoch: Value,
     },

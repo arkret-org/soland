@@ -221,8 +221,8 @@ async fn persist_realm_state_snapshot_chunk_blobs(
 /// A snapshot ships the reducer's own state, never rendered objects: every
 /// written Realm-scope cell under the Seal leaves covering the frontier, with
 /// the `event-auth-state-resolution.md` section 6.2.1 state object of its
-/// registered lattice — the complete active head set for a `cas_register`
-/// cell, the joined value for every other lattice. Section 4 then makes each
+/// registered state model — the complete active head set for a `causal_register`
+/// cell, the joined value for every other state model. Section 4 then makes each
 /// snapshot leaf byte-identical to that cell's `state_root` leaf.
 ///
 /// Membership follows section 6.2.1 rather than a settled value: a CAS cell is
@@ -262,40 +262,28 @@ async fn reducer_cell_items(
         .effective_state_at(&leaves, realm_id)
         .await
         .map_err(|error| internal(&error))?;
-    let heads_by_cell = state
-        .projections()
-        .effective_cas_heads_at(&leaves, realm_id)
-        .await
-        .map_err(|error| internal(&error))?;
-
-    let mut items = Vec::with_capacity(values.len() + heads_by_cell.len());
+    let mut items = Vec::with_capacity(values.len());
     let mut conflict_records = Vec::new();
     for (cell, cell_state) in values {
-        if arkret_wire::is_registered_cas_register_cell(cell.as_str()) {
-            // A CAS cell's state is its head set, taken from the identity half
-            // below; its joined value here would lose the write identities.
-            continue;
-        }
         match cell_state {
-            arkret_state::lattice::CellState::Value(value) => items.push(
+            arkret_state::state_model::ResolvedCellState::Causal(state) => items.push(
+                arkret_state::RealmStateSnapshotMaterializedItem::causal_cell(cell, &state.heads)
+                    .map_err(|error| internal(&error))?,
+            ),
+            arkret_state::state_model::ResolvedCellState::Sequenced(state) => items.push(
+                arkret_state::RealmStateSnapshotMaterializedItem::value(cell, state.value)
+                    .map_err(|error| internal(&error))?,
+            ),
+            arkret_state::state_model::ResolvedCellState::Value(value) => items.push(
                 arkret_state::RealmStateSnapshotMaterializedItem::value(cell, value)
                     .map_err(|error| internal(&error))?,
             ),
-            arkret_state::lattice::CellState::Bottom(_) => {
+            arkret_state::state_model::ResolvedCellState::Bottom(_) => {
                 conflict_records.push(arkret_state::RealmStateSnapshotConflictRecord::BottomCell {
                     cell_ref: cell,
                 })
             }
         }
-    }
-    for (cell, heads) in heads_by_cell {
-        if heads.is_empty() {
-            continue;
-        }
-        items.push(
-            arkret_state::RealmStateSnapshotMaterializedItem::cas_cell(cell, &heads)
-                .map_err(|error| internal(&error))?,
-        );
     }
     Ok((items, conflict_records))
 }

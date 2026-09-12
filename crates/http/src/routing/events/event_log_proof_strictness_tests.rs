@@ -1377,14 +1377,11 @@ async fn insert_data_event_seal_with(
     let mut seal = arkret_wire::Seal {
         id: data_event_placeholder_seal_id(),
         realm_id: realm,
-        predecessor_refs,
+        predecessor_ref: predecessor_refs.into_iter().next(),
         delta,
         control_event_set_root: data_event_hash(0x22),
         state_root: data_event_hash(0x77),
-        completeness_root: data_event_hash(0x33),
         notary_seq: 1,
-        data_view_root: None,
-        data_event_set_root: None,
         availability_receipt_digests: Vec::new(),
         covered_event_digests: Vec::new(),
         previous_state_root: None,
@@ -1517,12 +1514,15 @@ async fn insert_historical_data_event_grant_for_subject(
     };
     state
         .projections()
-        .test_append_sealed_effects(
+        .test_append_confirmed_effects(
             &realm,
             &seal_id,
             &[(
                 cell,
-                strictness_issued(arkret_state::lattice::SealedOp::new(move_id.clone(), op)),
+                strictness_issued(arkret_state::state_model::StateWrite::new(
+                    move_id.clone(),
+                    op,
+                )),
             )],
         )
         .await
@@ -1547,14 +1547,11 @@ async fn insert_data_event_revocation_successor(
     let mut successor = arkret_wire::Seal {
         id: data_event_placeholder_seal_id(),
         realm_id: realm.clone(),
-        predecessor_refs: vec![predecessor],
+        predecessor_ref: Some(predecessor),
         delta: vec![move_id.clone()],
         control_event_set_root: data_event_hash(0x23),
         state_root: data_event_hash(0x78),
-        completeness_root: data_event_hash(0x34),
         notary_seq: 2,
-        data_view_root: None,
-        data_event_set_root: None,
         availability_receipt_digests: Vec::new(),
         covered_event_digests: Vec::new(),
         previous_state_root: None,
@@ -1594,12 +1591,12 @@ async fn insert_data_event_revocation_successor(
     };
     state
         .projections()
-        .test_append_sealed_effects(
+        .test_append_confirmed_effects(
             &realm,
             &successor_id,
             &[(
                 cell,
-                strictness_issued(arkret_state::lattice::SealedOp::new(move_id, op)),
+                strictness_issued(arkret_state::state_model::StateWrite::new(move_id, op)),
             )],
         )
         .await
@@ -1662,20 +1659,20 @@ async fn insert_historical_data_event_child_grant_with_revoked_authority(
     };
     state
         .projections()
-        .test_append_sealed_effects(
+        .test_append_confirmed_effects(
             &realm,
             &seal_id,
             &[
                 (
                     parent_cell,
-                    strictness_issued(arkret_state::lattice::SealedOp::new(
+                    strictness_issued(arkret_state::state_model::StateWrite::new(
                         parent_move_id.clone(),
                         parent_op,
                     )),
                 ),
                 (
                     child_cell,
-                    strictness_issued(arkret_state::lattice::SealedOp::new(
+                    strictness_issued(arkret_state::state_model::StateWrite::new(
                         child_move_id.clone(),
                         child_op,
                     )),
@@ -1700,23 +1697,22 @@ fn data_event_derived_cells() -> Vec<String> {
 
 /// A DataEvent citing `grants` through `refs[role=authorized_by]`, which is
 /// where v1 puts a capability citation — `auth_context` is closed over
-/// `{did, key_id, key_epoch, credential_epoch}`.
+/// `{key_id, key_epoch, credential_epoch, authority_refs}`.
 fn data_event_object_with_refs(
-    seal_ref: &str,
+    authority_ref: &str,
     grants: Vec<String>,
 ) -> serde_json::Map<String, Value> {
     json!({
         "actor_id": data_event_account(DATA_EVENT_ACTOR),
-        "seal_ref": seal_ref,
         "created_at": "2026-05-08T00:02:00.000Z",
         "refs": grants
             .into_iter()
             .map(|grant_id| json!({"id": grant_id, "role": "authorized_by", "critical": true}))
             .collect::<Vec<Value>>(),
         "auth_context": {
-            "did": DATA_EVENT_ACTOR,
             "key_id": "device:01904100-0000-7000-8000-a11ce0000001",
-            "key_epoch": 1
+            "key_epoch": 1,
+            "authority_refs": [authority_ref]
         },
         // A DataEvent carries a payload, and `data_event_constraint_context`
         // resolves the field/track authorization context from it. A
@@ -2094,9 +2090,9 @@ async fn current_revocation_blocks_admission_regardless_of_seal_distance() {
 /// Attach a fixed issuer to a strictness fixture op; these cells are not
 /// ordered-log keyed, so the issuer travels but does not select a slot.
 fn strictness_issued(
-    op: arkret_state::lattice::SealedOp,
-) -> arkret_state::lattice::ordered_log::IssuedOp {
-    arkret_state::lattice::ordered_log::IssuedOp {
+    op: arkret_state::state_model::StateWrite,
+) -> arkret_state::state_model::ordered_log::IssuedOp {
+    arkret_state::state_model::ordered_log::IssuedOp {
         issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
             "did:webvh:z6mkfixture:alice.example",
         )),

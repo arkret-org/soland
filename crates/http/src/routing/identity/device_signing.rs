@@ -57,7 +57,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                 .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
             if account.station_id.as_str() != state.service_id() {
                 // This key is supplied only by exact Event/Actor-bound,
-                // independently verified origin-Station admission evidence.
+                // independently verified producer signer evidence.
                 // A foreign account must never borrow our local device row.
                 let key = producer_signing_key
                     .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;

@@ -451,10 +451,17 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let authorized_key_event =
-            serde_json::to_value(&activation.authorized_key_event).map_err(|error| {
-                PersistenceError::Internal(format!("encode typed Agent authorize Event: {error}"))
-            })?;
+        let authorized_key_event = (activation.outcome
+            == arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active)
+            .then(|| {
+                crate::agent_principal_row::pack_authorized_key_material(
+                    Some(activation.authorized_key_event.clone()),
+                    activation.signer_resolution_evidence_ref.clone(),
+                    activation.current_signer_evidence.clone(),
+                )
+            })
+            .transpose()?
+            .flatten();
         let pending_intent = serde_json::to_value(PendingAgentPairingCommitIntent {
             request_digest: activation.paired_request_digest.clone(),
             authorize_event_id: activation.authorized_event_ref.clone(),
@@ -499,6 +506,11 @@ impl AgentStore for PgAgentStore {
             if activation.outcome != arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active {
                 return Err(PersistenceError::SchemaViolation("pairing reconciliation requires a terminal outcome".into()).into());
             }
+            let authorized_key_event = authorized_key_event.as_ref().ok_or_else(|| {
+                PersistenceError::SchemaViolation(
+                    "active Agent authorization material is absent".to_owned(),
+                )
+            })?;
             let rows = diesel::update(
                 agent_principals::table
                     .filter(agent_principals::id.eq(&activation.agent_id))
@@ -538,7 +550,7 @@ impl AgentStore for PgAgentStore {
                     .eq(&activation.authorized_verification_method),
                 agent_principals::authorized_public_key_digest
                     .eq(&activation.authorized_public_key_digest),
-                agent_principals::authorized_key_event.eq(&authorized_key_event),
+                agent_principals::authorized_key_event.eq(authorized_key_event),
                 agent_principals::paired_pairing_request_id
                     .eq(activation.pairing_request_id.as_str()),
                 agent_principals::paired_request_digest.eq(&activation.paired_request_digest),

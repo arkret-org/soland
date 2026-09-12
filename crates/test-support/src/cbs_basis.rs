@@ -44,9 +44,9 @@ use crate::AppStateTestExt as _;
 const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
 /// Stable MLS group id used by E2EE fixture payloads.
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
-/// Build a frozen single-signer fixture from a real deterministic Ed25519 key.
+/// Build a frozen f=0 quorum fixture from a real deterministic Ed25519 key.
 #[must_use]
-pub fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
+pub fn test_f0_notary(did: &str) -> arkret_wire::NotaryValue {
     let signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
         Did::new(did.to_owned()).expect("fixture notary DID"),
         arkret_wire::DidUrl::new(format!("{did}#notary-key"))
@@ -54,7 +54,7 @@ pub fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
         [0x53; 32],
     )
     .expect("fixture notary signer");
-    arkret_wire::NotaryValue::single_signer(signer.descriptor)
+    arkret_wire::NotaryValue::new(vec![signer.descriptor], 0, 0).expect("fixture f=0 notary")
 }
 
 /// One fixture family's basis identity.
@@ -309,7 +309,7 @@ pub fn fixture_principal_control_realm_create_for_server(
             principal_id: principal.clone(),
             principal_did: principal_did.clone(),
             station_id,
-            notary: test_single_signer_notary(principal_did.as_str()),
+            notary: test_f0_notary(principal_did.as_str()),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -363,7 +363,7 @@ pub async fn seed_realm_basis(
         .await
         .expect("fixture basis Seal");
     state
-        .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .test_append_confirmed_effects(&realm, &basis.seal.id, &basis.ops)
         .await
         .expect("fixture basis sealed effects");
     seed_realm_genesis_event(state, realm_id, subject).await;
@@ -967,11 +967,11 @@ pub fn apply_registered_cbs_plane_seal(
         return;
     }
     if event.kind.is_data_plane() {
-        event.seal_ref = Some(seal_id);
         event.auth_context = Some(arkret_wire::AuthContext {
             key_id: fixture_auth_context_key_id(verification_method),
             key_epoch: 0,
             credential_epoch: None,
+            authority_refs: vec![seal_id],
         });
     } else if event.kind.is_control_plane() {
         event.seal_basis = Some(SealBasis {

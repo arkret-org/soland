@@ -1,7 +1,7 @@
 use arkret_models_collaboration::history_key::{
     HistoryAuthorityOutcome, HistoryAuthorityRequestBody, MembershipAuthorityRequestBody,
 };
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 
 use super::*;
 
@@ -48,7 +48,7 @@ pub(super) async fn read(
     };
     let policy_cell = arkret_wire::CellRef::new(policy_cell).map_err(unavailable)?;
     let policy: arkret_wire::HistoryAccess = match accepted.get(&policy_cell) {
-        Some(CellState::Value(value)) => {
+        Some(ResolvedCellState::Value(value)) => {
             serde_json::from_value(value.clone()).map_err(unavailable)?
         }
         _ => return Err(unavailable("scope history policy is unavailable")),

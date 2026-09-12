@@ -140,7 +140,8 @@ async fn accepted_agent_selector_claim(
         CellFamilyId::AGENT_SELECTOR_CLAIM_V1
     ))
     .map_err(|_| selector_not_found())?;
-    let Some(arkret_state::lattice::CellState::Value(value)) = effective.get(&cell) else {
+    let Some(arkret_state::state_model::ResolvedCellState::Value(value)) = effective.get(&cell)
+    else {
         return Err(selector_not_found());
     };
     let claim: AgentSelectorClaim =

@@ -8,7 +8,6 @@
 use std::collections::BTreeSet;
 
 use arkret_identifiers::CellRef;
-use arkret_state::lattice::CellState;
 use serde_json::Value;
 
 use super::{ProjectionState, RealmInheritancePolicyState};
@@ -166,10 +165,7 @@ pub(crate) fn capability_grant_cells(
         if !cell_ref.as_str().starts_with(CAPABILITY_GRANT_CELL_PREFIX) {
             return None;
         }
-        match cell_state {
-            CellState::Value(value) => Some((cell_ref, value)),
-            CellState::Bottom(_) => None,
-        }
+        cell_state.settled_value().map(|value| (cell_ref, value))
     })
 }
 

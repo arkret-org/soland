@@ -925,7 +925,7 @@ async fn persist_private_invite_projection(
 /// model never carries it. The holder-private carrier is the actor-private
 /// account-data cell `ak.account.invite_delivery` — the same carrier family
 /// `consent-model.md` §6.1.1 defines for the quarantine inbox — persisted as a
-/// bounded CAS register so late devices can read it back, and fanned out to
+/// bounded registered state model so late devices can read it back, and fanned out to
 /// every device as an `ak.account_data.update`.
 ///
 /// The token itself is derived with the same inputs the invite projection

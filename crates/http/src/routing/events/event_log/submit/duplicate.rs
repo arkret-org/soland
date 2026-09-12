@@ -180,7 +180,7 @@ pub(super) async fn resolve_existing_event_stage(
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
-            "Event retry must preserve the original producer proof and any admission proof",
+            "Event retry must preserve the original producer proof",
         ));
     }
 

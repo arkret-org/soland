@@ -33,7 +33,7 @@ pub enum ProjectionEffect {
         event_ref: String,
         actor_id: String,
         occurrence: Option<String>,
-        /// Live `mv_register` heads after the join. More than one means the
+        /// Live `causal_register` heads after the join. More than one means the
         /// responder has concurrent responses that only they can resolve.
         head_count: usize,
     },
@@ -119,7 +119,7 @@ pub enum ProjectionEffect {
         target_state: String,
     },
     /// Strand watch cell touched. Cell write itself is owned by the
-    /// Move/Seal pipeline (cas-register at SDK layer); the projection
+    /// Move/Seal pipeline (registered state model at SDK layer); the projection
     /// only records that a watch change happened for `(strand_id, actor_id)`
     /// so downstream listeners (notification dispatcher, watcher list
     /// projection) can react. `level` is `None` when the effect clears
@@ -135,12 +135,12 @@ pub enum ProjectionEffect {
         applet_id: AppletId,
     },
     /// `ak.realm.policy_bundle` projected into the canonical
-    /// `ak.component.realm.policy_bundle.v1` cas-register cell.
+    /// `ak.component.realm.policy_bundle.v1` registered state model cell.
     RealmPolicyBundleProjected {
         realm_id: String,
     },
     /// A registry-validated Realm bootstrap facet was written to its exact
-    /// single-target cas-register cell during the staged genesis transaction.
+    /// single-target registered state model cell during the staged genesis transaction.
     RealmBootstrapFacetProjected {
         realm_id: String,
         kind: String,
@@ -156,7 +156,7 @@ pub enum ProjectionEffect {
         digest_algorithm: String,
     },
     /// `ak.realm.media_service` projected into the canonical
-    /// `ak.component.realm.media_service.v1` cas-register cell consumed by
+    /// `ak.component.realm.media_service.v1` registered state model cell consumed by
     /// the AKP-0010 media token exchange.
     RealmMediaServiceProjected {
         realm_id: String,
@@ -174,7 +174,7 @@ pub enum ProjectionEffect {
         binding_id: String,
         state: String,
     },
-    /// `ak.audit.session.*` advanced the sealed release session FSM.
+    /// `ak.audit.session.*` advanced the sealed release session transition.
     AuditSessionProjected {
         session_id: String,
         state: String,
@@ -185,12 +185,12 @@ pub enum ProjectionEffect {
         release_id: String,
     },
     /// `call-state.md` §7 — `ak.call.summary` projected into the write-once
-    /// `ak.component.call.summary.v1` cas_register cell.
+    /// `ak.component.call.summary.v1` causal_register cell.
     CallSummaryProjected {
         call_id: String,
     },
     /// R3.1 — `ak.realm.link` event was projected into the
-    /// `ak.component.realm.link.v1` FSM cell + the `realm_links`
+    /// `ak.component.realm.link.v1` transition cell + the `realm_links`
     /// structured cache.
     RealmLinkProjected {
         realm_id: String,
@@ -199,7 +199,7 @@ pub enum ProjectionEffect {
         status: String,
     },
     /// R3.2 — `ak.realm.inheritance_policy` event was projected into the
-    /// `ak.component.realm.inheritance_policy.v1` cas-register cell.
+    /// `ak.component.realm.inheritance_policy.v1` registered state model cell.
     RealmInheritancePolicyProjected {
         realm_id: String,
         source_realm_id: String,
@@ -211,7 +211,7 @@ pub enum ProjectionEffect {
         realm_id: String,
     },
     /// SOL-ORG-02 — `ak.realm.organization` relationship statement projected
-    /// into the `ak.component.realm.organization.v1` cas-register cell keyed by
+    /// into the `ak.component.realm.organization.v1` registered state model cell keyed by
     /// `(organization_id, relationship)` + the `realm_organization_statements`
     /// structured cache. `status` is `active` (relationship live) or `revoked`
     /// (inactive, retained for audit).
@@ -243,7 +243,7 @@ pub enum ProjectionEffect {
         realm_id: String,
     },
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — agent
-    /// lifecycle FSM transition projected. `agent_id` is the DID
+    /// lifecycle transition transition projected. `agent_id` is the DID
     /// from the payload; `new_state` is the post-transition
     /// AgentLifecycleState. Bottom = `Reject`;
     /// Deactivated is terminal.

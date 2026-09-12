@@ -82,7 +82,7 @@ fn intersect_scope(
 
 pub(super) fn fold(
     value: &Value,
-    lifecycles: &BTreeMap<String, CellState>,
+    lifecycles: &BTreeMap<String, ResolvedCellState>,
     now: DateTime<Utc>,
 ) -> Result<(Value, Option<DateTime<Utc>>), EventSealCommitError> {
     let items = value
@@ -126,8 +126,8 @@ pub(super) fn fold(
         return Err(invalid("Agent key has no exact accepted lifecycle origin"));
     };
     match lifecycle {
-        CellState::Bottom(_) => return Ok((bottom(), None)),
-        CellState::Value(value) if value.as_str() == Some("active") => {}
+        ResolvedCellState::Bottom(_) => return Ok((bottom(), None)),
+        ResolvedCellState::Value(value) if value.as_str() == Some("active") => {}
         _ => return Ok((inactive("lifecycle_inactive"), None)),
     }
     let mut scope = first.agent_key_scope.clone();
@@ -202,7 +202,7 @@ pub(super) mod tests {
             .with_timezone(&Utc);
         let lifecycle = BTreeMap::from([(
             "ak:did_core:web:agent.example".into(),
-            CellState::Value(Value::String("active".into())),
+            ResolvedCellState::Value(Value::String("active".into())),
         )]);
         let value = serde_json::json!([
             authorization(1, "2026-09-10T00:05:00.000Z", &["a", "b"], &["one", "two"]),

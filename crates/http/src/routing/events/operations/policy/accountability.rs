@@ -71,7 +71,7 @@ async fn accountability_grants_at_frozen_basis(
             {
                 continue;
             }
-            let arkret_state::lattice::CellState::Value(value) = cell_state else {
+            let arkret_state::state_model::ResolvedCellState::Value(value) = cell_state else {
                 continue;
             };
             if let Some(grant) = parse_accountability_grant(&value)
@@ -120,8 +120,8 @@ fn accountability_seal_basis(
     operation: &Operation,
 ) -> Result<Vec<arkret_identifiers::SealId>, &'static str> {
     let mut ids = Vec::new();
-    if let Some(seal_ref) = &operation.context.seal_ref {
-        ids.push(seal_ref.clone());
+    if let Some(auth_context) = &operation.context.auth_context {
+        ids.extend(auth_context.authority_refs.iter().cloned());
     }
     if let Some(seal_basis) = &operation.context.seal_basis {
         ids.extend(seal_basis.leaves.iter().cloned());

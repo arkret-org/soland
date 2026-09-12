@@ -3,7 +3,7 @@
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{OperationId, RealmId};
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
@@ -58,7 +58,7 @@ fn seed_source_grant(
     .unwrap();
     state.cells.insert(
         cell_id,
-        CellState::Value(json!([
+        ResolvedCellState::Value(json!([
             {
                 "tag": grant_ref,
                 "value": {

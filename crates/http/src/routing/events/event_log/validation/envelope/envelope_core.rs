@@ -961,31 +961,16 @@ async fn validate_event_envelope_with_ingress(
     let realm_authority_root_authorized = event_string_field(object, &["authorization_ref"])
         .as_deref()
         == Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL);
-    let has_station_admission =
-        object
-            .get("proofs")
-            .and_then(Value::as_array)
-            .is_some_and(|proofs| {
-                proofs.iter().any(|proof| {
-                    proof.get("kind").and_then(Value::as_str) == Some("station_admission")
-                })
-            });
-    // A caller candidate is authorized against the origin's current control
-    // state. An already admitted Event is immutable history: receivers verify
-    // its frozen station_admission proof later in the submit pipeline and MUST
-    // NOT re-evaluate it against a later capability or lifecycle state.
-    if !has_station_admission {
-        realm_authority_root::validate_realm_authority_root_authorization(
-            state,
-            object,
-            &kind,
-            realm_id.as_str(),
-            &actor,
-            bootstrap_unit_member,
-            realm_bootstrap_contexts,
-        )
-        .await?;
-    }
+    realm_authority_root::validate_realm_authority_root_authorization(
+        state,
+        object,
+        &kind,
+        realm_id.as_str(),
+        &actor,
+        bootstrap_unit_member,
+        realm_bootstrap_contexts,
+    )
+    .await?;
     let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;
     // The MIMI facade is the sole closed service-authored message adapter. Its
     // exact current room-binding ref, provider attestation, attributed sender
@@ -994,9 +979,8 @@ async fn validate_event_envelope_with_ingress(
     // capability grant, so that closed authority tuple substitutes only for
     // the ordinary data-event capability lookup; every other validation and
     // reducer step remains shared with native Event submission.
-    if !has_station_admission
-        && !internal_admission
-            .is_some_and(|admission| admission.authorizes_mimi_facade_write(session, object))
+    if !internal_admission
+        .is_some_and(|admission| admission.authorizes_mimi_facade_write(session, object))
     {
         validate_data_event_capability_refs(
             state,
@@ -1297,6 +1281,9 @@ async fn enforce_device_generation_fence(
     if event_uses_active_applet_registration_epoch(state, object).await? {
         return Ok(());
     }
+    if session.token_hash.starts_with("proof-authenticated:") {
+        return Ok(());
+    }
     if let Some(verification_method) = object
         .get("proofs")
         .and_then(Value::as_array)
@@ -1528,7 +1515,7 @@ fn derived_data_event_cells(
     object: &serde_json::Map<String, Value>,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<String>, EventValidationError> {
-    if !object.contains_key("seal_ref") && !object.contains_key("auth_context") {
+    if !object.contains_key("auth_context") {
         return Ok(Vec::new());
     }
     let event =
@@ -1607,7 +1594,7 @@ fn enforce_registered_cell_contract(
     if kind == arkret_wire::event_kind_str::REALM_CREATE {
         // The canonical Realm-create genesis write set is likewise recomputed,
         // never compared against a submitted array. Only the *targets* are
-        // asserted: the lattice ops come from the registered
+        // asserted: the state model ops come from the registered
         // `effect_projection`, and restating them here would rebuild the
         // producer-side effect table v1 removed.
         let derived = arkret_schema::project_registered_cell_writes(&event, digest_suite).map_err(
@@ -1657,7 +1644,10 @@ async fn enforce_ordered_log_cell_contract(
         return Ok(());
     };
     if !descriptor.reducer_input
-        || descriptor.lattice != Some("ordered_log")
+        || !descriptor.cell_writes.iter().any(|write| {
+            write.state_model == Some(arkret_wire::EventCellStateModel::OrderedLog)
+                && write.value_projection_rule.is_some()
+        })
         || descriptor.value_projection_rule.is_none()
     {
         return Ok(());

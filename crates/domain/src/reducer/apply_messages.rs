@@ -515,7 +515,7 @@ impl ProjectionState {
                 reason: "rsvp_entry_missing".to_owned(),
             };
         };
-        // The whole entry is the lattice value, so it has to be a complete,
+        // The whole entry is the state model value, so it has to be a complete,
         // schema-valid object before it can become a head.
         let parsed_entry = match serde_json::from_value::<
             arkret_models_collaboration::objects::productivity::RsvpEntry,

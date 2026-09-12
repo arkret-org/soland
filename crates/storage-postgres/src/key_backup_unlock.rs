@@ -325,7 +325,7 @@ pub(crate) async fn validate_active_basis(
     if blocked > 0 {
         return Err(rejected("backup frontier quarantined").into());
     }
-    let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_refs ? parent.id) ORDER BY parent.id ASC")
+    let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_ref = parent.id) ORDER BY parent.id ASC")
         .bind::<Text,_>(realm).load::<SealText>(&mut *conn).await.map_err(PersistenceError::database)?.into_iter().map(|row|Value::String(row.value)).collect::<Vec<_>>();
     if Value::Array(leaves) != basis["seal_basis"]["leaves"] {
         return Err(rejected("backup_frontier_stale").into());

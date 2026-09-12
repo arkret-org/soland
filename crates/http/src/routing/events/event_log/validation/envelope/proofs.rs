@@ -39,6 +39,117 @@ fn did_key_from_ed25519_bytes(bytes: &[u8]) -> Result<arkret_wire::DidKey, Event
     })
 }
 
+async fn verify_with_historical_signer_evidence(
+    state: &AppState,
+    event: &arkret_wire::Event,
+    proof: &arkret_wire::ProducerEventProof,
+    envelope_bytes: &[u8],
+    event_actor: &arkret_wire::ActorId,
+    signer: &arkret_wire::ActorId,
+) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
+    let evidence_ref = proof
+        .signer_resolution_evidence_ref
+        .as_ref()
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "ordinary Event producer proof must reference signer evidence",
+            )
+        })?;
+    let content_digest = evidence_ref.content_digest().map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            format!("producer signer evidence reference is invalid: {error}"),
+        )
+    })?;
+    let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+        content_digest,
+    };
+    let dependency = state
+        .persistence()
+        .governance_dependency_store()
+        .get_unscoped_signer_evidence(&selector)
+        .await
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                format!("producer signer evidence lookup failed: {error}"),
+            )
+        })?;
+    let Some(dependency) = dependency else {
+        return Ok(None);
+    };
+    let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        authenticated_signer_resolution_evidence: evidence,
+        ..
+    } = dependency
+    else {
+        return Err(event_validation_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "schema_violation",
+            "producer signer evidence selector resolved to the wrong dependency kind",
+        ));
+    };
+    if evidence.signer_id() != signer.signing_principal_id() {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "producer signer evidence does not bind the Event signer",
+        ));
+    }
+    if evidence.verification_method() != &proof.verification_method {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "producer signer evidence does not bind the selected verification method",
+        ));
+    }
+    let public_key = if matches!(
+        evidence.as_ref(),
+        arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent { .. }
+    ) {
+        crate::routing::identity::agents::evidence::verified_historical_agent_event_key(
+            state, event, &evidence,
+        )
+        .await
+        .map_err(|error| event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error))?
+    } else {
+        arkret_models_identity::ed25519_verification_key_from_evidence(&evidence)
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    format!("producer signer evidence is invalid: {error}"),
+                )
+            })?
+            .public_key
+    };
+    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: public_key.to_vec(),
+    };
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        envelope_bytes,
+        event_actor,
+        &material,
+        proof.event_digest.digest_suite().map_err(|error| {
+            event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
+        })?,
+    )
+    .map_err(|error| {
+        tracing::debug!(%error, "historical producer Event proof verification failed");
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "producer Event proof signature is invalid",
+        )
+    })?;
+    did_key_from_ed25519_bytes(&public_key).map(Some)
+}
+
 pub(crate) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
     state: &AppState,
@@ -88,17 +199,11 @@ pub(crate) async fn validate_event_proofs(
             "proofs must contain at least one proof",
         ));
     }
-    let producer_proofs = proofs
-        .iter()
-        .filter(|proof| proof.get("kind").and_then(Value::as_str) == Some("detached_jws"))
-        .collect::<Vec<_>>();
-    if producer_proofs.len() != 1
-        || (proofs.len() != 1 && !(internal_admission.is_some() && proofs.len() == 2))
-    {
+    if proofs.len() != 1 {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
-            "Event must carry one producer proof and only federated accepted Events may carry one admission proof",
+            "Event must carry exactly one producer proof",
         ));
     }
     // Durable Events always carry the SDK Event proof shape. Development mode
@@ -204,7 +309,7 @@ pub(crate) async fn validate_event_proofs(
     // minimal-metadata profile AND the payload carries an encrypted-content
     // envelope.
     let minimal_metadata_context = minimal_metadata_author_context(object, state).await;
-    if let Some(proof) = producer_proofs.into_iter().next() {
+    if let Some(proof) = proofs.first() {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -398,6 +503,40 @@ pub(crate) async fn validate_event_proofs(
                 &created_at,
                 proof_object,
             )?;
+            let signer = object
+                .get("executed_by")
+                .cloned()
+                .map(serde_json::from_value::<arkret_wire::ActorId>)
+                .transpose()
+                .map_err(|error| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        format!("executed_by is invalid: {error}"),
+                    )
+                })?
+                .unwrap_or_else(|| event_actor.clone());
+            let typed_event =
+                serde_json::from_value::<arkret_wire::Event>(Value::Object(object.clone()))
+                    .map_err(|error| {
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "schema_violation",
+                            format!("producer Event is invalid: {error}"),
+                        )
+                    })?;
+            if let Some(signing_key) = verify_with_historical_signer_evidence(
+                state,
+                &typed_event,
+                &typed_proof,
+                envelope_bytes,
+                &event_actor,
+                &signer,
+            )
+            .await?
+            {
+                return Ok(signing_key);
+            }
             // A verified peer admission freezes the producer key at original
             // acceptance. Later installation revocation or key rotation must
             // not reinterpret an accepted historical Event through live gates.
@@ -1104,7 +1243,7 @@ pub(super) fn verify_with_federated_signer_evidence(
         value: multibase.to_owned(),
     };
     // The producer key is bound into the independently verified origin
-    // Station admission proof; no device-history sidecar is needed.
+    // The producer proof carries the exact signer-evidence reference.
     let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
         jws,
         canonical_bytes,
@@ -1255,7 +1394,14 @@ mod tests {
             &mut event,
             &signer,
             &verification_method,
-            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+            arkret_signatures::SignEventOptions::new(
+                arkret_wire::SignerEvidenceRef::new(format!(
+                    "ak:signer_evidence:sha256:{}",
+                    "11".repeat(32)
+                ))
+                .unwrap(),
+            )
+            .with_created_at(created_at),
         )
         .unwrap();
         let session = SessionRecord {
@@ -1394,11 +1540,7 @@ mod tests {
         let envelope_bytes =
             arkret_canonical::canonical_json_bytes(&event.event().digest_payload().unwrap())
                 .unwrap();
-        let event_digest = event.event().proofs[0]
-            .as_producer()
-            .unwrap()
-            .event_digest
-            .to_string();
+        let event_digest = event.event().proofs[0].event_digest.to_string();
         let object = serde_json::to_value(event.event()).unwrap();
         let object = object.as_object().unwrap();
         let admission = InternalEventAdmission::service_franking_proof(
@@ -1429,11 +1571,7 @@ mod tests {
         let envelope_bytes =
             arkret_canonical::canonical_json_bytes(&event.event().digest_payload().unwrap())
                 .unwrap();
-        let event_digest = event.event().proofs[0]
-            .as_producer()
-            .unwrap()
-            .event_digest
-            .to_string();
+        let event_digest = event.event().proofs[0].event_digest.to_string();
         let object = serde_json::to_value(event.event()).unwrap();
         let object = object.as_object().unwrap();
         let admission = InternalEventAdmission::service_franking_proof(

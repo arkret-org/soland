@@ -126,14 +126,14 @@ pub(super) async fn serve(
                 .map_err(internal)?;
             leaves.sort();
             leaves.dedup();
-            let seal_basis = arkret_wire::SealBasis { leaves };
-            seal_basis.validate_protocol_bounds().map_err(validation)?;
-            if seal_basis.leaves.is_empty() {
+            if leaves.len() != 1 {
                 return Err(AppError::new(
                     ErrorCode::FrontierUnavailable,
-                    "accepted bootstrap basis unavailable",
+                    "bootstrap requires one accepted Realm authority head",
                 ));
             }
+            let seal_basis = arkret_wire::SealBasis { leaves };
+            seal_basis.validate_protocol_bounds().map_err(validation)?;
             let digest_algorithm = state
                 .projections()
                 .predecessor_digest_suite(&request.realm_id, &seal_basis.leaves)
@@ -463,7 +463,7 @@ async fn resolve(
                 .ok_or_else(|| {
                     AppError::new(ErrorCode::DependencyMissing, "bootstrap Seal missing")
                 })?;
-            edges.extend(seal.predecessor_refs.iter().cloned().map(Pending::Seal));
+            edges.extend(seal.predecessor_ref.iter().cloned().map(Pending::Seal));
             edges.extend(seal.delta.iter().cloned().map(Pending::Event));
             edges.extend(
                 governance_runtime_dependency_selector_coordinates_for_acquisition(

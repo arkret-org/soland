@@ -214,7 +214,7 @@ async fn prepare_ghost_event(
         stamp_projection_operation_received_at(operation, received_at);
     }
     // Installation administrator Moves are ordinary local-origin Control
-    // Events. Persist their Station admission proof before notary evaluation.
+    // Events. Persist their producer evidence before notary evaluation.
     // The service-authored managed identity unit retains its distinct closed
     // aggregate proof contract; the hosting Station cannot sign as its origin.
     let (typed, envelope, accepted_canonical_bytes, governance_dependency) = if matches!(

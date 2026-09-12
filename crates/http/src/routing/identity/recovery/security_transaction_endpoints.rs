@@ -1432,14 +1432,10 @@ async fn continue_issue_terminal_receipt(
             "accepted device authorization Event changed the recovery binding",
         ));
     }
-    let mut producer_methods =
-        authorization_envelope
-            .proofs
-            .iter()
-            .filter_map(|proof| match proof {
-                arkret_wire::EventProof::Producer(proof) => Some(&proof.verification_method),
-                arkret_wire::EventProof::StationAdmission(_) => None,
-            });
+    let mut producer_methods = authorization_envelope
+        .proofs
+        .iter()
+        .map(|proof| &proof.verification_method);
     let expected_verification_method = producer_methods.next().ok_or_else(|| {
         AppError::internal("accepted replacement authorization Event has no producer proof")
     })?;

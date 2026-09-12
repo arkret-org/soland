@@ -370,7 +370,14 @@ mod federated_producer_event_proof_tests {
             &mut event,
             &signer,
             &verification_method,
-            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+            arkret_signatures::SignEventOptions::new(
+                arkret_wire::SignerEvidenceRef::new(format!(
+                    "ak:signer_evidence:sha256:{}",
+                    "11".repeat(32)
+                ))
+                .unwrap(),
+            )
+            .with_created_at(created_at),
         )
         .unwrap();
         event.into_event()
@@ -398,10 +405,7 @@ mod federated_producer_event_proof_tests {
     #[test]
     fn federated_producer_uses_strict_event_header_profile() {
         let event = fixture_event();
-        let producer = event.proofs[0]
-            .as_producer()
-            .expect("fixture producer proof")
-            .clone();
+        let producer = event.proofs[0].clone();
         let key = SigningKey::from_bytes(&[21_u8; 32]);
 
         verify_federated_producer_event_proof(&event, &producer, key.verifying_key().as_bytes())
@@ -430,30 +434,6 @@ mod federated_producer_event_proof_tests {
             key.verifying_key().as_bytes(),
         )
         .expect_err("Event protected headers must reject kid even with a valid signature");
-    }
-}
-
-mod direct_founding_origin_tests {
-    use super::direct_founding_origin_ids_match;
-
-    #[test]
-    fn direct_founding_source_receipt_and_every_event_share_one_origin() {
-        let source = "ak:did_core:web:remote.example";
-        assert!(direct_founding_origin_ids_match(
-            source,
-            source,
-            &[source, source, source]
-        ));
-        assert!(!direct_founding_origin_ids_match(
-            source,
-            source,
-            &[source, "ak:did_core:web:other.example", source]
-        ));
-        assert!(!direct_founding_origin_ids_match(
-            source,
-            "ak:did_core:web:other.example",
-            &[source, source, source]
-        ));
     }
 }
 
@@ -530,7 +510,7 @@ mod agent_pcr_batch_tests {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            crate::test_single_signer_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
+            crate::test_f0_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
         )
         .unwrap();
         let payload =

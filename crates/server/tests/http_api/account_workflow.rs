@@ -41,7 +41,7 @@ async fn seal_accepted_invite_create(
         .expect("invite predecessor state");
     let mut ops_by_cell: std::collections::BTreeMap<
         arkret_identifiers::CellRef,
-        Vec<arkret_state::lattice::ordered_log::IssuedOp>,
+        Vec<arkret_state::state_model::ordered_log::IssuedOp>,
     > = std::collections::BTreeMap::new();
     let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
     for write in writes {
@@ -53,18 +53,16 @@ async fn seal_accepted_invite_create(
         )
         .expect("resolve accepted invite write");
         for effect in effects {
-            assert!(!effect.recovery_reset, "invite create cannot reset cells");
             ops_by_cell.entry(effect.cell_id).or_default().push(
-                arkret_state::lattice::ordered_log::IssuedOp {
+                arkret_state::state_model::ordered_log::IssuedOp {
                     issuer_id: event.actor_id.clone(),
-                    op: arkret_state::lattice::SealedOp::new(move_id.clone(), effect.op),
+                    op: arkret_state::state_model::StateWrite::new(move_id.clone(), effect.op),
                 },
             );
         }
     }
 
     let mut sealed_ops = Vec::new();
-    let mut cas_heads = arkret_state::CasHeadsByCell::new();
     for (cell, ops) in ops_by_cell {
         assert!(
             !post_state.contains_key(&cell),
@@ -73,25 +71,15 @@ async fn seal_accepted_invite_create(
         let binding = registry
             .resolve(&event.realm_id, &cell)
             .expect("invite cell family is registered");
-        // The live-target slot is a `cas_register`, so its state_root leaf is
-        // the head set of spec section 6.2.1 rather than its settled value.
-        if arkret_state::is_causal_register(binding.lattice.kind()) {
-            let heads = arkret_state::causal_heads_for_batches(
-                binding.lattice.kind(),
-                std::slice::from_ref(&ops),
-            );
-            if !heads.is_empty() {
-                cas_heads.insert(cell.clone(), heads);
-            }
-        }
         post_state.insert(
             cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
+            arkret_state::join_cell(binding.model.as_ref(), &cell, &ops)
+                .expect("invite cell resolves"),
         );
         sealed_ops.extend(ops.into_iter().map(|op| (cell.clone(), op)));
     }
     let state_root = arkret_state::state::compute_state_root(
-        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_state::GovernanceView::new(&post_state),
         arkret_canonical::DigestSuite::Sha256,
     )
     .expect("invite successor state root");
@@ -130,7 +118,7 @@ async fn seal_accepted_invite_create(
         .await
         .expect("persist accepted invite successor Seal");
     state
-        .test_append_sealed_effects(&event.realm_id, &seal.id, &sealed_ops)
+        .test_append_confirmed_effects(&event.realm_id, &seal.id, &sealed_ops)
         .await
         .expect("persist accepted invite sealed effects");
 }
@@ -271,15 +259,11 @@ fn sign_contact_draft(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(created_at),
     )
     .expect("sign prepared Contact Event");
     let event = event.into_event();
-    let proof = event
-        .proofs
-        .iter()
-        .find_map(arkret_wire::EventProof::as_producer)
-        .expect("signed Contact producer proof");
+    let proof = event.proofs.first().expect("signed Contact producer proof");
     let envelope_bytes = arkret_signatures::EventProofBuilder::new()
         .envelope_bytes(&event)
         .expect("Contact Event proof envelope bytes");
@@ -1795,7 +1779,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     assert!(protocol_head_body["signature"].is_object());
 
     // `realm-state-snapshot-schema.md` section 3: `items[]` is a closed single-branch union
-    // of reducer cells, `{kind:"cell", id, state}`, and a `cas_register` cell's
+    // of reducer cells, `{kind:"cell", id, state}`, and a `causal_register` cell's
     // state is its full head set. Every Realm has at least one written CAS cell
     // from genesis — the notary — so a manifest without it is a producer that
     // still dumps Events instead of reducer state, which is what this Station
@@ -1829,7 +1813,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     );
     let heads = notary_item["state"]["heads"]
         .as_array()
-        .expect("a cas_register cell state is a head set");
+        .expect("a causal_register cell state is a head set");
     assert!(
         !heads.is_empty(),
         "an unwritten cell is not a member, so an emitted cell always has a head",

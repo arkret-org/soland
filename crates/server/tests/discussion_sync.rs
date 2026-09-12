@@ -812,7 +812,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(now),
     )
     .expect("SDK Event signer accepts discussion fixture");
     let event = event.into_event();

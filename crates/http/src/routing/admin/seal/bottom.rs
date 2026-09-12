@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use arkret_identifiers::{CellRef, RealmId, SealId};
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::Value;
@@ -18,7 +18,7 @@ use crate::{JsonResult, app_error, json_ok};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Fold a `CellState::Bottom(_)` JSON envelope into a `BottomEntry`.
+/// Fold a `ResolvedCellState::Bottom(_)` JSON envelope into a `BottomEntry`.
 ///
 /// The SDK serializes `Bottom` as `{kind, ...}` with `kind` already in the
 /// snake_case wire form, so callers (sodmin) can pattern-match it against
@@ -73,7 +73,7 @@ pub(super) fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -
 }
 
 /// Walk the projection cell map for one Realm, collect every
-/// `CellState::Bottom(_)` cell, and shape it into the wire response.
+/// `ResolvedCellState::Bottom(_)` cell, and shape it into the wire response.
 async fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntry> {
     let Ok(realm) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
@@ -97,7 +97,7 @@ async fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> V
         let Some(cell_state) = proj.cell(&cell) else {
             continue;
         };
-        if let CellState::Bottom(bottom) = cell_state {
+        if let ResolvedCellState::Bottom(bottom) = cell_state {
             let bottom_json = serde_json::to_value(bottom).unwrap_or(Value::Null);
             out.push(bottom_entry_from(realm_id, cell.as_str(), &bottom_json));
         }

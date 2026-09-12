@@ -26,7 +26,6 @@ pub(in crate::routing::events::event_log) fn events_submit_outcome(
         // owns the receipt store may populate this.
         ingress_receipts: Vec::new(),
         control_proposal_acks: Vec::new(),
-        agent_event_admissions: Vec::new(),
         quarantine: quarantine
             .into_iter()
             .filter_map(|event_id| EventId::new(event_id).ok())

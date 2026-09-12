@@ -48,16 +48,12 @@ pub(crate) async fn admin_get_seal_dag(
         let Ok(Some(seal)) = state.projections().seal_by_id(leaf_id).await else {
             continue;
         };
-        let signers = match &seal.notary_signature {
-            arkret_wire::seal::NotarySig::Single(signature) => {
-                vec![signature.verification_method.as_str().to_owned()]
-            }
-            arkret_wire::seal::NotarySig::Multi(multi) => multi
-                .signatures
-                .iter()
-                .map(|signature| signature.verification_method.as_str().to_owned())
-                .collect(),
-        };
+        let signers = seal
+            .notary_signature
+            .signatures
+            .iter()
+            .map(|signature| signature.verification_method.as_str().to_owned())
+            .collect();
         for digest in seal.covered_event_digests.iter().chain(seal.delta.iter()) {
             covered_event_digests.insert(digest.as_str().to_owned());
         }

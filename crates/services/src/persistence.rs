@@ -417,7 +417,7 @@ impl PersistenceHandle {
     pub async fn current_principal(
         &self,
         account_id: &arkret_wire::AccountId,
-        registry: &dyn arkret_state::state::CellRegistry,
+        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> crate::ServiceResult<soland_storage::CurrentPrincipalRead> {
         Ok(self
             .persistence

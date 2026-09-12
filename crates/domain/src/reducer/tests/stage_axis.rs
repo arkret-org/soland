@@ -138,7 +138,7 @@ fn strand_create_ignores_wire_supplied_stage_changed_at() {
 }
 
 /// §5.3.3: v1 has no transition matrix carrier, so the core reducer accepts
-/// every direction — including the two the deleted private FSM used to reject.
+/// every direction — including the two the deleted private transition used to reject.
 #[test]
 fn strand_stage_set_imposes_no_direction_rule() {
     let mut state = ProjectionState::new();

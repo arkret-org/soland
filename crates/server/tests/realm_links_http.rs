@@ -3,7 +3,8 @@
 //! - `POST /_arkret/self/events` — create, status-flip, or tombstone an `ak.realm.link`.
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — read the merged effective policy
 //!   (walks the inheritance chain).
-//! - General directed cycles are accepted; self-links and illegal FSM transitions are rejected.
+//! - General directed cycles are accepted; self-links and illegal transition transitions are
+//!   rejected.
 
 use arkret_identifiers::{RealmId, SealId};
 use chrono::Utc;
@@ -70,7 +71,7 @@ fn alice_core_id() -> String {
 }
 
 /// Bootstrap a Realm through the real `ak.realm.create` genesis batch, with this
-/// deployment as its frozen `single_signer` notary, and grant the caller `ak.realm.link`.
+/// deployment as its frozen `f=0` quorum notary, and grant the caller `ak.realm.link`.
 ///
 /// The Realm id is derived from the genesis Event (`realm-and-space.md` section
 /// 2.5.0), so it is read back off the Event rather than chosen here.
@@ -126,7 +127,7 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
 /// The accepted Seal a Control Move of `realm_id` cites in `seal_basis`.
 async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> SealId {
     // An accepted Event may still be ahead of the coordinator's signed head.
-    // Sequential FSM writes must cite a Seal covering the prior write, not
+    // Sequential transition writes must cite a Seal covering the prior write, not
     // merely any existing Seal returned while a successor is pending.
     let required_link_digests = state
         .test_persistence()
@@ -153,7 +154,7 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
             let leaf = frontier
                 .frontier
                 .sole_leaf()
-                .expect("single-signer Realm frontier")
+                .expect("f=0 Realm frontier")
                 .clone();
             if seal_covers_link_history(state, &leaf, &required_link_digests).await {
                 return leaf;
@@ -220,7 +221,7 @@ async fn realm_link_diagnostics(state: &AppState, realm_id: &str) -> Value {
     for cell in cells {
         let cell_batches = state
             .test_projections()
-            .sealed_op_batches_for_cell(&realm_id, &cell)
+            .confirmed_write_batches_for_cell(&realm_id, &cell)
             .await
             .unwrap();
         batches.push(json!({"cell": cell, "batches": format!("{cell_batches:?}")}));
@@ -246,7 +247,7 @@ async fn seal_covers_link_history(
             .expect("read accepted Seal")
             .expect("frontier and predecessor Seals are durably available");
         covered.extend(seal.delta);
-        pending.extend(seal.predecessor_refs);
+        pending.extend(seal.predecessor_ref);
     }
     required.is_subset(&covered)
 }
@@ -513,7 +514,7 @@ async fn realm_link_tombstone_recomputes_effective_policy() {
     );
 
     // Tombstoned is terminal. A later attempt to reactivate the same cell
-    // fails with the canonical FSM reason. `error-code-registry.json` maps
+    // fails with the canonical transition reason. `error-code-registry.json` maps
     // `failed_precondition` to HTTP 409, and `realm_link_invalid_transition`
     // is a `state_resolution` reason carried under it -- 422 is not the
     // status any part of the registry gives this rejection.
@@ -579,7 +580,7 @@ async fn assert_link_moves_are_sealed_once(state: &AppState, realm_id: &str, lea
                 *counts.entry(digest).or_default() += 1;
             }
         }
-        seals.extend(seal.predecessor_refs);
+        seals.extend(seal.predecessor_ref);
     }
     for digest in accepted_links {
         assert_eq!(

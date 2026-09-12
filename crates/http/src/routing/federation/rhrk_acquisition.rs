@@ -262,7 +262,10 @@ impl RhrkAcquisitionWorker {
             }
             let request = PeerSealResolveRequestBody {
                 realm_id: realm_id.clone(),
-                seal_refs: batch,
+                selection:
+                    arkret_models_collaboration::http_bodies::SealResolveSelection::SealRefs {
+                        seal_refs: batch,
+                    },
                 history_traversal_access: Some(access.clone()),
             };
             let outcome: SealResolveOutcome = self
@@ -271,15 +274,22 @@ impl RhrkAcquisitionWorker {
             outcome
                 .validate_for_peer_request(&request)
                 .map_err(|error| format!("seal_outcome:{error}"))?;
-            if !outcome.missing_seal_refs.is_empty() {
+            let SealResolveOutcome::Seals {
+                seals: resolved,
+                missing_seal_refs,
+            } = outcome
+            else {
+                return Err("seal_outcome_mode".to_owned());
+            };
+            if !missing_seal_refs.is_empty() {
                 return Err("seal_dependency_missing".to_owned());
             }
-            for seal in outcome.seals {
+            for seal in resolved {
                 if seal.realm_id != *realm_id {
                     return Err("seal_cross_realm".to_owned());
                 }
                 if !trusted_base_leaves.contains(&seal.id) {
-                    for predecessor in &seal.predecessor_refs {
+                    for predecessor in seal.predecessor_ref.as_slice() {
                         if !trusted_base_leaves.contains(predecessor)
                             && !seals.contains_key(predecessor)
                         {

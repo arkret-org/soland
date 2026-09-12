@@ -9,18 +9,18 @@ use arkret_models_crypto::{
     MlsGovernanceFrontierRequestBody, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
     ProposedMlsGroupGenesisBinding,
 };
-use arkret_state::lattice::ordered_log::IssuedOp;
-use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{
     MlsGovernanceVerificationCheckpoint, MlsGroupGenesisBinding,
 };
 #[cfg(test)]
 use arkret_state::state::compute_state_root;
-use arkret_state::state::{EventCellBottom, control_event_set_root};
+use arkret_state::state::control_event_set_root;
+use arkret_state::state_model::ordered_log::IssuedOp;
+use arkret_state::state_model::{ResolvedCellState, StateWrite};
 #[cfg(test)]
 use arkret_wire::cbs::LatticeOp;
 use arkret_wire::cbs::LatticeOpType;
-use arkret_wire::{Event, NotarySig, ScopeRef as GovernanceScope};
+use arkret_wire::{Event, ScopeRef as GovernanceScope};
 use salvo::oapi::extract::JsonBody;
 
 use super::*;
@@ -115,8 +115,8 @@ async fn materialize_self_governance_frontier(
     .map_err(map_governance_frontier_error)?;
     let epoch_head = match accepted.get(&epoch_cell) {
         None => None,
-        Some(CellState::Value(value)) => Some(
-            serde_json::from_value::<MlsEpochHead>(value.clone())
+        Some(ResolvedCellState::Sequenced(state)) => Some(
+            serde_json::from_value::<MlsEpochHead>(state.value.clone())
                 .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?,
         ),
         Some(_) => {
@@ -272,7 +272,7 @@ struct MaterializedRealmControl {
 }
 
 fn authoritative_notary(
-    joined: &BTreeMap<CellRef, CellState>,
+    joined: &BTreeMap<CellRef, ResolvedCellState>,
 ) -> Result<Option<arkret_wire::notary::NotaryValue>, AppError> {
     // `joined` is the portable control-state map used for Seal state-root
     // verification, so its keys must remain byte-identical to signed Event
@@ -281,10 +281,10 @@ fn authoritative_notary(
     // subject to `realm_id` to prevent cross-Realm aliasing.
     let notary_cell =
         CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned()).map_err(proof_state_error)?;
-    let Some(CellState::Value(value)) = joined.get(&notary_cell) else {
+    let Some(ResolvedCellState::Sequenced(state)) = joined.get(&notary_cell) else {
         return Ok(None);
     };
-    let notary = serde_json::from_value::<arkret_wire::notary::NotaryValue>(value.clone())
+    let notary = serde_json::from_value::<arkret_wire::notary::NotaryValue>(state.value.clone())
         .map_err(|error| {
             proof_state_error(format!("invalid materialized Realm notary: {error}"))
         })?;
@@ -298,7 +298,6 @@ async fn apply_authoritative_event_seal_path(
     authoritative_notary: &arkret_wire::notary::NotaryValue,
     event_ops: &[(CellRef, IssuedOp)],
     available_control_digests: &BTreeSet<Hash>,
-    control_events: &[(Event, arkret_canonical::DigestSuite)],
     seals: &[arkret_wire::Seal],
 ) -> Result<(), AppError> {
     for seal in seals {
@@ -341,7 +340,7 @@ async fn apply_authoritative_event_seal_path(
             .await
             .map_err(|error| proof_state_error(format!("read Event Seal frontier: {error}")))?;
         leaves.sort();
-        if seal.predecessor_refs != leaves {
+        if seal.predecessor_ref.as_slice() != leaves.as_slice() {
             return Err(proof_state_error(
                 "authoritative Event Seal predecessors differ from the local frontier",
             ));
@@ -389,24 +388,16 @@ async fn apply_authoritative_event_seal_path(
         let expected_control_root =
             control_event_set_root(&target, digest_suites.seal_digest_suite)
                 .map_err(proof_state_error)?;
-        let expected_completeness_root = arkret_state::control_event_completeness_root(
-            control_events,
-            &target,
-            digest_suites.seal_digest_suite,
-        )
-        .map_err(proof_state_error)?;
-        if seal.control_event_set_root != expected_control_root
-            || seal.completeness_root != expected_completeness_root
-        {
+        if seal.control_event_set_root != expected_control_root {
             return Err(proof_state_error(
-                "authoritative Event Seal control/completeness root mismatch",
+                "authoritative Event Seal control_event_set_root mismatch",
             ));
         }
 
         let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
         for (cell, op) in event_ops
             .iter()
-            .filter(|(_, issued)| target.contains(&issued.op.move_id))
+            .filter(|(_, issued)| target.contains(&issued.op.event_id.event_digest()))
         {
             ops_by_cell
                 .entry(cell.clone())
@@ -452,11 +443,10 @@ async fn apply_authoritative_event_seal_path(
             ));
         }
 
-        let canonical_bytes = seal.canonical_bytes_for_id().map_err(proof_state_error)?;
-        let signatures = match &seal.notary_signature {
-            NotarySig::Single(signature) => std::slice::from_ref(signature),
-            NotarySig::Multi(multi) => multi.signatures.as_slice(),
-        };
+        let canonical_bytes = seal
+            .commit_transcript_bytes(digest_suites.seal_digest_suite)
+            .map_err(proof_state_error)?;
+        let signatures = seal.notary_signature.signatures.as_slice();
         if signatures.is_empty() {
             return Err(proof_state_error(
                 "authoritative Event Seal has no signatures",
@@ -491,7 +481,7 @@ async fn apply_authoritative_event_seal_path(
         let delta = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
         let new_ops = event_ops
             .iter()
-            .filter(|(_, issued)| delta.contains(&issued.op.move_id))
+            .filter(|(_, issued)| delta.contains(&issued.op.event_id.event_digest()))
             .cloned()
             .collect::<Vec<_>>();
         match state
@@ -507,7 +497,6 @@ async fn apply_authoritative_event_seal_path(
                 &leaves,
                 &new_ops,
                 &target,
-                None,
                 &[],
             )
             .await
@@ -680,7 +669,7 @@ async fn materialize_realm_control_with_transported_seals(
     {
         let ops = state
             .projections()
-            .sealed_ops_for_cell(realm_id, &cell)
+            .state_writes_for_cell(realm_id, &cell)
             .await
             .map_err(|error| {
                 crate::app_error!(
@@ -689,7 +678,7 @@ async fn materialize_realm_control_with_transported_seals(
                 )
             })?;
         if !ops.is_empty() {
-            sealed_move_ids.extend(ops.iter().map(|issued| issued.op.move_id.clone()));
+            sealed_move_ids.extend(ops.iter().map(|issued| issued.op.event_id.event_digest()));
             event_ops.extend(ops.iter().cloned().map(|issued| (cell.clone(), issued)));
             ops_by_cell.insert(cell, ops);
         }
@@ -735,7 +724,7 @@ async fn materialize_realm_control_with_transported_seals(
         );
     }
 
-    // The query is newest-first, while FSM transitions across distinct Seal
+    // The query is newest-first, while transition transitions across distinct Seal
     // bases must be reduced in causal acceptance order. Move digests are
     // content hashes and therefore cannot be used as transition ordering.
     for record in realm_records.iter().rev() {
@@ -790,7 +779,7 @@ async fn materialize_realm_control_with_transported_seals(
         if (!projects_writes
             && !identity_anchor_event_ids.contains(record.event_id.as_str())
             && !requires_invite_membership_validation)
-            || event.seal_ref.is_some()
+            || event.auth_context.is_some()
         {
             continue;
         }
@@ -823,13 +812,12 @@ async fn materialize_realm_control_with_transported_seals(
                 "duplicate canonical Event digest in Realm control history",
             ));
         }
-        // The canonical Event envelope is immutable, so `seal_ref` is not
-        // retroactively stamped after finalization. The Cell store is the
+        // The canonical Event envelope is immutable. The Cell store is the
         // authoritative record of which control Moves are already sealed.
         // They remain part of cumulative Seal coverage and state-root
         // verification, but must not be projected into the successor's
         // candidate batch: doing so destroys the predecessor/candidate
-        // boundary used by mv-register resolution and can manufacture a
+        // boundary used by causal-state resolution and can manufacture a
         // conflict from one historical write.
         if sealed_move_ids.contains(&move_id) {
             continue;
@@ -854,14 +842,27 @@ async fn materialize_realm_control_with_transported_seals(
                             crate::app_error!(
                                 UnsupportedProfile,
                                 format!(
-                                    "no lattice registered for governance cell \
+                                    "no state model registered for governance cell \
                                          {member_cell}: {error}"
                                 ),
                             )
                         })?;
-                    match arkret_state::join_cell(binding.lattice.as_ref(), &member_cell, ops) {
-                        CellState::Value(serde_json::Value::String(value)) => Some(value),
-                        CellState::Value(_) => {
+                    let resolved =
+                        arkret_state::join_cell(binding.model.as_ref(), &member_cell, ops)
+                            .map_err(|error| {
+                                crate::app_error!(
+                                    StateMismatch,
+                                    format!("governance member cell resolution failed: {error}"),
+                                )
+                            })?;
+                    match resolved {
+                        ResolvedCellState::Sequenced(
+                            arkret_state::state_model::SequencedStateValue {
+                                value: serde_json::Value::String(value),
+                                ..
+                            },
+                        ) => Some(value),
+                        ResolvedCellState::Sequenced(_) => {
                             return Err(crate::app_error!(
                                 StateMismatch,
                                 format!(
@@ -869,10 +870,18 @@ async fn materialize_realm_control_with_transported_seals(
                                 ),
                             ));
                         }
-                        CellState::Bottom(_) => {
+                        ResolvedCellState::Bottom(_) => {
                             return Err(crate::app_error!(
                                 StateMismatch,
                                 format!("governance member cell {member_cell} is in Bottom state"),
+                            ));
+                        }
+                        ResolvedCellState::Causal(_) | ResolvedCellState::Value(_) => {
+                            return Err(crate::app_error!(
+                                StateMismatch,
+                                format!(
+                                    "governance member cell {member_cell} is not sequenced state"
+                                ),
                             ));
                         }
                     }
@@ -881,14 +890,12 @@ async fn materialize_realm_control_with_transported_seals(
         } else {
             None
         };
-        let basis_heads = event_basis_causal_heads(state, realm_id, &event).await?;
         for (cell, issued) in canonical_event_ops(
             state,
             realm_id,
             &event,
             &move_id,
             &ops_by_cell,
-            &basis_heads,
             invite_accept_from.as_deref(),
             record.digest_suite,
         )? {
@@ -930,28 +937,6 @@ async fn materialize_realm_control_with_transported_seals(
             "Realm has no accepted Control Event material",
         ));
     }
-    let completeness_events = realm_records
-        .iter()
-        .filter(|record| {
-            covered
-                .iter()
-                .any(|digest| digest.as_str() == record.canonical_digest)
-        })
-        .map(|record| {
-            let event =
-                serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                    crate::app_error!(
-                        StateMismatch,
-                        format!(
-                            "covered Event {} is not a canonical envelope: {error}",
-                            record.event_id
-                        ),
-                    )
-                })?;
-            Ok::<_, AppError>((event, record.digest_suite))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
     let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered).await?;
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let state_root = joined.state_root(digest_suite).map_err(|error| {
@@ -961,9 +946,6 @@ async fn materialize_realm_control_with_transported_seals(
         )
     })?;
     let covered_event_digests = covered.iter().cloned().collect::<Vec<_>>();
-    let completeness_root =
-        arkret_state::control_event_completeness_root(&completeness_events, &covered, digest_suite)
-            .map_err(proof_state_error)?;
     if let Some(seals) = transported_seals {
         let authoritative_notary = authoritative_notary(&joined.cells)?.ok_or_else(|| {
             proof_state_error("transported Event Seal path has no frozen notary authority")
@@ -974,7 +956,6 @@ async fn materialize_realm_control_with_transported_seals(
             &authoritative_notary,
             &event_ops,
             &covered,
-            &completeness_events,
             seals,
         )
         .await?;
@@ -984,7 +965,6 @@ async fn materialize_realm_control_with_transported_seals(
         realm_id,
         &covered_event_digests,
         &state_root,
-        &completeness_root,
         &event_ops,
         device_generation_seal_required,
         generation_fence.as_ref(),
@@ -1077,35 +1057,11 @@ async fn materialize_agent_realm_control(
             "Agent PCR material resolved to a different Realm",
         ));
     }
-    let managed_covered = material
-        .covered_event_digests
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let completeness_events = events
-        .iter()
-        .map(|event| {
-            event_digest_suites
-                .get(&event.event_id)
-                .copied()
-                .map(|event_digest_suite| (event.clone(), event_digest_suite))
-                .ok_or_else(|| {
-                    proof_state_error("Agent PCR Event has no frozen completeness digest suite")
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let completeness_root = arkret_state::control_event_completeness_root(
-        &completeness_events,
-        &managed_covered,
-        digest_suite,
-    )
-    .map_err(proof_state_error)?;
     let seal_view = crate::notary::ensure_materialized_event_seal(
         state,
         realm_id,
         &material.covered_event_digests,
         &material.state_root,
-        &completeness_root,
         &material.event_ops,
         true,
         None,
@@ -1202,7 +1158,7 @@ async fn load_governance_checkpoint(
                 "requested Seal closure crosses the Realm boundary",
             ));
         }
-        pending.extend(seal.predecessor_refs.iter().cloned());
+        pending.extend(seal.predecessor_ref.iter().cloned());
         seals.insert(seal_id, seal);
     }
     ensure_target_dominates_base(request, &seals)?;
@@ -1275,7 +1231,7 @@ pub(crate) async fn load_verified_governance_checkpoint(
                 "trusted RHRK base Seal closure crosses the Realm boundary",
             ));
         }
-        pending.extend(seal.predecessor_refs.iter().cloned());
+        pending.extend(seal.predecessor_ref.iter().cloned());
         seals.insert(seal_id, seal);
     }
     let mut events = BTreeMap::new();
@@ -1342,13 +1298,13 @@ fn ensure_target_dominates_base(
                 "requested target Seal closure is incomplete",
             )
         })?;
-        if seal.predecessor_refs.is_empty() {
+        if seal.predecessor_ref.is_none() {
             return Err(crate::app_error!(
                 MlsGovernanceAnchorUnreachable,
                 "proof target basis does not dominate proof base basis",
             ));
         }
-        pending.extend(seal.predecessor_refs.iter().cloned());
+        pending.extend(seal.predecessor_ref.iter().cloned());
     }
     if reached != base {
         return Err(crate::app_error!(
@@ -1492,7 +1448,7 @@ fn insert_checkpoint_dependency(
 }
 
 fn group_genesis_binding(
-    accepted: &BTreeMap<CellRef, CellState>,
+    accepted: &BTreeMap<CellRef, ResolvedCellState>,
     effective_scope: &GovernanceScope,
     mls_group_id: &arkret_wire::Base64UrlString,
     proposal: Option<&ProposedMlsGroupGenesisBinding>,
@@ -1503,14 +1459,14 @@ fn group_genesis_binding(
         arkret_state::mls_cells::key_schedule_cell_id(effective_scope, mls_group_id.as_str())
             .map_err(map_governance_frontier_error)?;
     match accepted.get(&key_schedule_cell) {
-        Some(CellState::Value(value)) => {
+        Some(ResolvedCellState::Sequenced(state)) => {
             if proposal.is_some() {
                 return Err(crate::app_error!(
                     MlsGenesisBindingProposalMismatch,
                     "accepted MLS Genesis exists at the requested basis; omit the proposal"
                 ));
             }
-            let binding: MlsGovernanceBindingPayload = serde_json::from_value(value.clone())
+            let binding: MlsGovernanceBindingPayload = serde_json::from_value(state.value.clone())
                 .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
             if binding.effective_scope() != effective_scope
                 || binding.mls_group_id() != mls_group_id.as_str()
@@ -1801,7 +1757,7 @@ async fn join_control_state_batches(
     for (cell, projected_ops) in ops_by_cell {
         let persisted = state
             .projections()
-            .sealed_op_batches_for_cell(realm_id, cell)
+            .confirmed_write_batches_for_cell(realm_id, cell)
             .await
             .map_err(|error| {
                 crate::app_error!(
@@ -1815,9 +1771,9 @@ async fn join_control_state_batches(
             .filter_map(|(_, ops)| {
                 let ops = ops
                     .into_iter()
-                    .filter(|issued| covered.contains(&issued.op.move_id))
+                    .filter(|issued| covered.contains(&issued.op.event_id.event_digest()))
                     .inspect(|issued| {
-                        persisted_digests.insert(issued.op.move_id.clone());
+                        persisted_digests.insert(issued.op.event_id.clone());
                     })
                     .collect::<Vec<_>>();
                 (!ops.is_empty()).then_some(ops)
@@ -1826,8 +1782,8 @@ async fn join_control_state_batches(
         let candidate_batch = projected_ops
             .iter()
             .filter(|issued| {
-                covered.contains(&issued.op.move_id)
-                    && !persisted_digests.contains(&issued.op.move_id)
+                covered.contains(&issued.op.event_id.event_digest())
+                    && !persisted_digests.contains(&issued.op.event_id)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -1843,30 +1799,28 @@ async fn join_control_state_batches(
             .map_err(|error| {
                 crate::app_error!(
                     UnsupportedProfile,
-                    format!("no lattice registered for governance cell {cell}: {error}"),
+                    format!("no state model registered for governance cell {cell}: {error}"),
                 )
             })?;
-        let bottom_mode = binding.bottom_mode;
-        // A `cas_register` cell's state_root leaf is its head set (spec section
-        // 6.2.1), derived from the same batches as the join.
-        if arkret_state::is_causal_register(binding.lattice.kind()) {
-            let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
-            if !heads.is_empty() {
-                joined.cas_heads.insert(cell.clone(), heads);
-            }
+        if binding.execution != arkret_wire::EventCellExecution::Security
+            || binding.state_model != arkret_state::state_model::StateModelKind::SequencedState
+        {
+            return Err(crate::app_error!(
+                UnsupportedProfile,
+                format!("governance cell {cell} is not sequenced security state"),
+            ));
         }
-        let resolved =
-            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), cell, &batches);
-        // `event-auth-state-resolution.md` §9.1.1: an exposed Bottom remains
-        // part of the materialized governance view (and is omitted from the
-        // state-root leaf set by `compute_state_root`). Only reject-mode cells
-        // — plus an impossible Bottom from an inert lattice — fail closed.
-        // Rejecting every Bottom here lets one ambiguous, unrelated selector
-        // poison all later controller-PCR authorization and Seal material.
-        if matches!(resolved, CellState::Bottom(_)) && bottom_mode != EventCellBottom::Expose {
+        let resolved = arkret_state::join_cell_seal_batches(binding.model.as_ref(), cell, &batches)
+            .map_err(|error| {
+                crate::app_error!(
+                    StateMismatch,
+                    format!("governance cell {cell} state resolution failed: {error}"),
+                )
+            })?;
+        if !matches!(resolved, ResolvedCellState::Sequenced(_)) {
             return Err(crate::app_error!(
                 StateMismatch,
-                format!("governance cell {cell} is in Bottom state"),
+                format!("governance cell {cell} did not resolve to sequenced state"),
             ));
         }
         joined.cells.insert(cell.clone(), resolved);
@@ -1874,81 +1828,14 @@ async fn join_control_state_batches(
     Ok(joined)
 }
 
-/// The causal-register heads one Event's own signed `seal_basis` observed.
-///
-/// `event-auth-state-resolution.md` §9.3.1.3 item 4: a causal-register write
-/// supersedes exactly the heads its own basis saw. The set is receiver-derived
-/// and never appears on the wire, so every path that rebuilds an Event's ops
-/// has to derive it again — the commit path does so in
-/// [`crate::notary::Notary::derive_sealed_ops`], and this is the same read for
-/// the re-projection paths.
-///
-/// An Event with no basis — Realm genesis, a B-model `seal_ref` Move — observed
-/// nothing and therefore supersedes nothing, exactly as `apply_seal` treats it.
-pub(crate) async fn event_basis_causal_heads(
-    state: &AppState,
-    realm_id: &RealmId,
-    event: &Event,
-) -> Result<arkret_state::CasHeadsByCell, AppError> {
-    let Some(basis) = event.seal_basis.as_ref() else {
-        return Ok(arkret_state::CasHeadsByCell::new());
-    };
-    state
-        .projections()
-        .effective_cas_heads_at(&basis.leaves, realm_id)
-        .await
-        .map_err(|error| {
-            crate::app_error!(
-                FrontierUnavailable,
-                format!(
-                    "read causal-register basis heads for Event {}: {error}",
-                    event.event_id
-                ),
-            )
-        })
-}
-
-/// Tag one projected write with its issuer and its derived `supersedes` set.
-///
-/// Leaving the set empty is not a neutral default: an empty set says "this
-/// write retired nothing", so the write it actually observed stays a live head
-/// beside it and the causal register reads two divergent heads — `⊥` — on the
-/// second legitimate write. That is how an accepted Invite's `fsm` lifecycle
-/// cell (`pending` then `accepted`) used to Bottom the whole governance view.
-fn issued_with_derived_supersedes(
-    state: &AppState,
-    realm_id: &RealmId,
-    event: &Event,
-    basis_heads: &arkret_state::CasHeadsByCell,
-    cell: CellRef,
-    op: SealedOp,
-) -> Result<(CellRef, IssuedOp), AppError> {
-    let kind = state
-        .projections()
-        .resolve_cell(realm_id, &cell)
-        .map_err(|error| {
-            crate::app_error!(
-                UnsupportedProfile,
-                format!("no lattice registered for governance cell {cell}: {error}"),
-            )
-        })?
-        .lattice
-        .kind();
-    let supersedes = if arkret_state::is_causal_register(kind) {
-        basis_heads
-            .get(&cell)
-            .map(|heads| heads.iter().map(|head| head.move_id.clone()).collect())
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    Ok((
+fn issued_security_write(event: &Event, cell: CellRef, op: StateWrite) -> (CellRef, IssuedOp) {
+    (
         cell,
         IssuedOp {
             issuer_id: event.actor_id.clone(),
-            op: op.with_supersedes(supersedes),
+            op,
         },
-    ))
+    )
 }
 
 /// Canonical sealed effects for one Event, each tagged with the Event's actor.
@@ -1962,11 +1849,10 @@ pub(crate) fn canonical_event_ops(
     event: &Event,
     move_id: &Hash,
     accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
-    basis_heads: &arkret_state::CasHeadsByCell,
     invite_accept_from: Option<&str>,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
-    canonical_event_sealed_ops(
+    Ok(canonical_event_sealed_ops(
         state,
         realm_id,
         event,
@@ -1977,25 +1863,24 @@ pub(crate) fn canonical_event_ops(
         digest_suite,
     )?
     .into_iter()
-    .map(|(cell, op)| issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op))
-    .collect()
+    .map(|(cell, op)| issued_security_write(event, cell, op))
+    .collect())
 }
 
 /// Canonical sealed effects for a verifier that already resolved the exact
 /// predecessor Seal frontier. This keeps B-model Seal admission on the same
 /// projection implementation without flattening predecessor Seal batches back
-/// into an `mv_register` history.
+/// into an `causal_register` history.
 pub(crate) fn canonical_event_ops_with_frozen_pre_state(
     state: &AppState,
     realm_id: &RealmId,
     event: &Event,
     move_id: &Hash,
-    frozen_pre_state: &BTreeMap<CellRef, CellState>,
-    basis_heads: &arkret_state::CasHeadsByCell,
+    frozen_pre_state: &BTreeMap<CellRef, ResolvedCellState>,
     invite_accept_from: Option<&str>,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
-    canonical_event_sealed_ops(
+    Ok(canonical_event_sealed_ops(
         state,
         realm_id,
         event,
@@ -2006,8 +1891,8 @@ pub(crate) fn canonical_event_ops_with_frozen_pre_state(
         digest_suite,
     )?
     .into_iter()
-    .map(|(cell, op)| issued_with_derived_supersedes(state, realm_id, event, basis_heads, cell, op))
-    .collect()
+    .map(|(cell, op)| issued_security_write(event, cell, op))
+    .collect())
 }
 
 /// Join the ops accumulated so far into the frozen pre-state the registered
@@ -2025,7 +1910,7 @@ fn frozen_governance_pre_state(
     state: &AppState,
     realm_id: &RealmId,
     accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
-) -> Result<BTreeMap<CellRef, CellState>, AppError> {
+) -> Result<BTreeMap<CellRef, ResolvedCellState>, AppError> {
     let mut pre_state = BTreeMap::new();
     for (cell, ops) in accumulated {
         let binding = state
@@ -2034,13 +1919,17 @@ fn frozen_governance_pre_state(
             .map_err(|error| {
                 crate::app_error!(
                     UnsupportedProfile,
-                    format!("no lattice registered for governance cell {cell}: {error}"),
+                    format!("no state model registered for governance cell {cell}: {error}"),
                 )
             })?;
-        pre_state.insert(
-            cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), cell, ops),
-        );
+        let resolved =
+            arkret_state::join_cell(binding.model.as_ref(), cell, ops).map_err(|error| {
+                crate::app_error!(
+                    StateMismatch,
+                    format!("governance cell {cell} state resolution failed: {error}"),
+                )
+            })?;
+        pre_state.insert(cell.clone(), resolved);
     }
     Ok(pre_state)
 }
@@ -2051,10 +1940,10 @@ fn canonical_event_sealed_ops(
     event: &Event,
     move_id: &Hash,
     accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
-    supplied_pre_state: Option<&BTreeMap<CellRef, CellState>>,
+    supplied_pre_state: Option<&BTreeMap<CellRef, ResolvedCellState>>,
     invite_accept_from: Option<&str>,
     digest_suite: arkret_canonical::DigestSuite,
-) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
+) -> Result<Vec<(CellRef, StateWrite)>, AppError> {
     // v1 carries no producer `effects[]`: every write is derived from
     // `kind + payload` by the registered contract.
     let projected = state
@@ -2077,7 +1966,7 @@ fn canonical_event_sealed_ops(
         computed_pre_state = frozen_governance_pre_state(state, realm_id, accumulated)?;
         &computed_pre_state
     };
-    let mut resolved: Vec<(CellRef, SealedOp)> = Vec::with_capacity(projected.len());
+    let mut resolved: Vec<(CellRef, StateWrite)> = Vec::with_capacity(projected.len());
     for write in &projected {
         // The pre-state-dependent grammars are resolved by the one shared
         // implementation; a second copy here would be a second answer to a
@@ -2097,7 +1986,7 @@ fn canonical_event_sealed_ops(
         for effect in effects {
             resolved.push((
                 effect.cell_id.clone(),
-                SealedOp::from_projection(move_id.clone(), &effect),
+                StateWrite::from_projection(move_id.clone(), &effect),
             ));
         }
     }
@@ -2135,7 +2024,7 @@ fn canonical_event_sealed_ops(
             ));
         }
     } else if event.kind == arkret_wire::EventKind::RealmCreate {
-        // Only the genesis targets are asserted; the lattice ops come from the
+        // Only the genesis targets are asserted; the state model ops come from the
         // registered `effect_projection`.
         let expected = arkret_bootstrap::expected_realm_create_cells(event);
         let actual: std::collections::BTreeSet<String> = resolved
@@ -2196,7 +2085,13 @@ mod tests {
         .unwrap();
         accepted.insert(
             arkret_state::mls_cells::key_schedule_cell_id(&scope, group.as_str()).unwrap(),
-            CellState::Value(serde_json::to_value(binding).unwrap()),
+            ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
+                revision_event_id: EventId::new(
+                    "ak:event:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU",
+                )
+                .unwrap(),
+                value: serde_json::to_value(binding).unwrap(),
+            }),
         );
         let current = group_genesis_binding(&accepted, &scope, &group, None, 1, 2).unwrap();
         assert_eq!(
@@ -2241,7 +2136,7 @@ mod tests {
             issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
                 "did:web:alice.example",
             )),
-            op: SealedOp::new(
+            op: StateWrite::new(
                 Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
                 LatticeOp {
                     op_type: LatticeOpType::Transition,
@@ -2256,106 +2151,12 @@ mod tests {
         }
     }
 
-    /// An accepted Invite must not Bottom its own lifecycle cell.
-    ///
-    /// `ak.invite.create` writes `pending` and `ak.invite.accept` writes
-    /// `accepted` on the same `fsm` cell. The join reads heads, not arrival
-    /// order (§9.3.1.5), so the accept only retires the pending write if it
-    /// carries the derived `supersedes` its basis observed. Re-projecting the
-    /// Event with an empty set left both live and the cell read `⊥`, which is
-    /// what surfaced to an invitee as
-    /// `409 state_mismatch: governance cell … is in Bottom state`.
-    #[tokio::test]
-    async fn invite_lifecycle_accept_supersedes_the_pending_write_it_observed() {
-        let state = test_state();
-        let event = agent_pcr_create();
-        let realm_id = event.realm_id.clone();
-        let cell = CellRef::new(
-            "ak:cell:ak.component.invite.lifecycle.v1:ak:invite:AUg3kgXpMvW4kMuGtTepFkRVooX03jTSKInIfDj4dDvu"
-                .to_owned(),
-        )
-        .unwrap();
-        let pending =
-            issued_transition(0x21, serde_json::Value::Null, serde_json::json!("pending"));
-        let kind = state
-            .projections()
-            .resolve_cell(&realm_id, &cell)
-            .unwrap()
-            .lattice
-            .kind();
-        let basis_heads = arkret_state::CasHeadsByCell::from([(
-            cell.clone(),
-            arkret_state::causal_heads_for_batches(kind, &[vec![pending.clone()]]),
-        )]);
-
-        let (_, accepted) = issued_with_derived_supersedes(
-            &state,
-            &realm_id,
-            &event,
-            &basis_heads,
-            cell.clone(),
-            issued_transition(
-                0x22,
-                serde_json::json!("pending"),
-                serde_json::json!("accepted"),
-            )
-            .op,
-        )
-        .unwrap();
-        assert_eq!(
-            accepted.op.supersedes,
-            vec![pending.op.move_id.clone()],
-            "the accept supersedes exactly the pending head its basis observed"
-        );
-
-        let ops = vec![pending.clone(), accepted.clone()];
-        let covered = ops
-            .iter()
-            .map(|issued| issued.op.move_id.clone())
-            .collect::<BTreeSet<_>>();
-        let joined = join_control_state_batches(
-            &state,
-            &realm_id,
-            &BTreeMap::from([(cell.clone(), ops)]),
-            &covered,
-        )
-        .await
-        .expect("an accepted Invite must not resolve to Bottom");
-
-        assert_eq!(
-            joined.cells.get(&cell),
-            Some(&CellState::Value(serde_json::json!("accepted")))
-        );
-
-        // The empty set is not a neutral default: without the derived edge the
-        // same two writes stay divergent heads and the cell fails closed.
-        let unlinked = vec![
-            pending.clone(),
-            issued_transition(
-                0x22,
-                serde_json::json!("pending"),
-                serde_json::json!("accepted"),
-            ),
-        ];
-        assert!(
-            join_control_state_batches(
-                &state,
-                &realm_id,
-                &BTreeMap::from([(cell, unlinked)]),
-                &covered,
-            )
-            .await
-            .is_err(),
-            "an accept that supersedes nothing is still two divergent heads"
-        );
-    }
-
     fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
         IssuedOp {
             issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
                 "did:web:alice.example",
             )),
-            op: SealedOp::new(
+            op: StateWrite::new(
                 Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
                 LatticeOp {
                     op_type: LatticeOpType::Set,
@@ -2372,11 +2173,17 @@ mod tests {
 
     #[test]
     fn authoritative_notary_lookup_uses_canonical_wire_singleton_cell() {
-        let notary = crate::test_single_signer_notary("did:web:notary.example", 41);
+        let notary = crate::test_f0_notary("did:web:notary.example", 41);
         let mut joined = BTreeMap::new();
         joined.insert(
             CellRef::new("ak:cell:ak.component.notary.v1:null".to_owned()).unwrap(),
-            CellState::Value(serde_json::to_value(&notary).unwrap()),
+            ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
+                revision_event_id: EventId::new(
+                    "ak:event:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU",
+                )
+                .unwrap(),
+                value: serde_json::to_value(&notary).unwrap(),
+            }),
         );
 
         assert_eq!(authoritative_notary(&joined).unwrap(), Some(notary));
@@ -2397,7 +2204,7 @@ mod tests {
         ];
         let covered = selector_ops
             .iter()
-            .map(|issued| issued.op.move_id.clone())
+            .map(|issued| issued.op.event_id.clone())
             .collect::<BTreeSet<_>>();
         let ops_by_cell = BTreeMap::from([(selector_cell.clone(), selector_ops)]);
 
@@ -2407,14 +2214,14 @@ mod tests {
 
         assert!(matches!(
             joined.cells.get(&selector_cell),
-            Some(CellState::Bottom(_))
+            Some(ResolvedCellState::Bottom(_))
         ));
         assert_eq!(
             joined
                 .state_root(arkret_canonical::DigestSuite::Sha256)
                 .unwrap(),
             compute_state_root(
-                arkret_state::GovernanceView::values_only(&BTreeMap::new()),
+                arkret_state::GovernanceView::new(&BTreeMap::new()),
                 arkret_canonical::DigestSuite::Sha256,
             )
             .unwrap(),
@@ -2443,7 +2250,7 @@ mod tests {
         ];
         let covered = accountability_ops
             .iter()
-            .map(|issued| issued.op.move_id.clone())
+            .map(|issued| issued.op.event_id.clone())
             .collect::<BTreeSet<_>>();
         let ops_by_cell = BTreeMap::from([(accountability_cell.clone(), accountability_ops)]);
 
@@ -2480,7 +2287,7 @@ mod tests {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            crate::test_single_signer_notary("did:web:agent.example", 42),
+            crate::test_f0_notary("did:web:agent.example", 42),
         )
         .unwrap();
         let payload =
@@ -2518,7 +2325,6 @@ mod tests {
             &event,
             &move_id,
             &BTreeMap::new(),
-            &arkret_state::CasHeadsByCell::new(),
             None,
             arkret_canonical::DigestSuite::Sha256,
         )
@@ -2555,7 +2361,6 @@ mod tests {
                 &event,
                 &move_id,
                 &BTreeMap::new(),
-                &arkret_state::CasHeadsByCell::new(),
                 None,
                 arkret_canonical::DigestSuite::Sha256,
             )
@@ -2618,7 +2423,7 @@ mod tests {
 
         let move_id = Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap();
         for prior_state in ["leave", "knock"] {
-            // The member-state fsm starts at its registered `initial_state`
+            // The member-state transition starts at its registered `initial_state`
             // (`leave`), so the frozen pre-state for that case is the cell with
             // no accumulated op at all; `knock` needs one accepted transition
             // into it first.
@@ -2627,7 +2432,7 @@ mod tests {
             } else {
                 vec![IssuedOp {
                     issuer_id: arkret_wire::ActorId::service(crate::test_actor_id(&actor_did)),
-                    op: SealedOp::new(
+                    op: StateWrite::new(
                         move_id.clone(),
                         LatticeOp {
                             op_type: LatticeOpType::Transition,
@@ -2649,7 +2454,6 @@ mod tests {
                 &event,
                 &move_id,
                 &accumulated,
-                &arkret_state::CasHeadsByCell::new(),
                 Some(prior_state),
                 arkret_canonical::DigestSuite::Sha256,
             )

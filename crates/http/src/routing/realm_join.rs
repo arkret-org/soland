@@ -688,7 +688,7 @@ async fn verify_peer_bootstrap(
         intent_cell.clone(),
     ];
     requested_cells.extend(lifecycle_cell.iter().cloned());
-    let registry = arkret_lattice_registry::try_build_sdk_cell_registry()
+    let registry = arkret_lattice_registry::try_build_sdk_state_registry()
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let audits = arkret_schema::CapabilityAuthorityAuditIndex::from_events(
         &verified.checkpoint.accepted_events,
@@ -932,7 +932,7 @@ async fn member_state_core(
         })?
         .get(&cell_id)
         .cloned()
-        .and_then(arkret_state::lattice::CellState::into_value)
+        .and_then(arkret_state::state_model::ResolvedCellState::into_value)
         .unwrap_or(serde_json::Value::Null);
     let payload = MembershipPayload {
         strand_id: None,
@@ -1047,6 +1047,12 @@ async fn prepare(
     let context = if seal_basis.leaves.is_empty() {
         remote_join_context(state, &body, observed_at).await?
     } else {
+        if seal_basis.leaves.len() != 1 {
+            return Err(crate::app_error!(
+                FrontierUnavailable,
+                "verified Realm join frontier must have exactly one head",
+            ));
+        }
         seal_basis.validate_protocol_bounds().map_err(|_| {
             crate::app_error!(
                 FrontierUnavailable,

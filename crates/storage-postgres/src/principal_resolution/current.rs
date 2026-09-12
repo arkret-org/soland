@@ -85,7 +85,7 @@ async fn accepted(
 pub(super) async fn refresh(
     pool: &PgPool,
     account: &AccountId,
-    registry: &dyn arkret_state::state::CellRegistry,
+    registry: &dyn arkret_state::state::CellStateRegistry,
 ) -> PersistenceResult<()> {
     let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
     conn.transaction::<_,crate::PgTransactionError,_>(async |conn| {

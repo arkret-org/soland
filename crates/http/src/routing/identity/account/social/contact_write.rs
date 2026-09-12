@@ -942,7 +942,6 @@ fn validate_signed_event(event: &Event, draft: &PreparedEventDraft) -> Result<()
         || event
             .proofs
             .iter()
-            .filter_map(arkret_wire::EventProof::as_producer)
             .any(|proof| proof.event_digest != draft.event_digest)
     {
         return Err(AppError::conflict(
@@ -1167,7 +1166,6 @@ pub(super) fn signed_current_proof(
         .proofs
         .iter()
         .find_map(|proof| {
-            let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
             (arkret_wire::project_did_to_core_id(&did).ok()

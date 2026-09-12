@@ -24,7 +24,7 @@ pub struct PushRouteSubject {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CallFsmHead {
+pub struct CallTransitionHead {
     pub basis: String,
     pub operation_id: String,
     pub value: String,
@@ -150,7 +150,7 @@ pub struct RealmInheritancePolicyState {
 
 /// SOL-ORG-02 — structured cache row for one `ak.realm.organization`
 /// relationship statement projection. Mirrors the canonical
-/// `ak.component.realm.organization.v1` cas-register cell keyed by the
+/// `ak.component.realm.organization.v1` registered state model cell keyed by the
 /// composite subject `(organization_id, relationship)`. The reducer keeps
 /// the latest statement per `(realm_id, organization_id, relationship)`; an
 /// `active` statement marks the relationship live, a `revoked` statement
@@ -493,8 +493,8 @@ pub(crate) fn space_container_id_from_payload(payload: &Value) -> Option<String>
 
 pub(crate) fn operation_history_basis_seals(operation: &Operation) -> Vec<String> {
     let mut seals = Vec::new();
-    if let Some(seal_ref) = &operation.context.seal_ref {
-        seals.push(seal_ref.to_string());
+    if let Some(auth_context) = &operation.context.auth_context {
+        seals.extend(auth_context.authority_refs.iter().map(ToString::to_string));
     }
     if let Some(seal_basis) = &operation.context.seal_basis {
         for leaf in &seal_basis.leaves {
@@ -648,7 +648,7 @@ pub struct CircleProjection {
 
 /// One sealed audit release session (`audited-e2ee.md` sections 3-4).
 ///
-/// The registered `ak.component.audit.session.v1` cell carries only the FSM
+/// The registered `ak.component.audit.session.v1` cell carries only the transition
 /// stage, but every later stage and the release manifest are checked against
 /// the binding and scope the session opened under, so those travel here.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -935,9 +935,9 @@ pub struct ReactionState {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// One `mv_register` head of `ak.component.calendar.rsvp.v1`.
+/// One `causal_register` head of `ak.component.calendar.rsvp.v1`.
 ///
-/// The lattice value is the whole `payload.entry`, so a head independently
+/// The state model value is the whole `payload.entry`, so a head independently
 /// carries the schedule basis the responder observed and the response itself.
 /// `source_event_digest` is what later RSVPs name in `causal_refs` to dominate
 /// this head; nothing here is ordered by HLC or arrival.
@@ -1033,7 +1033,7 @@ impl SolandRelationState {
 pub struct SolandMembershipState {
     pub member: String,
     pub realm_id: String,
-    /// Canonical FSM state value (one of `invite` / `join` / `leave` /
+    /// Canonical transition state value (one of `invite` / `join` / `leave` /
     /// `ban` / `knock`). Authoritative source is the
     /// `ak.component.member.state.v1` cell in
     /// [`super::ProjectionState::cells`]; this field is the structured-cache

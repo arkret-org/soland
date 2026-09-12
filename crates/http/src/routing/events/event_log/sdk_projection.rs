@@ -594,7 +594,6 @@ fn is_governance_replay_input(record: &AcceptedEvent) -> bool {
     );
     is_anchor_unit
         || (record.envelope.get("seal_basis").is_some()
-            && record.envelope.get("seal_ref").is_none()
             && record.envelope.get("auth_context").is_none())
 }
 
@@ -627,7 +626,7 @@ async fn is_validated_realm_bootstrap_member(state: &AppState, record: &Accepted
     };
     let genesis_seals = covering_seals
         .into_iter()
-        .filter(|seal| seal.predecessor_refs.is_empty())
+        .filter(|seal| seal.predecessor_ref.is_none())
         .collect::<Vec<_>>();
     if genesis_seals.is_empty() {
         return false;
@@ -766,54 +765,23 @@ fn circle_event_visible_to_session(
 ///
 /// Used by ephemeral `ak.receipt.read` admission and future receipt fanout
 /// handlers to enforce the Realm policy.
-///
-/// **Note**: this is a linear scan of the durable event store. For the
-/// production fanout path it should be projected into `AppState` once the
-/// reducer kind delegates from `Ignored` to a real projection.
 pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy> {
     // Cell-keyed fast path. The Move/Seal pipeline writes the
-    // `ak.component.realm.read_receipt_policy.v1` resolved CasRegister
+    // `ak.component.realm.read_receipt_policy.v1` resolved SequencedState
     // value into `ProjectionState::cells` after every apply_seal; we
     // read directly from there. (R1.2 renamed the cell family from
     // `ak.component.realm.read_receipt_policy.v1` along with the event
     // kind.)
-    {
-        let proj = state.projections().snapshot();
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
-        ))
-        .ok()?;
-        if let Some(value) = proj.cell_value(&cell_id) {
-            return read_receipt_policy_from_value(value);
-        }
-    }
-    // Cold-path fallback: linear scan of the durable Event store. Used at
-    // boot before the projection has been rehydrated, or when a server is
-    // running with persistence disabled.
-    let records = state.event_queries().canonical_events().await.ok()?;
-    let mut latest: Option<&AcceptedEvent> = None;
-    for record in &records {
-        // AcceptedEvent uses `kind` (not event_kind) for the
-        // canonical Arkret event kind string.
-        if record.kind != arkret_wire::event_kind_str::REALM_READ_RECEIPT_POLICY {
-            continue;
-        }
-        if canonical_realm_id_for_record(record).as_deref() != Some(realm_id) {
-            continue;
-        }
-        match latest {
-            Some(prev) if prev.received_at >= record.received_at => {}
-            _ => latest = Some(record),
-        }
-    }
-    let record = latest?;
-    // The policy state lives on the envelope payload; AcceptedEvent
-    // stores the full envelope, so we drill down to `envelope.payload`.
-    let payload = record.envelope.get("payload")?;
-    read_receipt_policy_from_value(payload)
+    let proj = state.projections().snapshot();
+    let cell_id = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
+    ))
+    .ok()?;
+    proj.cell_value(&cell_id)
+        .and_then(read_receipt_policy_from_value)
 }
 
 fn read_receipt_policy_from_value(
@@ -961,7 +929,7 @@ mod refs_limit_tests {
     fn governance_replay_visibility_does_not_classify_data_events_as_control_moves() {
         let message = visibility_record(
             arkret_wire::event_kind_str::MESSAGE_CREATE,
-            json!({"seal_ref": "ak:seal:sha256:00", "auth_context": {}}),
+            json!({"auth_context": {}}),
         );
         let control = visibility_record(
             arkret_wire::event_kind_str::MEMBER_STATE,

@@ -7,7 +7,7 @@
 //! relationship statement or revocation** (spec event-kind-registry +
 //! `event-payload.schema.json#/$defs/realm_organization_payload`). It is NOT
 //! Realm mutable metadata: the cell family `ak.component.realm.organization.v1`
-//! is a `cas_register` keyed by the composite subject
+//! is a `causal_register` keyed by the composite subject
 //! `(organization_id, relationship)`, so distinct
 //! `(organization_id, relationship)` pairs form independent cells and an
 //! `owner` / `governance` / `sponsor` / `directory_certifier` relationship can
@@ -43,7 +43,7 @@ use super::{ProjectionEffect, ProjectionState, RealmOrganizationStatementState};
 impl ProjectionState {
     /// Project a `ak.realm.organization` relationship statement.
     ///
-    /// Cell family: `ak.component.realm.organization.v1` (cas-register,
+    /// Cell family: `ak.component.realm.organization.v1` (registered state model,
     /// composite subject `(organization_id, relationship)`).
     ///
     /// On an `active` statement that passes the organization-side verifier the
@@ -116,7 +116,7 @@ impl ProjectionState {
             "revoked"
         };
 
-        // Cell write — cas-register keyed by the composite
+        // Cell write — registered state model keyed by the composite
         // `{organization_id}::{relationship}` subject. This mirrors the SDK
         // `RealmOrganization::subject_for_effect` form exactly so the inline
         // cache and the Move/Seal cell store agree.
@@ -132,8 +132,10 @@ impl ProjectionState {
                 "updated_at": arkret_canonical::format_timestamp_canonical(now),
                 "operation_id": operation.operation_id.as_str(),
             });
-            self.cells
-                .insert(cell_id, arkret_state::lattice::CellState::Value(value));
+            self.cells.insert(
+                cell_id,
+                arkret_state::state_model::ResolvedCellState::Value(value),
+            );
         }
 
         let row = RealmOrganizationStatementState {

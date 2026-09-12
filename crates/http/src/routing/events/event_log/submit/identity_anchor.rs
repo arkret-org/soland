@@ -172,7 +172,7 @@ pub(super) async fn submit_identity_anchor_batch(
     };
 
     let first_contexts = identity_anchor_head_context.as_slice();
-    super::value::validate_origin_submission_shape(state, session, &typed_create)?;
+    super::value::validate_producer_submission_shape(state, session, &typed_create)?;
     let first =
         validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts, None)
             .await?;
@@ -204,7 +204,7 @@ pub(super) async fn submit_identity_anchor_batch(
         is_bootstrap,
     )?;
     let second_contexts = std::slice::from_ref(&identity_anchor_context);
-    super::value::validate_origin_submission_shape(state, session, &typed_authorize)?;
+    super::value::validate_producer_submission_shape(state, session, &typed_authorize)?;
     let second =
         validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts, None)
             .await?;
@@ -1092,19 +1092,8 @@ async fn identical_historical_retry_with_wake(
                         format!("stored identity anchor is not canonical Event wire: {error}"),
                     )
                 })?;
-                // The durable canonical envelope includes the Station's admission proof, while the
-                // pending control index stores the producer Event and binds
-                // admission through the separate Ack. Recovery must restore that
-                // original shape.
-                if matches!(
-                    event.proofs.as_slice(),
-                    [
-                        arkret_wire::EventProof::Producer(_),
-                        arkret_wire::EventProof::StationAdmission(_)
-                    ]
-                ) {
-                    event.proofs.truncate(1);
-                }
+                // Restore the durable producer Event with its separate Control
+                // Proposal Ack into the pending control index.
                 state
                     .projections()
                     .put_pending_control_event_with_ack(&event, &ack, record.digest_suite)
@@ -2187,7 +2176,7 @@ mod tests {
                     "ak:did_core:webvh:z6mkfixture".to_owned(),
                 )
                 .unwrap(),
-                notary: crate::test_single_signer_notary(principal_did.as_str(), 43),
+                notary: crate::test_f0_notary(principal_did.as_str(), 43),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     did: principal_did.clone(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),

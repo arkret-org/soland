@@ -78,6 +78,63 @@ struct RuntimeKeyMaterial {
     proof_verified_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthorizedKeyMaterial {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event: Option<arkret_wire::Event>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current_signer_evidence:
+        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
+}
+
+pub(crate) fn pack_authorized_key_material(
+    event: Option<arkret_wire::Event>,
+    signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
+    current_signer_evidence: Option<
+        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence,
+    >,
+) -> Result<Option<Value>, PersistenceError> {
+    let presence = [
+        event.is_some(),
+        signer_resolution_evidence_ref.is_some(),
+        current_signer_evidence.is_some(),
+    ];
+    if presence.iter().any(|present| *present) && !presence.iter().all(|present| *present) {
+        return Err(PersistenceError::SchemaViolation(
+            "active Agent authorization material is partial".to_owned(),
+        ));
+    }
+    if !presence[0] {
+        return Ok(None);
+    }
+    serde_json::to_value(AuthorizedKeyMaterial {
+        event,
+        signer_resolution_evidence_ref,
+        current_signer_evidence,
+    })
+    .map(Some)
+    .map_err(|error| {
+        PersistenceError::Internal(format!("encode Agent authorization material: {error}"))
+    })
+}
+
+fn unpack_authorized_key_material(
+    material: Option<Value>,
+) -> Result<AuthorizedKeyMaterial, PersistenceError> {
+    material
+        .map(serde_json::from_value::<AuthorizedKeyMaterial>)
+        .transpose()
+        .map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "stored Agent authorization material is invalid: {error}"
+            ))
+        })
+        .map(Option::unwrap_or_default)
+}
+
 /// Packs the runtime key request and its digests into the single stored column.
 ///
 /// Returns `None` when all three parts are absent so an agent without a pending
@@ -190,15 +247,11 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
             authorized_event_ref: record.authorized_event_ref,
             authorized_verification_method: record.authorized_verification_method,
             authorized_public_key_digest: record.authorized_public_key_digest,
-            authorized_key_event: record
-                .authorized_key_event
-                .map(serde_json::to_value)
-                .transpose()
-                .map_err(|error| {
-                    PersistenceError::Internal(format!(
-                        "encode typed Agent authorize Event: {error}"
-                    ))
-                })?,
+            authorized_key_event: pack_authorized_key_material(
+                record.authorized_key_event,
+                record.signer_resolution_evidence_ref,
+                record.current_signer_evidence,
+            )?,
             state_changed_at: record.state_changed_at,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -247,6 +300,7 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
 
     fn try_from(row: AgentPrincipalRow) -> Result<Self, Self::Error> {
         let material = unpack_runtime_key_material(row.runtime_key_material)?;
+        let authorized = unpack_authorized_key_material(row.authorized_key_event)?;
         Ok(Self {
             id: row.id.to_string(),
             controller_principal_id: row.controller_principal_id.to_string(),
@@ -305,15 +359,9 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
             authorized_event_ref: row.authorized_event_ref,
             authorized_verification_method: row.authorized_verification_method,
             authorized_public_key_digest: row.authorized_public_key_digest,
-            authorized_key_event: row
-                .authorized_key_event
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|error| {
-                    PersistenceError::SchemaViolation(format!(
-                        "stored Agent authorize Event is invalid: {error}"
-                    ))
-                })?,
+            authorized_key_event: authorized.event,
+            signer_resolution_evidence_ref: authorized.signer_resolution_evidence_ref,
+            current_signer_evidence: authorized.current_signer_evidence,
             state_changed_at: row.state_changed_at,
             created_at: row.created_at,
             updated_at: row.updated_at,

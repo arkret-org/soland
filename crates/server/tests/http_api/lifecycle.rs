@@ -592,27 +592,27 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
 }
 
 #[test]
-fn strand_metadata_fields_status_has_no_private_transition_fsm() {
+fn strand_metadata_fields_status_has_no_private_transition_transition() {
     run_on_deep_stack(
-        "strand_metadata_fields_status_has_no_private_transition_fsm",
-        strand_metadata_fields_status_has_no_private_transition_fsm_body,
+        "strand_metadata_fields_status_has_no_private_transition_transition",
+        strand_metadata_fields_status_has_no_private_transition_transition_body,
     );
 }
 
 /// Ruling `2026-09-04-1752`: v1 registers no Realm workflow profile, so nothing
 /// legitimises a server-side `stage` transition matrix. soland used to run a private
-/// `todo -> in_progress -> done` / `investigating -> mitigated -> resolved` FSM over
+/// `todo -> in_progress -> done` / `investigating -> mitigated -> resolved` transition over
 /// `metadata.fields.status` and reject "skipped" transitions with
 /// `strand_status_transition_invalid` — a reason code no registry ever declared, on a key
 /// that is `hard_reject` forbidden wire (`forbidden-wire-fields.json`, replacement: the
-/// top-level `stage` field). The FSM, that reason code and the synthetic
+/// top-level `stage` field). The transition, that reason code and the synthetic
 /// `incident.status.transition` audit row are all deleted.
 ///
 /// What this test pins is the deletion plus the landed forbidden-wire surface:
 /// `metadata.fields.status` is rejected as `schema_violation` on shape
 /// (registry-projected through `arkret_wire::forbidden_wire`), identically for
 /// every value, and no private verdict or audit row appears.
-async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
+async fn strand_metadata_fields_status_has_no_private_transition_transition_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -671,7 +671,7 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     assert_eq!(resp["status"], "accepted", "{resp}");
 
     // The reserved spelling is rejected on shape, not on transition legality. The old
-    // private FSM would have *accepted* `todo -> in_progress` here and only rejected a
+    // private transition would have *accepted* `todo -> in_progress` here and only rejected a
     // "skipped" transition; now the field never reaches a reducer at all, so both a
     // legal-looking and an illegal-looking value fail identically.
     //
@@ -709,7 +709,7 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
         let body: Value = resp.take_json().await.unwrap();
         assert_ne!(
             body["reason_code"], "strand_status_transition_invalid",
-            "the private status FSM was deleted by ruling 2026-09-04-1752: {body}"
+            "the private status transition was deleted by ruling 2026-09-04-1752: {body}"
         );
         assert_eq!(
             problem_code(&body),
@@ -783,7 +783,7 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
             .expect("audit events array")
             .iter()
             .all(|event| event["action"] != "incident.status.transition"),
-        "the incident.status.transition audit action belonged to the deleted private FSM"
+        "the incident.status.transition audit action belonged to the deleted private transition"
     );
 }
 

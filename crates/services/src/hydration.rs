@@ -264,9 +264,7 @@ pub async fn hydrate_sidecar_context_projections(
 fn canonical_event_has_genesis_authority_exemption(
     record: &soland_storage::CanonicalEventRecord,
 ) -> bool {
-    record.envelope.get("seal_ref").is_none()
-        && record.envelope.get("seal_basis").is_none()
-        && record.envelope.get("auth_context").is_none()
+    record.envelope.get("seal_basis").is_none() && record.envelope.get("auth_context").is_none()
 }
 
 fn canonical_prev_refers_to(record: &soland_storage::CanonicalEventRecord, event_id: &str) -> bool {
@@ -1245,7 +1243,7 @@ pub async fn hydrate_projections_from_persistence(
     }
     // The Strand mirror intentionally stores only common index fields. Replay
     // the accepted projection events after mirror hydration so Calendar
-    // fields, schema activation, the schedule revision DAG, RSVP MV-register
+    // fields, schema activation, the schedule revision DAG, RSVP causal-register
     // heads, Poll Message/vote state, and moderation OR-Set indexes survive
     // a process restart from their canonical durable source. Poll responses
     // are replayed from the Event log into PollState and deliberately do not

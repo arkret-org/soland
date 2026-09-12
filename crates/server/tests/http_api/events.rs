@@ -522,24 +522,18 @@ async fn seed_agent_grant_session_with_suite(
         &mut authorize_event,
         &controller_signer,
         &controller_verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(now),
     )
     .unwrap();
-    let authorize_event = soland_http::attach_fixture_station_admission_proof(
-        &state,
-        authorize_event.into_event(),
-        arkret_wire::DidKey::new(format!(
-            "did:key:{}",
-            test_ed25519_multibase_public(&SigningKey::from_bytes(
-                &super::agents::CONTROLLER_DEVICE_SIGNING_SEED,
-            ))
-        ))
-        .unwrap(),
-        now,
-    )
-    .await
-    .expect("Station admission fixture succeeds")
-    .expect("fixture Station has resolvable signer evidence");
+    let mut authorize_event = authorize_event.into_event();
+    let [producer] = authorize_event.proofs.as_mut_slice() else {
+        panic!("fixture Event must contain exactly one producer proof");
+    };
+    let evidence_digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
+    producer.signer_resolution_evidence_ref = Some(
+        arkret_wire::SignerEvidenceRef::new(format!("ak:signer_evidence:{evidence_digest}"))
+            .unwrap(),
+    );
     let agent_pcr_authority = arkret_bootstrap::AgentPcrGenesisAuthority::from_accepted_create(
         &genesis_event,
         &super::agents::genesis_projector,
@@ -620,14 +614,15 @@ async fn seed_agent_grant_session_with_suite(
         ))
         .await
         .unwrap();
-    let admission = authorize_event
+    let producer = authorize_event
         .proofs
-        .iter()
-        .find_map(arkret_wire::EventProof::as_station_admission)
-        .expect("accepted control Event carries Station admission");
+        .first()
+        .expect("accepted control Event carries a producer proof");
     let dependency_selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-        content_digest: admission
+        content_digest: producer
             .signer_resolution_evidence_ref
+            .as_ref()
+            .expect("accepted control Event references signer evidence")
             .content_digest()
             .unwrap(),
     };
@@ -707,7 +702,7 @@ async fn seed_agent_grant_session_with_suite(
     let availability_request =
         arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody {
             realm_id: agent_pcr_realm.clone(),
-            predecessor_refs: vec![genesis_seal.id.clone()],
+            predecessor_ref: genesis_seal.id.clone(),
             event_digests: target.difference(&predecessor_covered).cloned().collect(),
             hlc: arkret_wire::Hlc::new(format!("{timestamp_hex}-0009-a13f9c2e")).unwrap(),
         };
@@ -1892,7 +1887,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
             "nobody else does"
         );
         // The registered `effect_projection` for each initial facet is
-        // `{"kind":"set","value":{"field":"payload"}}`, so the cas-register cell
+        // `{"kind":"set","value":{"field":"payload"}}`, so the registered state model cell
         // holds the whole signed payload object — not the bare enum the old
         // producer-written effect chose to store.
         for (family, expected) in [
@@ -2017,7 +2012,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
             "restart must rebuild the Realm authority root from canonical create"
         );
         // The registered `effect_projection` for each initial facet is
-        // `{"kind":"set","value":{"field":"payload"}}`, so the cas-register cell
+        // `{"kind":"set","value":{"field":"payload"}}`, so the registered state model cell
         // holds the whole signed payload object — not the bare enum the old
         // producer-written effect chose to store.
         for (family, expected) in [

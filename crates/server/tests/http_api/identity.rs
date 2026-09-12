@@ -407,7 +407,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         &mut authorize,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(created_at),
     )
     .unwrap();
     let authorize = authorize.into_event();

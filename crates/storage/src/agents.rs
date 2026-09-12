@@ -38,11 +38,14 @@ pub struct AgentRuntimeActivation {
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
-    /// Exact controller Event frozen before Station admission adds its proof.
+    /// Exact controller Event retained with its producer proof.
     pub frozen_authorize_event: arkret_wire::Event,
     pub expected_accepted_basis: arkret_wire::SealBasis,
     pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
     pub authorized_key_event: arkret_wire::Event,
+    pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
+    pub current_signer_evidence:
+        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
     pub authorized_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]

@@ -102,7 +102,7 @@ impl ProjectionState {
     /// when the cell is absent / Bottom / not an array).
     fn moderation_cell_items(&self, cell_ref: &CellRef) -> Vec<Value> {
         match self.cells.get(cell_ref) {
-            Some(CellState::Value(Value::Array(items))) => items.clone(),
+            Some(ResolvedCellState::Value(Value::Array(items))) => items.clone(),
             _ => Vec::new(),
         }
     }
@@ -121,7 +121,7 @@ impl ProjectionState {
             {
                 continue;
             }
-            let CellState::Value(Value::Array(items)) = state else {
+            let ResolvedCellState::Value(Value::Array(items)) = state else {
                 continue;
             };
             for item in items {
@@ -166,7 +166,7 @@ impl ProjectionState {
                     .starts_with("ak:cell:ak.component.moderation_state.v1:")
             })
             .flat_map(|(_, state)| match state {
-                CellState::Value(Value::Array(items)) => items.clone(),
+                ResolvedCellState::Value(Value::Array(items)) => items.clone(),
                 _ => Vec::new(),
             })
             .filter(|item| {
@@ -322,7 +322,7 @@ impl ProjectionState {
             "value": value,
         }));
         self.cells
-            .insert(cell_ref, CellState::Value(Value::Array(items)));
+            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
 
         ProjectionEffect::ModerationDecisionProjected {
             decision_id,
@@ -403,7 +403,7 @@ impl ProjectionState {
             }
         }
         self.cells
-            .insert(cell_ref, CellState::Value(Value::Array(items)));
+            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
 
         ProjectionEffect::ModerationDecisionLifted {
             decision_id,

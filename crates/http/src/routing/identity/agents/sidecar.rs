@@ -1021,7 +1021,6 @@ fn validate_signed_sidecar_draft(
         || signed_event
             .proofs
             .iter()
-            .filter_map(arkret_wire::EventProof::as_producer)
             .any(|proof| proof.event_digest != draft.event_digest)
     {
         return Err(AppError::param_invalid(

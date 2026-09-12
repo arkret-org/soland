@@ -1105,7 +1105,7 @@ struct StrandProjectionView {
     /// `metadata.fields.calendar` subtree co-occur in both directions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     schema_refs: Vec<String>,
-    /// Every live RSVP `mv_register` head for this Strand.
+    /// Every live RSVP `causal_register` head for this Strand.
     ///
     /// Concurrent responses are exposed side by side rather than reduced to one
     /// value: only the responder can resolve them, and the spec forbids
@@ -1136,7 +1136,7 @@ struct StrandRsvpProjectionView {
     heads: Vec<StrandRsvpHeadView>,
 }
 
-/// One `mv_register` head. `entry` is the complete signed lattice value, so a
+/// One `causal_register` head. `entry` is the complete signed state model value, so a
 /// reader can classify it on both the basis and response axes without going
 /// back to the Event.
 #[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]

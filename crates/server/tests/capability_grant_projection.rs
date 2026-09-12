@@ -123,7 +123,7 @@ fn seed_realm_owner(state: &mut ProjectionState) {
             REALM.to_owned(),
             arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ),
-        arkret_state::lattice::CellState::Value(
+        arkret_state::state_model::ResolvedCellState::Value(
             serde_json::to_value(
                 arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(actor(ISSUER)),
             )

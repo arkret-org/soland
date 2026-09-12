@@ -1,6 +1,6 @@
 //! Integration tests - agent HTTP surfaces.
 
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 
 use super::common::*;
 
@@ -105,60 +105,12 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
-fn attach_fixture_service_admission(
-    state: &AppState,
-    event: &mut arkret_wire::Event,
-    producer_public_key_multibase: &str,
-) {
-    let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
-        panic!("fixture Event must begin with exactly one producer proof");
-    };
-    let producer = producer.clone();
-    let evidence_digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
-    let mut admission = arkret_wire::StationAdmissionProof {
-        applet_installation_digest: None,
-        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
-        verification_method: state
-            .service_notary_signer_descriptor()
-            .unwrap()
-            .verification_method,
-        event_digest: producer.event_digest.clone(),
-        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
-            .unwrap(),
-        producer_verification_method: producer.verification_method.clone(),
-        producer_signing_key_did: arkret_wire::DidKey::new(format!(
-            "did:key:{producer_public_key_multibase}"
-        ))
-        .unwrap(),
-        producer_signer_resolution_evidence_ref: None,
-        signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
-            "ak:signer_evidence:{evidence_digest}"
-        ))
-        .unwrap(),
-        accepted_at: event.created_at,
-        jws: String::new(),
-    };
-    admission.jws = arkret_signatures::sign_ed25519_detached_jws(
-        state.notary_signing_key().as_ref(),
-        &admission.canonical_binding_bytes().unwrap(),
-    )
-    .unwrap();
-    event
-        .proofs
-        .push(arkret_wire::EventProof::StationAdmission(admission));
-    event
-        .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
-        .unwrap();
-}
-
 fn principal_control_notary(
     account_id: arkret_wire::AccountId,
     principal_did: &str,
 ) -> arkret_wire::NotaryValue {
-    let mut notary = soland_test_support::cbs_basis::test_single_signer_notary(principal_did);
-    let arkret_wire::NotaryValue::SingleSigner { signer, .. } = &mut notary else {
-        unreachable!("single-signer fixture")
-    };
+    let mut notary = soland_test_support::cbs_basis::test_f0_notary(principal_did);
+    let signer = notary.signers.first_mut().expect("f=0 signer");
     // A PCR is owned by this exact Account, not by a Service that happens to
     // use the same signing principal. Preserve the fixture's frozen key.
     signer.actor_id = arkret_wire::ActorId::account(account_id);
@@ -176,11 +128,8 @@ fn principal_control_notary_keeps_the_exact_station_account() {
         principal.clone(),
         arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
     );
-    let arkret_wire::NotaryValue::SingleSigner { signer, .. } =
-        principal_control_notary(account.clone(), principal_did)
-    else {
-        unreachable!()
-    };
+    let notary = principal_control_notary(account.clone(), principal_did);
+    let signer = notary.signers.first().expect("f=0 signer");
     assert_eq!(signer.actor_id, arkret_wire::ActorId::account(account));
     assert_ne!(
         signer.actor_id,
@@ -403,7 +352,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             test_ed25519_multibase_public(&signing_key)
         ))
         .unwrap(),
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::for_native_unit().with_created_at(created_at),
     )
     .unwrap();
     let mut bootstrap = bootstrap.into_event();
@@ -430,21 +379,10 @@ pub(crate) async fn seed_active_controller_device_generation(
         &mut authorize,
         &bootstrap_signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::for_native_unit().with_created_at(created_at),
     )
     .unwrap();
-    let mut authorize = authorize.into_event();
-    // The Station admission proof has to be attached before these Events are
-    // retained, not after: the control-event store keeps whatever envelope it
-    // is sealed with, and every later re-validation of an accepted Control
-    // Event (`validate_station_admission_binding`) reads that envelope. Proofs
-    // are outside the digest payload, so attaching first leaves the Seal and
-    // every digest identical.
-    let controller_public_key_multibase = test_ed25519_multibase_public(&signing_key);
-    attach_fixture_service_admission(state, &mut bootstrap, &controller_public_key_multibase);
-    attach_fixture_service_admission(state, &mut authorize, &controller_public_key_multibase);
-    let bootstrap = bootstrap;
-    let authorize = authorize;
+    let authorize = authorize.into_event();
     let bootstrap_seal = arkret_bootstrap::build_self_principal_bootstrap_seal(
         &bootstrap,
         &authorize,
@@ -719,7 +657,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                     arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
                 ),
             ),
-            CellState::Value(Value::String(arkret_wire::CORE_REDUCER_PROFILE.to_owned())),
+            ResolvedCellState::Value(Value::String(arkret_wire::CORE_REDUCER_PROFILE.to_owned())),
         );
 }
 
@@ -1017,7 +955,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         &mut pcr_genesis,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::for_native_unit().with_created_at(now),
     )
     .unwrap();
     let pcr_genesis = pcr_genesis.into_event();
@@ -1076,7 +1014,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(now),
     )
     .unwrap();
     let event = event.into_event();
@@ -1127,7 +1065,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     }
 
     let predecessor = state
-        .test_seal(frontier.sole_leaf().expect("single-signer Realm frontier"))
+        .test_seal(frontier.sole_leaf().expect("f=0 Realm frontier"))
         .await
         .unwrap()
         .expect("controller PCR predecessor Seal");
@@ -1149,7 +1087,6 @@ async fn provision_agent_sdk_commit_attempt_inner(
             let is_predecessor_control = predecessor.covered_event_digests.contains(&digest);
             let is_new_control_move = event.kind.is_reducer_input()
                 && event.seal_basis.is_some()
-                && event.seal_ref.is_none()
                 && event.auth_context.is_none();
             (is_predecessor_control || is_new_control_move).then_some(event)
         })
@@ -1178,7 +1115,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let availability_request =
         arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody {
             realm_id: controller_realm_id.clone(),
-            predecessor_refs: vec![predecessor.id.clone()],
+            predecessor_ref: predecessor.id.clone(),
             event_digests: target.difference(&predecessor_covered).cloned().collect(),
             hlc: arkret_wire::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         };
@@ -1199,7 +1136,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let pending_request =
         arkret_models_collaboration::governance_dependencies::PcrPendingControlRequestBody {
             realm_id: controller_realm_id.clone(),
-            predecessor_refs: availability_request.predecessor_refs.clone(),
+            predecessor_ref: availability_request.predecessor_ref.clone(),
             limit: 1024,
         };
     let mut pending_response =
@@ -1400,7 +1337,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     );
     let settled_request =
         arkret_models_collaboration::governance_dependencies::PcrPendingControlRequestBody {
-            predecessor_refs: vec![controller_seal.id.clone()],
+            predecessor_ref: controller_seal.id.clone(),
             ..pending_request
         };
     let mut settled_response =
@@ -1688,28 +1625,11 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
             .validate_proof_bindings_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
         assert_eq!(event.proofs.len(), 2);
-        assert_eq!(
-            event
-                .proofs
-                .iter()
-                .filter(|proof| proof.as_producer().is_some())
-                .count(),
-            1
-        );
-        assert_eq!(
-            event
-                .proofs
-                .iter()
-                .filter(|proof| proof.as_station_admission().is_some())
-                .count(),
-            1
-        );
+        assert_eq!(event.proofs.len(), 1);
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         arkret_signatures::verify_ed25519_detached_jws_proof(
-            event.proofs[0]
-                .as_producer()
-                .expect("provision Event carries a producer proof"),
+            &event.proofs[0],
             &canonical_bytes,
             &event.actor_id,
             &public_key,

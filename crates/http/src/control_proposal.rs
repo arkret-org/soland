@@ -472,16 +472,13 @@ pub(crate) async fn verify_control_proposal_decision(
 
 #[cfg(test)]
 mod control_proposal_ack_quorum_tests {
-    use arkret_wire::notary::{ForensicAttribution, NotaryValue};
+    use arkret_wire::notary::NotaryValue;
 
     use super::*;
 
     fn signer(name: &str) -> arkret_wire::NotarySignerDescriptor {
-        let notary = crate::test_single_signer_notary(&format!("did:web:{name}.example"), 51);
-        let NotaryValue::SingleSigner { signer, .. } = notary else {
-            unreachable!()
-        };
-        signer
+        let notary = crate::test_f0_notary(&format!("did:web:{name}.example"), 51);
+        notary.signers.into_iter().next().unwrap()
     }
 
     fn signers(values: &[&str]) -> BTreeSet<arkret_wire::DidUrl> {
@@ -492,39 +489,16 @@ mod control_proposal_ack_quorum_tests {
     }
 
     #[test]
-    fn threshold_requires_distinct_current_members() {
-        let profile = NotaryValue::Threshold {
-            threshold: 2,
-            signers: vec![signer("a"), signer("b"), signer("c")],
-            forensic_attribution: ForensicAttribution::QuorumIntersection,
-        };
-        assert!(profile.proposal_quorum_met(&signers(&["a", "b"])));
-        assert!(!profile.proposal_quorum_met(&signers(&["a"])));
-        assert!(!profile.proposal_quorum_met(&signers(&["a", "outsider"])));
-    }
-
-    #[test]
-    fn open_set_ack_is_one_signer_slot_not_a_cross_leaf_quorum() {
-        let profile = NotaryValue::OpenSet {
-            signers: vec![signer("a"), signer("b")],
-        };
-        assert!(profile.proposal_quorum_met(&signers(&["a"])));
+    fn quorum_requires_the_fault_tolerant_threshold_of_distinct_members() {
+        let profile = NotaryValue::new(
+            vec![signer("a"), signer("b"), signer("c"), signer("d")],
+            1,
+            0,
+        )
+        .unwrap();
+        assert!(profile.proposal_quorum_met(&signers(&["a", "b", "c"])));
         assert!(!profile.proposal_quorum_met(&signers(&["a", "b"])));
-        assert!(!profile.proposal_quorum_met(&signers(&["outsider"])));
-    }
-
-    #[test]
-    fn mixed_accepts_primary_or_complete_recovery_set_only() {
-        let profile = NotaryValue::Mixed {
-            signer: signer("primary"),
-            recovery_signers: vec![signer("recovery-a"), signer("recovery-b")],
-            controller_organization_id: None,
-            recovery_controller_organization_ids: Vec::new(),
-        };
-        assert!(profile.proposal_quorum_met(&signers(&["primary"])));
-        assert!(profile.proposal_quorum_met(&signers(&["recovery-a", "recovery-b"])));
-        assert!(!profile.proposal_quorum_met(&signers(&["recovery-a"])));
-        assert!(!profile.proposal_quorum_met(&signers(&["primary", "recovery-a"])));
+        assert!(!profile.proposal_quorum_met(&signers(&["a", "b", "outsider"])));
     }
 }
 
@@ -769,7 +743,7 @@ mod tests {
             signing_key.verifying_key().as_bytes(),
         )
         .unwrap();
-        let notary = NotaryValue::single_signer(descriptor);
+        let notary = NotaryValue::new(vec![descriptor], 0, 0).unwrap();
         let policy = ControlProposalDecisionPolicy::default();
         let received_at = Utc.with_ymd_and_hms(2026, 8, 25, 0, 0, 0).single().unwrap();
         let ack = mint_control_proposal_ack(

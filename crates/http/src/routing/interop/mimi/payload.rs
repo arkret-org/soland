@@ -78,6 +78,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
         key_epoch: 0,
         credential_epoch: None,
+        authority_refs: vec![seal.id.clone()],
     };
     let mut event =
         arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::MessageCreate>::new(
@@ -90,7 +91,6 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .and_then(|draft| {
             draft
                 .with_prev_refs(prev_refs)
-                .with_seal_ref(seal.id)
                 .with_auth_context(auth_context)
                 .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
         })
@@ -101,11 +101,18 @@ pub(super) async fn persist_mimi_canonical_message_event(
         verification_method.clone(),
     );
     let canonical_created_at = event.created_at;
+    let signer_evidence_ref =
+        crate::routing::identity::agents::evidence::retain_current_service_signer_evidence_ref(
+            state,
+            canonical_created_at,
+        )
+        .await?;
     arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(canonical_created_at),
+        arkret_signatures::SignEventOptions::new(signer_evidence_ref)
+            .with_created_at(canonical_created_at),
     )
     .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;
     let event_id = event.event_id().to_string();

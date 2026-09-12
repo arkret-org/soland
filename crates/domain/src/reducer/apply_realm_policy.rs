@@ -49,9 +49,11 @@ impl ProjectionState {
             };
         }
         if let Some(existing) = self.cells.get(&config_cell) {
-            if existing != &CellState::Value(config_value.clone())
+            if existing != &ResolvedCellState::Value(config_value.clone())
                 || self.cells.get(&state_cell)
-                    != Some(&CellState::Value(Value::String("active".to_owned())))
+                    != Some(&ResolvedCellState::Value(Value::String(
+                        "active".to_owned(),
+                    )))
             {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
@@ -64,10 +66,10 @@ impl ProjectionState {
                 };
             }
             self.cells
-                .insert(config_cell, CellState::Value(config_value));
+                .insert(config_cell, ResolvedCellState::Value(config_value));
             self.cells.insert(
                 state_cell,
-                CellState::Value(Value::String("active".to_owned())),
+                ResolvedCellState::Value(Value::String("active".to_owned())),
             );
         }
         ProjectionEffect::AuditBindingProjected {
@@ -102,7 +104,10 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        if !matches!(self.cells.get(&config_cell), Some(CellState::Value(_))) {
+        if !matches!(
+            self.cells.get(&config_cell),
+            Some(ResolvedCellState::Value(_))
+        ) {
             return ProjectionEffect::Rejected {
                 reason: "audit_binding_unresolved".to_owned(),
             };
@@ -126,7 +131,7 @@ impl ProjectionState {
                 | (Some("suspended"), Some("active" | "revoked"))
         );
         let current = self.cells.get(&state_cell).and_then(|cell| match cell {
-            CellState::Value(Value::String(value)) => Some(value.as_str()),
+            ResolvedCellState::Value(Value::String(value)) => Some(value.as_str()),
             _ => None,
         });
         if op.op_type != arkret_wire::cbs::LatticeOpType::Transition || !legal {
@@ -140,25 +145,27 @@ impl ProjectionState {
             };
         }
         let state = to.expect("legal audit transition has a target").to_owned();
-        self.cells
-            .insert(state_cell, CellState::Value(Value::String(state.clone())));
+        self.cells.insert(
+            state_cell,
+            ResolvedCellState::Value(Value::String(state.clone())),
+        );
         ProjectionEffect::AuditBindingProjected { binding_id, state }
     }
 
     fn set_realm_null_subject_cell(&mut self, realm_id: &str, family: &str, value: Value) {
         self.realm_null_subject_cells.insert(
             (realm_id.to_owned(), format!("ak:cell:{family}:null")),
-            CellState::Value(value),
+            ResolvedCellState::Value(value),
         );
     }
 
-    /// Apply one closed Realm-bootstrap cas-register facet.
+    /// Apply one closed Realm-bootstrap registered state model facet.
     ///
     /// The write itself is not read off the wire — the v1 Event carries no
     /// producer `effects[]`. It comes from the registry contract evaluated by
     /// `arkret_schema::project_registered_cell_writes`, so Soland keeps no
     /// second event-kind -> cell-family table. Every one of these facets
-    /// registers exactly one `cas_register` write on a `null`-subject cell
+    /// registers exactly one `causal_register` write on a `null`-subject cell
     /// whose value is the whole payload object; this process-wide projection
     /// cache scopes those Realm-singleton cells by Realm so two Realms cannot
     /// overwrite one another.
@@ -253,7 +260,7 @@ impl ProjectionState {
                 .insert(operation.realm_id.to_string(), join_rule.to_owned());
         }
         self.realm_null_subject_cells
-            .insert(realm_cell_key, CellState::Value(value));
+            .insert(realm_cell_key, ResolvedCellState::Value(value));
         ProjectionEffect::RealmBootstrapFacetProjected {
             realm_id: operation.realm_id.to_string(),
             kind: kind.as_str().to_owned(),
@@ -277,7 +284,7 @@ impl ProjectionState {
         let realm_id = payload.realm_id.to_string();
         if matches!(
             self.realm_notary_cells.get(&realm_id),
-            Some(CellState::Bottom(_))
+            Some(ResolvedCellState::Bottom(_))
         ) {
             return ProjectionEffect::Rejected {
                 reason: "cell_in_bottom_state".to_owned(),
@@ -289,7 +296,7 @@ impl ProjectionState {
             };
         };
         self.realm_notary_cells
-            .insert(realm_id.clone(), CellState::Value(value));
+            .insert(realm_id.clone(), ResolvedCellState::Value(value));
         ProjectionEffect::RealmNotaryProjected { realm_id }
     }
 
@@ -321,7 +328,7 @@ impl ProjectionState {
         );
         if matches!(
             self.realm_null_subject_cells.get(&cell_key),
-            Some(CellState::Bottom(_))
+            Some(ResolvedCellState::Bottom(_))
         ) {
             return ProjectionEffect::Rejected {
                 reason: "cell_in_bottom_state".to_owned(),
@@ -334,7 +341,7 @@ impl ProjectionState {
             };
         };
         self.realm_null_subject_cells
-            .insert(cell_key, CellState::Value(value));
+            .insert(cell_key, ResolvedCellState::Value(value));
         ProjectionEffect::RealmDigestSuiteTransitionProjected {
             realm_id,
             digest_algorithm,
@@ -444,7 +451,7 @@ impl ProjectionState {
         // does not declare them, so there is nothing to select, ratchet or
         // preserve here: both are read from the winning MLS epoch tuple.
         self.realm_policy_bundle_cells
-            .insert(realm_id.clone(), CellState::Value(value));
+            .insert(realm_id.clone(), ResolvedCellState::Value(value));
         ProjectionEffect::RealmPolicyBundleProjected { realm_id }
     }
 
@@ -465,7 +472,7 @@ impl ProjectionState {
     }
 
     /// Project `ak.realm.media_service` into the canonical
-    /// `ak.component.realm.media_service.v1` cas-register cell consumed by
+    /// `ak.component.realm.media_service.v1` registered state model cell consumed by
     /// the AKP-0010 media token exchange (`routing::interop::webrtc`). The
     /// The SDK's exact payload type validates the closed descriptor before its
     /// `value` is projected into the cell.
@@ -550,7 +557,7 @@ impl ProjectionState {
         if self.cell_value(&state_cell).and_then(Value::as_str) == Some(initial_state) {
             return ProjectionEffect::CallStateProjected { call_id };
         }
-        let (Some(next), fsm_head) = (match project_call_fsm_transition(
+        let (Some(next), transition_head) = (match project_call_transition_transition(
             self,
             &state_cell,
             arkret_wire::CellFamilyId::CALL_STATE_V1,
@@ -570,22 +577,22 @@ impl ProjectionState {
             };
         };
         self.cells.insert(state_cell.clone(), next);
-        if let Some(head) = fsm_head {
-            self.call_fsm_heads.insert(state_cell, head);
+        if let Some(head) = transition_head {
+            self.call_transition_heads.insert(state_cell, head);
         }
         ProjectionEffect::CallStateProjected { call_id }
     }
 
     /// Project a validated `ak.call.state` Event's exact registered effects
     /// into the nine independent call cells. The shared SDK validator has
-    /// already recomputed every cell and full lattice op from the signed
+    /// already recomputed every cell and full state model op from the signed
     /// payload; this projection consumes those effects rather than recreating
-    /// a private composite-call lattice.
+    /// a private composite-call state model.
     pub(crate) fn apply_call_state(&mut self, operation: &Operation) -> ProjectionEffect {
         self.apply_call_cell_effects(operation, false)
     }
 
-    /// Project the capture FSM and initial result effects of a validated
+    /// Project the capture transition and initial result effects of a validated
     /// `ak.call.recording.start`. Consent and notice are checked before either
     /// cell is changed.
     pub(crate) fn apply_call_recording_start(&mut self, operation: &Operation) -> ProjectionEffect {
@@ -674,7 +681,7 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
                 };
             }
-            if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+            if matches!(self.cells.get(&cell_id), Some(ResolvedCellState::Bottom(_))) {
                 return ProjectionEffect::Rejected {
                     reason: "cell_bottom_state".to_owned(),
                 };
@@ -693,9 +700,9 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
                 };
             }
-            let (next, fsm_head) = match op.op_type {
+            let (next, transition_head) = match op.op_type {
                 arkret_wire::cbs::LatticeOpType::Transition => {
-                    match project_call_fsm_transition(
+                    match project_call_transition_transition(
                         self,
                         &cell_id,
                         family,
@@ -712,10 +719,10 @@ impl ProjectionState {
                     }
                 }
                 arkret_wire::cbs::LatticeOpType::Set => {
-                    (op.value.clone().map(CellState::Value), None)
+                    (op.value.clone().map(ResolvedCellState::Value), None)
                 }
                 arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => (
-                    project_call_or_set(self.cells.get(&cell_id), op).map(CellState::Value),
+                    project_call_or_set(self.cells.get(&cell_id), op).map(ResolvedCellState::Value),
                     None,
                 ),
                 _ => (None, None),
@@ -729,8 +736,12 @@ impl ProjectionState {
                 && !focus_write_preserves_committed(
                     self.cells.get(&cell_id),
                     match &next {
-                        CellState::Value(value) => value,
-                        CellState::Bottom(_) => unreachable!("focus is not an FSM cell"),
+                        ResolvedCellState::Value(value) => value,
+                        ResolvedCellState::Bottom(_)
+                        | ResolvedCellState::Causal(_)
+                        | ResolvedCellState::Sequenced(_) => {
+                            unreachable!("focus is not an transition cell")
+                        }
                     },
                 )
             {
@@ -738,19 +749,19 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
                 };
             }
-            updates.push((cell_id, next, fsm_head));
+            updates.push((cell_id, next, transition_head));
         }
-        for (cell_id, state, fsm_head) in updates {
+        for (cell_id, state, transition_head) in updates {
             self.cells.insert(cell_id.clone(), state);
-            if let Some(head) = fsm_head {
-                self.call_fsm_heads.insert(cell_id, head);
+            if let Some(head) = transition_head {
+                self.call_transition_heads.insert(cell_id, head);
             }
         }
         ProjectionEffect::CallStateProjected { call_id }
     }
 
     /// Project `ak.call.summary` into the write-once
-    /// `ak.component.call.summary.v1` cas_register cell
+    /// `ak.component.call.summary.v1` causal_register cell
     /// (`cell_subject = payload.call_id`). `call-state.md` §7:
     ///
     /// - `final_state` MUST be a terminal call state (`ended` / `missed` / `failed` / `cancelled`).
@@ -794,7 +805,7 @@ impl ProjectionState {
             };
         }
 
-        // §7 — write-once cas_register. A divergent rewrite is rejected; an
+        // §7 — write-once causal_register. A divergent rewrite is rejected; an
         // identical replay is a no-op.
         if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.call.summary.v1:{call_id}"
@@ -807,12 +818,12 @@ impl ProjectionState {
                 }
                 return ProjectionEffect::CallSummaryProjected { call_id };
             }
-            self.cells.insert(cell_id, CellState::Value(value));
+            self.cells.insert(cell_id, ResolvedCellState::Value(value));
         }
         ProjectionEffect::CallSummaryProjected { call_id }
     }
 
-    /// Project a canonical `ak.realm.link` event into its FSM cell and query caches.
+    /// Project a canonical `ak.realm.link` event into its transition cell and query caches.
     ///
     /// The HTTP operation materializes its default `status=active` before this
     /// point. Durable Event admission requires `status` explicitly.
@@ -893,7 +904,7 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
 
-        // Cell write — FSM keyed by the canonical composite subject.
+        // Cell write — transition keyed by the canonical composite subject.
         if let Some(cell_id) =
             realm_links::realm_link_projection_cell_ref(&realm_id, target_realm_id, link_kind)
         {
@@ -906,7 +917,7 @@ impl ProjectionState {
                 "commitment": commitment,
                 "updated_at": arkret_canonical::format_timestamp_canonical(now),
             });
-            self.cells.insert(cell_id, CellState::Value(value));
+            self.cells.insert(cell_id, ResolvedCellState::Value(value));
         }
 
         // Structured side-band cache mirror. Outbound: keyed by source
@@ -939,7 +950,7 @@ impl ProjectionState {
 
     /// R3.2 — project a `ak.realm.inheritance_policy` event.
     ///
-    /// Cell family: `ak.component.realm.inheritance_policy.v1` (cas-register).
+    /// Cell family: `ak.component.realm.inheritance_policy.v1` (registered state model).
     /// Rejects payloads with `max_depth > 1` (current wire cap), rejects
     /// inheritance through an already-active non-capability-bearing Realm
     /// link, and verifies requested policies / bundles against projected
@@ -1011,7 +1022,7 @@ impl ProjectionState {
                 "max_depth": max_depth,
                 "updated_at": arkret_canonical::format_timestamp_canonical(now),
             });
-            self.cells.insert(cell_id, CellState::Value(value));
+            self.cells.insert(cell_id, ResolvedCellState::Value(value));
         }
 
         let state_row = RealmInheritancePolicyState {
@@ -1144,7 +1155,7 @@ impl ProjectionState {
             };
         };
         let mut items = match self.cells.get(&cell_id) {
-            Some(CellState::Value(Value::Array(items))) => items.clone(),
+            Some(ResolvedCellState::Value(Value::Array(items))) => items.clone(),
             _ => Vec::new(),
         };
         items.push(serde_json::json!({
@@ -1152,7 +1163,7 @@ impl ProjectionState {
             "value": operation.payload.clone(),
         }));
         self.cells
-            .insert(cell_id, CellState::Value(Value::Array(items)));
+            .insert(cell_id, ResolvedCellState::Value(Value::Array(items)));
 
         self.capability_derived.insert(
             grant_id.clone(),
@@ -1200,14 +1211,14 @@ fn call_cell_family_allowed(family: &str, recording_start: bool) -> bool {
     )
 }
 
-fn project_call_fsm_transition(
+fn project_call_transition_transition(
     state: &ProjectionState,
     cell_id: &arkret_identifiers::CellRef,
     family: &str,
     op: &arkret_wire::cbs::LatticeOp,
     operation: &Operation,
     recording_start: bool,
-) -> Result<(Option<CellState>, Option<CallFsmHead>), &'static str> {
+) -> Result<(Option<ResolvedCellState>, Option<CallTransitionHead>), &'static str> {
     let from = match op.from.as_ref() {
         Some(Value::Null) => None,
         Some(Value::String(value)) if !value.is_empty() => Some(value.as_str()),
@@ -1221,44 +1232,20 @@ fn project_call_fsm_transition(
     else {
         return Err(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED);
     };
-    validate_call_fsm_edge(family, from, to, recording_start)?;
+    validate_call_transition_edge(family, from, to, recording_start)?;
 
-    let basis = call_fsm_conflict_basis(operation);
-    if let Some(head) = state.call_fsm_heads.get(cell_id)
+    let basis = call_transition_conflict_basis(operation);
+    if let Some(head) = state.call_transition_heads.get(cell_id)
         && head.basis == basis
     {
         if head.value == to {
             return Ok((state.cells.get(cell_id).cloned(), None));
         }
-        let bottom = arkret_wire::Bottom {
-            kind: arkret_wire::BottomKind::Conflict,
-            cell_ids: vec![cell_id.clone()],
-            move_ids: Vec::new(),
-            seal_view: None,
-            head_ids: vec![
-                serde_json::json!({
-                    "move_id": head.operation_id.as_str(),
-                    "to": head.value.as_str(),
-                    "basis": basis.as_str(),
-                }),
-                serde_json::json!({
-                    "move_id": operation.operation_id.as_str(),
-                    "to": to,
-                    "basis": basis.as_str(),
-                }),
-            ],
-            details: Some(arkret_wire::bottom_details([
-                ("basis", serde_json::json!(basis.as_str())),
-                ("cell_family", serde_json::json!(family)),
-                ("reason", serde_json::json!("call_fsm_sibling_conflict")),
-            ])),
-            escalated_at: None,
-        };
-        return Ok((Some(CellState::Bottom(bottom)), None));
+        return Err(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED);
     }
 
     let current = state.cells.get(cell_id).and_then(|cell| match cell {
-        CellState::Value(Value::String(value)) => Some(value.as_str()),
+        ResolvedCellState::Value(Value::String(value)) => Some(value.as_str()),
         _ => None,
     });
     match (current, from) {
@@ -1280,8 +1267,8 @@ fn project_call_fsm_transition(
     }
 
     Ok((
-        Some(CellState::Value(Value::String(to.to_owned()))),
-        Some(CallFsmHead {
+        Some(ResolvedCellState::Value(Value::String(to.to_owned()))),
+        Some(CallTransitionHead {
             basis,
             operation_id: operation.operation_id.to_string(),
             value: to.to_owned(),
@@ -1289,7 +1276,7 @@ fn project_call_fsm_transition(
     ))
 }
 
-fn validate_call_fsm_edge(
+fn validate_call_transition_edge(
     family: &str,
     from: Option<&str>,
     to: &str,
@@ -1355,7 +1342,7 @@ fn validate_call_fsm_edge(
     }
 }
 
-fn call_fsm_conflict_basis(operation: &Operation) -> String {
+fn call_transition_conflict_basis(operation: &Operation) -> String {
     operation
         .context
         .seal_basis
@@ -1365,13 +1352,13 @@ fn call_fsm_conflict_basis(operation: &Operation) -> String {
 }
 
 fn project_call_or_set(
-    existing: Option<&CellState>,
+    existing: Option<&ResolvedCellState>,
     op: &arkret_wire::cbs::LatticeOp,
 ) -> Option<Value> {
     let tag = op.tag.as_deref()?;
     let mut entries = existing
         .and_then(|state| match state {
-            CellState::Value(Value::Array(entries)) => Some(entries.clone()),
+            ResolvedCellState::Value(Value::Array(entries)) => Some(entries.clone()),
             _ => None,
         })
         .unwrap_or_default();
@@ -1407,7 +1394,7 @@ fn project_call_or_set(
 
 fn call_observed_remove_matches(
     family: &str,
-    existing: Option<&CellState>,
+    existing: Option<&ResolvedCellState>,
     op: &arkret_wire::cbs::LatticeOp,
     payload: &Value,
 ) -> bool {
@@ -1418,7 +1405,7 @@ fn call_observed_remove_matches(
         return false;
     };
     let Some(value) = existing.and_then(|state| match state {
-        CellState::Value(Value::Array(entries)) => entries.iter().find_map(|entry| {
+        ResolvedCellState::Value(Value::Array(entries)) => entries.iter().find_map(|entry| {
             (entry.get("tag").and_then(Value::as_str) == Some(tag))
                 .then(|| entry.get("value"))
                 .flatten()
@@ -1448,9 +1435,9 @@ fn call_observed_remove_matches(
     }
 }
 
-fn focus_write_preserves_committed(existing: Option<&CellState>, next: &Value) -> bool {
+fn focus_write_preserves_committed(existing: Option<&ResolvedCellState>, next: &Value) -> bool {
     let Some(existing) = existing.and_then(|state| match state {
-        CellState::Value(value) => Some(value),
+        ResolvedCellState::Value(value) => Some(value),
         _ => None,
     }) else {
         return true;

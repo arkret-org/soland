@@ -582,7 +582,7 @@ mod tests {
         );
         projection.cells.insert(
             cell,
-            arkret_state::lattice::CellState::Value(json!({
+            arkret_state::state_model::ResolvedCellState::Value(json!({
                 "organization_id": organization_id,
                 "value": {
                     "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",

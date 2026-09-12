@@ -13,8 +13,8 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CellRef, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
-use arkret_state::lattice::CellState;
-use arkret_state::state::{CellRegistry, CellStore, StoreError};
+use arkret_state::state::{CellStateRegistry, CellStore, StoreError};
+use arkret_state::state_model::ResolvedCellState;
 use arkret_wire::cbs::ProjectedCellWrite;
 use arkret_wire::{AppletId, ProfileId};
 use serde_json::Value;
@@ -33,7 +33,7 @@ pub struct ProjectionState {
     /// `(event_ref, occurrence, actor_id)`, where `occurrence` keeps the signed
     /// JSON null as `None` rather than a sentinel string.
     ///
-    /// This mirrors the `ak.component.calendar.rsvp.v1` `mv_register` cell: it
+    /// This mirrors the `ak.component.calendar.rsvp.v1` `causal_register` cell: it
     /// holds every live head, never a single last-writer value.
     pub rsvps: BTreeMap<(String, Option<String>, String), RsvpProjection>,
     /// Shared pin projection keyed by `(pin_scope_key, target_ref)`.
@@ -52,15 +52,15 @@ pub struct ProjectionState {
     pub polls: BTreeMap<arkret_wire::MessageId, PollState>,
     pub poll_responses: arkret_models_collaboration::poll::PollResponseSet,
     /// Structured side-band cache keyed by
-    /// `(realm_id, actor_id)`. Holds the FSM state value plus `role` /
+    /// `(realm_id, actor_id)`. Holds the transition state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
-    /// `ak.component.member.state.v1` FSM cell itself. Reads should go
+    /// `ak.component.member.state.v1` transition cell itself. Reads should go
     /// through helpers like [`ProjectionState::members_of_realm`] /
     /// [`ProjectionState::members_in_state`] / [`ProjectionState::member`]
     /// rather than touching this directly.
     ///
     /// Banned and knocking members are derived via `members_in_state`
-    /// against the FSM state field, not stored as separate collections.
+    /// against the transition state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), SolandMembershipState>,
     /// Exact controller authority and controller join generation carried by a
     /// Agent membership Event. Effective Agent membership is
@@ -115,18 +115,18 @@ pub struct ProjectionState {
     /// This map is the canonical source for all cell-driven state in the
     /// Move/Seal pipeline.
     /// Completed migrations:
-    ///   - `read_receipt_policies` (CasRegister) — old BTreeMap deleted; read path uses
+    ///   - `read_receipt_policies` (SequencedState) — old BTreeMap deleted; read path uses
     ///     `cell_value`.
-    ///   - `memberships` / `banned_members` / `knocking_members` (FSM) — replaced by flat
+    ///   - `memberships` / `banned_members` / `knocking_members` (transition) — replaced by flat
     ///     `members: BTreeMap<(String, String), SolandMembershipState>` cache + per-actor
-    ///     `ak.component.member.state.v1` FSM cell.
+    ///     `ak.component.member.state.v1` transition cell.
     ///   - `realm_states` remains an application-side effective view; protocol truth is split
     ///     across genesis/create-log/profile/facet/terminal cells. Helpers: `realm_create_log` /
     ///     `realm_genesis_cell_value` / `realm_profile_cell_value` / `realm_is_destroyed` query
     ///     cells directly. Durable-event-only fields (`messages` / `reactions` / `read_cursors` /
     ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
     ///     `cell_family` declaration).
-    pub cells: BTreeMap<CellRef, CellState>,
+    pub cells: BTreeMap<CellRef, ResolvedCellState>,
     /// Realm-scoped mirror for all resolved cell families, including cells
     /// whose subject is derived from an account or Event. A canonical CellRef
     /// does not carry its enclosing Realm, so the same invite target (for
@@ -135,18 +135,18 @@ pub struct ProjectionState {
     /// `cells` remains populated for legacy callers whose families have a
     /// globally unique subject; Realm-aware admission and read paths prefer
     /// this map and therefore cannot observe another Realm's value.
-    pub realm_cells: BTreeMap<(String, String), CellState>,
+    pub realm_cells: BTreeMap<(String, String), ResolvedCellState>,
     /// Realm-scoped resolved values for protocol cell families
     /// whose canonical subject is the literal `null`. The Realm id belongs
     /// to the CellStore namespace, not the wire cell id, so these values
     /// cannot safely share the global `cells` map.
-    pub realm_profile_cells: BTreeMap<String, CellState>,
-    pub realm_create_cells: BTreeMap<String, CellState>,
-    pub realm_notary_cells: BTreeMap<String, CellState>,
-    pub realm_policy_bundle_cells: BTreeMap<String, CellState>,
+    pub realm_profile_cells: BTreeMap<String, ResolvedCellState>,
+    pub realm_create_cells: BTreeMap<String, ResolvedCellState>,
+    pub realm_notary_cells: BTreeMap<String, ResolvedCellState>,
+    pub realm_policy_bundle_cells: BTreeMap<String, ResolvedCellState>,
     /// Other canonical null-subject Realm facets keyed by
     /// `(realm_id, canonical_cell_ref)`.
-    pub realm_null_subject_cells: BTreeMap<(String, String), CellState>,
+    pub realm_null_subject_cells: BTreeMap<(String, String), ResolvedCellState>,
     /// Effective `default_join_rule`, keyed by Realm. This mirrors the
     /// bootstrap/create value and later sealed join-rule facet so admission
     /// can select the protocol's C-axis gates without inventing a Realm id
@@ -202,7 +202,7 @@ pub struct ProjectionState {
     /// `GET /_soland/admin/applets` admin snapshot. Runtime-private applet
     /// session progress is not a durable Arkret event and is not mirrored here.
     pub applets: BTreeMap<AppletId, AppletProjection>,
-    /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
+    /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — transition lifecycle
     /// state for each complete canonical Agent Account ActorId. Driven by
     /// `ak.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
     /// for any Agent Account we've seen; `Deactivated` is terminal
@@ -218,9 +218,9 @@ pub struct ProjectionState {
     /// (cleared on `ak.agent.key.revoke`).
     /// Agent id -> (active key id -> accepted authorize Event id).
     pub agent_authorized_keys: BTreeMap<String, BTreeMap<String, String>>,
-    /// Latest accepted FSM head for each independent call cell. This detects
+    /// Latest accepted transition head for each independent call cell. This detects
     /// same-basis sibling transitions without coupling orthogonal call axes.
-    pub call_fsm_heads: BTreeMap<arkret_identifiers::CellRef, CallFsmHead>,
+    pub call_transition_heads: BTreeMap<arkret_identifiers::CellRef, CallTransitionHead>,
     /// R3.1 — Realm-link projection. Outer key is the source
     /// `realm_id` (the envelope `realm_id` of a `ak.realm.link` event);
     /// the inner Vec accumulates every directed link the Realm has
@@ -235,13 +235,13 @@ pub struct ProjectionState {
     /// `direction=inbound` in O(1) without a full scan.
     pub realm_links_inbound: BTreeMap<String, Vec<RealmLinkState>>,
     /// R3.2 — `ak.realm.inheritance_policy` projection, keyed by the
-    /// child `realm_id` (the envelope `realm_id`). Cas-register
+    /// child `realm_id` (the envelope `realm_id`). Registered state-model
     /// semantics — last write wins.
     pub realm_inheritance_policies: BTreeMap<String, RealmInheritancePolicyState>,
     /// realm-links.md §6.2 — per-`(child_realm, source_realm)` inheritance
     /// declarations, so a child that opts into multiple governance sources
     /// (multi-`governed_by`) retains each source's narrowed allow-list
-    /// independently. Cas-register per `(child, source)` pair — a re-declared
+    /// independently. Registered state-model per `(child, source)` pair — a re-declared
     /// `(child, source)` replaces only that pair. This is the substrate the
     /// effective-policy read uses to compute the narrow-only intersection
     /// across all opted-in sources, distinct from the single last-write
@@ -249,12 +249,12 @@ pub struct ProjectionState {
     pub realm_inheritance_policies_by_source:
         BTreeMap<(String, String), RealmInheritancePolicyState>,
     /// R3.2 — `ak.capability.derived` projection, keyed by
-    /// `capability_id`. Cas-register semantics — last write wins per
+    /// `capability_id`. Registered state-model semantics — last write wins per
     /// capability.
     pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
     /// SOL-ORG-02 — `ak.realm.organization` relationship-statement
     /// projection, keyed by `(realm_id, organization_id, relationship)`.
-    /// Cas-register semantics per `(organization_id, relationship)` cell
+    /// Registered state-model semantics per `(organization_id, relationship)` cell
     /// subject — the latest statement (active or revoked) wins. Multiple
     /// owner / governance / sponsor / directory_certifier relationships for
     /// the same Realm coexist as independent rows. Cell-canonical values
@@ -659,10 +659,10 @@ impl ProjectionState {
 
     /// Look up a cell's resolved state by its canonical [`CellRef`]. Returns
     /// `None` if the cell hasn't been observed (no sealed Move ever wrote
-    /// to it). The returned `CellState` is either `Value(_)` (lattice
+    /// to it). The returned `ResolvedCellState` is either `Value(_)` (state model
     /// resolved successfully) or `Bottom(_)` (concurrent conflict requires
     /// recovery).
-    pub fn cell(&self, cell_id: &CellRef) -> Option<&CellState> {
+    pub fn cell(&self, cell_id: &CellRef) -> Option<&ResolvedCellState> {
         self.cells.get(cell_id)
     }
 
@@ -671,10 +671,7 @@ impl ProjectionState {
     /// distinguish (e.g. UI showing "this state is in conflict") should
     /// use [`ProjectionState::cell`] directly.
     pub fn cell_value(&self, cell_id: &CellRef) -> Option<&Value> {
-        match self.cells.get(cell_id)? {
-            CellState::Value(v) => Some(v),
-            CellState::Bottom(_) => None,
-        }
+        self.cells.get(cell_id)?.settled_value()
     }
 
     /// Look up a cell's resolved state inside one Realm namespace.
@@ -684,7 +681,7 @@ impl ProjectionState {
     /// rather than the process-wide `cells` map. Keeping the state-level
     /// lookup here also lets administrative readers expose `Bottom` instead
     /// of accidentally treating it as absent.
-    pub fn realm_cell(&self, realm_id: &str, cell_id: &CellRef) -> Option<&CellState> {
+    pub fn realm_cell(&self, realm_id: &str, cell_id: &CellRef) -> Option<&ResolvedCellState> {
         match cell_id.as_str() {
             arkret_wire::REALM_PROFILE_CELL => self.realm_profile_cells.get(realm_id),
             arkret_wire::REALM_CREATE_CELL => self.realm_create_cells.get(realm_id),
@@ -719,10 +716,7 @@ impl ProjectionState {
     /// singleton cells share the same wire CellRef across Realms, so their
     /// process cache keeps the Realm id as a separate key dimension.
     pub fn realm_cell_value(&self, realm_id: &str, cell_id: &CellRef) -> Option<&Value> {
-        match self.realm_cell(realm_id, cell_id)? {
-            CellState::Value(value) => Some(value),
-            CellState::Bottom(_) => None,
-        }
+        self.realm_cell(realm_id, cell_id)?.settled_value()
     }
 
     /// Evaluate registered head_eq predicates by canonical whole-value
@@ -785,8 +779,11 @@ impl ProjectionState {
         }
         let cell_id = CellRef::new(cell_ref.to_owned()).map_err(|_| "failed_precondition")?;
         match self.realm_cell(realm_id, &cell_id) {
-            Some(CellState::Bottom(_)) => Err("cell_bottom_state"),
-            Some(CellState::Value(value)) => Ok(Self::observed_head_eq(value, expected)),
+            Some(ResolvedCellState::Bottom(_)) => Err("cell_bottom_state"),
+            Some(state) => state
+                .settled_value()
+                .map(|value| Self::observed_head_eq(value, expected))
+                .ok_or("cell_bottom_state"),
             None => Ok(expected.is_null()),
         }
     }
@@ -892,7 +889,7 @@ impl ProjectionState {
     }
 
     /// Reload the cells map for one Realm from the SDK CellStore + apply
-    /// each cell's lattice. Called after every successful `apply_seal`
+    /// each cell's state model. Called after every successful `apply_seal`
     /// in the peer-event/notary pipeline to keep this projection cache in sync
     /// with sealed cell state.
     ///
@@ -904,15 +901,16 @@ impl ProjectionState {
         &mut self,
         realm_id: &RealmId,
         cell_store: &dyn CellStore,
-        cell_registry: &dyn CellRegistry,
+        cell_registry: &dyn CellStateRegistry,
     ) -> Result<(), StoreError> {
         let mut resolved_cells = Vec::new();
         for cell in cell_store.list_cells(realm_id).await? {
-            let ops = cell_store.sealed_ops_for_cell(realm_id, &cell).await?;
+            let ops = cell_store.state_writes_for_cell(realm_id, &cell).await?;
             let binding = cell_registry
                 .resolve(realm_id, &cell)
                 .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;
-            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
+            let resolved = arkret_state::join_cell(binding.model.as_ref(), &cell, &ops)
+                .map_err(|error| StoreError::Backend(format!("cell state resolution: {error}")))?;
             resolved_cells.push((cell, resolved));
         }
         self.install_reloaded_cells(realm_id, resolved_cells);
@@ -926,7 +924,7 @@ impl ProjectionState {
     pub fn install_reloaded_cells(
         &mut self,
         realm_id: &RealmId,
-        resolved_cells: impl IntoIterator<Item = (CellRef, CellState)>,
+        resolved_cells: impl IntoIterator<Item = (CellRef, ResolvedCellState)>,
     ) {
         for (cell, resolved) in resolved_cells {
             match cell.as_str() {
@@ -972,18 +970,17 @@ impl ProjectionState {
     ///
     /// Tolerance for unknown kinds is preserved: a miss in the registry
     /// returns `ProjectionEffect::Ignored` (same as the old wildcard
-    /// arm). Durable-event projection's lattice-registry probe
-    /// (`apply_via_lattice_registry`) still fails closed for unknown
+    /// arm). Durable-event projection's state model-registry probe
+    /// (`apply_via_state_model_registry`) still fails closed for unknown
     /// canonical kinds — the registry miss path here is the
     /// "cell-state-only event reached the inline cache by mistake"
     /// branch.
     ///
     /// All cell-state events (ak.realm.policy / ak.realm.read_receipt_policy /
     /// ak.consent.* / ak.member.state / ak.realm.* facets) are routed via
-    /// the Move/Seal pipeline through `LatticeKind` impls in
-    /// `lattice_kinds.rs`; the structured ProjectionState fields don't
-    /// mirror them. `routing/projection.rs::project_read_receipt_policy`
-    /// handles the read-receipt cache fast path explicitly.
+    /// the Move/Seal pipeline through `StateModelKind` impls in
+    /// `state_model_kinds.rs`; the structured ProjectionState fields don't
+    /// mirror them; reads consume only the confirmed state-model projection.
     fn apply_once(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
         let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
             return ProjectionEffect::Rejected {
@@ -1069,7 +1066,7 @@ impl ProjectionState {
         effect
     }
 
-    /// Probe the supplied [`LatticeRegistry`] for a `cell_family` that
+    /// Probe the supplied [`CellFamilyRegistry`] for a `cell_family` that
     /// handles this Operation's canonical kind via `event_kinds()`.
     ///
     /// Behaviour:
@@ -1081,12 +1078,12 @@ impl ProjectionState {
     ///   before. No log noise.
     /// - **Unknown canonical kind**: spec compliance requires us to fail closed — log at `error`
     ///   level and return an observable [`ProjectionEffect::Rejected`].
-    pub fn apply_via_lattice_registry(
+    pub fn apply_via_state_model_registry(
         &mut self,
         operation: &Operation,
         cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
-        registry: &arkret_lattice_registry::LatticeRegistry,
+        registry: &arkret_lattice_registry::CellFamilyRegistry,
     ) -> ProjectionEffect {
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
@@ -1094,7 +1091,7 @@ impl ProjectionState {
                 tracing::error!(
                     event_kind = %operation.event_kind,
                     operation_id = %operation.operation_id,
-                    "lattice registry dispatch: unknown canonical kind for operation; \
+                    "state-model registry dispatch: unknown canonical kind for operation; \
                      dropping with bottom (reject)"
                 );
                 return ProjectionEffect::Rejected {
@@ -1108,13 +1105,13 @@ impl ProjectionState {
             .is_some()
         {
             // Canonical hit — log at trace + delegate to inline helpers.
-            // The inline helpers and the LatticeRegistry-resolved cell
+            // The inline helpers and the CellFamilyRegistry-resolved cell
             // family agree by construction (this whole module has one
             // canonical match arm; the registry just declares which
             // event kinds it owns).
             tracing::trace!(
                 event_kind = %kind,
-                "lattice registry dispatch: routed through LatticeRegistry"
+                "state-model registry dispatch: routed through CellFamilyRegistry"
             );
             self.apply_projected(operation, cell_writes, hlc)
         } else {
@@ -1367,17 +1364,14 @@ mod head_eq_tests {
         );
         state
             .realm_notary_cells
-            .insert(REALM_A.to_owned(), CellState::Value(Value::Null));
+            .insert(REALM_A.to_owned(), ResolvedCellState::Value(Value::Null));
         assert_eq!(
             state.head_eq_holds(REALM_A, cell.as_str(), &Value::Null),
             Ok(true)
         );
         state.realm_notary_cells.insert(
             REALM_A.to_owned(),
-            CellState::Bottom(arkret_wire::Bottom::new(
-                arkret_wire::BottomKind::Conflict,
-                vec![cell.clone()],
-            )),
+            ResolvedCellState::Bottom(arkret_wire::Bottom::conflict(vec![cell.clone()], vec![])),
         );
         assert_eq!(
             state.head_eq_holds(REALM_A, cell.as_str(), &Value::Null),

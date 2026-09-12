@@ -503,8 +503,8 @@ impl FrontierExchangeWorker {
         });
         let mut seal_selectors = BTreeSet::new();
         for submission in &pending {
-            if let Some(seal_ref) = &submission.event.seal_ref {
-                seal_selectors.insert(seal_ref.clone());
+            if let Some(context) = &submission.event.auth_context {
+                seal_selectors.extend(context.authority_refs.iter().cloned());
             }
             if let Some(seal_basis) = &submission.event.seal_basis {
                 seal_selectors.extend(seal_basis.leaves.iter().cloned());
@@ -529,7 +529,10 @@ impl FrontierExchangeWorker {
             let batch = seal_selectors.iter().take(256).cloned().collect::<Vec<_>>();
             let request = arkret_models_collaboration::http_bodies::PeerSealResolveRequestBody {
                 realm_id: remote.realm_id.clone(),
-                seal_refs: batch.clone(),
+                selection:
+                    arkret_models_collaboration::http_bodies::SealResolveSelection::SealRefs {
+                        seal_refs: batch.clone(),
+                    },
                 history_traversal_access: None,
             };
             let (outcome, domain, size): (
@@ -548,17 +551,24 @@ impl FrontierExchangeWorker {
             outcome
                 .validate_for_peer_request(&request)
                 .map_err(|error| format!("schema_violation:{error}"))?;
-            if !outcome.missing_seal_refs.is_empty() {
+            let arkret_models_collaboration::http_bodies::SealResolveOutcome::Seals {
+                seals,
+                missing_seal_refs,
+            } = outcome
+            else {
+                return Err("schema_violation:seal_resolve_mode_mismatch".to_owned());
+            };
+            if !missing_seal_refs.is_empty() {
                 return Err("dependency_missing:seal_prerequisite".to_owned());
             }
             for seal_ref in batch {
                 seal_selectors.remove(&seal_ref);
             }
-            for seal in outcome.seals {
+            for seal in seals {
                 if seal.realm_id != remote.realm_id {
                     return Err("schema_violation:seal_dependency_realm_mismatch".to_owned());
                 }
-                for predecessor in &seal.predecessor_refs {
+                for predecessor in seal.predecessor_ref.as_slice() {
                     let is_local = self
                         .state
                         .projections()

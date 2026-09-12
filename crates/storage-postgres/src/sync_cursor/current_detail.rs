@@ -111,7 +111,7 @@ pub(super) async fn page(
     request: &CurrentDetailRequest,
     progress: Option<&CurrentDetailProgress>,
     byte_budget: usize,
-    registry: &dyn arkret_state::state::CellRegistry,
+    registry: &dyn arkret_state::state::CellStateRegistry,
 ) -> PersistenceResult<CurrentDetailOutcome> {
     if request
         .strand_ids

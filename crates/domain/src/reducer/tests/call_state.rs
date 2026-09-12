@@ -124,7 +124,7 @@ fn call_create_is_idempotent_after_registered_cell_projection() {
     let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
     state.cells.insert(
         call_cell(arkret_wire::CellFamilyId::CALL_STATE_V1, &call_id),
-        CellState::Value(serde_json::json!("ringing")),
+        ResolvedCellState::Value(serde_json::json!("ringing")),
     );
 
     assert!(matches!(
@@ -144,10 +144,10 @@ fn call_create_registry_dispatch_preserves_projected_writes() {
         serde_json::json!({"initial_state": "connecting"}),
     );
     let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
-    let registry = super::super::lattice_kinds::default_lattice_registry();
+    let registry = super::super::state_model_kinds::default_cell_family_registry();
 
     assert!(matches!(
-        state.apply_via_lattice_registry(
+        state.apply_via_state_model_registry(
             &input.operation,
             &input.cell_writes,
             &hlc,
@@ -375,7 +375,7 @@ fn recording_start_requires_consent_before_both_cells_are_written() {
 }
 
 #[test]
-fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
+fn call_transition_rejects_wrong_predecessor_and_terminal_exit() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
@@ -474,7 +474,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
             arkret_wire::CellFamilyId::CALL_STATE_V1,
             call_id
         )),
-        Some(CellState::Bottom(_))
+        Some(ResolvedCellState::Bottom(_))
     ));
 
     let participant = serde_json::json!({

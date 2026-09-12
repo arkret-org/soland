@@ -101,6 +101,11 @@ pub fn verify_jws_shape(
         "detached_jws",
         verification_method,
         payload_digest,
+        arkret_wire::SignerEvidenceRef::new(format!(
+            "ak:signer_evidence:sha256:{}",
+            "0".repeat(64)
+        ))
+        .expect("static signer evidence ref"),
         None,
         None,
         jws,
@@ -1609,6 +1614,11 @@ mod did_binding_tests {
             "detached_jws",
             arkret_wire::DidUrl::new(verification_method.to_owned()).expect("DID URL"),
             event_digest,
+            arkret_wire::SignerEvidenceRef::new(format!(
+                "ak:signer_evidence:sha256:{}",
+                "0".repeat(64)
+            ))
+            .expect("static signer evidence ref"),
             None,
             None,
             "",

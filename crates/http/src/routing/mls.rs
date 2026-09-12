@@ -1500,7 +1500,7 @@ async fn peer_claim_policy_authorized(
             else {
                 return Ok(false);
             };
-            if !crate::routing::federation::federation_actor_origin_acceptable(
+            if !crate::routing::federation::federation_mls_actor_route_acceptable(
                 state,
                 &requester_actor,
                 source_id,

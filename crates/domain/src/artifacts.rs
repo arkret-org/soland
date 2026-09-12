@@ -17,14 +17,14 @@ static ID_KIND_FORMS: OnceLock<HashMap<String, String>> = OnceLock::new();
 pub struct EventKindCellBinding {
     pub event_kind: String,
     pub cell_family: String,
-    pub lattice: String,
+    pub state_model: String,
     pub bottom: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CellFamilyBinding {
     pub cell_family: String,
-    pub lattice: String,
+    pub state_model: String,
     pub bottom: String,
     pub event_kinds: Vec<String>,
 }
@@ -70,7 +70,7 @@ pub fn active_durable_cell_bindings() -> &'static [EventKindCellBinding] {
                         Some(EventKindCellBinding {
                             event_kind: descriptor.kind.to_owned(),
                             cell_family: write.cell_family?.as_str().to_owned(),
-                            lattice: write.lattice?.as_str().to_owned(),
+                            state_model: write.state_model?.as_str().to_owned(),
                             bottom: write.bottom?.as_str().to_owned(),
                         })
                     })
@@ -89,7 +89,7 @@ pub fn cell_family_bindings() -> &'static [CellFamilyBinding] {
                     .entry(binding.cell_family.clone())
                     .or_insert_with(|| CellFamilyBinding {
                         cell_family: binding.cell_family.clone(),
-                        lattice: binding.lattice.clone(),
+                        state_model: binding.state_model.clone(),
                         bottom: binding.bottom.clone(),
                         event_kinds: Vec::new(),
                     });
@@ -222,7 +222,7 @@ mod tests {
             member.cell_family,
             arkret_wire::CellFamilyId::MEMBER_STATE_V1
         );
-        assert_eq!(member.lattice, "fsm");
+        assert_eq!(member.state_model, "sequenced_state");
         assert_eq!(member.bottom, "reject");
     }
 }

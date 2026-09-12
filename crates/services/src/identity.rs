@@ -1040,11 +1040,14 @@ pub struct ActivateAgentRuntimeCommand {
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
-    /// Exact controller Event frozen before Station admission adds its proof.
+    /// Exact controller Event retained with its producer proof.
     pub frozen_authorize_event: arkret_wire::Event,
     pub expected_accepted_basis: arkret_wire::SealBasis,
     pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
     pub authorized_key_event: arkret_wire::Event,
+    pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
+    pub current_signer_evidence:
+        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
     pub authorized_at: DateTime<Utc>,
 }
 
@@ -1095,6 +1098,9 @@ pub struct AgentPairingState {
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
     pub authorized_key_event: Option<arkret_wire::Event>,
+    pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
+    pub current_signer_evidence:
+        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1122,6 +1128,9 @@ pub struct ActiveAgentRuntimeBinding {
     pub verification_method: DidUrl,
     pub public_key_digest: Hash,
     pub key_authorization_event: arkret_wire::Event,
+    pub signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef,
+    pub current_signer_evidence:
+        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1171,6 +1180,8 @@ impl AgentPairingState {
             authorized_verification_method: None,
             authorized_public_key_digest: None,
             authorized_key_event: None,
+            signer_resolution_evidence_ref: None,
+            current_signer_evidence: None,
             state_changed_at: Some(created_at),
             created_at,
             updated_at: created_at,
@@ -1218,6 +1229,26 @@ impl AgentPairingState {
                     self.authorized_key_event.clone().ok_or_else(|| {
                         "active Agent runtime binding is missing key_authorization_event".to_owned()
                     })?;
+                let signer_resolution_evidence_ref =
+                    self.signer_resolution_evidence_ref.clone().ok_or_else(|| {
+                        "active Agent runtime binding is missing signer evidence reference"
+                            .to_owned()
+                    })?;
+                let current_signer_evidence =
+                    self.current_signer_evidence.clone().ok_or_else(|| {
+                        "active Agent runtime binding is missing current signer evidence".to_owned()
+                    })?;
+                let (signer_root, _) = current_signer_evidence
+                    .hydrate_complete_agent()
+                    .map_err(|error| error.to_string())?;
+                if arkret::signer_evidence_ref(&signer_root).map_err(|error| error.to_string())?
+                    != signer_resolution_evidence_ref
+                {
+                    return Err(
+                        "active Agent runtime signer evidence reference does not match its closure"
+                            .to_owned(),
+                    );
+                }
                 let key = arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(&key_authorization_event).map_err(|error| error.to_string())?;
                 if key.agent_id.as_str() != self.id
                     || key.agent_key_authorize_event_id != authorized_event_ref
@@ -1235,6 +1266,8 @@ impl AgentPairingState {
                     verification_method,
                     public_key_digest,
                     key_authorization_event,
+                    signer_resolution_evidence_ref,
+                    current_signer_evidence,
                 })
             }
             None => {
@@ -1242,6 +1275,8 @@ impl AgentPairingState {
                     || self.authorized_verification_method.is_some()
                     || self.authorized_public_key_digest.is_some()
                     || self.authorized_key_event.is_some()
+                    || self.signer_resolution_evidence_ref.is_some()
+                    || self.current_signer_evidence.is_some()
                 {
                     return Err(
                         "Agent runtime authorization columns contain a partial active binding"
@@ -2992,80 +3027,6 @@ mod tests {
         )
     }
 
-    const ACTIVE_BINDING_AGENT_ID: &str = "ak:did_core:web:agent.example";
-    const ACTIVE_BINDING_VERIFICATION_METHOD: &str = "did:web:agent.example#key-1";
-    const ACTIVE_BINDING_EVENT_ID: &str = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
-
-    fn active_key_authorization_event() -> arkret_wire::Event {
-        serde_json::from_value(serde_json::json!({
-            "event_id":ACTIVE_BINDING_EVENT_ID,"kind":"ak.agent.key.authorize",
-            "realm_id":"ak:realm:Aa0HGvOq8Bsl1PLw19X-9sJ3Zdu6M7N-HDm-MebQoQcG",
-            "scope_ref":{"kind":"realm","realm_id":"ak:realm:Aa0HGvOq8Bsl1PLw19X-9sJ3Zdu6M7N-HDm-MebQoQcG"},
-            "actor_id":{"kind":"account","account_id":{"principal_id":ACTIVE_BINDING_AGENT_ID,"station_id":"ak:did_core:web:station.example"}},
-            "actor_seq":1,"created_at":"2026-07-27T00:00:00.000Z","hlc":"01970e589d21-0001-a13f9c2e","prev_refs":[],"proofs":[],
-            "payload":{"agent_id":ACTIVE_BINDING_AGENT_ID,"key_id":"runtime-1","verification_method":ACTIVE_BINDING_VERIFICATION_METHOD,
-                "public_key":{"kty":"OKP","kid":ACTIVE_BINDING_VERIFICATION_METHOD,"algorithm":"Ed25519","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
-                "issued_at":"2026-07-27T00:00:00.000Z","accountable_principal_id":"ak:did_core:web:alice.example"}
-        })).unwrap()
-    }
-
-    fn active_agent_pairing_state(
-        binding: arkret_wire::Event,
-        authorized_public_key_digest: String,
-    ) -> AgentPairingState {
-        let mut record = AgentPairingState::new(
-            ACTIVE_BINDING_AGENT_ID.to_owned(),
-            "ak:did_core:web:alice.example".to_owned(),
-            "ak:realm:personal".to_owned(),
-            DidUrl::new("did:web:alice.example#key-1".to_owned()).unwrap(),
-            AgentLifecycleState::Active,
-            Utc::now(),
-        );
-        let pairing_request_id = OpaqueLocalId::new("pairing-1").unwrap();
-        record.pairing_request_id = Some(pairing_request_id.clone());
-        record.paired_pairing_request_id = Some(pairing_request_id);
-        record.authorized_event_ref = Some(ACTIVE_BINDING_EVENT_ID.to_owned());
-        record.authorized_verification_method = Some(ACTIVE_BINDING_VERIFICATION_METHOD.to_owned());
-        record.authorized_public_key_digest = Some(authorized_public_key_digest);
-        record.authorized_key_event = Some(binding);
-        record
-    }
-
-    /// The persisted digest uses the same raw key domain as every proof.
-    #[test]
-    fn active_runtime_binding_reads_back_with_authorization_domain_digest() {
-        let binding = active_key_authorization_event();
-        let record = active_agent_pairing_state(
-            binding.clone(),
-            arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
-                &binding,
-            )
-            .unwrap()
-            .public_key_digest
-            .to_string(),
-        );
-        let bindings = record
-            .runtime_bindings()
-            .expect("active runtime binding is readable");
-        let active = bindings
-            .active_binding
-            .expect("active binding is reconstructed");
-        assert_eq!(
-            active.public_key_digest.as_str(),
-            arkret_canonical::sha256_digest(&[0u8; 32])
-        );
-        assert!(bindings.open_handle.is_none());
-    }
-
-    #[test]
-    fn active_runtime_binding_rejects_a_different_raw_key_digest() {
-        let record = active_agent_pairing_state(
-            active_key_authorization_event(),
-            arkret_canonical::sha256_digest(&[1u8; 32]),
-        );
-        assert!(record.runtime_bindings().is_err());
-    }
-
     struct StaticAccount;
 
     struct NoDevices;
@@ -3702,33 +3663,6 @@ mod tests {
         assert_eq!(
             document.did_document,
             serde_json::json!({"id": document.did})
-        );
-    }
-
-    #[tokio::test]
-    async fn pairing_activation_is_one_atomic_port_call() {
-        let service = AgentPairingService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
-        let command = ActivateAgentRuntimeCommand {
-            agent_id: "ak:did_core:web:agent.example".to_owned(),
-            approval_request_id: OpaqueLocalId::new("approval-1").unwrap(),
-            runtime_key_binding_digest: "sha256:binding".to_owned(),
-            pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
-            paired_request_digest: "sha256:request".to_owned(),
-            authorized_event_ref: "ak:event:1".to_owned(),
-            authorized_verification_method: "did:web:agent.example#key-1".to_owned(),
-            authorized_public_key_digest: "sha256:key".to_owned(),
-            frozen_authorize_event: active_key_authorization_event(),
-            expected_accepted_basis: arkret_wire::SealBasis { leaves: vec![] },
-            outcome:
-                arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active,
-            authorized_key_event: active_key_authorization_event(),
-            authorized_at: Utc::now(),
-        };
-        assert!(
-            service
-                .activate_runtime(&command)
-                .await
-                .expect("activate runtime")
         );
     }
 

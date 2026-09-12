@@ -13,7 +13,7 @@ use arkret_models_collaboration::governance_dependencies::{
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
-use arkret_wire::{ActorId, DidCoreId, Event, NotarySig, Seal};
+use arkret_wire::{ActorId, DidCoreId, Event, Seal};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -545,11 +545,7 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
         .signing_principal_id()
         .as_str()
         .to_owned();
-    for proof in event
-        .proofs
-        .iter()
-        .filter_map(arkret_wire::EventProof::as_producer)
-    {
+    for proof in event.proofs.iter() {
         // `did-usage-and-verification.md` §2.2: the method MUST be a DID URL
         // under the signer, never the bare signer DID. Event actor identities
         // are stable CoreIds while verification methods are rooted in Dids,
@@ -871,14 +867,14 @@ fn verify_device_seal_signature(
     device_public_key: &str,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(), AppError> {
-    let NotarySig::Single(signature) = &seal.notary_signature else {
+    let [signature] = seal.notary_signature.signatures.as_slice() else {
         return Err(device_generation_fenced(
             "B-model Seal requires one identifiable current-generation device signature",
         ));
     };
     let canonical_bytes = seal
-        .canonical_bytes_for_id()
-        .map_err(|error| seal_admission_error(format!("Seal canonical bytes: {error}")))?;
+        .commit_transcript_bytes(digest_suite)
+        .map_err(|error| seal_admission_error(format!("Seal commit transcript: {error}")))?;
     let expected_digest = arkret_canonical::digest(digest_suite, &canonical_bytes);
     if signature.payload_digest.as_str() != expected_digest {
         return Err(device_generation_fenced(
@@ -978,7 +974,7 @@ async fn try_apply_device_generation_event_seal(
     };
     if !state
         .projections()
-        .seal_predecessors_known(&seal.predecessor_refs)
+        .seal_predecessors_known(seal.predecessor_ref.as_slice())
         .await
         .map_err(|error| {
             crate::app_error!(
@@ -993,14 +989,14 @@ async fn try_apply_device_generation_event_seal(
     }
     let mut expected_frontier = context.accepted_frontier_refs.clone();
     expected_frontier.sort();
-    if seal.predecessor_refs != expected_frontier {
+    if seal.predecessor_ref.as_slice() != expected_frontier.as_slice() {
         return Err(device_generation_fenced(
             "B-model Event Seal predecessors differ from the complete accepted generation frontier",
         ));
     }
     let predecessor_coverage = state
         .projections()
-        .predecessor_covered_events(&seal.predecessor_refs)
+        .predecessor_covered_events(seal.predecessor_ref.as_slice())
         .await
         .map_err(app_error_from_seal_reject)?;
     if seal
@@ -1028,7 +1024,6 @@ async fn try_apply_device_generation_event_seal(
     }
     let expected_control_root = control_event_set_root(&target, digest_suites.seal_digest_suite)
         .map_err(app_error_from_seal_reject)?;
-    let mut completeness_events = Vec::with_capacity(context.records.len());
     let mut available_digests = BTreeSet::new();
     for record in &context.records {
         let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
@@ -1060,7 +1055,6 @@ async fn try_apply_device_generation_event_seal(
             )));
         }
         available_digests.insert(parsed_digest);
-        completeness_events.push((event, record.digest_suite));
     }
     let missing = target
         .difference(&available_digests)
@@ -1083,24 +1077,16 @@ async fn try_apply_device_generation_event_seal(
             missing.join(",")
         )));
     }
-    let expected_completeness_root = arkret_state::control_event_completeness_root(
-        &completeness_events,
-        &target,
-        digest_suites.seal_digest_suite,
-    )
-    .map_err(app_error_from_seal_reject)?;
-    if seal.control_event_set_root != expected_control_root
-        || seal.completeness_root != expected_completeness_root
-    {
+    if seal.control_event_set_root != expected_control_root {
         return Err(seal_admission_error(
-            "B-model Event Seal control/completeness root mismatch",
+            "B-model Event Seal control_event_set_root mismatch",
         ));
     }
-    let expected_notary_seq = if seal.predecessor_refs.is_empty() {
+    let expected_notary_seq = if seal.predecessor_ref.is_none() {
         0
     } else {
         let mut maximum = None;
-        for predecessor in &seal.predecessor_refs {
+        for predecessor in seal.predecessor_ref.as_slice() {
             let value = state
                 .projections()
                 .seal_by_id(predecessor)
@@ -1131,7 +1117,7 @@ async fn try_apply_device_generation_event_seal(
         .as_ref()
         .map(|requirement| {
             crate::notary::validate_first_generation_event_seal(
-                &seal.predecessor_refs,
+                seal.predecessor_ref.as_slice(),
                 &predecessor_coverage,
                 &target,
                 requirement,
@@ -1146,7 +1132,7 @@ async fn try_apply_device_generation_event_seal(
     {
         arkret_models_collaboration::events_payloads::device_identity::validate_device_reanchor_recovery_first_seal(
             &requirement.payload,
-            &seal.predecessor_refs,
+            seal.predecessor_ref.as_slice(),
             &seal.delta,
             &requirement.reanchor_digest,
             &requirement.replacement_authorize_digest,
@@ -1163,7 +1149,7 @@ async fn try_apply_device_generation_event_seal(
         false
     };
 
-    let NotarySig::Single(signature) = &seal.notary_signature else {
+    let [signature] = seal.notary_signature.signatures.as_slice() else {
         return Err(device_generation_fenced(
             "B-model Event Seal requires one identifiable device signature",
         ));
@@ -1302,15 +1288,15 @@ async fn try_apply_device_generation_event_seal(
     }
     let mut new_ops: Vec<(
         arkret_identifiers::CellRef,
-        arkret_state::lattice::ordered_log::IssuedOp,
+        arkret_state::state_model::ordered_log::IssuedOp,
     )> = Vec::new();
     // Every Event in one Seal delta resolves against the exact, frozen
     // predecessor frontier. `effective_state_at` preserves Seal batches for
-    // mv-register cells; rebuilding this map from only `new_ops` would make the
+    // causal-register cells; rebuilding this map from only `new_ops` would make the
     // first patch after a predecessor Seal observe `null`.
     let predecessor_state = state
         .projections()
-        .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+        .effective_state_at(seal.predecessor_ref.as_slice(), &seal.realm_id)
         .await
         .map_err(|error| {
             seal_admission_error(format!(
@@ -1335,7 +1321,7 @@ async fn try_apply_device_generation_event_seal(
                 record.event_id
             ))
         })?;
-        let event_digest_suite = if seal.predecessor_refs.is_empty()
+        let event_digest_suite = if seal.predecessor_ref.is_none()
             && event.kind == arkret_wire::EventKind::RealmCreate
         {
             arkret_canonical::DigestSuite::Sha256
@@ -1362,7 +1348,7 @@ async fn try_apply_device_generation_event_seal(
                 record.event_id
             )));
         }
-        if event.realm_id.as_str() != seal.realm_id.as_str() || event.seal_ref.is_some() {
+        if event.realm_id.as_str() != seal.realm_id.as_str() || event.auth_context.is_some() {
             return Err(seal_admission_error(
                 "B-model Event Seal delta must contain control Events from the same Realm",
             ));
@@ -1416,7 +1402,7 @@ async fn try_apply_device_generation_event_seal(
         let member_cell = member_cell_for_actor(&event.actor_id)?;
         let mut accumulated: BTreeMap<
             arkret_identifiers::CellRef,
-            Vec<arkret_state::lattice::ordered_log::IssuedOp>,
+            Vec<arkret_state::state_model::ordered_log::IssuedOp>,
         > = BTreeMap::new();
         for (cell, issued) in &new_ops {
             accumulated
@@ -1431,13 +1417,6 @@ async fn try_apply_device_generation_event_seal(
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
             .or_else(|| Some("leave".to_owned()));
-        let basis_heads =
-            crate::routing::events::event_log::governance_proof::event_basis_causal_heads(
-                state,
-                &seal.realm_id,
-                &event,
-            )
-            .await?;
         new_ops.extend(
             crate::routing::events::event_log::governance_proof::canonical_event_ops_with_frozen_pre_state(
                 state,
@@ -1445,7 +1424,6 @@ async fn try_apply_device_generation_event_seal(
                 &event,
                 digest,
                 &predecessor_state,
-                &basis_heads,
                 invite_accept_from.as_deref(),
                 event_digest_suite,
             )?,
@@ -1491,7 +1469,6 @@ async fn try_apply_device_generation_event_seal(
             &context.cas_frontier_refs,
             &new_ops,
             &target,
-            None,
             &availability_dependency_writes,
         )
         .await
@@ -1607,7 +1584,7 @@ pub(crate) async fn apply_agent_event_seal(
             )
         })?;
     leaves.sort();
-    if seal.predecessor_refs != leaves {
+    if seal.predecessor_ref.as_slice() != leaves.as_slice() {
         return Err(seal_admission_error(
             "Agent PCR Seal predecessors differ from the complete accepted frontier",
         ));
@@ -1738,29 +1715,9 @@ pub(crate) async fn apply_agent_event_seal(
     }
     let expected_control_root = control_event_set_root(&target, digest_suites.seal_digest_suite)
         .map_err(app_error_from_seal_reject)?;
-    let completeness_events = events
-        .iter()
-        .map(|event| {
-            event_digest_suites
-                .get(&event.event_id)
-                .copied()
-                .map(|digest_suite| (event.clone(), digest_suite))
-                .ok_or_else(|| {
-                    seal_admission_error("Agent PCR Event has no frozen completeness digest suite")
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let expected_completeness_root = arkret_state::control_event_completeness_root(
-        &completeness_events,
-        &target,
-        digest_suites.seal_digest_suite,
-    )
-    .map_err(app_error_from_seal_reject)?;
-    if seal.control_event_set_root != expected_control_root
-        || seal.completeness_root != expected_completeness_root
-    {
+    if seal.control_event_set_root != expected_control_root {
         return Err(seal_admission_error(
-            "Agent PCR Seal control/completeness root mismatch",
+            "Agent PCR Seal control_event_set_root mismatch",
         ));
     }
     if seal.state_root != material.state_root {
@@ -1799,7 +1756,7 @@ pub(crate) async fn apply_agent_event_seal(
         ));
     }
 
-    let NotarySig::Single(signature) = &seal.notary_signature else {
+    let [signature] = seal.notary_signature.signatures.as_slice() else {
         return Err(device_generation_fenced(
             "Agent PCR Seal requires one controller-device signature",
         ));
@@ -1879,7 +1836,7 @@ pub(crate) async fn apply_agent_event_seal(
     let new_ops = material
         .event_ops
         .iter()
-        .filter(|(_, issued)| delta.contains(&issued.op.move_id))
+        .filter(|(_, issued)| delta.contains(&issued.op.event_id.event_digest()))
         .cloned()
         .collect::<Vec<_>>();
     let availability_dependency_writes =
@@ -1906,7 +1863,6 @@ pub(crate) async fn apply_agent_event_seal(
             &leaves,
             &new_ops,
             &target,
-            None,
             &availability_dependency_writes,
         )
         .await
@@ -1951,7 +1907,7 @@ pub(crate) async fn apply_inbound_seal(
     }
     verify_realm_notary_seal(state, seal).await?;
     let verifier = select_jws_verifier(state);
-    let context = if seal.predecessor_refs.is_empty() {
+    let context = if seal.predecessor_ref.is_none() {
         let mut events_with_digests = Vec::with_capacity(seal.delta.len());
         for digest in &seal.delta {
             let event = state
@@ -2009,7 +1965,6 @@ pub(crate) async fn apply_inbound_seal(
             &expected_store_frontier,
             &prepared.new_ops,
             &prepared.covered_event_digests,
-            None,
             &governance_dependencies,
         )
         .await
@@ -2048,29 +2003,13 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                 format!("resolve Seal notary authority: {error}"),
             )
         })?;
-    let canonical_bytes = seal.canonical_bytes_for_id().map_err(|error| {
+    let canonical_bytes = seal.commit_transcript_bytes(digest_suite).map_err(|error| {
         crate::app_error!(
             SchemaViolation,
             format!("derive Seal signature transcript: {error}"),
         )
     })?;
-    let signatures = match (&notary, &seal.notary_signature) {
-        (arkret_wire::notary::NotaryValue::SingleSigner { .. }, NotarySig::Single(signature))
-        | (arkret_wire::notary::NotaryValue::OpenSet { .. }, NotarySig::Single(signature))
-        | (arkret_wire::notary::NotaryValue::Mixed { .. }, NotarySig::Single(signature)) => {
-            std::slice::from_ref(signature)
-        }
-        (arkret_wire::notary::NotaryValue::Threshold { .. }, NotarySig::Multi(multi))
-        | (arkret_wire::notary::NotaryValue::Mixed { .. }, NotarySig::Multi(multi)) => {
-            multi.signatures.as_slice()
-        }
-        _ => {
-            return Err(crate::app_error!(
-                DirectoryGovernanceProofSignatureInvalid,
-                "Seal signature shape does not match the frozen notary value".to_owned(),
-            ));
-        }
-    };
+    let signatures = seal.notary_signature.signatures.as_slice();
     let methods = signatures
         .iter()
         .map(|signature| signature.verification_method.clone())
@@ -2080,45 +2019,6 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             DirectoryGovernanceProofSignatureInvalid,
             "Seal signatures do not satisfy the frozen notary quorum".to_owned(),
         ));
-    }
-    // A recovery-signed Seal that adjudicates a fork adjudicates nothing else.
-    // Without this, the narrow section 6.3.2 exception would let a recovery
-    // signer attach an ordinary membership, capability or policy Move to the
-    // same Seal and become a general signing authority.
-    //
-    // Every delta kind has to resolve for the closure to mean anything: a Move
-    // this node cannot read is a Move whose kind it cannot rule out, so
-    // skipping it would let an unreadable ordinary Move ride along beside a
-    // fork resolution. Only recovery-signed Seals pay this cost.
-    if notary.signers_are_recovery_set(&methods) {
-        let mut delta_kinds = Vec::with_capacity(seal.delta.len());
-        for digest in &seal.delta {
-            let event = state
-                .projections()
-                .control_event(digest)
-                .await
-                .map_err(|error| {
-                    crate::app_error!(
-                        InternalError,
-                        format!("load recovery-Seal Control Move: {error}"),
-                    )
-                })?
-                .ok_or_else(|| {
-                    crate::app_error!(
-                        SealSignerUnauthorized,
-                        "a recovery-signed Seal must cover Control Moves this node can read"
-                            .to_owned(),
-                    )
-                })?;
-            delta_kinds.push(event.kind);
-        }
-        if !notary.authorizes_seal_delta(&methods, &delta_kinds) {
-            return Err(crate::app_error!(
-                SealSignerUnauthorized,
-                "a recovery-signed fork-resolution Seal must cover only ak.fork.resolution Moves"
-                    .to_owned(),
-            ));
-        }
     }
     for signature in signatures {
         let descriptor = notary
@@ -2332,7 +2232,7 @@ mod seal_delta_tests {
             .await
             .unwrap();
         projections
-            .conformance_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+            .conformance_append_confirmed_effects(&realm, &basis.seal.id, &basis.ops)
             .await
             .unwrap();
         let before = projections.realm_seal_leaves(&realm).await.unwrap();
@@ -2341,7 +2241,7 @@ mod seal_delta_tests {
             .await
             .unwrap();
         let mut candidate = basis.seal.clone();
-        candidate.predecessor_refs = vec![basis.seal.id.clone()];
+        candidate.predecessor_ref = Some(basis.seal.id.clone());
         candidate.delta.clear();
         candidate.notary_seq += 1;
         candidate.sealed_at = chrono::Utc::now();
@@ -2548,7 +2448,7 @@ mod seal_delta_tests {
             )
         );
         let empty_root = arkret_state::state::compute_state_root(
-            arkret_state::GovernanceView::values_only(&BTreeMap::new()),
+            arkret_state::GovernanceView::new(&BTreeMap::new()),
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
@@ -2561,14 +2461,11 @@ mod seal_delta_tests {
                 "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned(),
             )
             .unwrap(),
-            predecessor_refs: Vec::new(),
+            predecessor_ref: None,
             delta: Vec::new(),
             control_event_set_root: empty_root.clone(),
             state_root: empty_root.clone(),
-            completeness_root: empty_root,
             notary_seq: 0,
-            data_view_root: None,
-            data_event_set_root: None,
             availability_receipt_digests: Vec::new(),
             covered_event_digests: Vec::new(),
             previous_state_root: None,

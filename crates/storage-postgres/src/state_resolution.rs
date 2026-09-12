@@ -5,16 +5,16 @@ mod welcome_discovery;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
-use arkret_state::lattice::ordered_log::IssuedOp;
-use arkret_state::lattice::{CellState, SealedOp};
+use arkret_identifiers::{CellRef, EventId, Hash, RealmId, SealId};
 use arkret_state::state::store::ControlProposalIngress;
 use arkret_state::state::{
-    CellRegistry, CellStore, ControlEventStore, ControlProposalSnapshot,
+    CellStateRegistry, CellStore, ControlEventStore, ControlProposalSnapshot,
     ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
     ControlSealScheduleRepairStats, PendingControlEventRecord, SealStore, SealedControlEventRecord,
     StoreError, StoreResult, compute_state_root, control_event_digest,
 };
+use arkret_state::state_model::ordered_log::IssuedOp;
+use arkret_state::state_model::{ResolvedCellState, StateWrite};
 use arkret_wire::{
     ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event, LatticeOp,
     Seal,
@@ -32,7 +32,7 @@ pub struct StateResolutionStores {
     pub control_event_store: Arc<dyn ControlEventStore>,
     pub seal_store: Arc<dyn SealStore>,
     pub cell_store: Arc<dyn CellStore>,
-    pub cell_registry: Arc<dyn CellRegistry>,
+    pub cell_registry: Arc<dyn CellStateRegistry>,
     pub event_seal_committer: Arc<dyn EventSealCommitStore>,
 }
 
@@ -42,14 +42,7 @@ pub struct SealEffectiveStateCheckpoint {
     pub seal_id: SealId,
     pub covered_event_digests: BTreeSet<Hash>,
     pub covered_seal_ids: BTreeSet<SealId>,
-    pub state: BTreeMap<CellRef, CellState>,
-    /// The `cas_register` head identities of the same view.
-    ///
-    /// A checkpoint exists to skip recomputing `state_root`, and since spec
-    /// section 6.2.1 a CAS cell's leaf is its head set rather than its settled
-    /// value — so a checkpoint without these cannot reproduce the root it is
-    /// supposed to stand in for.
-    pub cas_heads: arkret_state::CasHeadsByCell,
+    pub state: BTreeMap<CellRef, ResolvedCellState>,
 }
 
 /// The stored form of a checkpoint's joined view.
@@ -59,11 +52,10 @@ pub struct SealEffectiveStateCheckpoint {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredCheckpointView {
-    cells: BTreeMap<CellRef, CellState>,
-    cas_heads: arkret_state::CasHeadsByCell,
+    cells: BTreeMap<CellRef, ResolvedCellState>,
     rule_context: CheckpointRuleContext,
-    current_mv_heads: current_results::CurrentMvHeads,
-    current_mv_ready: bool,
+    causal_heads: current_results::CurrentCausalHeads,
+    causal_ready: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -74,7 +66,7 @@ enum CheckpointRuleContext {
 }
 
 impl CheckpointRuleContext {
-    fn capture(registry: &dyn CellRegistry, realm: &RealmId) -> StoreResult<Self> {
+    fn capture(registry: &dyn CellStateRegistry, realm: &RealmId) -> StoreResult<Self> {
         Ok(match registry.checkpoint_context(realm)? {
             Some(digest) => {
                 static IMPLEMENTATION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -124,14 +116,8 @@ pub trait EventSealCommitStore: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
-
-    async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<BTreeSet<Hash>>>;
 
     /// Return the immutable, receiver-verified effective state frozen at one
     /// accepted Seal. A missing row permits a full replay; a malformed row is
@@ -144,7 +130,7 @@ pub trait EventSealCommitStore: Send + Sync {
 
 pub fn build_state_resolution_stores(
     pool: Option<PgPool>,
-    cell_registry: Arc<dyn CellRegistry>,
+    cell_registry: Arc<dyn CellStateRegistry>,
 ) -> StateResolutionStores {
     if let Some(pool) = pool {
         return StateResolutionStores {
@@ -168,7 +154,6 @@ pub fn build_state_resolution_stores(
         cell_store: cell_store.clone(),
         event_seal_committer: Arc::new(MemoryEventSealCommitStore {
             lock: tokio::sync::Mutex::new(()),
-            data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
             effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
             control_event_store,
             seal_store,
@@ -193,18 +178,16 @@ struct PgCellStore {
 
 struct PgEventSealCommitStore {
     pool: PgPool,
-    cell_registry: Arc<dyn CellRegistry>,
+    cell_registry: Arc<dyn CellStateRegistry>,
 }
 
 struct MemoryEventSealCommitStore {
     lock: tokio::sync::Mutex<()>,
-    data_event_leaf_manifests:
-        parking_lot::Mutex<std::collections::BTreeMap<SealId, BTreeSet<Hash>>>,
     effective_state_checkpoints: parking_lot::Mutex<BTreeMap<SealId, SealEffectiveStateCheckpoint>>,
     control_event_store: Arc<arkret_state::state::MemoryControlEventStore>,
     seal_store: Arc<arkret_state::state::MemorySealStore>,
     cell_store: Arc<arkret_state::state::MemoryCellStore>,
-    cell_registry: Arc<dyn CellRegistry>,
+    cell_registry: Arc<dyn CellStateRegistry>,
 }
 
 fn validate_proposal_decision_append(
@@ -353,12 +336,6 @@ struct CountRow {
 }
 
 #[derive(QueryableByName)]
-struct DataEventLeafManifestRow {
-    #[diesel(sql_type = Array<Text>)]
-    leaf_digests: Vec<String>,
-}
-
-#[derive(QueryableByName)]
 struct TextArrayRow {
     #[diesel(sql_type = Array<Text>)]
     values: Vec<String>,
@@ -376,24 +353,6 @@ struct EffectiveStateCheckpointRow {
     state_json: Value,
 }
 
-fn validate_data_event_leaf_manifest(
-    seal: &Seal,
-    digest_suite: arkret_canonical::DigestSuite,
-    manifest: &BTreeSet<Hash>,
-) -> StoreResult<()> {
-    let computed = (!manifest.is_empty())
-        .then(|| arkret_state::event_digest_set_root(manifest, digest_suite))
-        .transpose()
-        .map_err(|error| StoreError::Backend(format!("data_event_set_root recompute: {error}")))?;
-    if computed != seal.data_event_set_root {
-        return Err(StoreError::Conflict(format!(
-            "Event Seal data_event_set_root mismatch: declared {:?}, manifest {:?}",
-            seal.data_event_set_root, computed
-        )));
-    }
-    Ok(())
-}
-
 #[derive(QueryableByName)]
 struct StoredSealRow {
     #[diesel(sql_type = Text)]
@@ -406,8 +365,8 @@ struct StoredSealRow {
     accepted_seal_bytes: Vec<u8>,
     #[diesel(sql_type = Jsonb)]
     seal_json: Value,
-    #[diesel(sql_type = Jsonb)]
-    predecessor_refs: Value,
+    #[diesel(sql_type = Nullable<Text>)]
+    predecessor_ref: Option<String>,
     #[diesel(sql_type = Bool)]
     is_genesis: bool,
     #[diesel(sql_type = Bool)]
@@ -628,7 +587,7 @@ async fn lock_seal_realm(
 pub(crate) async fn refresh_current_if_expired(
     conn: &mut AsyncPgConnection,
     realm_id: &str,
-    registry: &dyn CellRegistry,
+    registry: &dyn CellStateRegistry,
 ) -> soland_storage::PersistenceResult<()> {
     let result: Result<(), EventSealCommitError> = async {
         lock_seal_realm(conn, realm_id).await?;
@@ -683,7 +642,7 @@ struct StateSealInsert<'a> {
     seal_id_preimage_bytes: &'a [u8],
     accepted_seal_bytes: &'a [u8],
     seal_json: &'a Value,
-    predecessor_refs: &'a Value,
+    predecessor_ref: Option<&'a str>,
     is_genesis: bool,
 }
 
@@ -698,12 +657,12 @@ async fn preflight_state_seal(
         seal_id_preimage_bytes,
         accepted_seal_bytes,
         seal_json,
-        predecessor_refs,
+        predecessor_ref,
         is_genesis,
     } = *insert;
     let stored = sql_query(
         "SELECT s.digest_suite, s.realm_id, s.seal_id_preimage_bytes, s.accepted_seal_bytes, s.seal_json, \
-                s.predecessor_refs, s.is_genesis, \
+                s.predecessor_ref, s.is_genesis, \
                 EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id) AS quarantined \
          FROM state_seals s WHERE s.id = $1 FOR UPDATE",
     )
@@ -720,7 +679,7 @@ async fn preflight_state_seal(
     {
         if stored.realm_id != realm_id
             || stored.seal_json != *seal_json
-            || stored.predecessor_refs != *predecessor_refs
+            || stored.predecessor_ref.as_deref() != predecessor_ref
             || stored.is_genesis != is_genesis
         {
             return Err(StoreError::Backend(format!(
@@ -841,7 +800,7 @@ async fn insert_new_state_seal(
     account_summary::invalidate(conn, insert.realm_id).await?;
     sql_query(
         "INSERT INTO state_seals \
-         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_refs, is_genesis) \
+         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_ref, is_genesis) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind::<Text, _>(insert.id)
@@ -850,7 +809,7 @@ async fn insert_new_state_seal(
     .bind::<Binary, _>(insert.seal_id_preimage_bytes)
     .bind::<Binary, _>(insert.accepted_seal_bytes)
     .bind::<Jsonb, _>(insert.seal_json)
-    .bind::<Jsonb, _>(insert.predecessor_refs)
+    .bind::<Nullable<Text>, _>(insert.predecessor_ref)
     .bind::<Bool, _>(insert.is_genesis)
     .execute(conn)
     .await
@@ -875,22 +834,19 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .and_then(|actor_id| {
             serde_json::from_value::<arkret_wire::ActorId>(actor_id.clone()).map_err(serde_to_store)
         })?;
-    let move_id = value
-        .get("move_id")
+    let event_id = value
+        .get("event_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| StoreError::Backend("sealed op missing move_id".to_owned()))
+        .ok_or_else(|| StoreError::Backend("state write missing event_id".to_owned()))
         .and_then(|id| {
-            Hash::new(id.to_owned()).map_err(|error| StoreError::Backend(error.to_string()))
+            arkret_wire::EventId::new(id.to_owned())
+                .map_err(|error| StoreError::Backend(error.to_string()))
         })?;
     let op = value
         .get("op")
         .cloned()
         .ok_or_else(|| StoreError::Backend("sealed op missing op".to_owned()))
         .and_then(|op| serde_json::from_value::<LatticeOp>(op).map_err(serde_to_store))?;
-    let recovery_reset = value
-        .get("recovery_reset")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     // The head identities this write superseded, derived at Seal admission from
     // the Move's own signed basis (`event-auth-state-resolution.md` §9.3.1.1).
     // A row that predates the field decodes as "superseded nothing", which is
@@ -907,11 +863,11 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
                         StoreError::Backend("sealed op supersedes entry is not a string".to_owned())
                     })
                     .and_then(|id| {
-                        Hash::new(id.to_owned())
+                        arkret_wire::EventId::new(id.to_owned())
                             .map_err(|error| StoreError::Backend(error.to_string()))
                     })
             })
-            .collect::<StoreResult<Vec<Hash>>>()?,
+            .collect::<StoreResult<Vec<EventId>>>()?,
         Some(_) => {
             return Err(StoreError::Backend(
                 "sealed op supersedes must be an array".to_owned(),
@@ -920,10 +876,9 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
     };
     Ok(IssuedOp {
         issuer_id,
-        op: SealedOp {
-            move_id,
+        op: StateWrite {
+            event_id,
             op,
-            recovery_reset,
             supersedes,
         },
     })
@@ -932,25 +887,24 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
 fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
     Ok(serde_json::json!({
         "issuer_id": issued.issuer_id,
-        "move_id": issued.op.move_id.as_str(),
+        "event_id": issued.op.event_id.as_str(),
         "op": serde_json::to_value(&issued.op.op).map_err(serde_to_store)?,
-        "recovery_reset": issued.op.recovery_reset,
         "supersedes": issued
             .op
             .supersedes
             .iter()
-            .map(Hash::as_str)
+            .map(EventId::as_str)
             .collect::<Vec<_>>(),
     }))
 }
 
 async fn effective_state_with_new_ops(
     cells: &dyn CellStore,
-    registry: &dyn CellRegistry,
+    registry: &dyn CellStateRegistry,
     realm_id: &RealmId,
     covered: &BTreeSet<Hash>,
     new_ops: &[(CellRef, IssuedOp)],
-) -> StoreResult<std::collections::BTreeMap<CellRef, CellState>> {
+) -> StoreResult<std::collections::BTreeMap<CellRef, ResolvedCellState>> {
     let mut cell_refs = cells
         .list_cells(realm_id)
         .await?
@@ -960,13 +914,13 @@ async fn effective_state_with_new_ops(
     let mut joined = std::collections::BTreeMap::new();
     for cell in cell_refs {
         let mut batches = cells
-            .sealed_op_batches_for_cell(realm_id, &cell)
+            .confirmed_write_batches_for_cell(realm_id, &cell)
             .await?
             .into_iter()
             .filter_map(|(_, ops)| {
                 let ops = ops
                     .into_iter()
-                    .filter(|issued| covered.contains(&issued.op.move_id))
+                    .filter(|issued| covered.contains(&issued.op.event_id.event_digest()))
                     .collect::<Vec<_>>();
                 (!ops.is_empty()).then_some(ops)
             })
@@ -974,7 +928,7 @@ async fn effective_state_with_new_ops(
         let new_batch = new_ops
             .iter()
             .filter(|(candidate, issued)| {
-                candidate == &cell && covered.contains(&issued.op.move_id)
+                candidate == &cell && covered.contains(&issued.op.event_id.event_digest())
             })
             .map(|(_, op)| op.clone())
             .collect::<Vec<_>>();
@@ -984,26 +938,19 @@ async fn effective_state_with_new_ops(
         if batches.is_empty() {
             continue;
         }
-        // CellStore returns accepted operations in Seal insertion order and
-        // `new_ops` is already in causal Event order. Content digests do not
-        // encode causality; sorting FSM transitions by MoveId can turn a valid
-        // leave -> join -> ban history into Bottom.
+        // CellStore returns confirmed operations in Seal insertion order and
+        // `new_ops` is already in the accepted Event order.
         let binding = registry.resolve(realm_id, &cell)?;
-        joined.insert(
-            cell.clone(),
-            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches),
-        );
+        let resolved =
+            arkret_state::join_cell_seal_batches(binding.model.as_ref(), &cell, &batches)
+                .map_err(|error| StoreError::Backend(format!("cell state resolution: {error}")))?;
+        joined.insert(cell.clone(), resolved);
     }
     Ok(joined)
 }
 
-fn seal_predecessor_refs_json(seal: &Seal) -> Value {
-    Value::Array(
-        seal.predecessor_refs
-            .iter()
-            .map(|id| Value::String(id.as_str().to_owned()))
-            .collect(),
-    )
+fn seal_predecessor_ref_value(seal: &Seal) -> Option<String> {
+    seal.predecessor_ref.as_ref().map(ToString::to_string)
 }
 
 fn covering_seal_ids(ids: Vec<String>) -> StoreResult<Vec<SealId>> {
@@ -1136,11 +1083,11 @@ impl ControlEventStore for PgControlEventStore {
                 StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
             })?;
         let seal_for_validation = seal.clone();
-        let predecessor_refs = seal_predecessor_refs_json(seal);
+        let predecessor_ref = seal_predecessor_ref_value(seal);
         let seal_id = seal.id.as_str().to_owned();
         let error_seal_id = seal_id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
-        let is_genesis = seal.predecessor_refs.is_empty();
+        let is_genesis = seal.predecessor_ref.is_none();
         let delta_index = seal
             .delta
             .iter()
@@ -1179,7 +1126,7 @@ impl ControlEventStore for PgControlEventStore {
                     seal_id_preimage_bytes: &seal_id_preimage_bytes,
                     accepted_seal_bytes: &accepted_seal_bytes,
                     seal_json: &seal_json,
-                    predecessor_refs: &predecessor_refs,
+                    predecessor_ref: predecessor_ref.as_deref(),
                     is_genesis,
                 };
                 let outcome = preflight_state_seal(conn, &insert).await?;
@@ -1734,11 +1681,11 @@ impl SealStore for PgSealStore {
             arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
                 StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
             })?;
-        let predecessor_refs = seal_predecessor_refs_json(seal);
+        let predecessor_ref = seal_predecessor_ref_value(seal);
         let id = seal.id.as_str().to_owned();
         let error_id = id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
-        let is_genesis = seal.predecessor_refs.is_empty();
+        let is_genesis = seal.predecessor_ref.is_none();
         let outcome = await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
@@ -1750,7 +1697,7 @@ impl SealStore for PgSealStore {
                     seal_id_preimage_bytes: &seal_id_preimage_bytes,
                     accepted_seal_bytes: &accepted_seal_bytes,
                     seal_json: &seal_json,
-                    predecessor_refs: &predecessor_refs,
+                    predecessor_ref: predecessor_ref.as_deref(),
                     is_genesis,
                 };
                 let outcome = preflight_state_seal(conn, &insert).await?;
@@ -1783,6 +1730,11 @@ impl SealStore for PgSealStore {
         expected_leaves: &[SealId],
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<bool> {
+        if seal.predecessor_ref.as_slice() != expected_leaves {
+            return Err(StoreError::Conflict(
+                "Seal predecessor_ref does not match the expected accepted Seal".to_owned(),
+            ));
+        }
         seal.validate_id(digest_suite)
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
         let pool = self.pool.clone();
@@ -1794,11 +1746,11 @@ impl SealStore for PgSealStore {
             arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
                 StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
             })?;
-        let predecessor_refs = seal_predecessor_refs_json(seal);
+        let predecessor_ref = seal_predecessor_ref_value(seal);
         let id = seal.id.as_str().to_owned();
         let error_id = id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
-        let is_genesis = seal.predecessor_refs.is_empty();
+        let is_genesis = seal.predecessor_ref.is_none();
         let expected = expected_leaves
             .iter()
             .map(|leaf| leaf.as_str().to_owned())
@@ -1814,7 +1766,7 @@ impl SealStore for PgSealStore {
                     seal_id_preimage_bytes: &seal_id_preimage_bytes,
                     accepted_seal_bytes: &accepted_seal_bytes,
                     seal_json: &seal_json,
-                    predecessor_refs: &predecessor_refs,
+                    predecessor_ref: predecessor_ref.as_deref(),
                     is_genesis,
                 };
                 let outcome = preflight_state_seal(conn, &insert).await?;
@@ -1839,7 +1791,7 @@ impl SealStore for PgSealStore {
                          WHERE child.realm_id = parent.realm_id \
                            AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
                                            WHERE q.seal_id = child.id) \
-                           AND child.predecessor_refs ? parent.id \
+                           AND child.predecessor_ref = parent.id \
                        ) \
                      ORDER BY parent.id ASC",
                 )
@@ -1940,7 +1892,7 @@ impl SealStore for PgSealStore {
                      WHERE child.realm_id = $1 \
                        AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
                                        WHERE q.seal_id = child.id) \
-                       AND child.predecessor_refs ? parent.id \
+                       AND child.predecessor_ref = parent.id \
                    ) \
                  ORDER BY parent.id ASC",
             )
@@ -2018,7 +1970,7 @@ impl SealStore for PgSealStore {
             let rows = sql_query(
                 "SELECT id AS value \
                  FROM state_seals \
-                 WHERE realm_id = $1 AND predecessor_refs ? $2 \
+                 WHERE realm_id = $1 AND predecessor_ref = $2 \
                    AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
                                    WHERE q.seal_id = state_seals.id) \
                  ORDER BY id ASC",
@@ -2046,14 +1998,15 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
+        if seal.predecessor_ref.as_slice() != expected_store_frontier {
+            return Err(StoreError::Conflict(
+                "Seal predecessor_ref does not match the expected accepted Seal".to_owned(),
+            ));
+        }
         seal.validate_id(digest_suite)
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
-        if let Some(manifest) = data_event_leaf_manifest {
-            validate_data_event_leaf_manifest(seal, digest_suite, manifest)?;
-        }
         for (edge_index, dependency) in governance_dependencies.iter().enumerate() {
             if dependency.realm_id != seal.realm_id
                 || dependency.source
@@ -2082,9 +2035,9 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
                 StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
             })?;
-        let predecessor_refs = seal_predecessor_refs_json(seal);
+        let predecessor_ref = seal_predecessor_ref_value(seal);
         let predecessor_seal_ids = seal
-            .predecessor_refs
+            .predecessor_ref
             .iter()
             .map(|predecessor| predecessor.as_str().to_owned())
             .collect::<Vec<_>>();
@@ -2100,7 +2053,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .collect::<Vec<_>>();
         let sealed_at = seal.sealed_at;
         let declared_state_root = seal.state_root.clone();
-        let is_genesis = seal.predecessor_refs.is_empty();
+        let is_genesis = seal.predecessor_ref.is_none();
         let expected = expected_store_frontier
             .iter()
             .map(|leaf| leaf.as_str().to_owned())
@@ -2109,17 +2062,6 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .iter()
             .map(|digest| digest.as_str().to_owned())
             .collect::<BTreeSet<_>>();
-        let data_event_leaf_manifest = data_event_leaf_manifest.map(|manifest| {
-            manifest
-                .iter()
-                .map(|digest| digest.as_str().to_owned())
-                .collect::<Vec<_>>()
-        });
-        let data_event_set_root = seal
-            .data_event_set_root
-            .as_ref()
-            .map(|root| root.as_str().to_owned());
-        let manifest_digest_suite = digest_suite.as_str().to_owned();
         let governance_dependencies = governance_dependencies.to_vec();
         let new_rows = new_ops
             .iter()
@@ -2128,7 +2070,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 Ok((
                     index as i64,
                     cell.as_str().to_owned(),
-                    issued.op.move_id.as_str().to_owned(),
+                    issued.op.event_id.as_str().to_owned(),
                     sealed_op_to_value(issued)?,
                 ))
             })
@@ -2144,27 +2086,11 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     seal_id_preimage_bytes: &seal_id_preimage_bytes,
                     accepted_seal_bytes: &accepted_seal_bytes,
                     seal_json: &seal_json,
-                    predecessor_refs: &predecessor_refs,
+                    predecessor_ref: predecessor_ref.as_deref(),
                     is_genesis,
                 };
                 let outcome = preflight_state_seal(conn, &insert).await?;
                 if outcome == SealInsertOutcome::ExactRetry {
-                    let stored_manifest = sql_query(
-                        "SELECT leaf_digests FROM state_seal_data_event_manifests WHERE seal_id = $1",
-                    )
-                    .bind::<Text, _>(&seal_id)
-                    .get_result::<DataEventLeafManifestRow>(&mut *conn)
-                    .await
-                    .optional()?;
-                    if let Some(manifest) = &data_event_leaf_manifest
-                        && stored_manifest.map(|row| row.leaf_digests) != Some(manifest.clone())
-                    {
-                        return Err(StoreError::Conflict(
-                            "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
-                                .to_owned(),
-                        )
-                        .into());
-                    }
                     let exact_dependencies =
                         crate::governance_dependencies_match_in_transaction(
                             conn,
@@ -2222,10 +2148,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     }
                     let checkpoint_view = checkpoint_view_from_value(checkpoint.state_json)?;
                     let checkpoint_root = compute_state_root(
-                        arkret_state::GovernanceView::new(
-                            &checkpoint_view.cells,
-                            &checkpoint_view.cas_heads,
-                        ),
+                        arkret_state::GovernanceView::new(&checkpoint_view.cells),
                         digest_suite,
                     )
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -2259,7 +2182,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                          WHERE child.realm_id = parent.realm_id \
                            AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
                                            WHERE q.seal_id = child.id) \
-                           AND child.predecessor_refs ? parent.id \
+                           AND child.predecessor_ref = parent.id \
                        ) \
                      ORDER BY parent.id ASC",
                 )
@@ -2285,17 +2208,17 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     ))
                     .into());
                 }
-                for (index, cell, move_id, op_json) in &new_rows {
+                for (index, cell, event_id, op_json) in &new_rows {
                     sql_query(
                         "INSERT INTO state_cell_ops \
-                         (realm_id, seal_id, op_index, cell_id, move_id, op_json) \
+                         (realm_id, seal_id, op_index, cell_id, event_id, op_json) \
                          VALUES ($1, $2, $3, $4, $5, $6)",
                     )
                     .bind::<Text, _>(&realm_id)
                     .bind::<Text, _>(&seal_id)
                     .bind::<BigInt, _>(*index)
                     .bind::<Text, _>(cell)
-                    .bind::<Text, _>(move_id)
+                    .bind::<Text, _>(event_id)
                     .bind::<Jsonb, _>(op_json)
                     .execute(&mut *conn)
                     .await?;
@@ -2322,7 +2245,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         let predecessor_coverage = row.covered_event_digests
                             .into_iter().collect::<BTreeSet<_>>();
                         let supplied_moves = new_rows.iter()
-                            .map(|(_, _, move_id, _)| move_id.clone()).collect::<BTreeSet<_>>();
+                            .map(|(_, _, event_id, _)| event_id.clone()).collect::<BTreeSet<_>>();
                         if view.rule_context.reusable_with(&rule_context)
                             && predecessor_coverage.is_subset(&covered)
                             && covered.difference(&predecessor_coverage)
@@ -2359,7 +2282,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     std::collections::BTreeMap::<CellRef, Vec<(String, Vec<IssuedOp>)>>::new();
                 for row in rows {
                     let issued = sealed_op_from_value(row.op_json)?;
-                    if !covered.contains(issued.op.move_id.as_str()) {
+                    if !covered.contains(issued.op.event_id.event_digest().as_str()) {
                         continue;
                     }
                     let cell = CellRef::new(row.cell_id)
@@ -2375,34 +2298,24 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 }
                 let realm = RealmId::new(realm_id.clone())
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
-                let (mut joined, mut joined_cas_heads) = reused
-                    .map(|view| (view.cells, view.cas_heads))
-                    .unwrap_or_default();
+                let mut joined = reused.map(|view| view.cells).unwrap_or_default();
                 // No pre-sort: joins are commutative and ordering by the typed
-                // `move_id` string would imply a tie-break `encoding.md` 4.2 forbids.
+                // `event_id` string would imply a tie-break `encoding.md` 4.2 forbids.
                 for (cell, batches) in batches_by_cell {
                     let binding = cell_registry.resolve(&realm, &cell)?;
                     let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
-                    // A `cas_register` cell's state_root leaf is its head set
-                    // (spec section 6.2.1), derived from these same batches.
-                    joined_cas_heads.remove(&cell);
-                    if arkret_state::is_causal_register(binding.lattice.kind()) {
-                        let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
-                        if !heads.is_empty() {
-                            joined_cas_heads.insert(cell.clone(), heads);
-                        }
-                    }
-                    joined.insert(
-                        cell.clone(),
-                        arkret_state::join_cell_seal_batches(
-                            binding.lattice.as_ref(),
-                            &cell,
-                            &batches,
-                        ),
-                    );
+                    let resolved = arkret_state::join_cell_seal_batches(
+                        binding.model.as_ref(),
+                        &cell,
+                        &batches,
+                    )
+                    .map_err(|error| {
+                        StoreError::Backend(format!("cell state resolution: {error}"))
+                    })?;
+                    joined.insert(cell.clone(), resolved);
                 }
                 let recomputed = compute_state_root(
-                    arkret_state::GovernanceView::new(&joined, &joined_cas_heads),
+                    arkret_state::GovernanceView::new(&joined),
                     digest_suite,
                 )
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -2442,13 +2355,12 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
                 insert_new_state_seal(conn, &insert).await?;
-                let (current_mv_heads, current_mv_ready) = current_results::advance_mv_heads(conn, &realm_id, &predecessor_seal_ids, &new_rows, &rule_context).await?;
+                let (causal_heads, causal_ready) = current_results::advance_causal_heads(conn, &realm_id, &predecessor_seal_ids, &new_rows, &rule_context).await?;
                 let checkpoint_state_json = serde_json::to_value(StoredCheckpointView {
                     cells: joined.clone(),
-                    cas_heads: joined_cas_heads.clone(),
                     rule_context: rule_context.clone(),
-                    current_mv_heads: current_mv_heads.clone(),
-                    current_mv_ready,
+                    causal_heads: causal_heads.clone(),
+                    causal_ready,
                 })
                 .map_err(serde_to_store)?;
                 let checkpoint_coverage = covered.iter().cloned().collect::<Vec<_>>();
@@ -2465,20 +2377,6 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 .bind::<Jsonb, _>(&checkpoint_state_json)
                 .execute(&mut *conn)
                 .await?;
-                if let Some(manifest) = &data_event_leaf_manifest {
-                    sql_query(
-                        "INSERT INTO state_seal_data_event_manifests \
-                         (seal_id, realm_id, digest_suite, leaf_digests, data_event_set_root) \
-                         VALUES ($1, $2, $3, $4, $5)",
-                    )
-                    .bind::<Text, _>(&seal_id)
-                    .bind::<Text, _>(&realm_id)
-                    .bind::<Text, _>(&manifest_digest_suite)
-                    .bind::<Array<Text>, _>(manifest)
-                    .bind::<Nullable<Text>, _>(&data_event_set_root)
-                    .execute(&mut *conn)
-                    .await?;
-                }
                 for dependency in &governance_dependencies {
                     crate::put_governance_dependency_exact_in_transaction(conn, dependency)
                         .await
@@ -2497,7 +2395,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 }
                 account_summary::register_delta_members(conn, &realm_id, &delta).await?;
                 if expected.iter().all(|leaf| predecessor_seal_ids.contains(leaf)) {
-                    account_summary::publish(conn, &realm_id, &joined, &joined_cas_heads, &current_mv_heads, current_mv_ready).await?;
+                    account_summary::publish(conn, &realm_id, &joined, &causal_heads, causal_ready).await?;
                 } else {
                     account_summary::publish_current_frontier(conn, &realm_id, cell_registry.as_ref()).await?;
                 }
@@ -2513,33 +2411,6 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 "seal_hash_collision: Seal {error_seal_id} is quarantined"
             ))),
         }
-    }
-
-    async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<BTreeSet<Hash>>> {
-        let pool = self.pool.clone();
-        let seal_id = seal_id.as_str().to_owned();
-        await_store!(async move {
-            let mut conn = pg_conn(&pool).await?;
-            sql_query("SELECT leaf_digests FROM state_seal_data_event_manifests WHERE seal_id = $1")
-                .bind::<Text, _>(&seal_id)
-                .get_result::<DataEventLeafManifestRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(diesel_to_store)?
-                .map(|row| {
-                    row.leaf_digests
-                        .into_iter()
-                        .map(|digest| {
-                            Hash::new(digest)
-                                .map_err(|error| StoreError::Backend(error.to_string()))
-                        })
-                        .collect()
-                })
-                .transpose()
-        })
     }
 
     async fn effective_state_checkpoint(
@@ -2588,7 +2459,6 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     covered_event_digests,
                     covered_seal_ids,
                     state: view.cells,
-                    cas_heads: view.cas_heads,
                 }))
             })
             .transpose()
@@ -2606,12 +2476,13 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock().await;
-        if let Some(manifest) = data_event_leaf_manifest {
-            validate_data_event_leaf_manifest(seal, digest_suite, manifest)?;
+        if seal.predecessor_ref.as_slice() != expected_store_frontier {
+            return Err(StoreError::Conflict(
+                "Seal predecessor_ref does not match the expected accepted Seal".to_owned(),
+            ));
         }
         if let Some(existing) = self.seal_store.get(&seal.id).await? {
             let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
@@ -2621,14 +2492,6 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             if existing_bytes != retry_bytes {
                 return Err(StoreError::Conflict(
                     "duplicate_conflict: exact Seal id replay has different accepted bytes"
-                        .to_owned(),
-                ));
-            }
-            if let Some(manifest) = data_event_leaf_manifest
-                && self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest)
-            {
-                return Err(StoreError::Conflict(
-                    "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
                         .to_owned(),
                 ));
             }
@@ -2642,7 +2505,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             if checkpoint.realm_id != seal.realm_id
                 || checkpoint.covered_event_digests != *covered
                 || compute_state_root(
-                    arkret_state::GovernanceView::new(&checkpoint.state, &checkpoint.cas_heads),
+                    arkret_state::GovernanceView::new(&checkpoint.state),
                     digest_suite,
                 )
                 .map_err(|error| StoreError::Backend(error.to_string()))?
@@ -2671,7 +2534,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         let mut checkpoint_seals = BTreeSet::from([seal.id.clone()]);
         {
             let checkpoints = self.effective_state_checkpoints.lock();
-            for predecessor in &seal.predecessor_refs {
+            for predecessor in seal.predecessor_ref.as_slice() {
                 let checkpoint = checkpoints.get(predecessor).ok_or_else(|| {
                     StoreError::Conflict(format!(
                         "predecessor {predecessor} has no effective-state checkpoint"
@@ -2693,22 +2556,9 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             new_ops,
         )
         .await?;
-        // The head half of the same candidate assembly: `new_ops` are not
-        // visible through the store until this Seal commits.
-        let post_cas_heads = arkret_state::effective_cas_heads_with_new_ops(
-            covered,
-            &seal.realm_id,
-            self.cell_store.as_ref(),
-            self.cell_registry.as_ref(),
-            new_ops,
-        )
-        .await
-        .map_err(|error| StoreError::Backend(format!("cas heads: {error}")))?;
-        let state_root = compute_state_root(
-            arkret_state::GovernanceView::new(&post_state, &post_cas_heads),
-            digest_suite,
-        )
-        .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
+        let state_root =
+            compute_state_root(arkret_state::GovernanceView::new(&post_state), digest_suite)
+                .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
             return Err(StoreError::Conflict(format!(
                 "Event Seal state_root mismatch: declared {}, recomputed {}",
@@ -2716,7 +2566,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             )));
         }
         self.cell_store
-            .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)
+            .append_confirmed_effects(&seal.realm_id, &seal.id, new_ops)
             .await?;
         match self
             .seal_store
@@ -2724,11 +2574,6 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             .await
         {
             Ok(true) => {
-                if let Some(manifest) = data_event_leaf_manifest {
-                    self.data_event_leaf_manifests
-                        .lock()
-                        .insert(seal.id.clone(), manifest.clone());
-                }
                 self.effective_state_checkpoints.lock().insert(
                     seal.id.clone(),
                     SealEffectiveStateCheckpoint {
@@ -2737,7 +2582,6 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                         covered_event_digests: covered.clone(),
                         covered_seal_ids: checkpoint_seals,
                         state: post_state,
-                        cas_heads: post_cas_heads,
                     },
                 );
                 // Match the PostgreSQL transaction: accepted delta Events
@@ -2764,14 +2608,6 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                 Err(error)
             }
         }
-    }
-
-    async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<BTreeSet<Hash>>> {
-        let _guard = self.lock.lock().await;
-        Ok(self.data_event_leaf_manifests.lock().get(seal_id).cloned())
     }
 
     async fn effective_state_checkpoint(
@@ -2824,7 +2660,7 @@ impl CellStore for PgCellStore {
         })
     }
 
-    async fn sealed_ops_for_cell(
+    async fn state_writes_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
@@ -2854,7 +2690,7 @@ impl CellStore for PgCellStore {
         })
     }
 
-    async fn sealed_op_batches_for_cell(
+    async fn confirmed_write_batches_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
@@ -2905,7 +2741,7 @@ impl CellStore for PgCellStore {
         _realm_id: &RealmId,
         _cell: &CellRef,
         _view_hash: &Hash,
-    ) -> StoreResult<Option<CellState>> {
+    ) -> StoreResult<Option<ResolvedCellState>> {
         Ok(None)
     }
 
@@ -2914,12 +2750,12 @@ impl CellStore for PgCellStore {
         _realm_id: &RealmId,
         _cell: &CellRef,
         _view_hash: &Hash,
-        _state: &CellState,
+        _state: &ResolvedCellState,
     ) -> StoreResult<()> {
         Ok(())
     }
 
-    async fn append_sealed_effects(
+    async fn append_confirmed_effects(
         &self,
         realm_id: &RealmId,
         seal: &SealId,
@@ -2936,17 +2772,17 @@ impl CellStore for PgCellStore {
                 Ok((
                     index as i64,
                     cell.as_str().to_owned(),
-                    issued.op.move_id.as_str().to_owned(),
+                    issued.op.event_id.as_str().to_owned(),
                     op_json,
                 ))
             })
             .collect::<StoreResult<_>>()?;
         await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
-            for (index, cell, move_id, op_json) in rows {
+            for (index, cell, event_id, op_json) in rows {
                 sql_query(
                     "INSERT INTO state_cell_ops \
-                     (realm_id, seal_id, op_index, cell_id, move_id, op_json) \
+                     (realm_id, seal_id, op_index, cell_id, event_id, op_json) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
                      ON CONFLICT (seal_id, op_index) DO NOTHING",
                 )
@@ -2954,7 +2790,7 @@ impl CellStore for PgCellStore {
                 .bind::<Text, _>(&seal)
                 .bind::<BigInt, _>(index)
                 .bind::<Text, _>(&cell)
-                .bind::<Text, _>(&move_id)
+                .bind::<Text, _>(&event_id)
                 .bind::<Jsonb, _>(&op_json)
                 .execute(&mut *conn)
                 .await
@@ -3088,8 +2924,8 @@ mod proposal_decision_tests {
 #[cfg(test)]
 mod event_seal_commit_tests {
     /// Attach a fixed issuer to a fixture op. These cases exercise counter /
-    /// fsm cells, where the issuer travels but is not part of the slot key.
-    fn test_issued(op: super::SealedOp) -> super::IssuedOp {
+    /// transition cells, where the issuer travels but is not part of the slot key.
+    fn test_issued(op: super::StateWrite) -> super::IssuedOp {
         super::IssuedOp {
             issuer_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 arkret_wire::project_did_to_core_id(
@@ -3107,50 +2943,27 @@ mod event_seal_commit_tests {
 
     use arkret_identifiers::Hlc;
     use arkret_state::SealStore;
-    use arkret_state::lattice::CellState;
     use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
+    use arkret_state::state_model::ResolvedCellState;
     use arkret_wire::{LatticeOpType, NotarySig, SealSignature};
     use chrono::Utc;
     use serde_json::json;
     use tokio::sync::Barrier;
 
     use super::{
-        BTreeSet, CellRef, CellRegistry, CellStore, ControlEventStore, EventSealCommitStore, Hash,
-        LatticeOp, MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp,
+        BTreeSet, CellRef, CellStateRegistry, CellStore, ControlEventStore, EventSealCommitStore,
+        Hash, LatticeOp, MemoryEventSealCommitStore, RealmId, Seal, SealId, StateWrite,
         build_state_resolution_stores, checkpoint_view_from_value, compute_state_root,
         effective_state_with_new_ops, sealed_op_from_value, sealed_op_to_value,
     };
 
-    #[test]
-    fn recovery_reset_marker_survives_postgres_json_round_trip() {
-        let mut sealed = SealedOp::new(
-            Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
-            LatticeOp {
-                op_type: LatticeOpType::Set,
-                tag: None,
-                value: Some(json!({"status": "recovered"})),
-                from: None,
-                to: None,
-                reason: None,
-                issuer_seq: None,
-            },
-        );
-        sealed.recovery_reset = true;
-        let issued = test_issued(sealed);
-        let encoded = sealed_op_to_value(&issued).expect("encode stored op");
-        assert_eq!(encoded["recovery_reset"], true);
-        let decoded = sealed_op_from_value(encoded).expect("decode stored op");
-        assert!(decoded.op.recovery_reset);
-        assert_eq!(decoded, issued);
-    }
-
-    /// The derived head identities a `cas_register` write superseded must
+    /// The derived head identities a `causal_register` write superseded must
     /// survive the op log, or the cell's heads are lost on reload and every
     /// stored write reads back as concurrent.
     #[test]
     fn superseded_head_identities_survive_the_postgres_json_round_trip() {
         let superseded = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
-        let issued = test_issued(SealedOp::superseding(
+        let issued = test_issued(StateWrite::superseding(
             Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             LatticeOp {
                 op_type: LatticeOpType::Set,
@@ -3175,15 +2988,15 @@ mod event_seal_commit_tests {
     fn incomplete_or_unknown_checkpoint_fields_are_errors() {
         for damaged in [
             json!({"cells": {}}),
-            json!({"cells": {}, "cas_heads": {}}),
-            json!({"cells": {}, "cas_heads": {}, "rule_context": null}),
-            json!({"cells": {}, "cas_heads": {},
+            json!({"cells": {}, "causal_heads": {}}),
+            json!({"cells": {}, "causal_heads": {}, "rule_context": null}),
+            json!({"cells": {}, "causal_heads": {},
                 "rule_context": {"status": "unavailable"}, "obsolete": true}),
         ] {
             assert!(checkpoint_view_from_value(damaged).is_err());
         }
         let valid = checkpoint_view_from_value(json!({
-            "cells": {}, "cas_heads": {}, "rule_context": {"status": "unavailable"}, "current_mv_heads": {}, "current_mv_ready": true
+            "cells": {}, "causal_heads": {}, "rule_context": {"status": "unavailable"}, "causal_heads": {}, "causal_ready": true
         }))
         .unwrap();
         assert!(!valid.rule_context.reusable_with(&valid.rule_context));
@@ -3191,8 +3004,9 @@ mod event_seal_commit_tests {
 
     #[test]
     fn in_memory_state_resolution_reuses_the_validated_registry_instance() {
-        let registry: Arc<dyn CellRegistry> = Arc::new(
-            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+        let registry: Arc<dyn CellStateRegistry> = Arc::new(
+            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()
+                .unwrap(),
         );
         let stores = build_state_resolution_stores(None, registry.clone());
         assert!(Arc::ptr_eq(&registry, &stores.cell_registry));
@@ -3200,7 +3014,7 @@ mod event_seal_commit_tests {
 
     async fn competing_seal(
         cell_store: &dyn CellStore,
-        registry: &dyn CellRegistry,
+        registry: &dyn CellStateRegistry,
         realm: &RealmId,
         marker: char,
         increment: i64,
@@ -3229,7 +3043,7 @@ mod event_seal_commit_tests {
             Utc::now(),
         )
         .unwrap();
-        let move_id = arkret_state::state::control_event_digest(
+        let event_id = arkret_state::state::control_event_digest(
             &event,
             arkret_canonical::DigestSuite::Sha256,
         )
@@ -3240,8 +3054,8 @@ mod event_seal_commit_tests {
         .unwrap();
         let ops = vec![(
             cell,
-            test_issued(SealedOp::new(
-                move_id.clone(),
+            test_issued(StateWrite::new(
+                event_id.clone(),
                 LatticeOp {
                     op_type: LatticeOpType::Set,
                     tag: None,
@@ -3253,17 +3067,12 @@ mod event_seal_commit_tests {
                 },
             )),
         )];
-        let covered = std::iter::once(move_id.clone()).collect::<BTreeSet<_>>();
+        let covered = std::iter::once(event_id.clone()).collect::<BTreeSet<_>>();
         let state = effective_state_with_new_ops(cell_store, registry, realm, &covered, &ops)
             .await
             .unwrap();
-        let cas_heads = arkret_state::effective_cas_heads_with_new_ops(
-            &covered, realm, cell_store, registry, &ops,
-        )
-        .await
-        .unwrap();
         let state_root = compute_state_root(
-            arkret_state::GovernanceView::new(&state, &cas_heads),
+            arkret_state::GovernanceView::new(&state),
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
@@ -3276,14 +3085,11 @@ mod event_seal_commit_tests {
         let mut seal = Seal {
             id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
             realm_id: realm.clone(),
-            predecessor_refs: Vec::new(),
-            delta: vec![move_id],
+            predecessor_ref: None,
+            delta: vec![event_id],
             control_event_set_root: control_root.clone(),
             state_root,
-            completeness_root: control_root,
             notary_seq: 0,
-            data_view_root: None,
-            data_event_set_root: None,
             availability_receipt_digests: Vec::new(),
             covered_event_digests: Vec::new(),
             previous_state_root: None,
@@ -3304,10 +3110,11 @@ mod event_seal_commit_tests {
     }
 
     #[tokio::test]
-    async fn postgres_replay_uses_validated_sdk_fsm_contract() {
+    async fn postgres_replay_uses_validated_sdk_transition_contract() {
         let cell_store = arkret_state::state::MemoryCellStore::default();
         let registry =
-            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()
+                .unwrap();
         let realm = RealmId::new("ak:realm:AZNm59MVqzgAGc4q_sl4Kbc5rafvtPEBQ5Jpz3ZVvQ1e").unwrap();
         let cell =
             CellRef::new("ak:cell:ak.component.member.state.v1:did:web:member.example".to_owned())
@@ -3316,7 +3123,7 @@ mod event_seal_commit_tests {
         let ban_move = Hash::new(format!("sha256:{}", "f".repeat(64))).unwrap();
         // The ban write's own verified basis observed the join write, so it
         // supersedes it (`event-auth-state-resolution.md` §9.3.1.7 item 4).
-        // `fsm` is a causal register since §9.3.1.5: order in this list carries
+        // `transition` is a causal register since §9.3.1.5: order in this list carries
         // no causality, and without the edge these are two concurrent writes
         // with different `to` and the cell reads `⊥`.
         let ops = [
@@ -3324,11 +3131,11 @@ mod event_seal_commit_tests {
             (ban_move.clone(), "join", "ban", vec![join_move.clone()]),
         ]
         .into_iter()
-        .map(|(move_id, from, to, supersedes)| {
+        .map(|(event_id, from, to, supersedes)| {
             (
                 cell.clone(),
-                test_issued(SealedOp::superseding(
-                    move_id,
+                test_issued(StateWrite::superseding(
+                    event_id,
                     LatticeOp {
                         op_type: LatticeOpType::Transition,
                         tag: None,
@@ -3349,15 +3156,19 @@ mod event_seal_commit_tests {
             .await
             .unwrap();
 
-        assert_eq!(state.get(&cell), Some(&CellState::Value(json!("ban"))),);
+        assert_eq!(
+            state.get(&cell),
+            Some(&ResolvedCellState::Value(json!("ban"))),
+        );
     }
 
     #[tokio::test]
     async fn postgres_organization_policy_survives_restart_replay_and_out_of_order_seal() {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
-        let registry: Arc<dyn CellRegistry> = Arc::new(
-            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+        let registry: Arc<dyn CellStateRegistry> = Arc::new(
+            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()
+                .unwrap(),
         );
         let stores = build_state_resolution_stores(Some(pool.clone()), registry.clone());
         let realm = RealmId::new("ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6").unwrap();
@@ -3399,17 +3210,8 @@ mod event_seal_commit_tests {
         )
         .await
         .unwrap();
-        let cas_heads = arkret_state::effective_cas_heads_with_new_ops(
-            &covered,
-            &realm,
-            stores.cell_store.as_ref(),
-            registry.as_ref(),
-            &ops,
-        )
-        .await
-        .unwrap();
         seal.state_root = compute_state_root(
-            arkret_state::GovernanceView::new(&state, &cas_heads),
+            arkret_state::GovernanceView::new(&state),
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
@@ -3436,7 +3238,6 @@ mod event_seal_commit_tests {
                     &[],
                     &ops,
                     &covered,
-                    Some(&BTreeSet::new()),
                     &[],
                 )
                 .await
@@ -3446,7 +3247,7 @@ mod event_seal_commit_tests {
         let restarted = build_state_resolution_stores(Some(pool), registry.clone());
         let stored = restarted
             .cell_store
-            .sealed_ops_for_cell(&realm, &cell)
+            .state_writes_for_cell(&realm, &cell)
             .await
             .unwrap();
         assert_eq!(stored.len(), 1);
@@ -3460,7 +3261,6 @@ mod event_seal_commit_tests {
                     &[],
                     &ops,
                     &covered,
-                    Some(&BTreeSet::new()),
                     &[],
                 )
                 .await
@@ -3478,7 +3278,7 @@ mod event_seal_commit_tests {
         .await;
         let missing_predecessor =
             SealId::new(format!("ak:seal:sha256:{}", "f".repeat(64))).unwrap();
-        out_of_order.predecessor_refs = vec![missing_predecessor.clone()];
+        out_of_order.predecessor_ref = Some(missing_predecessor.clone());
         out_of_order.id = out_of_order
             .derive_id(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
@@ -3491,7 +3291,6 @@ mod event_seal_commit_tests {
                     &[missing_predecessor],
                     &out_of_order_ops,
                     &out_of_order_covered,
-                    Some(&BTreeSet::new()),
                     &[],
                 )
                 .await
@@ -3509,7 +3308,7 @@ mod event_seal_commit_tests {
         assert_eq!(
             restarted
                 .cell_store
-                .sealed_ops_for_cell(&realm, &cell)
+                .state_writes_for_cell(&realm, &cell)
                 .await
                 .unwrap()
                 .len(),
@@ -3522,12 +3321,12 @@ mod event_seal_commit_tests {
         let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
         let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
         let control_event_store = Arc::new(arkret_state::state::MemoryControlEventStore::default());
-        let registry: Arc<dyn CellRegistry> = Arc::new(
-            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+        let registry: Arc<dyn CellStateRegistry> = Arc::new(
+            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()
+                .unwrap(),
         );
         let committer = Arc::new(MemoryEventSealCommitStore {
             lock: tokio::sync::Mutex::new(()),
-            data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
             effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
             control_event_store: control_event_store.clone(),
             seal_store: seal_store.clone(),
@@ -3571,7 +3370,6 @@ mod event_seal_commit_tests {
                         &[],
                         &candidate.1,
                         &candidate.2,
-                        Some(&BTreeSet::new()),
                         &[],
                     )
                     .await
@@ -3588,26 +3386,29 @@ mod event_seal_commit_tests {
         let winner = if left.2 { &left } else { &right };
         let loser = if left.2 { &right } else { &left };
         let cell = winner.1[0].0.clone();
-        let stored = cell_store.sealed_ops_for_cell(&realm, &cell).await.unwrap();
+        let stored = cell_store
+            .state_writes_for_cell(&realm, &cell)
+            .await
+            .unwrap();
         assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].op.move_id, winner.1[0].1.op.move_id);
+        assert_eq!(stored[0].op.event_id, winner.1[0].1.op.event_id);
         assert!(
             stored
                 .iter()
-                .all(|issued| issued.op.move_id != loser.1[0].1.op.move_id)
+                .all(|issued| issued.op.event_id != loser.1[0].1.op.event_id)
         );
         assert!(seal_store.get(&winner.0.id).await.unwrap().is_some());
         assert!(seal_store.get(&loser.0.id).await.unwrap().is_none());
         assert_eq!(
             control_event_store
-                .covering_seals(&winner.1[0].1.op.move_id)
+                .covering_seals(&winner.1[0].1.op.event_id.event_digest())
                 .await
                 .unwrap(),
             vec![winner.0.id.clone()]
         );
         assert!(
             control_event_store
-                .covering_seals(&loser.1[0].1.op.move_id)
+                .covering_seals(&loser.1[0].1.op.event_id.event_digest())
                 .await
                 .unwrap()
                 .is_empty()
@@ -3621,135 +3422,21 @@ mod event_seal_commit_tests {
                 .all(|record| {
                     arkret_state::state::control_event_digest(&record.event, record.digest_suite)
                         .unwrap()
-                        == loser.1[0].1.op.move_id
+                        == loser.1[0].1.op.event_id.event_digest()
                 })
         );
-        assert_eq!(
-            committer
-                .data_event_leaf_manifest(&winner.0.id)
-                .await
-                .unwrap(),
-            Some(BTreeSet::new())
-        );
-        let read_committer = committer.clone();
-        let read_seal_id = winner.0.id.clone();
-        let commit_guard = committer.lock.lock().await;
-        let mut reader =
-            tokio::spawn(
-                async move { read_committer.data_event_leaf_manifest(&read_seal_id).await },
-            );
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), &mut reader)
-                .await
-                .is_err(),
-            "manifest reads must wait for the composite commit lock"
-        );
-        drop(commit_guard);
-        assert_eq!(reader.await.unwrap().unwrap(), Some(BTreeSet::new()));
-        committer
-            .data_event_leaf_manifests
-            .lock()
-            .remove(&winner.0.id);
-        let retry_error = committer
-            .commit_if_frontier(
-                &winner.0,
-                arkret_canonical::DigestSuite::Sha256,
-                &[],
-                &winner.1,
-                &std::iter::once(winner.1[0].1.op.move_id.clone()).collect(),
-                Some(&BTreeSet::new()),
-                &[],
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            retry_error
-                .to_string()
-                .contains("different or missing DataEvent leaf manifest")
-        );
-
-        let mismatched_manifest = [Hash::new(format!("sha256:{}", "f".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let root_error = committer
-            .commit_if_frontier(
-                &loser.0,
-                arkret_canonical::DigestSuite::Sha256,
-                &[],
-                &loser.1,
-                &std::iter::once(loser.1[0].1.op.move_id.clone()).collect(),
-                Some(&mismatched_manifest),
-                &[],
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            root_error
-                .to_string()
-                .contains("data_event_set_root mismatch")
-        );
-    }
-
-    #[tokio::test]
-    async fn memory_transport_commit_accepts_observational_root_without_manifest() {
-        let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
-        let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
-        let control_event_store = Arc::new(arkret_state::state::MemoryControlEventStore::default());
-        let registry: Arc<dyn CellRegistry> = Arc::new(
-            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
-        );
-        let committer = MemoryEventSealCommitStore {
-            lock: tokio::sync::Mutex::new(()),
-            data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
-            effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
-            control_event_store: control_event_store.clone(),
-            seal_store,
-            cell_store: cell_store.clone(),
-            cell_registry: registry.clone(),
-        };
-        let realm =
-            RealmId::new("ak:realm:AbyyZrF7pGSKY_6LDT13wAQKxoSWNXKFknfWSmLtjw3U".to_owned())
-                .unwrap();
-        let (mut seal, ops, covered, event) =
-            competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'c', 3).await;
-        let observed = [Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        seal.data_event_set_root = Some(
-            arkret_state::event_digest_set_root(&observed, arkret_canonical::DigestSuite::Sha256)
-                .unwrap(),
-        );
-        seal.id = seal
-            .derive_id(arkret_canonical::DigestSuite::Sha256)
-            .unwrap();
-        let ackless = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
-            device_id: "ak:device:fixture".to_owned(),
-            device_authorize_event_id: "ak:event:fixture".to_owned(),
-            device_generation_ref: 1,
-            seal_basis_digest: "sha256:fixture".to_owned(),
-        });
-        control_event_store
-            .put_pending_with_ingress(&event, &ackless, arkret_canonical::DigestSuite::Sha256)
-            .await
-            .unwrap();
-
         assert!(
             committer
                 .commit_if_frontier(
-                    &seal,
+                    &winner.0,
                     arkret_canonical::DigestSuite::Sha256,
                     &[],
-                    &ops,
-                    &covered,
-                    None,
+                    &winner.1,
+                    &std::iter::once(winner.1[0].1.op.event_id.event_digest()).collect(),
                     &[],
                 )
                 .await
                 .unwrap()
-        );
-        assert_eq!(
-            committer.data_event_leaf_manifest(&seal.id).await.unwrap(),
-            None
         );
     }
 }

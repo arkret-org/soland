@@ -208,13 +208,11 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 }
 
 /// A citable accepted Seal of the demo Realm that establishes this service as
-/// the current single-signer proposal/notary authority.
+/// the current f=0 proposal/notary authority.
 ///
 /// `event-auth-state-resolution.md` §5 makes a control-plane Event a Control
-/// Move whose `seal_basis.leaves` must be non-empty; unlike a DataEvent
-/// `seal_ref`, the leaves are not resolved into an authorization pre-state at
-/// admission, but Control Proposal Ack admission still resolves the accepted
-/// notary cell.
+/// Move whose `seal_basis.leaves` must be non-empty. Ordinary Events instead
+/// cite their authorization pre-state through `auth_context.authority_refs`.
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     ingest_extension_admin_document(state).await;
     let device_verification_method = format!("did:web:alice.example#{ALICE_DEVICE_ID}");
@@ -241,8 +239,11 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 demo_realm_id().to_owned(),
                 arkret_wire::REALM_GENESIS_CELL.to_owned(),
             ))
-            .or_insert_with(|| arkret_state::lattice::CellState::Value(serde_json::json!({})));
-        if let arkret_state::lattice::CellState::Value(Value::Object(object)) = genesis {
+            .or_insert_with(|| {
+                arkret_state::state_model::ResolvedCellState::Value(serde_json::json!({}))
+            });
+        if let arkret_state::state_model::ResolvedCellState::Value(Value::Object(object)) = genesis
+        {
             object.insert(
                 "digest_algorithm".to_owned(),
                 Value::String("sha256".to_owned()),
@@ -265,7 +266,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
                 ),
             ),
-            arkret_state::lattice::CellState::Value(Value::String(
+            arkret_state::state_model::ResolvedCellState::Value(Value::String(
                 arkret_wire::CORE_REDUCER_PROFILE.to_owned(),
             )),
         );
@@ -276,7 +277,9 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 demo_realm_id().to_owned(),
                 arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
             ),
-            arkret_state::lattice::CellState::Value(serde_json::to_value(authority_root).unwrap()),
+            arkret_state::state_model::ResolvedCellState::Value(
+                serde_json::to_value(authority_root).unwrap(),
+            ),
         );
     }
     let create = soland_http::state::development_demo_genesis_event(
@@ -337,19 +340,24 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     )
     .unwrap();
     let notary_cell: arkret_identifiers::CellRef = arkret_wire::REALM_NOTARY_CELL.parse().unwrap();
-    let notary_op = arkret_state::lattice::ordered_log::IssuedOp {
+    let notary_op = arkret_state::state_model::ordered_log::IssuedOp {
         issuer_id: arkret_wire::ActorId::service(
             arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
         ),
-        op: arkret_state::lattice::SealedOp::new(
+        op: arkret_state::state_model::StateWrite::new(
             move_id.clone(),
             arkret_wire::LatticeOp {
                 op_type: arkret_wire::LatticeOpType::Set,
                 tag: None,
                 value: Some(
-                    serde_json::to_value(arkret_wire::NotaryValue::single_signer(
-                        state.service_notary_signer_descriptor().unwrap(),
-                    ))
+                    serde_json::to_value(
+                        arkret_wire::NotaryValue::new(
+                            vec![state.service_notary_signer_descriptor().unwrap()],
+                            0,
+                            0,
+                        )
+                        .unwrap(),
+                    )
                     .unwrap(),
                 ),
                 from: None,
@@ -363,9 +371,9 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         "ak:cell:ak.component.capability.grant.v1:{admin_grant_id}"
     ))
     .unwrap();
-    let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
+    let admin_grant_op = arkret_state::state_model::ordered_log::IssuedOp {
         issuer_id: admin_actor.clone(),
-        op: arkret_state::lattice::SealedOp::new(
+        op: arkret_state::state_model::StateWrite::new(
             admin_grant_move_id.clone(),
             arkret_wire::LatticeOp {
                 op_type: arkret_wire::LatticeOpType::Add,
@@ -383,31 +391,26 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         .resolve(&realm, &notary_cell)
         .expect("notary cell family is registered");
     let notary_joined = arkret_state::join_cell(
-        notary_binding.lattice.as_ref(),
+        notary_binding.model.as_ref(),
         &notary_cell,
         std::slice::from_ref(&notary_op),
-    );
+    )
+    .expect("notary cell resolves");
     let grant_binding = registry
         .resolve(&realm, &admin_grant_cell)
         .expect("capability grant cell family is registered");
     let grant_joined = arkret_state::join_cell(
-        grant_binding.lattice.as_ref(),
+        grant_binding.model.as_ref(),
         &admin_grant_cell,
         std::slice::from_ref(&admin_grant_op),
-    );
-    // The notary cell is a `cas_register`, so its state_root leaf is the head
-    // set spec section 6.2.1 defines, not its settled value; the head is the op
-    // joined just above. The grant cell is an `or_set` and keeps its value leaf.
+    )
+    .expect("capability grant cell resolves");
     let cells = BTreeMap::from([
         (notary_cell.clone(), notary_joined),
         (admin_grant_cell.clone(), grant_joined),
     ]);
-    let cas_heads = arkret_state::CasHeadsByCell::from([(
-        notary_cell.clone(),
-        arkret_state::cas_heads_for_batches(&[vec![notary_op.clone()]]),
-    )]);
     let state_root = arkret_state::compute_state_root(
-        arkret_state::GovernanceView::new(&cells, &cas_heads),
+        arkret_state::GovernanceView::new(&cells),
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
@@ -511,7 +514,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         .await
         .unwrap();
     state
-        .test_append_sealed_effects(
+        .test_append_confirmed_effects(
             &realm,
             &seal.id,
             &[(notary_cell, notary_op), (admin_grant_cell, admin_grant_op)],
@@ -769,7 +772,8 @@ fn finalize_and_sign_applet_event(
         &mut event,
         &signer,
         &verification_method,
-        SignEventOptions::new().with_created_at(now),
+        SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref())
+            .with_created_at(now),
     )
     .unwrap();
     event.into_event()
@@ -850,7 +854,7 @@ fn applet_managed_pcr_genesis_event(
         arkret_canonical::DigestSuite::Sha256,
         arkret_wire::SecurityClass::HighAssurance,
         arkret_wire::EncryptionProfile::MlsRfc9420,
-        arkret_wire::NotaryValue::single_signer(target_station_notary),
+        arkret_wire::NotaryValue::new(vec![target_station_notary], 0, 0).unwrap(),
     )
     .expect("fixture Applet-managed PCR genesis");
     let mut event = arkret_wire::test_support::raw_event_at(
@@ -1291,19 +1295,11 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         )
     }) {
         let accepted: Event = serde_json::from_value(record.envelope.clone()).unwrap();
-        assert!(
-            matches!(
-                accepted.proofs.as_slice(),
-                [
-                    arkret_wire::EventProof::Producer(_),
-                    arkret_wire::EventProof::StationAdmission(_),
-                ]
-            ),
-            "every stored administrator install Move must carry its Station admission proof"
+        assert_eq!(
+            accepted.proofs.len(),
+            1,
+            "every stored administrator install Move must carry one producer proof"
         );
-        accepted
-            .validate_station_admission_binding(record.digest_suite)
-            .unwrap();
     }
 
     assert!(install_events.iter().any(|event| {
@@ -1865,7 +1861,7 @@ struct AppletMessageTransactionRequest<'a> {
     prev_ref: &'a str,
     text: &'a str,
     idempotency_key: &'a str,
-    seal_ref: Option<arkret_identifiers::SealId>,
+    authority_seal_ref: Option<arkret_identifiers::SealId>,
 }
 
 async fn post_signed_applet_message_transaction(
@@ -2138,11 +2134,10 @@ async fn applet_message_event(
     // issued to the executing service, while actor_id remains the accountable
     // ghost, so the frozen CBS view must cover the exact install
     // authorization_ref for the executing service.
-    let seal_id = match &request.seal_ref {
+    let seal_id = match &request.authority_seal_ref {
         Some(seal_id) => seal_id.clone(),
         None => seed_applet_message_grant_basis(state, package, realm_id, authorization_ref).await,
     };
-    event.seal_ref = Some(seal_id);
     event.auth_context = Some(arkret_wire::AuthContext {
         key_id: arkret_wire::OpaqueLocalId::new(
             verification_method
@@ -2153,6 +2148,7 @@ async fn applet_message_event(
         .expect("fixture auth_context key id is an opaque local id"),
         key_epoch: 0,
         credential_epoch: None,
+        authority_refs: vec![seal_id],
     });
     let signing_key = applet_service_signing_key(&verification_method);
     let signer = Ed25519PayloadSigner::new(
@@ -2176,7 +2172,7 @@ async fn applet_message_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(now),
     )
     .unwrap();
     let event = event.into_event();
@@ -2342,7 +2338,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
             prev_ref: provision["profile_event_ref"].as_str().unwrap(),
             text: &transaction_text,
             idempotency_key: &transaction_idempotency_key,
-            seal_ref: None,
+            authority_seal_ref: None,
         },
     )
     .await;
@@ -2350,7 +2346,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
     assert_eq!(
         transaction["rejections"][0]["reason_code"],
         json!("capability_denied"),
-        "an installed Ghost is not a Realm member until the ordinary invite/join FSM accepts it"
+        "an installed Ghost is not a Realm member until the ordinary invite/join transition accepts it"
     );
     let messages = state
         .test_persistence()
@@ -2535,7 +2531,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
             prev_ref: provision["profile_event_ref"].as_str().unwrap(),
             text: "after revoke",
             idempotency_key: &rejected_idempotency_key,
-            seal_ref: Some(pre_revoke_message_seal),
+            authority_seal_ref: Some(pre_revoke_message_seal),
         },
     )
     .await;
@@ -2885,7 +2881,8 @@ async fn signed_install_events(
         &mut registration_event,
         &signer,
         &verification_method,
-        SignEventOptions::new().with_created_at(now),
+        SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref())
+            .with_created_at(now),
     )
     .unwrap();
     let registration_event = registration_event.into_event();
@@ -2961,7 +2958,8 @@ async fn signed_install_events(
             &mut event,
             &signer,
             &verification_method,
-            SignEventOptions::new().with_created_at(now),
+            SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref())
+                .with_created_at(now),
         )
         .unwrap();
         let event = event.into_event();
@@ -3232,7 +3230,8 @@ async fn admit_applet_managed_member(
         &mut event,
         &signer,
         &verification_method,
-        SignEventOptions::new().with_created_at(now),
+        SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref())
+            .with_created_at(now),
     )
     .unwrap();
     let event = event.into_event();
@@ -3347,7 +3346,8 @@ async fn signed_revoke_events(
             &mut event,
             &signer,
             &verification_method,
-            SignEventOptions::new().with_created_at(now),
+            SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref())
+                .with_created_at(now),
         )
         .unwrap();
         let event = event.into_event();
@@ -3393,7 +3393,8 @@ async fn signed_revoke_events(
             &mut event,
             &signer,
             &verification_method,
-            SignEventOptions::new().with_created_at(now),
+            SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref())
+                .with_created_at(now),
         )
         .unwrap();
         let event = event.into_event();

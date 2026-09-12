@@ -915,7 +915,7 @@ diesel::table! {
         revision -> Int8,
         current_value -> Nullable<Jsonb>,
         available -> Bool,
-        cas_heads -> Jsonb,
+        revision_event_id -> Nullable<Text>,
     }
 }
 diesel::table! {
@@ -1541,7 +1541,7 @@ diesel::table! {
         seal_id -> Text,
         op_index -> Int8,
         cell_id -> Text,
-        move_id -> Text,
+        event_id -> Text,
         op_json -> Jsonb,
         appended_at -> Timestamptz,
     }
@@ -1593,7 +1593,7 @@ diesel::table! {
         seal_id_preimage_bytes -> Bytea,
         accepted_seal_bytes -> Bytea,
         seal_json -> Jsonb,
-        predecessor_refs -> Jsonb,
+        predecessor_ref -> Nullable<Text>,
         is_genesis -> Bool,
         inserted_at -> Timestamptz,
     }
@@ -1668,10 +1668,6 @@ diesel::table! {
         object_digest -> Text,
         canonical_bytes -> Bytea,
         object_json -> Jsonb,
-        historical_agent_id -> Nullable<Text>,
-        historical_verification_method -> Nullable<Text>,
-        historical_event_id -> Nullable<Text>,
-        historical_receiver_id -> Nullable<Text>,
         inserted_at -> Timestamptz,
     }
 }

@@ -2,7 +2,7 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -53,7 +53,7 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
         .realm_null_subject_cells
         .insert(
             (REALM_ID.to_owned(), cell_id.as_str().to_owned()),
-            CellState::Value(json!({
+            ResolvedCellState::Value(json!({
                 "service_id": service_id,
                 "foci": [{
                     "focus_id": FOCUS_ID,

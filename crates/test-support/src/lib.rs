@@ -5,6 +5,13 @@ pub mod fault_injection;
 pub mod sealed_grant;
 pub mod signed_event;
 
+pub fn fixture_signer_evidence_ref() -> arkret_wire::SignerEvidenceRef {
+    let digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32)))
+        .expect("fixture signer evidence digest");
+    arkret_wire::SignerEvidenceRef::new(format!("ak:signer_evidence:{digest}"))
+        .expect("fixture signer evidence reference")
+}
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::path::Path;
@@ -18,13 +25,13 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceDidDocument, ServiceDidEndpoint, ServiceDidVerificationMethod,
     ServiceRegistrationKey, ServiceRegistrationReceipt,
 };
-use arkret_state::lattice::CellState;
-use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
-    CellRegistry, CellStore, ControlEventStore, ControlProposalIngress, MemoryCellStore,
+    CellStateRegistry, CellStore, ControlEventStore, ControlProposalIngress, MemoryCellStore,
     MemoryControlEventStore, MemorySealStore, SealStore, StoreError, StoreResult,
     compute_state_root,
 };
+use arkret_state::state_model::ResolvedCellState;
+use arkret_state::state_model::ordered_log::IssuedOp;
 use arkret_wire::{DidCoreId, Seal, ServiceKind, project_did_to_core_id};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -346,7 +353,7 @@ fn app_state_with_identity_and_stores(
         Arc<dyn ControlEventStore>,
         Arc<dyn SealStore>,
         Arc<dyn CellStore>,
-        Arc<dyn CellRegistry>,
+        Arc<dyn CellStateRegistry>,
         Arc<dyn EventSealCommitPort>,
     ) = if let Some(stores) = postgres_stores {
         (
@@ -366,7 +373,6 @@ fn app_state_with_identity_and_stores(
         let cell_store = Arc::new(MemoryCellStore::default());
         let event_seal_committer = Arc::new(MemoryEventSealCommitter {
             lock: Mutex::new(()),
-            data_event_leaf_manifests: Mutex::new(BTreeMap::new()),
             seal_store: seal_store.clone(),
             cell_store: cell_store.clone(),
             cell_registry: cell_registry.clone(),
@@ -462,7 +468,6 @@ impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         self.0
@@ -472,16 +477,9 @@ impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
                 expected_store_frontier,
                 new_ops,
                 covered,
-                data_event_leaf_manifest,
                 governance_dependencies,
             )
             .await
-    }
-    async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<BTreeSet<Hash>>> {
-        self.0.data_event_leaf_manifest(seal_id).await
     }
     async fn effective_state_checkpoint(
         &self,
@@ -498,7 +496,6 @@ impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
                         covered_event_digests: checkpoint.covered_event_digests,
                         covered_seal_ids: checkpoint.covered_seal_ids,
                         state: checkpoint.state,
-                        cas_heads: checkpoint.cas_heads,
                     }
                 })
             })
@@ -543,7 +540,7 @@ pub trait AppStateTestExt {
     /// fixture that needs the Seal to actually *carry* state — for example a
     /// capability grant — has to write the ops the sealed Control Moves
     /// projected, which is what this does.
-    async fn test_append_sealed_effects(
+    async fn test_append_confirmed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
@@ -574,49 +571,22 @@ pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceS
     );
 }
 
-/// Recompute the two cumulative Seal roots for fixture signing.
-///
-/// Real Control Events are resolved from the test Control Event store. The
-/// development-only synthetic basis retains its exact listed descriptors in
-/// the fixture cache. Any digest unresolved by either source fails closed.
-pub async fn test_seal_roots(
+/// Recompute the cumulative Control Event set root for fixture signing.
+pub async fn test_control_event_set_root(
     state: &AppState,
     predecessor_refs: &[SealId],
     delta_events: &[(arkret_wire::Event, arkret_canonical::DigestSuite)],
     root_digest_suite: arkret_canonical::DigestSuite,
-) -> StoreResult<(Hash, Hash)> {
-    let (seal_store, control_event_store) = state_test_registry()
+) -> StoreResult<Hash> {
+    let seal_store = state_test_registry()
         .lock()
         .get(&app_state_key(state))
-        .map(|resources| {
-            (
-                resources
-                    .seal_store
-                    .clone()
-                    .expect("test Seal store is unavailable for this AppState"),
-                resources
-                    .control_event_store
-                    .clone()
-                    .expect("test Control Event store is unavailable for this AppState"),
-            )
-        })
+        .and_then(|resources| resources.seal_store.clone())
         .expect("AppState was not constructed by soland-test-support");
     let mut covered =
         arkret_state::union_predecessor_covered_events(predecessor_refs, seal_store.as_ref())
             .await
             .map_err(|error| StoreError::Backend(error.to_string()))?;
-    let mut resolved = BTreeMap::new();
-    let predecessor_closure =
-        arkret_state::predecessor_seal_closure(predecessor_refs, seal_store.as_ref())
-            .await
-            .map_err(|error| StoreError::Backend(error.to_string()))?;
-    for seal_id in predecessor_closure {
-        if let Some(listed) = crate::cbs_basis::basis_listed_control_events_with_id(&seal_id) {
-            for event in listed {
-                resolved.insert(event.event_digest, (event.actor_id, event.actor_seq));
-            }
-        }
-    }
     for (event, digest_suite) in delta_events {
         let digest = Hash::new(
             event
@@ -625,37 +595,9 @@ pub async fn test_seal_roots(
         )
         .map_err(|error| StoreError::Backend(error.to_string()))?;
         covered.insert(digest.clone());
-        resolved.insert(digest, (event.actor_id.clone(), event.actor_seq));
     }
-    for digest in &covered {
-        if resolved.contains_key(digest) {
-            continue;
-        }
-        if let Some(event) = control_event_store.get(digest).await? {
-            resolved.insert(digest.clone(), (event.actor_id, event.actor_seq));
-        }
-    }
-    let listed = covered
-        .iter()
-        .map(|digest| {
-            let (actor_id, actor_seq) = resolved.get(digest).cloned().ok_or_else(|| {
-                StoreError::Backend(format!(
-                    "fixture Seal coverage contains unresolved Control Event digest {digest}"
-                ))
-            })?;
-            Ok(arkret_state::ListedControlEvent {
-                actor_id,
-                actor_seq,
-                event_digest: digest.clone(),
-            })
-        })
-        .collect::<StoreResult<Vec<_>>>()?;
-    let control_root = arkret_state::control_event_set_root(&covered, root_digest_suite)
-        .map_err(|error| StoreError::Backend(error.to_string()))?;
-    let completeness_root =
-        arkret_state::control_event_completeness_root_from_listed(&listed, root_digest_suite)
-            .map_err(|error| StoreError::Backend(error.to_string()))?;
-    Ok((control_root, completeness_root))
+    arkret_state::control_event_set_root(&covered, root_digest_suite)
+        .map_err(|error| StoreError::Backend(error.to_string()))
 }
 
 #[async_trait::async_trait]
@@ -735,7 +677,7 @@ impl AppStateTestExt for AppState {
             .await
     }
 
-    async fn test_append_sealed_effects(
+    async fn test_append_confirmed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
@@ -746,7 +688,7 @@ impl AppStateTestExt for AppState {
             .get(&app_state_key(self))
             .and_then(|resources| resources.cell_store.clone())
             .expect("test cell store is unavailable for this AppState");
-        store.append_sealed_effects(realm_id, seal_id, ops).await
+        store.append_confirmed_effects(realm_id, seal_id, ops).await
     }
     async fn test_commit_bootstrap_seal(
         &self,
@@ -754,7 +696,7 @@ impl AppStateTestExt for AppState {
         digest_suite: arkret_canonical::DigestSuite,
         ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
-        if !seal.predecessor_refs.is_empty() {
+        if !seal.predecessor_ref.is_none() {
             return Err(StoreError::Conflict(
                 "bootstrap fixture must have no predecessors".to_owned(),
             ));
@@ -766,7 +708,7 @@ impl AppStateTestExt for AppState {
             .expect("test atomic Seal committer unavailable");
         let covered = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
         if !committer
-            .commit_if_frontier(seal, digest_suite, &[], ops, &covered, None, &[])
+            .commit_if_frontier(seal, digest_suite, &[], ops, &covered, &[])
             .await?
         {
             return Err(StoreError::Conflict(
@@ -1055,10 +997,9 @@ impl RuntimeHealthPort for MemoryRuntimeHealth {
 
 struct MemoryEventSealCommitter {
     lock: Mutex<()>,
-    data_event_leaf_manifests: Mutex<BTreeMap<SealId, BTreeSet<Hash>>>,
     seal_store: Arc<MemorySealStore>,
     cell_store: Arc<MemoryCellStore>,
-    cell_registry: Arc<dyn CellRegistry>,
+    cell_registry: Arc<dyn CellStateRegistry>,
     control_event_store: Arc<dyn ControlEventStore>,
 }
 
@@ -1075,22 +1016,9 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
-        if let Some(manifest) = data_event_leaf_manifest {
-            let computed_root = (!manifest.is_empty())
-                .then(|| arkret_state::event_digest_set_root(manifest, digest_suite))
-                .transpose()
-                .map_err(|error| StoreError::Backend(error.to_string()))?;
-            if computed_root != seal.data_event_set_root {
-                return Err(StoreError::Conflict(
-                    "Event Seal data_event_set_root does not match its frozen leaf manifest"
-                        .to_owned(),
-                ));
-            }
-        }
         if let Some(existing) = self.seal_store.get(&seal.id).await? {
             let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -1099,14 +1027,6 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             if existing_bytes != retry_bytes {
                 return Err(StoreError::Conflict(
                     "duplicate_conflict: exact Seal id replay has different accepted bytes"
-                        .to_owned(),
-                ));
-            }
-            if let Some(manifest) = data_event_leaf_manifest
-                && self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest)
-            {
-                return Err(StoreError::Conflict(
-                    "duplicate_conflict: exact Seal replay changed its frozen DataEvent leaf manifest"
                         .to_owned(),
                 ));
             }
@@ -1133,22 +1053,9 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             new_ops,
         )
         .await?;
-        // The head half of the same candidate assembly: `new_ops` are not
-        // visible through the store until this Seal commits.
-        let post_cas_heads = arkret_state::effective_cas_heads_with_new_ops(
-            covered,
-            &seal.realm_id,
-            self.cell_store.as_ref(),
-            self.cell_registry.as_ref(),
-            new_ops,
-        )
-        .await
-        .map_err(|error| StoreError::Backend(format!("cas heads: {error}")))?;
-        let state_root = compute_state_root(
-            arkret_state::GovernanceView::new(&post_state, &post_cas_heads),
-            digest_suite,
-        )
-        .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
+        let state_root =
+            compute_state_root(arkret_state::GovernanceView::new(&post_state), digest_suite)
+                .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
             return Err(StoreError::Conflict(format!(
                 "Event Seal state_root mismatch: declared {}, recomputed {}",
@@ -1156,7 +1063,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             )));
         }
         self.cell_store
-            .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)
+            .append_confirmed_effects(&seal.realm_id, &seal.id, new_ops)
             .await?;
         match self
             .seal_store
@@ -1164,11 +1071,6 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             .await
         {
             Ok(true) => {
-                if let Some(manifest) = data_event_leaf_manifest {
-                    self.data_event_leaf_manifests
-                        .lock()
-                        .insert(seal.id.clone(), manifest.clone());
-                }
                 // Match the production memory commit boundary: a sealed Move
                 // must leave the pending queue before another signing pass.
                 for digest in &seal.delta {
@@ -1191,23 +1093,15 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             }
         }
     }
-
-    async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<BTreeSet<Hash>>> {
-        let _guard = self.lock.lock();
-        Ok(self.data_event_leaf_manifests.lock().get(seal_id).cloned())
-    }
 }
 
 async fn effective_state_with_new_ops(
     cells: &dyn CellStore,
-    registry: &dyn CellRegistry,
+    registry: &dyn CellStateRegistry,
     realm_id: &arkret_identifiers::RealmId,
     covered: &BTreeSet<Hash>,
     new_ops: &[(CellRef, IssuedOp)],
-) -> StoreResult<BTreeMap<CellRef, CellState>> {
+) -> StoreResult<BTreeMap<CellRef, ResolvedCellState>> {
     let mut cell_refs = cells
         .list_cells(realm_id)
         .await?
@@ -1217,13 +1111,13 @@ async fn effective_state_with_new_ops(
     let mut joined = BTreeMap::new();
     for cell in cell_refs {
         let mut batches = cells
-            .sealed_op_batches_for_cell(realm_id, &cell)
+            .confirmed_write_batches_for_cell(realm_id, &cell)
             .await?
             .into_iter()
             .filter_map(|(_, ops)| {
                 let ops = ops
                     .into_iter()
-                    .filter(|issued| covered.contains(&issued.op.move_id))
+                    .filter(|issued| covered.contains(&issued.op.event_id.event_digest()))
                     .collect::<Vec<_>>();
                 (!ops.is_empty()).then_some(ops)
             })
@@ -1231,7 +1125,7 @@ async fn effective_state_with_new_ops(
         let new_batch = new_ops
             .iter()
             .filter(|(candidate, issued)| {
-                candidate == &cell && covered.contains(&issued.op.move_id)
+                candidate == &cell && covered.contains(&issued.op.event_id.event_digest())
             })
             .map(|(_, operation)| operation.clone())
             .collect::<Vec<_>>();
@@ -1241,15 +1135,13 @@ async fn effective_state_with_new_ops(
         if batches.is_empty() {
             continue;
         }
-        // Match production CellStore semantics: persisted operations and
-        // `new_ops` are both causal. The Control Move id is a content hash,
-        // not an ordering
-        // key for FSM transitions.
+        // Match production CellStore semantics: persisted and new writes retain
+        // the same confirmed batch boundaries.
         let binding = registry.resolve(realm_id, &cell)?;
-        joined.insert(
-            cell.clone(),
-            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches),
-        );
+        let resolved =
+            arkret_state::join_cell_seal_batches(binding.model.as_ref(), &cell, &batches)
+                .map_err(|error| arkret_state::StoreError::Backend(error.to_string()))?;
+        joined.insert(cell.clone(), resolved);
     }
     Ok(joined)
 }

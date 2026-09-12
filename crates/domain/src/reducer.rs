@@ -13,8 +13,8 @@
 //! dispatcher to inline projection helpers.
 //!
 //! The standard peer-event receive pipeline routes through the SDK's
-//! `arkret_lattice_registry::LatticeKind` / `LatticeRegistry`;
-//! [`lattice_kinds::default_lattice_registry`] feeds
+//! `arkret_lattice_registry::StateModelKind` / `CellFamilyRegistry`;
+//! [`state_model_kinds::default_cell_family_registry`] feeds
 //! the SDK's `verify_move` / `apply_seal` pipeline. This is the
 //! protocol-canonical path; [`ProjectionState`]'s structured fields
 //! (`messages`, `reactions`, `read_cursors`, etc.) are an in-memory
@@ -38,9 +38,9 @@ mod apply_realm_organization;
 mod apply_realm_policy;
 mod apply_relations;
 mod apply_space_container;
-pub mod lattice_kinds;
 pub mod mls;
 pub mod realm_links;
+pub mod state_model_kinds;
 // Structural split (2026-06-18) — the direct content of this mod file
 // (top-level projection types, free helpers, dispatch registry, and the
 // `ProjectionState` struct + inline impl) was moved into the sibling
@@ -68,7 +68,7 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::read_receipts::{
     ReadCursorCausalRelation, ReadCursorPosition, ReadMarkerOutcome,
 };
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use arkret_wire::ReadCursorScope;
 use arkret_wire::cbs::ProjectedCellWrite;
 use serde_json::Value;
@@ -123,7 +123,7 @@ pub use projections::{
     StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
 pub(crate) use projections::{
-    CallFsmHead, operation_history_basis_seals, space_container_id_from_payload,
+    CallTransitionHead, operation_history_basis_seals, space_container_id_from_payload,
 };
 
 #[cfg(test)]

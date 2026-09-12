@@ -51,7 +51,6 @@ pub use routing::{
 
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub use crate::routing::events::event_log::attach_fixture_station_admission_proof;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub use crate::routing::events::projection::project_accepted_operations;
@@ -82,7 +81,7 @@ pub(crate) fn test_account_actor(did: &arkret_identifiers::Did) -> arkret_wire::
 }
 
 #[cfg(test)]
-pub(crate) fn test_single_signer_notary(did: &str, seed: u8) -> arkret_wire::NotaryValue {
+pub(crate) fn test_f0_notary(did: &str, seed: u8) -> arkret_wire::NotaryValue {
     let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
     let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
         test_actor_id_str(did),
@@ -91,7 +90,7 @@ pub(crate) fn test_single_signer_notary(did: &str, seed: u8) -> arkret_wire::Not
         verifying_key.as_bytes(),
     )
     .expect("test notary descriptor");
-    arkret_wire::NotaryValue::single_signer(descriptor)
+    arkret_wire::NotaryValue::new(vec![descriptor], 0, 0).expect("test f=0 notary")
 }
 
 use salvo::catcher::Catcher;

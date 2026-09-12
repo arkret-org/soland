@@ -246,7 +246,7 @@ impl ProjectionState {
         self.members_in_state(realm_id, "join")
     }
 
-    /// All `SolandMembershipState` entries for a Realm whose FSM state matches
+    /// All `SolandMembershipState` entries for a Realm whose transition state matches
     /// `state` (`invite` / `join` / `leave` / `ban` / `knock`).
     pub fn members_in_state(&self, realm_id: &str, state: &str) -> Vec<&SolandMembershipState> {
         self.members
@@ -306,11 +306,11 @@ impl ProjectionState {
             && controller.member == controller_actor_key
     }
 
-    /// Read the FSM state of a member directly from the cells map.
+    /// Read the transition state of a member directly from the cells map.
     /// Returns `None` if the cell hasn't been written or is in `Bottom`
     /// state. The cell_subject is the actor_id per spec
     /// `ak.component.member.state.v1` cell_family declaration.
-    pub fn member_fsm_state(&self, actor_id: &str) -> Option<String> {
+    pub fn member_transition_state(&self, actor_id: &str) -> Option<String> {
         let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
         let actor_key = actor.canonical_key().ok()?;
         let subject = arkret_wire::composite_subject(&[actor_key]).ok()?;
@@ -331,13 +331,9 @@ impl ProjectionState {
         cell_family: &str,
     ) -> Option<&Value> {
         let cell_id = format!("ak:cell:{cell_family}:null");
-        match self
-            .realm_null_subject_cells
-            .get(&(realm_id.to_owned(), cell_id))
-        {
-            Some(CellState::Value(value)) => Some(value),
-            Some(CellState::Bottom(_)) | None => None,
-        }
+        self.realm_null_subject_cells
+            .get(&(realm_id.to_owned(), cell_id))?
+            .settled_value()
     }
 
     /// Read the effective `ak.realm.read_receipt_policy` value out of the
@@ -366,10 +362,7 @@ impl ProjectionState {
     /// Read the effective display profile singleton. Returns `None` for an
     /// absent or conflicting profile cell.
     pub fn realm_profile_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        match self.realm_profile_cells.get(realm_id)? {
-            CellState::Value(value) => Some(value),
-            CellState::Bottom(_) => None,
-        }
+        self.realm_profile_cells.get(realm_id)?.settled_value()
     }
 
     /// Read the `ak.component.realm.create.v1` ordered-log entries for the
@@ -377,7 +370,7 @@ impl ProjectionState {
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn realm_create_log(&self, realm_id: &str) -> Option<&[Value]> {
         match self.realm_create_cells.get(realm_id)? {
-            CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
+            ResolvedCellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
             _ => None,
         }
     }
@@ -433,7 +426,7 @@ impl ProjectionState {
         let key = (realm_id.to_owned(), format!("ak:cell:{family}:null"));
         !matches!(
             self.realm_null_subject_cells.get(&key),
-            None | Some(CellState::Value(Value::Bool(false)))
+            None | Some(ResolvedCellState::Value(Value::Bool(false)))
         )
     }
 
@@ -454,14 +447,14 @@ impl ProjectionState {
     }
 
     pub fn realm_policy_bundle_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        match self.realm_policy_bundle_cells.get(realm_id)? {
-            // The registry projects `field=payload`, so authoritative Seal
-            // replay stores the generic state payload `{"value": ...}`.
-            // Live dispatch already normalizes that envelope before caching.
-            // Return the one canonical policy value from both paths.
-            CellState::Value(value) => Some(value.get("value").unwrap_or(value)),
-            CellState::Bottom(_) => None,
-        }
+        // The registry projects `field=payload`, so authoritative Seal replay
+        // stores the generic state payload `{"value": ...}`. Live dispatch
+        // already normalizes that envelope before caching.
+        let value = self
+            .realm_policy_bundle_cells
+            .get(realm_id)?
+            .settled_value()?;
+        Some(value.get("value").unwrap_or(value))
     }
 
     pub fn realm_join_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
@@ -543,7 +536,7 @@ impl ProjectionState {
     ) -> Result<(), &'static str> {
         if matches!(
             self.realm_policy_bundle_cells.get(realm_id),
-            Some(CellState::Bottom(_))
+            Some(ResolvedCellState::Bottom(_))
         ) {
             return Err("gate_check_failed");
         }
@@ -926,7 +919,7 @@ impl ProjectionState {
             else {
                 return false;
             };
-            let CellState::Value(config) = state else {
+            let ResolvedCellState::Value(config) = state else {
                 return false;
             };
             if config.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
@@ -939,7 +932,7 @@ impl ProjectionState {
             };
             matches!(
                 self.cells.get(&state_cell),
-                Some(CellState::Value(Value::String(value))) if value == "active"
+                Some(ResolvedCellState::Value(Value::String(value))) if value == "active"
             )
         })
     }
@@ -959,10 +952,13 @@ impl ProjectionState {
     pub fn realm_policy_control_cells(
         &self,
         realm_id: &str,
-    ) -> BTreeMap<CellRef, arkret_state::lattice::CellState> {
+    ) -> BTreeMap<CellRef, arkret_state::state_model::ResolvedCellState> {
         let mut cells = BTreeMap::new();
-        let mut insert = |wire: String, state: &arkret_state::lattice::CellState| {
-            if matches!(state, arkret_state::lattice::CellState::Bottom(_)) {
+        let mut insert = |wire: String, state: &arkret_state::state_model::ResolvedCellState| {
+            if matches!(
+                state,
+                arkret_state::state_model::ResolvedCellState::Bottom(_)
+            ) {
                 return;
             }
             if let Ok(cell_ref) = CellRef::new(wire) {
@@ -999,7 +995,7 @@ impl ProjectionState {
     ///
     /// This is a value frontier digest, **not** the section 6.2.1 governance
     /// `state_root`: the two issuers comparing it hold each other's cell values,
-    /// not each other's `cas_register` write identities, and `realm-and-space.md`
+    /// not each other's `causal_register` write identities, and `realm-and-space.md`
     /// section 3.6 defines this digest's own coverage.
     pub fn realm_policy_frontier_digest(&self, realm_id: &str) -> Option<arkret_wire::Hash> {
         let cells = self
@@ -1040,17 +1036,17 @@ impl ProjectionState {
             .filter_map(|(cell_ref, state)| {
                 let cell_id = arkret_wire::cell::CellId::from_ref(cell_ref).ok()?;
                 if !is_membership_frontier_component(cell_id.component())
-                    || matches!(state, arkret_state::lattice::CellState::Bottom(_))
+                    || matches!(
+                        state,
+                        arkret_state::state_model::ResolvedCellState::Bottom(_)
+                    )
                 {
                     return None;
                 }
                 let names_actor = cell_id.subject() == actor_subject;
-                let mentions_actor = match state {
-                    arkret_state::lattice::CellState::Value(value) => {
-                        value_mentions_actor(value, &actor_value)
-                    }
-                    arkret_state::lattice::CellState::Bottom(_) => false,
-                };
+                let mentions_actor = state
+                    .settled_value()
+                    .is_some_and(|value| value_mentions_actor(value, &actor_value));
                 (names_actor || mentions_actor).then(|| (cell_ref.clone(), state.clone()))
             })
             .collect::<BTreeMap<_, _>>();
@@ -1077,22 +1073,21 @@ impl ProjectionState {
             })
             .collect::<BTreeMap<_, _>>();
         for (cell_ref, state) in &self.cells {
-            if matches!(state, arkret_state::lattice::CellState::Bottom(_)) {
+            if matches!(
+                state,
+                arkret_state::state_model::ResolvedCellState::Bottom(_)
+            ) {
                 continue;
             }
             let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell_ref) else {
                 continue;
             };
             let names_actor = cell_id.subject() == actor_subject;
-            let mentions_actor = match state {
-                arkret_state::lattice::CellState::Value(value) => {
-                    value_mentions_actor(value, &actor_value)
-                        && (cell_id.component() != arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
-                            || grant_snapshot_from_value(value).realm_id.as_deref()
-                                == Some(realm_id))
-                }
-                arkret_state::lattice::CellState::Bottom(_) => false,
-            };
+            let mentions_actor = state.settled_value().is_some_and(|value| {
+                value_mentions_actor(value, &actor_value)
+                    && (cell_id.component() != arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+                        || grant_snapshot_from_value(value).realm_id.as_deref() == Some(realm_id))
+            });
             if (is_membership_frontier_component(cell_id.component())
                 || cell_id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1)
                 && (names_actor || mentions_actor)
@@ -1106,7 +1101,7 @@ impl ProjectionState {
     fn filtered_state_root(
         &self,
         realm_id: &str,
-        cells: &BTreeMap<CellRef, arkret_state::lattice::CellState>,
+        cells: &BTreeMap<CellRef, arkret_state::state_model::ResolvedCellState>,
     ) -> Option<arkret_wire::Hash> {
         self.realm_digest_algorithm(realm_id)
             .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())

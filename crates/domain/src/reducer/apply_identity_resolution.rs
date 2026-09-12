@@ -34,10 +34,8 @@ impl ProjectionState {
         let Some(current) = self
             .realm_null_subject_cells
             .get(&(operation.realm_id.to_string(), RESOLUTION_CELL.to_owned()))
-            .and_then(|state| match state {
-                CellState::Value(value) => Some(value.clone()),
-                CellState::Bottom(_) => None,
-            })
+            .and_then(ResolvedCellState::settled_value)
+            .cloned()
         else {
             return ProjectionEffect::Rejected {
                 reason: "identity_resolution_missing".to_owned(),
@@ -104,7 +102,7 @@ impl ProjectionState {
         }
         self.realm_null_subject_cells.insert(
             (operation.realm_id.to_string(), RESOLUTION_CELL.to_owned()),
-            CellState::Value(expected),
+            ResolvedCellState::Value(expected),
         );
         ProjectionEffect::RealmLifecycle {
             realm_id: operation.realm_id.to_string(),

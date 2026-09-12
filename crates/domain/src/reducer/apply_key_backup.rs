@@ -68,7 +68,7 @@ impl ProjectionState {
             "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
         )) {
             self.cells
-                .insert(cell_id, CellState::Value(operation.payload.clone()));
+                .insert(cell_id, ResolvedCellState::Value(operation.payload.clone()));
         }
         self.key_backup_active_series
             .insert(pointer_key, projection);

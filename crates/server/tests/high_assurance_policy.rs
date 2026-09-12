@@ -1,7 +1,7 @@
 //! `security_class=high_assurance` federation-policy enforcement.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use serde_json::json;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
@@ -25,7 +25,7 @@ fn state_with_security_class(security_class: &str) -> ProjectionState {
     let mut state = ProjectionState::new();
     state.realm_null_subject_cells.insert(
         (REALM.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-        CellState::Value(json!({"security_class": security_class})),
+        ResolvedCellState::Value(json!({"security_class": security_class})),
     );
     state
 }

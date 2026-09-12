@@ -367,9 +367,9 @@ pub(crate) async fn seed_seal_with_direct_event_effects(
                 .expect("bootstrap Event projection must not depend on pre-state");
             ops.push((
                 effect.cell_id,
-                arkret_state::lattice::ordered_log::IssuedOp {
+                arkret_state::state_model::ordered_log::IssuedOp {
                     issuer_id: event.actor_id.clone(),
-                    op: arkret_state::lattice::SealedOp::new(digest.clone(), effect.op),
+                    op: arkret_state::state_model::StateWrite::new(digest.clone(), effect.op),
                 },
             ));
         }
@@ -389,41 +389,30 @@ fn fixture_sealed_state_root(
     realm: &RealmId,
     ops: &[(
         arkret_identifiers::CellRef,
-        arkret_state::lattice::ordered_log::IssuedOp,
+        arkret_state::state_model::ordered_log::IssuedOp,
     )],
 ) -> arkret_identifiers::Hash {
     let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
     let mut grouped: std::collections::BTreeMap<
         arkret_identifiers::CellRef,
-        Vec<arkret_state::lattice::ordered_log::IssuedOp>,
+        Vec<arkret_state::state_model::ordered_log::IssuedOp>,
     > = std::collections::BTreeMap::new();
     for (cell, op) in ops {
         grouped.entry(cell.clone()).or_default().push(op.clone());
     }
     let mut post_state = std::collections::BTreeMap::new();
-    let mut cas_heads = arkret_state::CasHeadsByCell::new();
     for (cell, cell_ops) in grouped {
         let binding = registry
             .resolve(realm, &cell)
             .expect("fixture cell family is registered");
-        // A `cas_register` cell's state_root leaf is its head set (spec section
-        // 6.2.1), derived from the same ops as the join.
-        if arkret_state::is_causal_register(binding.lattice.kind()) {
-            let heads = arkret_state::causal_heads_for_batches(
-                binding.lattice.kind(),
-                std::slice::from_ref(&cell_ops),
-            );
-            if !heads.is_empty() {
-                cas_heads.insert(cell.clone(), heads);
-            }
-        }
         post_state.insert(
             cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
+            arkret_state::join_cell(binding.model.as_ref(), &cell, &cell_ops)
+                .expect("fixture cell resolves"),
         );
     }
     arkret_state::compute_state_root(
-        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_state::GovernanceView::new(&post_state),
         arkret_canonical::DigestSuite::Sha256,
     )
     .expect("fixture state_root")
@@ -1297,7 +1286,7 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
         &mut typed,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(created_at),
     )
     .expect("SDK Event signer re-signs mutated HTTP fixture");
     let typed = typed.into_event();
@@ -2072,7 +2061,7 @@ pub(crate) async fn seed_test_realm_basis_seal_for_station(
         .await
         .unwrap();
     state
-        .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .test_append_confirmed_effects(&realm, &basis.seal.id, &basis.ops)
         .await
         .unwrap();
     for grant in &basis.grants {
@@ -2111,7 +2100,7 @@ pub(crate) async fn seed_realm_genesis_event(
         .expect("fixture genesis Event digest is a hash")
 }
 
-/// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
+/// The authority Seal a fixture Event cites in `auth_context` or `seal_basis`.
 pub(crate) fn test_realm_basis_seal(realm_id: &str, subject: &str) -> arkret_wire::Seal {
     test_realm_basis(
         &soland_test_support::app_state(test_config()),
@@ -2125,13 +2114,14 @@ pub(crate) fn test_realm_basis_seal(realm_id: &str, subject: &str) -> arkret_wir
 ///
 /// Federation disclosure is keyed off the transported Event, not off its actor:
 /// `event_sync.rs::validate_federation_transport` refuses a `cbs_proof_bundles`
-/// entry that is not reachable from some transported `seal_ref` or
-/// `seal_basis.leaves` entry. So a fixture that re-authors an Event after the
-/// envelope was built has to disclose the Seal the envelope still names.
+/// entry that is not reachable from some transported authority reference or
+/// `seal_basis.leaves` entry. A fixture that re-authors an Event after the
+/// envelope was built therefore has to disclose the same authority object.
 pub(crate) fn test_cited_basis_seal(event: &arkret_wire::Event) -> arkret_wire::Seal {
     let cited = event
-        .seal_ref
+        .auth_context
         .as_ref()
+        .and_then(|context| context.authority_refs.first())
         .or_else(|| {
             event
                 .seal_basis
@@ -2145,11 +2135,10 @@ pub(crate) fn test_cited_basis_seal(event: &arkret_wire::Event) -> arkret_wire::
 
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
-/// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
-/// same Realm (`event-auth-state-resolution.md` §4.3(1)) **and** the governance
-/// state that Seal covers MUST authorize the Event's derived writes, so both
-/// the Seal object and its sealed cell effects have to exist before the Event
-/// is admitted. The cell writes are OR-Set adds under a fixed tag, so repeating
+/// An ordinary Event authority reference MUST resolve to a verified governance
+/// object for the same Realm and authorize the Event's derived writes, so both
+/// the authority object and its confirmed cell effects must exist before the
+/// Event is admitted. The cell writes are OR-Set adds under a fixed tag, so repeating
 /// this for the same Realm/subject is idempotent.
 pub(crate) async fn seed_test_realm_basis_seal(
     state: &AppState,
@@ -2163,7 +2152,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
         .await
         .unwrap();
     state
-        .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .test_append_confirmed_effects(&realm, &basis.seal.id, &basis.ops)
         .await
         .unwrap();
     // Keep the synthetic setup honest: the head Seal must reconstruct the
@@ -2314,7 +2303,7 @@ pub(crate) async fn seed_shared_signal_basis_seal(
 
 type SignalBasisOp = (
     arkret_identifiers::CellRef,
-    arkret_state::lattice::ordered_log::IssuedOp,
+    arkret_state::state_model::ordered_log::IssuedOp,
 );
 
 fn signal_basis_with_joined_members(
@@ -2447,9 +2436,9 @@ fn append_signal_membership_op(
     delta.push(move_id.clone());
     ops.push((
         cell,
-        arkret_state::lattice::ordered_log::IssuedOp {
+        arkret_state::state_model::ordered_log::IssuedOp {
             issuer_id: actor,
-            op: arkret_state::lattice::SealedOp::new(
+            op: arkret_state::state_model::StateWrite::new(
                 move_id,
                 arkret_wire::LatticeOp {
                     op_type: arkret_wire::LatticeOpType::Transition,
@@ -2471,7 +2460,7 @@ async fn install_signal_basis(state: &AppState, seal: &arkret_wire::Seal, ops: &
         .await
         .unwrap();
     state
-        .test_append_sealed_effects(&seal.realm_id, &seal.id, ops)
+        .test_append_confirmed_effects(&seal.realm_id, &seal.id, ops)
         .await
         .unwrap();
     for (cell, _) in ops {

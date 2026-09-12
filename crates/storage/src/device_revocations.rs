@@ -25,7 +25,6 @@ pub enum DeviceRevocationGateAction {
     KeyPackageClaim,
     ToDeviceWrite,
     EventWrite,
-    StationAdmissionProofIssue,
 }
 
 impl DeviceRevocationGateAction {
@@ -37,7 +36,6 @@ impl DeviceRevocationGateAction {
             Self::KeyPackageClaim => "keypackage_claim",
             Self::ToDeviceWrite => "to_device_write",
             Self::EventWrite => "event_write",
-            Self::StationAdmissionProofIssue => "station_admission_proof_issue",
         }
     }
 }

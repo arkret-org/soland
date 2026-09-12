@@ -477,19 +477,6 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::MemberIdentityUpdate {
             project_member_identity_update(state, operation).await;
         }
-        // Cache ak.realm.read_receipt_policy state into ProjectionState so the
-        // parent/child policy-combination validators hit a BTreeMap lookup
-        // instead of scanning the durable Event store.
-        // (R1.2 renamed `ak.space.read_receipt_policy` to `ak.realm.*`.)
-        //
-        // NOT a Signal fanout filter: `disclosure="disabled"` and
-        // `visibility="private"` are enforced client-side
-        // (`discovery/read-receipts.md` §2.5). `ak.receipt.read` travels as
-        // Signal plaintext inside the ciphertext, so this service cannot read
-        // it and MUST NOT route or drop an envelope by receipt content.
-        if kinds::canonical_kind(operation) == arkret_wire::EventKind::RealmReadReceiptPolicy {
-            project_read_receipt_policy(state, operation);
-        }
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::AccountDataSet {
             project_account_data_set(state, origin, source_device_id, operation).await;
         }
@@ -534,7 +521,7 @@ async fn project_accepted_operations_inner(
                 if kinds::canonical_kind(operation) == arkret_wire::EventKind::ReadCursorAdvance {
                     Some(state.projections().apply_read_cursor(reducer_operation))
                 } else {
-                    Some(state.projections().apply_via_lattice_registry(
+                    Some(state.projections().apply_via_state_model_registry(
                         reducer_operation,
                         &cell_writes,
                         state.hlc(),

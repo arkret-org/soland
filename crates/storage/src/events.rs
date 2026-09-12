@@ -212,7 +212,7 @@ pub trait MessageStore: Send + Sync {
 /// the full `(digest_suite, digest)` identity. Implementations must never
 /// overwrite a row when identical digest bytes bind different digest-preimage
 /// canonical bytes. Envelope-only proof/unsigned differences are not hash
-/// collisions and must be handled by admission proof validation.
+/// collisions and must be handled by producer proof validation.
 #[async_trait]
 pub trait EventStore: Send + Sync {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()>;

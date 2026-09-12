@@ -11,13 +11,13 @@
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
 //! check; rate limiting comes from the global RateLimiter middleware.
 //!
-//! The lattice + bottom_policy resolution is delegated to
+//! The state model and bottom policy resolution are delegated to
 //! `state.projections().resolve_cell(realm_id, &cell)`. Both single-cell and
 //! list reads require an explicit Realm scope so product Space subjects are
 //! never mistaken for security boundaries.
 
 use arkret_identifiers::{CellRef, RealmId};
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -36,7 +36,7 @@ pub(super) fn router() -> Router {
 
 /// Response body for `GET /_soland/admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AdminCellStateOutcome {
+pub struct AdminResolvedCellStateOutcome {
     /// Canonical wire form of the cell id (`ak:cell:<family>:<subject>`).
     pub cell_id: String,
     /// `"value"` when the cell holds a resolved JSON value; `"bottom"` when
@@ -49,36 +49,40 @@ pub struct AdminCellStateOutcome {
     /// Structured bottom diagnostic when `state="bottom"`; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bottom: Option<Value>,
-    /// Lattice kind wire string from the cell registry binding.
-    /// One of `or-set` / `cas-register` / `fsm` / `ordered-log` /
-    /// `mv-register` / `counter`.
-    pub lattice: String,
+    /// State model wire string from the cell registry binding.
+    /// One of `causal_register`, `sequenced_state`, `or_set`, `ordered_log`,
+    /// or `counter`.
+    pub state_model: String,
     /// Bottom policy wire string from the cell registry binding.
     /// `"reject"` (safety-critical), `"expose"` (display state) or
-    /// `"inert"` (the bound lattice cannot produce Bottom).
+    /// `"inert"` (the bound state model cannot produce Bottom).
     pub bottom_policy: String,
 }
 
 /// Response body for `GET /_soland/admin/cells?...` (list).
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminCellListOutcome {
-    pub cells: Vec<AdminCellStateOutcome>,
+    pub cells: Vec<AdminResolvedCellStateOutcome>,
     /// Total number of cells matching the filter (before pagination).
     pub total: usize,
     pub limit: usize,
     pub offset: usize,
 }
 
-/// Map a CellState enum into the wire response shape.
+/// Map a ResolvedCellState enum into the wire response shape.
 fn state_response_from(
     cell_id: &CellRef,
-    state: Option<&CellState>,
-    lattice: &str,
+    state: Option<&ResolvedCellState>,
+    state_model: &str,
     bottom_policy: &str,
-) -> AdminCellStateOutcome {
+) -> AdminResolvedCellStateOutcome {
     let (state_str, value, bottom) = match state {
-        Some(CellState::Value(v)) => ("value".to_owned(), Some(v.clone()), None),
-        Some(CellState::Bottom(b)) => {
+        Some(
+            value @ (ResolvedCellState::Value(_)
+            | ResolvedCellState::Causal(_)
+            | ResolvedCellState::Sequenced(_)),
+        ) => ("value".to_owned(), value.settled_value().cloned(), None),
+        Some(ResolvedCellState::Bottom(b)) => {
             // Bottom is `Serialize` via SDK; render through serde_json so
             // we don't have to keep the field list in sync by hand.
             let bottom_json = serde_json::to_value(b).unwrap_or(Value::Null);
@@ -86,12 +90,12 @@ fn state_response_from(
         }
         None => ("absent".to_owned(), None, None),
     };
-    AdminCellStateOutcome {
+    AdminResolvedCellStateOutcome {
         cell_id: cell_id.as_str().to_owned(),
         state: state_str,
         value,
         bottom,
-        lattice: lattice.to_owned(),
+        state_model: state_model.to_owned(),
         bottom_policy: bottom_policy.to_owned(),
     }
 }
@@ -127,7 +131,7 @@ async fn admin_get_cell(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AdminCellStateOutcome> {
+) -> JsonResult<AdminResolvedCellStateOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
@@ -160,8 +164,10 @@ async fn admin_get_cell(
         .projections()
         .resolve_cell(&realm, &cell_ref)
         .map_err(|e| crate::app_error!(NotFound, format!("cell family not registered: {e}"),))?;
-    let lattice_kind = binding.lattice.kind().as_wire_str();
-    let bottom_policy = binding.bottom_mode.as_str();
+    let state_model_kind = binding.model.kind().as_wire_str();
+    let bottom_policy = binding
+        .bottom_mode
+        .map_or("none", arkret_wire::EventCellBottom::as_str);
 
     let cell_state_opt = {
         let proj = state.projections().snapshot();
@@ -183,7 +189,7 @@ async fn admin_get_cell(
     json_ok(state_response_from(
         &cell_ref,
         cell_state_opt.as_ref(),
-        lattice_kind,
+        state_model_kind,
         bottom_policy,
     ))
 }
@@ -248,7 +254,7 @@ async fn admin_list_cells(
     // Snapshot projection cells once; per-cell registry resolves are fast
     // (in-memory hash lookup), but we want one lock acquisition for the
     // whole page rather than per-cell.
-    let cell_states: Vec<(CellRef, Option<CellState>)> = {
+    let cell_states: Vec<(CellRef, Option<ResolvedCellState>)> = {
         let proj = state.projections().snapshot();
         page.into_iter()
             .map(|cell| {
@@ -267,12 +273,14 @@ async fn admin_list_cells(
                 continue;
             }
         };
-        let lattice_kind = binding.lattice.kind().as_wire_str();
-        let bottom_policy = binding.bottom_mode.as_str();
+        let state_model_kind = binding.model.kind().as_wire_str();
+        let bottom_policy = binding
+            .bottom_mode
+            .map_or("none", arkret_wire::EventCellBottom::as_str);
         cells_out.push(state_response_from(
             &cell,
             cell_state.as_ref(),
-            lattice_kind,
+            state_model_kind,
             bottom_policy,
         ));
     }
@@ -296,13 +304,13 @@ mod tests {
         let cell =
             CellRef::new("ak:cell:ak.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
-        let st = CellState::Value(json!("join"));
-        let resp = state_response_from(&cell, Some(&st), "fsm", "reject");
+        let st = ResolvedCellState::Value(json!("join"));
+        let resp = state_response_from(&cell, Some(&st), "transition", "reject");
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["state"], "value");
         assert_eq!(v["value"], json!("join"));
         assert!(v.get("bottom").is_none() || v["bottom"].is_null());
-        assert_eq!(v["lattice"], "fsm");
+        assert_eq!(v["state_model"], "transition");
         assert_eq!(v["bottom_policy"], "reject");
     }
 

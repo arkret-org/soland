@@ -1,7 +1,7 @@
 use arkret_models_collaboration::history_key::{
     MembershipAuthorityOutcome, MembershipAuthorityRequestBody,
 };
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 
 use super::*;
 
@@ -84,11 +84,16 @@ pub(super) async fn current_membership(
         };
         let cell = arkret_wire::CellRef::new(arkret_wire::cell::subject_cell(family, &subject))
             .map_err(unavailable)?;
-        match accepted.get(&cell) {
-            Some(CellState::Bottom(_)) => return Err(unavailable("membership cell is unresolved")),
+        match accepted
+            .get(&cell)
+            .and_then(ResolvedCellState::settled_value)
+        {
+            Some(value) if value.as_str() == Some("join") => {}
+            Some(_) => return Err(AppError::not_found("membership not found")),
+            None if matches!(accepted.get(&cell), Some(ResolvedCellState::Bottom(_))) => {
+                return Err(unavailable("membership cell is unresolved"));
+            }
             None => return Err(AppError::not_found("membership not found")),
-            Some(CellState::Value(value)) if value.as_str() == Some("join") => {}
-            Some(CellState::Value(_)) => return Err(AppError::not_found("membership not found")),
         }
     }
     if !crate::routing::governance_history::history_scope_has_current_member(

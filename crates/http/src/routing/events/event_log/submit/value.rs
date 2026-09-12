@@ -182,7 +182,7 @@ pub(super) fn typed_event_to_canonical_value(envelope: Event) -> Result<Value, S
 /// The receiver-derived cell writes for one submitted Event.
 ///
 /// `event-and-patch.md` §2.4.2 makes the registered reducer contract the only
-/// source of a write's cell and lattice operation. A kind whose registry row is
+/// source of a write's cell and state model operation. A kind whose registry row is
 /// not an active reducer input declares no contract and legitimately writes
 /// nothing; a reducer input whose contract will not evaluate fails the Event
 /// closed rather than admitting it with an empty projection.
@@ -261,7 +261,10 @@ pub(super) fn validate_cas_write_guards(
     state: &AppState,
     operation: &Operation,
     writes: &[arkret_wire::cbs::ProjectedCellWrite],
-    frozen: &std::collections::BTreeMap<arkret_wire::CellRef, arkret_state::lattice::CellState>,
+    _frozen: &std::collections::BTreeMap<
+        arkret_wire::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
 ) -> Result<(), SubmitOneError> {
     use arkret_wire::cbs::{LatticeOpType, ProjectedOp};
     for write in writes {
@@ -283,7 +286,7 @@ pub(super) fn validate_cas_write_guards(
                     error.to_string(),
                 )
             })?;
-        if binding.lattice.kind() != arkret_state::lattice::LatticeKind::CasRegister {
+        if binding.model.kind() != arkret_state::state_model::StateModelKind::CausalRegister {
             continue;
         }
         // No generalized whole-value head_eq is required. Section 9.3.1.3 item 1
@@ -293,22 +296,6 @@ pub(super) fn validate_cas_write_guards(
         // declared business precondition is still evaluated on the ordinary
         // predicate path.
         //
-        // What is still refused here is a write onto a cell whose family has no
-        // ordinary-write exit from Bottom (section 9.3.1.4 sole_recovery_families):
-        // only ak.conflict.recovery can move those. Families outside that list
-        // heal through an authorized ordinary write, so a Bottom target alone is
-        // not a rejection.
-        if matches!(
-            frozen.get(&write.cell_id),
-            Some(arkret_state::lattice::CellState::Bottom(_))
-        ) && arkret_state::state::is_sole_recovery_cell(write.cell_id.as_str())
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                "failed_bottom",
-                "CAS target is in Bottom and its family has no ordinary-write exit",
-            ));
-        }
     }
     Ok(())
 }
@@ -708,6 +695,27 @@ pub(in crate::routing) async fn submit_mimi_reporter_initial_event_submission(
             "MIMI reporter Event forbids publication authority sidecars",
         ));
     }
+    let envelope = typed_event_to_canonical_value(submission.event)?;
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        SubmitEventContext {
+            internal_admission: Some(admission),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(Box::new(SubmitCommitOptions::none())),
+    )
+    .await
+}
+
+pub(in crate::routing) async fn submit_proof_authenticated_publication(
+    state: &AppState,
+    session: &SessionRecord,
+    publication: arkret_wire::ProofAuthenticatedPublication,
+    admission: &InternalEventAdmission,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let submission = publication.into_submission();
     let envelope = typed_event_to_canonical_value(submission.event)?;
     submit_event_value_with_context(
         state,
@@ -1141,9 +1149,6 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
     if !event.kind.is_reducer_input() {
         return Some("event kind is not a reducer input");
     }
-    if event.seal_ref.is_some() {
-        return Some("event carries seal_ref");
-    }
     if event.auth_context.is_some() {
         return Some("event carries delegated auth_context");
     }
@@ -1207,18 +1212,14 @@ fn self_principal_pcr_device_query_for_station(
 
 /// Select the one proof that can author an Ack-less self-PCR Control Move.
 ///
-/// A freshly submitted Event contains only this producer proof. Once admitted,
-/// the canonical envelope also contains the Station admission proof
-/// required for federation. Revalidation must ignore that transport-origin
-/// attestation without ever accepting two producer authorities.
+/// Every submitted and accepted Event contains exactly this producer proof.
 fn sole_self_principal_pcr_producer_proof(
-    proofs: &[arkret_wire::EventProof],
+    proofs: &[arkret_wire::ProducerEventProof],
 ) -> Option<&arkret_wire::ProducerEventProof> {
-    let mut producers = proofs
-        .iter()
-        .filter_map(arkret_wire::EventProof::as_producer);
-    let producer = producers.next()?;
-    producers.next().is_none().then_some(producer)
+    let [producer] = proofs else {
+        return None;
+    };
+    Some(producer)
 }
 
 /// The ingress authority judgement for a candidate Ack-less self-principal
@@ -1291,13 +1292,12 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
             "Realm has no current accepted notary",
         ));
     };
-    if !matches!(
-        notary,
-        arkret_wire::notary::NotaryValue::SingleSigner { ref signer, .. }
-            if signer.actor_id == event.actor_id
-    ) {
+    if notary.fault_tolerance != 0
+        || notary.signers.len() != 1
+        || notary.signers[0].actor_id != event.actor_id
+    {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
-            "current notary is not single_signer with principal actor authority",
+            "current f=0 quorum notary is not the principal actor authority",
         ));
     }
 
@@ -1493,115 +1493,14 @@ async fn replay_ackless_self_principal_ingress_for_station(
     Ok(None)
 }
 
-/// Append this Station's admission proof to a producer-signed fixture Event and
-/// retain the signer evidence that proof references.
-///
-/// A fixture that seeds an accepted Event straight into the store still has to
-/// produce the closed proof set a real submit produces — exactly one producer
-/// proof followed by exactly one origin Station admission proof. Anything less
-/// is an Event that could never have been accepted, and every later check that
-/// re-validates an accepted Event (Seal admission, the MLS governance frontier)
-/// rejects it. This reuses the same evidence retention and signing the submit
-/// path uses so the two cannot drift.
-#[cfg(feature = "test-support")]
-pub async fn attach_fixture_station_admission_proof(
-    state: &AppState,
-    mut event: Event,
-    producer_signing_key_did: arkret_wire::DidKey,
-    accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Option<Event>, String> {
-    let digest_suite = event.event_id.digest_suite_code().digest_suite();
-    let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
-        return Err("fixture Event must carry exactly one producer proof".to_owned());
-    };
-    let producer = producer.clone();
-    let event_digest = arkret_wire::Hash::new(
-        event
-            .event_digest_with_digest_suite(digest_suite)
-            .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let service_id = state.service_core_id();
-    // A Station with no resolvable service identity never accepted anything, so
-    // it has no admission proof to give. That is a property of the fixture state
-    // rather than a failure, and the caller decides what it means.
-    let authenticated_resolution =
-        match crate::routing::system::service_resolution::current_authenticated_service_resolution(
-            state,
-        )
-        .await
-        {
-            Ok(resolution) => resolution,
-            Err(error) if error.code == ErrorCode::ServiceIdentityUnavailable => return Ok(None),
-            Err(error) => return Err(error.to_string()),
-        };
-    let (_, verification_method) = state
-        .current_service_receipt_binding()
-        .await
-        .map_err(|error| error.to_string())?;
-    let signer_evidence =
-        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
-            authenticated_resolution,
-            &service_id,
-            verification_method.clone(),
-            accepted_at,
-        )
-        .map_err(|error| error.to_string())?;
-    let content_digest = signer_evidence
-        .canonical_sha256_digest()
-        .map_err(|error| error.to_string())?;
-    let signer_resolution_evidence_ref = signer_evidence
-        .evidence_ref()
-        .map_err(|error| error.to_string())?;
-    let dependency = arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-            content_digest,
-        },
-        authenticated_signer_resolution_evidence: Box::new(signer_evidence),
-    };
-    state
-        .persistence()
-        .governance_dependency_store()
-        .put_unscoped_signer_evidence_exact(dependency)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut admission = arkret_wire::StationAdmissionProof {
-        applet_installation_digest: None,
-        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
-        verification_method,
-        event_digest,
-        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
-            .map_err(|error| error.to_string())?,
-        producer_verification_method: producer.verification_method.clone(),
-        producer_signing_key_did,
-        producer_signer_resolution_evidence_ref: None,
-        signer_resolution_evidence_ref,
-        accepted_at,
-        jws: String::new(),
-    };
-    let signing_input = admission
-        .canonical_binding_bytes()
-        .map_err(|error| error.to_string())?;
-    admission.jws = arkret_signatures::sign_ed25519_detached_jws(
-        state.notary_signing_key().as_ref(),
-        &signing_input,
-    )
-    .map_err(|error| error.to_string())?;
-    event.proofs.push(admission.into());
-    event
-        .validate_station_admission_binding(digest_suite)
-        .map_err(|error| error.to_string())?;
-    Ok(Some(event))
-}
-
 pub(super) async fn accepted_event_envelope(
     state: &AppState,
-    session: &SessionRecord,
-    envelope: Value,
+    _session: &SessionRecord,
+    _envelope: Value,
     event: Event,
     parsed: &ValidatedEventEnvelope,
-    internal_admission: Option<&InternalEventAdmission>,
-    accepted_at: chrono::DateTime<chrono::Utc>,
+    _internal_admission: Option<&InternalEventAdmission>,
+    _accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<
     (
         Event,
@@ -1611,114 +1510,13 @@ pub(super) async fn accepted_event_envelope(
     ),
     SubmitOneError,
 > {
-    if session.token_hash.starts_with("federation:") {
-        let mut dependencies = Vec::new();
-        if event.applet_id.is_some() {
-            let admission = event
-                .proofs
-                .last()
-                .and_then(arkret_wire::EventProof::as_station_admission)
-                .ok_or_else(|| {
-                    SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "Applet replica admission is missing",
-                    )
-                })?;
-            let installation_digest =
-                admission
-                    .applet_installation_digest
-                    .clone()
-                    .ok_or_else(|| {
-                        SubmitOneError::new(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_proof",
-                            "Applet replica installation dependency is missing",
-                        )
-                    })?;
-            let signer_digest = admission
-                .signer_resolution_evidence_ref
-                .content_digest()
-                .map_err(|error| {
-                    SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
-                })?;
-            let source = super::applet_admission::historical_installation_origin(state, &event)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(StatusCode::CONFLICT, "dependency_missing", error)
-                })?;
-            for selector in [
-                arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest: signer_digest },
-                arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AppletInstallationAuthority { content_digest: installation_digest },
-            ] {
-                let item = super::applet_admission::resolve_admission_dependency(state, &event.realm_id, &source, selector).await
-                    .map_err(|error| SubmitOneError::new(StatusCode::CONFLICT, "dependency_missing", error))?;
-                dependencies.push(soland_storage::GovernanceDependencyWrite {
-                    realm_id: event.realm_id.clone(),
-                    source: soland_storage::GovernanceDependencySource::Event(admission.event_digest.clone()),
-                    edge_index: dependencies.len() as u64,
-                    item,
-                });
-            }
-        }
-        return Ok((
-            event,
-            envelope,
-            parsed.canonical_bytes.clone(),
-            dependencies,
-        ));
-    }
-    let mut event = event;
-    let installation = super::applet_admission::current_installation_authority(state, &event)
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::FORBIDDEN,
-                "applet_registration_unauthorized",
-                error,
-            )
-        })?;
-    if installation.is_none()
-        && event
-            .executed_by
-            .as_ref()
-            .unwrap_or(&event.actor_id)
-            .route_service_id()
-            .as_str()
-            != state.service_id()
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "caller Event must be submitted to its declared Station",
-        ));
-    }
-    let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
+    let [producer] = event.proofs.as_slice() else {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
-            "caller submission must carry exactly one producer proof",
+            "accepted Event must carry exactly one producer proof",
         ));
     };
-    let producer = producer.clone();
-    let producer_signing_key = parsed.producer_signing_key.clone().ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "verified producer key was not retained for admission proof",
-        )
-    })?;
-    let (_, verification_method) =
-        state
-            .current_service_receipt_binding()
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("Station signing method is unavailable: {error}"),
-                )
-            })?;
     let event_digest =
         arkret_wire::Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
             SubmitOneError::new(
@@ -1727,197 +1525,48 @@ pub(super) async fn accepted_event_envelope(
                 error.to_string(),
             )
         })?;
-    let service_id = arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("Station id is invalid: {error}"),
-        )
-    })?;
-    let producer_signer_evidence = if session.agent_session.is_some()
-        || internal_admission.is_some_and(InternalEventAdmission::is_mimi_agent_reporter)
-    {
-        let signer_id = event
-            .executed_by
-            .as_ref()
-            .unwrap_or(&event.actor_id)
-            .clone();
-        let selector = crate::routing::identity::agents::evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-            actor: signer_id.clone(),
-            verification_method: producer.verification_method.clone(),
-        };
-        Some(
-            crate::routing::identity::agents::evidence::freeze_current_agent_signer_evidence(
-                state, &selector,
+    let evidence_digest = producer
+        .signer_resolution_evidence_ref
+        .as_ref()
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "ordinary Event producer proof must reference signer evidence",
             )
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "temporarily_unavailable",
-                    format!("Agent signer evidence freeze failed: {error}"),
-                )
-            })?,
-        )
-    } else {
-        None
-    };
-    let authenticated_resolution =
-        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "temporarily_unavailable",
-                    format!("Station signer evidence is unavailable: {error}"),
-                )
-            })?;
-    let signer_evidence =
-        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
-            authenticated_resolution,
-            &service_id,
-            verification_method.clone(),
-            accepted_at,
-        )
+        })?
+        .content_digest()
         .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "temporarily_unavailable",
-                format!("Station signer evidence is invalid: {error}"),
-            )
+            SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
         })?;
-    let signer_resolution_evidence_digest =
-        signer_evidence.canonical_sha256_digest().map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("Station signer evidence digest failed: {error}"),
-            )
-        })?;
-    let signer_resolution_evidence_ref = signer_evidence.evidence_ref().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("Station signer evidence ref failed: {error}"),
-        )
-    })?;
-    let dependency = arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-            content_digest: signer_resolution_evidence_digest.clone(),
-        },
-        authenticated_signer_resolution_evidence: Box::new(signer_evidence),
+    let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+        content_digest: evidence_digest,
     };
-    state
+    let dependency = state
         .persistence()
         .governance_dependency_store()
-        .put_unscoped_signer_evidence_exact(dependency.clone())
+        .get_unscoped_signer_evidence(&selector)
         .await
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("Station signer evidence retention failed: {error}"),
+                error.to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "dependency_missing",
+                "producer signer evidence is unavailable",
             )
         })?;
-    let mut governance_dependency: Vec<_> = (event.kind.is_control_plane()
-        || installation.is_some())
-    .then(|| soland_storage::GovernanceDependencyWrite {
+    let governance_dependency = vec![soland_storage::GovernanceDependencyWrite {
         realm_id: event.realm_id.clone(),
         source: soland_storage::GovernanceDependencySource::Event(event_digest.clone()),
         edge_index: 0,
         item: dependency,
-    })
-    .into_iter()
-    .collect();
-    let mut admission = arkret_wire::StationAdmissionProof {
-        applet_installation_digest: installation
-            .as_ref()
-            .map(|authority| authority.canonical_sha256_digest())
-            .transpose()
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    error.to_string(),
-                )
-            })?,
-        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
-        verification_method,
-        event_digest,
-        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    error.to_string(),
-                )
-            })?,
-        producer_verification_method: producer.verification_method.clone(),
-        producer_signing_key_did: producer_signing_key,
-        producer_signer_resolution_evidence_ref: producer_signer_evidence
-            .as_ref()
-            .map(|(reference, _)| reference.clone()),
-        signer_resolution_evidence_ref,
-        accepted_at,
-        jws: String::new(),
-    };
-    let signing_input = admission.canonical_binding_bytes().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            error.to_string(),
-        )
-    })?;
-    admission.jws = arkret_signatures::sign_ed25519_detached_jws(
-        state.notary_signing_key().as_ref(),
-        &signing_input,
-    )
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("Station admission proof signing failed: {error}"),
-        )
-    })?;
-    event.proofs.push(admission.into());
-    event
-        .validate_station_admission_structure(parsed.digest_suite)
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                error.to_string(),
-            )
-        })?;
-    if let Some(authority) = installation {
-        arkret_policy::applet_admission::validate_applet_installation_coordinates(
-            &event, &authority,
-        )
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::FORBIDDEN,
-                "applet_registration_unauthorized",
-                error.to_string(),
-            )
-        })?;
-        let content_digest = authority.canonical_sha256_digest().map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                error.to_string(),
-            )
-        })?;
-        governance_dependency.push(soland_storage::GovernanceDependencyWrite {
-            realm_id: event.realm_id.clone(),
-            source: soland_storage::GovernanceDependencySource::Event(arkret_wire::Hash::new(parsed.canonical_digest.clone())
-                .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?),
-            edge_index: governance_dependency.len() as u64,
-            item: arkret_models_collaboration::governance_dependencies::GovernanceDependency::AppletInstallationAuthority {
-                selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AppletInstallationAuthority { content_digest },
-                applet_installation_authority: Box::new(authority),
-            },
-        });
-    }
+    }];
     let canonical_bytes =
         canonical::canonical_json_bytes(&event.digest_payload().map_err(|error| {
             SubmitOneError::new(
@@ -1937,33 +1586,15 @@ pub(super) async fn accepted_event_envelope(
     Ok((event, envelope, canonical_bytes, governance_dependency))
 }
 
-pub(super) fn validate_origin_submission_shape(
-    state: &AppState,
+pub(super) fn validate_producer_submission_shape(
+    _state: &AppState,
     session: &SessionRecord,
     event: &Event,
 ) -> Result<(), SubmitOneError> {
     if session.token_hash.starts_with("federation:") {
         return Ok(());
     }
-    if event.applet_id.is_none()
-        && event
-            .executed_by
-            .as_ref()
-            .unwrap_or(&event.actor_id)
-            .route_service_id()
-            .as_str()
-            != state.service_id()
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "caller Event must be submitted to its declared Station",
-        ));
-    }
-    if !matches!(
-        event.proofs.as_slice(),
-        [arkret_wire::EventProof::Producer(_)]
-    ) {
+    if event.proofs.len() != 1 {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
@@ -1974,22 +1605,12 @@ pub(super) fn validate_origin_submission_shape(
 }
 
 pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Event) -> bool {
-    let Ok(mut existing) = serde_json::from_slice::<arkret_wire::Event>(existing_bytes) else {
+    let Ok(existing) = serde_json::from_slice::<arkret_wire::Event>(existing_bytes) else {
         return false;
     };
-    if !matches!(
-        existing.proofs.as_slice(),
-        [
-            arkret_wire::EventProof::Producer(_),
-            arkret_wire::EventProof::StationAdmission(_)
-        ]
-    ) || !matches!(
-        submitted.proofs.as_slice(),
-        [arkret_wire::EventProof::Producer(_)]
-    ) {
+    if submitted.proofs.len() != 1 {
         return false;
     }
-    existing.proofs.truncate(1);
     existing == *submitted
 }
 
@@ -2094,11 +1715,7 @@ pub(in crate::routing::events::event_log) async fn validate_membership_compensat
         )
     })?;
     let core = &evidence.delegation.core;
-    let producer_method = event
-        .proofs
-        .iter()
-        .find_map(|proof| proof.as_producer())
-        .map(|proof| &proof.verification_method);
+    let producer_method = event.proofs.first().map(|proof| &proof.verification_method);
     if producer_method != Some(&core.executor_proof_key_kid)
         || evidence.delegation.signature.verification_method != core.verification_method
         || evidence.terminal_certificate.issuer_id != *core.executor_id.signing_principal_id()
@@ -2175,8 +1792,7 @@ pub(in crate::routing::events::event_log) async fn validate_membership_compensat
         })?;
     let join_producer_method = accepted_join_event
         .proofs
-        .iter()
-        .find_map(|proof| proof.as_producer())
+        .first()
         .map(|proof| &proof.verification_method);
     if accepted_join_event.kind != arkret_wire::EventKind::MemberState
         || accepted_join_event.realm_id != core.resource_id
@@ -2368,7 +1984,7 @@ pub(super) async fn submit_event_value_with_context(
             format!("validated Event envelope does not decode: {error}"),
         )
     })?;
-    validate_origin_submission_shape(state, session, &submitted_event)?;
+    validate_producer_submission_shape(state, session, &submitted_event)?;
     // Ordinary Events never declare a reducer profile. The receiver resolves
     // it from the Realm's authoritative singleton. The current registry has
     // one profile and no upgrade edges, so the projected singleton is also the
@@ -3233,8 +2849,10 @@ mod member_identity_state_guard_tests {
 #[cfg(test)]
 mod cas_write_guard_tests {
 
-    fn conflict_bottom(cell: &arkret_wire::CellRef) -> arkret_state::lattice::CellState {
-        arkret_state::lattice::CellState::Bottom(arkret_wire::Bottom {
+    fn conflict_bottom(
+        cell: &arkret_wire::CellRef,
+    ) -> arkret_state::state_model::ResolvedCellState {
+        arkret_state::state_model::ResolvedCellState::Bottom(arkret_wire::Bottom {
             kind: arkret_wire::BottomKind::Conflict,
             cell_ids: vec![cell.clone()],
             move_ids: Vec::new(),
@@ -3273,12 +2891,12 @@ mod cas_write_guard_tests {
         let current = json!({"policy_revision": 1, "federation_policy": "restricted"});
         frozen.insert(
             writes[0].cell_id.clone(),
-            arkret_state::lattice::CellState::Value(current.clone()),
+            arkret_state::state_model::ResolvedCellState::Value(current.clone()),
         );
         let mut snapshot = state.projections().snapshot();
         snapshot.realm_policy_bundle_cells.insert(
             realm.to_owned(),
-            arkret_state::lattice::CellState::Value(current.clone()),
+            arkret_state::state_model::ResolvedCellState::Value(current.clone()),
         );
         state.projections().install_snapshot(snapshot);
         // Section 9.3.1.3 item 1 forbids demanding a wire head_eq for a
@@ -3297,7 +2915,7 @@ mod cas_write_guard_tests {
         let mut latest = state.projections().snapshot();
         latest.realm_policy_bundle_cells.insert(
             realm.to_owned(),
-            arkret_state::lattice::CellState::Value(json!({
+            arkret_state::state_model::ResolvedCellState::Value(json!({
                 "policy_revision": 9, "federation_policy": "restricted"
             })),
         );
@@ -3346,7 +2964,7 @@ mod cas_write_guard_tests {
             op: arkret_wire::cbs::ProjectedOp::Direct(op),
         }];
         let mut frozen = std::collections::BTreeMap::new();
-        let value = arkret_state::lattice::CellState::Value(operation.payload.clone());
+        let value = arkret_state::state_model::ResolvedCellState::Value(operation.payload.clone());
         let mut snapshot = state.projections().snapshot();
         snapshot.install_reloaded_cells(&source, [(cell.clone(), value.clone())]);
         state.projections().install_snapshot(snapshot);
@@ -3570,7 +3188,7 @@ mod local_device_authorization_tests {
             )
             .unwrap(),
         };
-        event.proofs = vec![arkret_wire::EventProof::Producer(proof)];
+        event.proofs = vec![proof];
         for actor in [foreign, arkret_wire::ActorId::service(principal)] {
             event.actor_id = actor;
             assert!(self_principal_pcr_control_shape_rejection(&event).is_none());
@@ -3611,35 +3229,6 @@ mod local_device_authorization_tests {
         }
     }
 
-    fn admission_proof(
-        producer: &arkret_wire::ProducerEventProof,
-    ) -> arkret_wire::StationAdmissionProof {
-        arkret_wire::StationAdmissionProof {
-            applet_installation_digest: None,
-            kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
-            verification_method: arkret_wire::DidUrl::new(
-                "did:webvh:QmService:local.host:webvh:service#notary-key",
-            )
-            .unwrap(),
-            event_digest: producer.event_digest.clone(),
-            producer_proof_digest: arkret_wire::Hash::new(format!("sha256:{}", "22".repeat(32)))
-                .unwrap(),
-            producer_verification_method: producer.verification_method.clone(),
-            producer_signing_key_did: arkret_wire::DidKey::new(
-                "did:key:z6MkvLM6yK9N3Z1GYikAQLnhdjZoFQv4u4sRZNzgmwLkYsXx",
-            )
-            .unwrap(),
-            producer_signer_resolution_evidence_ref: None,
-            signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
-                "ak:signer_evidence:sha256:{}",
-                "11".repeat(32)
-            ))
-            .unwrap(),
-            accepted_at: producer.created_at,
-            jws: "admission-signature".to_owned(),
-        }
-    }
-
     /// A wire proof that mirrors the evidence digest beside its
     /// content-addressed ref is rejected at decode, not tolerated and ignored.
     ///
@@ -3652,8 +3241,6 @@ mod local_device_authorization_tests {
     #[test]
     fn proof_carrying_a_sibling_evidence_digest_is_a_schema_violation() {
         let producer = producer_proof();
-        let admission = admission_proof(&producer);
-
         let mut producer_wire = serde_json::to_value(&producer).unwrap();
         producer_wire["signer_resolution_evidence_ref"] =
             serde_json::json!(format!("ak:signer_evidence:sha256:{}", "11".repeat(32)));
@@ -3667,27 +3254,12 @@ mod local_device_authorization_tests {
                 .contains("signer_resolution_evidence_digest"),
             "unexpected producer proof error: {error}"
         );
-
-        let mut admission_wire = serde_json::to_value(&admission).unwrap();
-        admission_wire["signer_resolution_evidence_digest"] =
-            serde_json::json!(format!("sha256:{}", "11".repeat(32)));
-        let error = serde_json::from_value::<arkret_wire::StationAdmissionProof>(admission_wire)
-            .expect_err("admission proof must reject the deleted sibling digest");
-        assert!(
-            error
-                .to_string()
-                .contains("signer_resolution_evidence_digest"),
-            "unexpected admission proof error: {error}"
-        );
     }
 
     #[test]
     fn accepted_self_pcr_event_keeps_one_producer_authority() {
         let producer = producer_proof();
-        let proofs = vec![
-            arkret_wire::EventProof::Producer(producer.clone()),
-            arkret_wire::EventProof::StationAdmission(admission_proof(&producer)),
-        ];
+        let proofs = vec![producer.clone()];
 
         assert_eq!(
             sole_self_principal_pcr_producer_proof(&proofs),
@@ -3695,7 +3267,7 @@ mod local_device_authorization_tests {
         );
 
         let mut ambiguous = proofs;
-        ambiguous.push(arkret_wire::EventProof::Producer(producer));
+        ambiguous.push(producer);
         assert!(sole_self_principal_pcr_producer_proof(&ambiguous).is_none());
     }
 

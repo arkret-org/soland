@@ -903,7 +903,7 @@ async fn assert_identity_anchor_frontier(
              WHERE successor.realm_id = candidate.realm_id \
                AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
                                WHERE q.seal_id = successor.id) \
-               AND successor.predecessor_refs @> to_jsonb(ARRAY[candidate.id]::text[]) \
+               AND successor.predecessor_ref = candidate.id \
            ) \
          ORDER BY candidate.id",
     )

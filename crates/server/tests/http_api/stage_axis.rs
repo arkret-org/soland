@@ -88,7 +88,7 @@ async fn strand_stage_set_is_the_single_writable_path_for_the_stage_axis_body() 
     assert_eq!(read["stage"], "planned", "{read}");
     assert!(read.get("stage_changed_at").is_none(), "{read}");
 
-    // `planned -> done` skips `in_progress`. The deleted private FSM rejected
+    // `planned -> done` skips `in_progress`. The deleted private transition rejected
     // exactly this; the core reducer has no direction rule at all (§5.3.3).
     let advance = signed_strand_event(
         "ak:event:AZv0YWJ8Q7t3bnvpDGRJMHEG7XoKbFZ8Ea5R4qbNfHzT",

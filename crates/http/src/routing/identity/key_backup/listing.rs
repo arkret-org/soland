@@ -3,7 +3,7 @@ use arkret_models_crypto::{
     BackupActiveSeriesPointer, BackupActiveSeriesState, KeyBackupsListQuery,
 };
 use arkret_server::{CursorAuthority, CursorBindingContext};
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use soland_services::identity::{KeyBackupListPosition, KeyBackupListQuery as StorageQuery};
 
 use super::*;
@@ -244,8 +244,11 @@ pub(super) async fn active_pointers(
         .map_err(unavailable)?;
         match accepted.get(&cell) {
             None => Ok(BackupActiveSeriesPointer::Absent {}),
-            Some(CellState::Bottom(_)) => Err(unavailable("backup pointer is conflicted")),
-            Some(CellState::Value(value)) => {
+            Some(ResolvedCellState::Bottom(_)) => Err(unavailable("backup pointer is conflicted")),
+            Some(state) => {
+                let value = state
+                    .settled_value()
+                    .ok_or_else(|| unavailable("backup pointer is conflicted"))?;
                 let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =
                     serde_json::from_value(value.clone()).map_err(unavailable)?;
                 if record.actor_id != actor

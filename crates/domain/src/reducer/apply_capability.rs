@@ -209,9 +209,9 @@ pub fn engine_grant_from_cell_body(
 
 pub fn engine_grant_from_capability_cell_state(
     grant_id: &str,
-    cell_state: &CellState,
+    cell_state: &ResolvedCellState,
 ) -> Option<crate::capability::Grant> {
-    let CellState::Value(Value::Array(items)) = cell_state else {
+    let ResolvedCellState::Value(Value::Array(items)) = cell_state else {
         return None;
     };
     if items.is_empty() {
@@ -650,7 +650,7 @@ impl ProjectionState {
     /// cell is absent / Bottom / not an array).
     fn capability_cell_items(&self, cell_ref: &CellRef) -> Vec<Value> {
         match self.cells.get(cell_ref) {
-            Some(CellState::Value(Value::Array(items))) => items.clone(),
+            Some(ResolvedCellState::Value(Value::Array(items))) => items.clone(),
             _ => Vec::new(),
         }
     }
@@ -1345,7 +1345,7 @@ impl ProjectionState {
             "value": value,
         }));
         self.cells
-            .insert(cell_ref, CellState::Value(Value::Array(items)));
+            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
 
         ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id }
     }
@@ -1445,7 +1445,7 @@ impl ProjectionState {
             }
         }
         self.cells
-            .insert(cell_ref, CellState::Value(Value::Array(items)));
+            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
 
         if crate::kinds::canonical_kind_for_operation(operation)
             == Some(arkret_wire::EventKind::CapabilityRelinquish)
@@ -1720,7 +1720,7 @@ impl ProjectionState {
             if !cell_ref.as_str().starts_with(cell_prefix) {
                 continue;
             }
-            let CellState::Value(Value::Array(items)) = cell_state else {
+            let ResolvedCellState::Value(Value::Array(items)) = cell_state else {
                 continue;
             };
             for item in items {
@@ -1781,7 +1781,7 @@ impl ProjectionState {
             if !cell_ref.as_str().starts_with(cell_prefix) {
                 continue;
             }
-            let CellState::Value(Value::Array(items)) = cell_state else {
+            let ResolvedCellState::Value(Value::Array(items)) = cell_state else {
                 continue;
             };
             // Terminal or_set semantics: if any surviving add for this grant

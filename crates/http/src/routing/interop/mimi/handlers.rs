@@ -898,7 +898,6 @@ async fn verify_mimi_consent_update_authority(
             .event
             .proofs
             .first()
-            .and_then(arkret_wire::EventProof::as_producer)
             .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
             .map(|(_, fragment)| fragment.to_owned())
             .ok_or_else(|| {
@@ -1372,8 +1371,7 @@ fn validate_mimi_report_event_cross_binding(
     }
     let producer_method = event
         .proofs
-        .iter()
-        .find_map(arkret_wire::EventProof::as_producer)
+        .first()
         .map(|proof| &proof.verification_method)
         .ok_or_else(mimi_reporter_resolution_required)?;
     if producer_method != &body.reporter_authority.proof.verification_method {
@@ -1408,8 +1406,7 @@ async fn verify_mimi_reporter_authority(
     let event = &body.report_event.event;
     let producer_method = event
         .proofs
-        .iter()
-        .find_map(arkret_wire::EventProof::as_producer)
+        .first()
         .map(|proof| &proof.verification_method)
         .ok_or_else(mimi_reporter_resolution_required)?;
     if producer_method != &authority.proof.verification_method {
@@ -1712,7 +1709,7 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
 mod reporter_event_binding_tests {
     use arkret_models_collaboration::http_bodies::MimiReporterAuthority;
     use arkret_wire::{
-        AccountId, ActorId, Audience, DidCoreId, DidUrl, EventInitialSubmission, EventProof, Hash,
+        AccountId, ActorId, Audience, DidCoreId, DidUrl, EventInitialSubmission, Hash,
         PayloadProof, ProducerEventProof, ScopeRef, proof_kind,
     };
 
@@ -1767,17 +1764,23 @@ mod reporter_event_binding_tests {
                 .unwrap(),
         )
         .unwrap();
-        event.proofs = vec![EventProof::Producer(ProducerEventProof {
+        event.proofs = vec![ProducerEventProof {
             kind: proof_kind::DETACHED_JWS.to_owned(),
             verification_method: verification_method.clone(),
             event_digest,
-            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_ref: Some(
+                arkret_wire::SignerEvidenceRef::new(format!(
+                    "ak:signer_evidence:sha256:{}",
+                    "11".repeat(32)
+                ))
+                .unwrap(),
+            ),
             created_at,
             domain: None,
             audience: None,
             proof_purpose: None,
             jws: "e30..c2ln".to_owned(),
-        })];
+        }];
         let mut request = MimiReportAbuseRequestBody {
             reporter_authority: MimiReporterAuthority {
                 actor_id,
@@ -1847,10 +1850,8 @@ mod reporter_event_binding_tests {
         assert_cross_binding_rejected(&provider_swap);
 
         let mut method_swap = original;
-        method_swap.report_event.event.proofs[0]
-            .as_producer_mut()
-            .unwrap()
-            .verification_method = DidUrl::new("did:web:alice.example#other-device").unwrap();
+        method_swap.report_event.event.proofs[0].verification_method =
+            DidUrl::new("did:web:alice.example#other-device").unwrap();
         assert_cross_binding_rejected(&method_swap);
     }
 

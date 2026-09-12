@@ -363,8 +363,8 @@ async fn federation_cbs_proof_bundles(
 ) -> Result<Vec<arkret_wire::CbsProofBundle>, String> {
     let mut targets = BTreeSet::new();
     for event in events {
-        if let Some(seal_ref) = &event.seal_ref {
-            targets.insert(seal_ref.clone());
+        if let Some(context) = &event.auth_context {
+            targets.extend(context.authority_refs.iter().cloned());
         }
         if let Some(seal_basis) = &event.seal_basis {
             targets.extend(seal_basis.leaves.iter().cloned());
@@ -417,7 +417,7 @@ pub(in crate::routing) async fn cbs_proof_bundles_for_targets(
                 .await
                 .map_err(|error| format!("read federation Seal prerequisite {seal_id}: {error}"))?
                 .ok_or_else(|| format!("federation Seal prerequisite {seal_id} is unavailable"))?;
-            pending.extend(seal.predecessor_refs.iter().cloned());
+            pending.extend(seal.predecessor_ref.iter().cloned());
             by_id.insert(seal_id, seal);
         }
         if by_id.len() > arkret_wire::cbs_proof_bundle::MAX_BUNDLE_SEALS {
@@ -1181,17 +1181,23 @@ async fn realm_event_dependency_records(
     for dependency in &parsed.prev_refs {
         append_stored_event_dependencies(dependency.as_str(), &by_id, &mut visited, &mut ordered);
     }
-    if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str)
-        && let Ok(seal_id) = arkret_identifiers::SealId::new(seal_ref.to_owned())
+    if let Some(authority_refs) = envelope
+        .get("auth_context")
+        .and_then(|context| context.get("authority_refs"))
+        .and_then(Value::as_array)
     {
-        let mut pending = vec![seal_id];
+        let mut pending = authority_refs
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(|value| arkret_identifiers::SealId::new(value.to_owned()).ok())
+            .collect::<Vec<_>>();
         let mut seals_by_id = BTreeMap::new();
         while let Some(seal_id) = pending.pop() {
             if seals_by_id.contains_key(&seal_id) {
                 continue;
             }
             if let Ok(Some(seal)) = state.projections().seal_by_id(&seal_id).await {
-                pending.extend(seal.predecessor_refs.iter().cloned());
+                pending.extend(seal.predecessor_ref.iter().cloned());
                 seals_by_id.insert(seal_id, seal);
             }
         }

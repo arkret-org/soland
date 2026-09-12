@@ -61,7 +61,7 @@ fn source(
 }
 
 #[tokio::test]
-async fn concurrent_mv_sources_keep_distinct_full_heads_and_failed_patch_is_atomic() {
+async fn concurrent_causal_sources_keep_distinct_full_heads_and_failed_patch_is_atomic() {
     let database = crate::test_database::TestDatabase::lease().await;
     let pool = database.pool();
     let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(

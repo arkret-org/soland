@@ -42,7 +42,7 @@ fn alice_notary() -> arkret_wire::NotaryValue {
         verifying_key.as_bytes(),
     )
     .unwrap();
-    arkret_wire::NotaryValue::single_signer(descriptor)
+    arkret_wire::NotaryValue::new(vec![descriptor], 0, 0).unwrap()
 }
 
 fn test_config() -> crate::config::AppConfig {
@@ -639,7 +639,7 @@ fn seed_read_receipt_inheritance(
     child_realm_id: &str,
     parent_policy: serde_json::Value,
 ) {
-    use arkret_state::lattice::CellState;
+    use arkret_state::state_model::ResolvedCellState;
 
     let now = chrono::Utc::now();
     let mut projection = state.test_projection().lock();
@@ -649,7 +649,7 @@ fn seed_read_receipt_inheritance(
     .expect("valid read receipt policy cell ref");
     projection
         .cells
-        .insert(cell_id, CellState::Value(parent_policy));
+        .insert(cell_id, ResolvedCellState::Value(parent_policy));
     projection
         .realm_links
         .entry(child_realm_id.to_owned())

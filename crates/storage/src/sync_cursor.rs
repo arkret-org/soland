@@ -74,7 +74,7 @@ pub trait SyncCursorStore: Send + Sync {
         request: &super::CurrentDetailRequest,
         progress: Option<&super::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellRegistry,
+        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> PersistenceResult<super::CurrentDetailOutcome>;
     async fn account_summary_has_join(
         &self,

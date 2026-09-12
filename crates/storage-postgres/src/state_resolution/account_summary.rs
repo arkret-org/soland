@@ -102,23 +102,22 @@ pub(super) async fn register_delta_members(
     Ok(())
 }
 
-fn singleton<'a>(cells: &'a BTreeMap<CellRef, CellState>, family: &str) -> Option<&'a Value> {
+fn singleton<'a>(
+    cells: &'a BTreeMap<CellRef, ResolvedCellState>,
+    family: &str,
+) -> Option<&'a Value> {
     let cell = CellRef::new(format!("ak:cell:{family}:null")).ok()?;
-    match cells.get(&cell)? {
-        CellState::Value(value) => Some(value),
-        CellState::Bottom(_) => None,
-    }
+    cells.get(&cell)?.settled_value()
 }
 
 pub(super) async fn publish(
     conn: &mut AsyncPgConnection,
     realm: &str,
-    cells: &BTreeMap<CellRef, CellState>,
-    cas_heads: &arkret_state::CasHeadsByCell,
-    current_mv_heads: &super::current_results::CurrentMvHeads,
-    current_mv_ready: bool,
+    cells: &BTreeMap<CellRef, ResolvedCellState>,
+    causal_heads: &super::current_results::CurrentCausalHeads,
+    causal_ready: bool,
 ) -> Result<(), EventSealCommitError> {
-    super::welcome_discovery::publish(conn, realm, cells, cas_heads).await?;
+    super::welcome_discovery::publish(conn, realm, cells).await?;
     let rows = sql_query("SELECT cell_id, actor_key FROM account_summary_members WHERE realm_id = $1 ORDER BY actor_key")
         .bind::<Text, _>(realm).load::<SummaryMemberRow>(&mut *conn).await?;
     let title = singleton(cells, arkret_wire::CellFamilyId::REALM_PROFILE_V1)
@@ -143,7 +142,7 @@ pub(super) async fn publish(
             None
         } else {
             match cells.get(&cell) {
-                Some(CellState::Value(value)) => value
+                Some(ResolvedCellState::Value(value)) => value
                     .as_str()
                     .filter(|state| matches!(*state, "join" | "knock")),
                 _ => None,
@@ -185,15 +184,8 @@ pub(super) async fn publish(
         .execute(&mut *conn)
         .await?;
     }
-    super::current_results::publish(
-        conn,
-        realm,
-        cells,
-        revision,
-        current_mv_heads,
-        current_mv_ready,
-    )
-    .await?;
+    super::current_results::publish(conn, realm, cells, revision, causal_heads, causal_ready)
+        .await?;
     Ok(())
 }
 
@@ -202,14 +194,14 @@ pub(super) async fn publish(
 pub(super) async fn publish_current_frontier(
     conn: &mut AsyncPgConnection,
     realm: &str,
-    registry: &dyn CellRegistry,
+    registry: &dyn CellStateRegistry,
 ) -> Result<(), EventSealCommitError> {
     let leaves = sql_query(
         "SELECT parent.id AS value FROM state_seals parent
         WHERE parent.realm_id = $1
           AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = parent.id)
           AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id = $1
-            AND child.predecessor_refs ? parent.id
+            AND child.predecessor_ref = parent.id
             AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = child.id))",
     )
     .bind::<Text, _>(realm)
@@ -223,8 +215,8 @@ pub(super) async fn publish_current_frontier(
         RealmId::new(realm.to_owned()).map_err(|e| StoreError::Backend(e.to_string()))?;
     let rule_context = CheckpointRuleContext::capture(registry, &realm_id)?;
     let mut covered = BTreeSet::new();
-    let mut mv_views = Vec::new();
-    let current_mv_ready = true;
+    let mut causal_views = Vec::new();
+    let causal_ready = true;
     let mut expected_seal = None;
     for leaf in leaves {
         let row = sql_query(
@@ -255,21 +247,20 @@ pub(super) async fn publish_current_frontier(
         if quarantined != 0 {
             return Ok(());
         }
-        if single_leaf && reusable && view.current_mv_ready {
+        if single_leaf && reusable && view.causal_ready {
             return publish(
                 conn,
                 realm,
                 &view.cells,
-                &view.cas_heads,
-                &view.current_mv_heads,
-                view.current_mv_ready,
+                &view.causal_heads,
+                view.causal_ready,
             )
             .await;
         }
-        let heads = if reusable && view.current_mv_ready {
-            view.current_mv_heads
+        let heads = if reusable && view.causal_ready {
+            view.causal_heads
         } else {
-            let Some(heads) = super::current_results::rebuild_mv_heads(
+            let Some(heads) = super::current_results::rebuild_causal_heads(
                 conn,
                 realm,
                 &row.covered_seal_ids,
@@ -292,13 +283,13 @@ pub(super) async fn publish_current_frontier(
             expected_seal =
                 Some(serde_json::from_value::<Seal>(seal.value).map_err(serde_to_store)?);
         }
-        mv_views.push((heads, row.covered_event_digests.iter().cloned().collect()));
+        causal_views.push((heads, row.covered_event_digests.iter().cloned().collect()));
         covered.extend(row.covered_event_digests);
     }
     let covered = covered.into_iter().collect::<Vec<_>>();
     let rows = sql_query(
         "SELECT op.cell_id, op.seal_id, op.op_json FROM state_cell_ops op
-        WHERE op.realm_id = $1 AND op.move_id = ANY($2)
+        WHERE op.realm_id = $1 AND op.event_id = ANY($2)
           AND EXISTS (SELECT 1 FROM state_seals s WHERE s.id = op.seal_id)
           AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = op.seal_id)
         ORDER BY op.cell_id, op.seq",
@@ -323,25 +314,28 @@ pub(super) async fn publish_current_frontier(
     let realm_id =
         RealmId::new(realm.to_owned()).map_err(|e| StoreError::Backend(e.to_string()))?;
     let mut cells = BTreeMap::new();
-    let mut cas_heads = arkret_state::CasHeadsByCell::new();
+    let mut security_cells = BTreeMap::new();
     for (cell, batches) in batches {
         let binding = registry.resolve(&realm_id, &cell)?;
         let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
-        if arkret_state::is_causal_register(binding.lattice.kind()) {
-            let heads = arkret_state::causal_heads_for_batches(binding.lattice.kind(), &batches);
-            if !heads.is_empty() {
-                cas_heads.insert(cell.clone(), heads);
+        let resolved =
+            arkret_state::join_cell_seal_batches(binding.model.as_ref(), &cell, &batches)
+                .map_err(|error| StoreError::Backend(format!("cell state resolution: {error}")))?;
+        if binding.execution == arkret_wire::EventCellExecution::Security {
+            if !matches!(resolved, ResolvedCellState::Sequenced(_)) {
+                return Err(StoreError::Backend(format!(
+                    "security cell {cell} did not resolve to sequenced state"
+                ))
+                .into());
             }
+            security_cells.insert(cell.clone(), resolved.clone());
         }
-        cells.insert(
-            cell.clone(),
-            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches),
-        );
+        cells.insert(cell.clone(), resolved);
     }
-    let current_mv_heads = super::current_results::merge_mv_views(&mv_views)?;
+    let causal_heads = super::current_results::merge_causal_views(&causal_views)?;
     if let Some(seal) = expected_seal {
         let root = compute_state_root(
-            arkret_state::GovernanceView::new(&cells, &cas_heads),
+            arkret_state::GovernanceView::new(&security_cells),
             seal.state_root
                 .digest_suite()
                 .map_err(|error| StoreError::Backend(error.to_string()))?,
@@ -354,13 +348,5 @@ pub(super) async fn publish_current_frontier(
             .into());
         }
     }
-    publish(
-        conn,
-        realm,
-        &cells,
-        &cas_heads,
-        &current_mv_heads,
-        current_mv_ready,
-    )
-    .await
+    publish(conn, realm, &cells, &causal_heads, causal_ready).await
 }

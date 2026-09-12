@@ -41,7 +41,7 @@ use arkret_models_collaboration::http_bodies::{
 };
 use arkret_wire::{
     Event, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,
-    MAX_EVENT_SUBMIT_BATCH, NotarySig, Seal, proof_kind,
+    MAX_EVENT_SUBMIT_BATCH, Seal, proof_kind,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -203,7 +203,7 @@ pub(crate) async fn validate_pcr_prepare_ackless_ingress(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "PCR preparation has no durable Control Move admission".to_owned())?;
-    // Event proofs may gain a Station admission signature after the reducer
+    // Event proofs remain byte-identical after producer authoring
     // row is stored. Compare the signed content address, not that proof list.
     let recorded_digest = snapshot
         .event
@@ -234,7 +234,6 @@ pub(crate) async fn validate_pcr_prepare_ackless_ingress(
 pub(crate) use endpoints::{VerifiedActorPredecessors, load_realm_actor_frontier};
 pub(crate) use submit::accepted_event_digest_suites;
 #[cfg(feature = "test-support")]
-pub use submit::attach_fixture_station_admission_proof;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
@@ -246,7 +245,8 @@ pub(in crate::routing) use submit::{
     submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
     submit_mimi_reporter_initial_event_submission, submit_one_error_to_app_error,
-    submit_peer_pcr_genesis, submit_recovery_identity_anchor_batch, submit_sidecar_ensure_batch,
+    submit_peer_pcr_genesis, submit_proof_authenticated_publication,
+    submit_recovery_identity_anchor_batch, submit_sidecar_ensure_batch,
     verify_federated_event_admission, verify_frontier_backfill_event,
 };
 use submit::{

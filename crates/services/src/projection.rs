@@ -11,16 +11,16 @@ use arkret_models_collaboration::history_key::{
     AuthorizationIncarnation, HistoryReleaseAttestation,
 };
 use arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
-use arkret_state::lattice::CellState;
-use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressClass};
 use arkret_state::state::{
-    CellLatticeBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
+    CellStateModelBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
     ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
     ControlSealScheduleRepairStats, PendingControlEventRecord, SealDigestSuites, SealEffect,
     SealLeafUnionProof, SealReject, SealStore, SealedControlEventRecord, StoreError, StoreResult,
 };
-use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
+use arkret_state::state_model::ResolvedCellState;
+use arkret_state::state_model::ordered_log::IssuedOp;
+use arkret_state::{CellStateRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cbs::ProjectedCellWrite;
 use arkret_wire::event_envelope::Event;
 use arkret_wire::{
@@ -60,7 +60,7 @@ pub fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
 
 pub fn engine_grant_from_capability_cell_state(
     grant_id: &str,
-    cell_state: &CellState,
+    cell_state: &ResolvedCellState,
 ) -> Option<arkret_policy::authz::authority::Grant> {
     soland_domain::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
 }
@@ -94,12 +94,7 @@ pub struct SealEffectiveStateCheckpoint {
     pub seal_id: SealId,
     pub covered_event_digests: BTreeSet<Hash>,
     pub covered_seal_ids: BTreeSet<SealId>,
-    pub state: BTreeMap<CellRef, CellState>,
-    /// The `cas_register` head identities of the same view. Spec section 6.2.1
-    /// builds a CAS leaf from these rather than from the settled value, so a
-    /// checkpoint without them cannot reproduce the `state_root` it stands in
-    /// for.
-    pub cas_heads: arkret_state::CasHeadsByCell,
+    pub state: BTreeMap<CellRef, ResolvedCellState>,
 }
 
 #[async_trait::async_trait]
@@ -115,14 +110,8 @@ pub trait EventSealCommitPort: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
-        data_event_leaf_manifest: Option<&std::collections::BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
-
-    async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<BTreeSet<Hash>>>;
 
     async fn effective_state_checkpoint(
         &self,
@@ -171,7 +160,7 @@ pub struct ProjectionService {
     control_event_store: Arc<dyn ControlEventStore>,
     seal_store: Arc<dyn SealStore>,
     cell_store: Arc<dyn CellStore>,
-    cell_registry: Arc<dyn CellRegistry>,
+    cell_registry: Arc<dyn CellStateRegistry>,
     event_seal_committer: Arc<dyn EventSealCommitPort>,
     control_decision_commit_lock: Arc<AsyncMutex<()>>,
     history_authority_view_cas_lock: Arc<Mutex<()>>,
@@ -419,7 +408,7 @@ impl ProjectionService {
         control_event_store: Arc<dyn ControlEventStore>,
         seal_store: Arc<dyn SealStore>,
         cell_store: Arc<dyn CellStore>,
-        cell_registry: Arc<dyn CellRegistry>,
+        cell_registry: Arc<dyn CellStateRegistry>,
         event_seal_committer: Arc<dyn EventSealCommitPort>,
         clock_node: &str,
     ) -> Self {
@@ -491,15 +480,15 @@ impl ProjectionService {
     }
 
     #[must_use]
-    pub fn sdk_cell_registry() -> Arc<dyn CellRegistry> {
+    pub fn sdk_cell_registry() -> Arc<dyn CellStateRegistry> {
         Self::try_sdk_cell_registry()
-            .expect("canonical shared FSM registry must pass the startup closure gate")
+            .expect("canonical shared transition registry must pass the startup closure gate")
     }
 
     pub fn try_sdk_cell_registry()
-    -> Result<Arc<dyn CellRegistry>, arkret_lattice_registry::ContractRegistryError> {
+    -> Result<Arc<dyn CellStateRegistry>, arkret_lattice_registry::ContractRegistryError> {
         Ok(Arc::new(
-            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()?,
+            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()?,
         ))
     }
 
@@ -518,9 +507,9 @@ impl ProjectionService {
     /// The Realm's cell registry.
     ///
     /// Exposed because the notary derives each write's `supersedes` set from
-    /// the cell's lattice (`event-auth-state-resolution.md` §9.3.1.3 item 4),
+    /// the cell's state model (`event-auth-state-resolution.md` §9.3.1.3 item 4),
     /// which it cannot ask without resolving the binding.
-    pub fn cell_registry(&self) -> &dyn CellRegistry {
+    pub fn cell_registry(&self) -> &dyn CellStateRegistry {
         self.cell_registry.as_ref()
     }
 
@@ -924,21 +913,23 @@ impl ProjectionService {
         self.cell_store().list_cells(realm_id).await
     }
 
-    pub async fn sealed_ops_for_cell(
+    pub async fn state_writes_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
     ) -> StoreResult<Vec<IssuedOp>> {
-        self.cell_store().sealed_ops_for_cell(realm_id, cell).await
+        self.cell_store()
+            .state_writes_for_cell(realm_id, cell)
+            .await
     }
 
-    pub async fn sealed_op_batches_for_cell(
+    pub async fn confirmed_write_batches_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
     ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
         self.cell_store()
-            .sealed_op_batches_for_cell(realm_id, cell)
+            .confirmed_write_batches_for_cell(realm_id, cell)
             .await
     }
 
@@ -946,7 +937,7 @@ impl ProjectionService {
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
-    ) -> StoreResult<CellLatticeBinding> {
+    ) -> StoreResult<CellStateModelBinding> {
         self.cell_registry().resolve(realm_id, cell)
     }
 
@@ -962,7 +953,7 @@ impl ProjectionService {
         &self,
         write: &ProjectedCellWrite,
         realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
     ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject> {
         arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
     }
@@ -995,7 +986,7 @@ impl ProjectionService {
         }
         if !checkpoint.covered_seal_ids.contains(seal_id)
             || !seal
-                .predecessor_refs
+                .predecessor_ref
                 .iter()
                 .all(|predecessor| checkpoint.covered_seal_ids.contains(predecessor))
         {
@@ -1009,7 +1000,7 @@ impl ProjectionService {
             .await?
             .ok_or_else(|| SealReject::Store(format!("checkpoint Seal {seal_id} has no suite")))?;
         let state_root = arkret_state::compute_state_root(
-            arkret_state::GovernanceView::new(&checkpoint.state, &checkpoint.cas_heads),
+            arkret_state::GovernanceView::new(&checkpoint.state),
             digest_suite,
         )
         .map_err(|error| SealReject::Store(format!("checkpoint state_root: {error}")))?;
@@ -1073,7 +1064,7 @@ impl ProjectionService {
         }
         let digest_suites = self.seal_digest_suites(seal).await?;
         let predecessor_state = self
-            .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+            .effective_state_at(seal.predecessor_ref.as_slice(), &seal.realm_id)
             .await
             .map_err(|error| SealReject::Store(error.to_string()))?;
         let event_lookup = arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
@@ -1105,7 +1096,7 @@ impl ProjectionService {
     > {
         let digest_suites = self.seal_digest_suites(seal).await?;
         let predecessor_state = self
-            .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+            .effective_state_at(seal.predecessor_ref.as_slice(), &seal.realm_id)
             .await
             .map_err(|error| SealReject::Store(error.to_string()))?;
         let context = arkret_state::mls_governance_proof::derive_seal_dependency_replay_context(
@@ -1155,38 +1146,11 @@ impl ProjectionService {
         .await
     }
 
-    /// The `cas_register` head identities of the same view
-    /// [`Self::effective_state_at`] resolves.
-    ///
-    /// Spec section 6.2.1 builds a CAS `state_root` leaf from these rather than
-    /// from the settled value, so anything recomputing a root needs both halves.
-    pub async fn effective_cas_heads_at(
-        &self,
-        leaves: &[SealId],
-        realm_id: &RealmId,
-    ) -> Result<arkret_state::CasHeadsByCell, SealReject> {
-        if let [seal_id] = leaves
-            && let Some(checkpoint) = self
-                .validated_effective_state_checkpoint(seal_id, realm_id)
-                .await?
-        {
-            return Ok(checkpoint.cas_heads);
-        }
-        arkret_state::effective_cas_heads_at(
-            leaves,
-            realm_id,
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-        )
-        .await
-    }
-
     pub async fn effective_state_at(
         &self,
         leaves: &[SealId],
         realm_id: &RealmId,
-    ) -> Result<BTreeMap<CellRef, CellState>, SealReject> {
+    ) -> Result<BTreeMap<CellRef, ResolvedCellState>, SealReject> {
         if let [seal_id] = leaves
             && let Some(checkpoint) = self
                 .validated_effective_state_checkpoint(seal_id, realm_id)
@@ -1289,7 +1253,7 @@ impl ProjectionService {
     /// The receiver-derived cell writes for a signed Event.
     ///
     /// The v1 wire carries no producer `effects[]`: the only legitimate source
-    /// of cell targets and lattice operations is the registered reducer
+    /// of cell targets and state model operations is the registered reducer
     /// contract (`event-and-patch.md` §2.4.2).
     pub fn project_cell_writes(&self, event: &Event) -> Result<Vec<ProjectedCellWrite>, String> {
         self.project_cell_writes_with_digest_suite(
@@ -1396,7 +1360,7 @@ impl ProjectionService {
         &self,
         write: &ProjectedCellWrite,
         realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
     ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject> {
         arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
     }
@@ -1407,7 +1371,7 @@ impl ProjectionService {
         &self,
         event: &Event,
         realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
         verify_proofs: F,
     ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
     where
@@ -1426,7 +1390,7 @@ impl ProjectionService {
         &self,
         event: &Event,
         realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
     ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
@@ -1447,7 +1411,7 @@ impl ProjectionService {
         &self,
         event: &Event,
         realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
         digest_suite: arkret_canonical::DigestSuite,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
@@ -1471,13 +1435,13 @@ impl ProjectionService {
 
     /// Verify a Control Move already committed by the local accepted-event
     /// admission lane. This retains proof, CBS-basis, state-resolution, and
-    /// lattice checks while using the accepted-event projection path for the
+    /// state model checks while using the accepted-event projection path for the
     /// previously frozen `ak.invite.cancel` binding.
     pub fn verify_accepted_control_move_in_context<F>(
         &self,
         event: &Event,
         realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
     ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
@@ -1498,7 +1462,7 @@ impl ProjectionService {
         &self,
         event: &Event,
         realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
+        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
         digest_suite: arkret_canonical::DigestSuite,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
@@ -1518,48 +1482,6 @@ impl ProjectionService {
             verify_proofs,
             |event| self.project_accepted_cell_writes_with_digest_suite(event, digest_suite),
         )
-    }
-
-    pub async fn verify_recovery_witness(
-        &self,
-        event: &Event,
-        effects: &[arkret_wire::cbs::ProjectionEffect],
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
-        predecessor_closure: &BTreeSet<SealId>,
-    ) -> Result<(), ControlMoveReject> {
-        self.verify_recovery_witness_with_digest_suite(
-            event,
-            effects,
-            realm_id,
-            pre_state,
-            predecessor_closure,
-            self.realm_digest_suite(realm_id.as_str()),
-        )
-        .await
-    }
-
-    pub async fn verify_recovery_witness_with_digest_suite(
-        &self,
-        event: &Event,
-        effects: &[arkret_wire::cbs::ProjectionEffect],
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, CellState>,
-        predecessor_closure: &BTreeSet<SealId>,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> Result<(), ControlMoveReject> {
-        arkret_state::verify_recovery_witness(
-            event,
-            effects,
-            realm_id,
-            pre_state,
-            predecessor_closure,
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-            digest_suite,
-        )
-        .await
     }
 
     pub async fn apply_seal<F>(
@@ -1675,8 +1597,12 @@ impl ProjectionService {
     }
 
     pub async fn seal_digest_suites(&self, seal: &Seal) -> Result<SealDigestSuites, SealReject> {
-        self.seal_digest_suites_for_delta(&seal.realm_id, &seal.predecessor_refs, &seal.delta)
-            .await
+        self.seal_digest_suites_for_delta(
+            &seal.realm_id,
+            seal.predecessor_ref.as_slice(),
+            &seal.delta,
+        )
+        .await
     }
 
     pub async fn seal_digest_suites_for_delta(
@@ -1779,7 +1705,6 @@ impl ProjectionService {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
-        data_event_leaf_manifest: Option<&std::collections::BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
@@ -1790,18 +1715,8 @@ impl ProjectionService {
                 expected_store_frontier,
                 new_ops,
                 covered,
-                data_event_leaf_manifest,
                 governance_dependencies,
             )
-            .await
-    }
-
-    pub async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<BTreeSet<Hash>>> {
-        self.event_seal_committer()
-            .data_event_leaf_manifest(seal_id)
             .await
     }
 
@@ -1820,14 +1735,14 @@ impl ProjectionService {
     }
 
     #[doc(hidden)]
-    pub async fn conformance_append_sealed_effects(
+    pub async fn conformance_append_confirmed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
         new_ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
         self.cell_store()
-            .append_sealed_effects(realm_id, seal_id, new_ops)
+            .append_confirmed_effects(realm_id, seal_id, new_ops)
             .await
     }
 
@@ -1850,7 +1765,7 @@ impl ProjectionService {
         ] {
             state.realm_null_subject_cells.insert(
                 (realm_id.to_string(), cell.to_owned()),
-                CellState::Value(value),
+                ResolvedCellState::Value(value),
             );
         }
         self.conformance_fixture_realms
@@ -1878,13 +1793,13 @@ impl ProjectionService {
 
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
-    pub async fn test_append_sealed_effects(
+    pub async fn test_append_confirmed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
         new_ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
-        self.conformance_append_sealed_effects(realm_id, seal_id, new_ops)
+        self.conformance_append_confirmed_effects(realm_id, seal_id, new_ops)
             .await
     }
 
@@ -2462,17 +2377,17 @@ impl ProjectionService {
             .into()
     }
 
-    pub fn apply_via_lattice_registry(
+    pub fn apply_via_state_model_registry(
         &self,
         operation: &Operation,
         cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
     ) -> ProjectionEffectView {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+        let registry = soland_domain::reducer::state_model_kinds::default_cell_family_registry();
         self.state
             .lock()
-            .apply_via_lattice_registry(operation, cell_writes, hlc, &registry)
+            .apply_via_state_model_registry(operation, cell_writes, hlc, &registry)
             .into()
     }
 
@@ -2500,12 +2415,12 @@ impl ProjectionService {
         hlc: &ServerHlc,
     ) -> Result<(), String> {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+        let registry = soland_domain::reducer::state_model_kinds::default_cell_family_registry();
         let mut state = self.state.lock();
         let mut staged = state.clone();
         for (operation, cell_writes) in operations {
             if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
-                staged.apply_via_lattice_registry(operation, cell_writes, hlc, &registry)
+                staged.apply_via_state_model_registry(operation, cell_writes, hlc, &registry)
             {
                 return Err(reason);
             }
@@ -2804,7 +2719,7 @@ impl ProjectionService {
         self.state
             .lock()
             .cells
-            .insert(cell_id, CellState::Value(value));
+            .insert(cell_id, ResolvedCellState::Value(value));
     }
 
     pub fn cell_value(&self, cell_id: &CellRef) -> Option<Value> {
@@ -2826,7 +2741,7 @@ impl ProjectionService {
         for cell in self.cell_store().list_cells(realm_id).await? {
             let ops = self
                 .cell_store()
-                .sealed_ops_for_cell(realm_id, &cell)
+                .state_writes_for_cell(realm_id, &cell)
                 .await?;
             let binding = self
                 .cell_registry()
@@ -2834,7 +2749,10 @@ impl ProjectionService {
                 .map_err(|error| {
                     arkret_state::StoreError::Backend(format!("cell registry resolve: {error}"))
                 })?;
-            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
+            let resolved =
+                arkret_state::join_cell(binding.model.as_ref(), &cell, &ops).map_err(|error| {
+                    arkret_state::StoreError::Backend(format!("cell state resolution: {error}"))
+                })?;
             resolved_cells.push((cell, resolved));
         }
         let _authority_guard = self.history_authority_view_cas_guard();
@@ -3126,9 +3044,10 @@ pub(crate) fn restore_invite_acceptance_membership(
         },
     );
     if let Some(cell_id) = invite_member_cell(member) {
-        state
-            .cells
-            .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
+        state.cells.insert(
+            cell_id,
+            ResolvedCellState::Value(Value::String("join".to_owned())),
+        );
     }
 }
 
@@ -3488,7 +3407,7 @@ mod effective_checkpoint_tests {
 
     use arkret_state::state::store::{CellStore, SealStore};
     use arkret_state::state::{
-        MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
+        MemoryCellStateRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
     };
 
     use super::*;
@@ -3514,22 +3433,24 @@ mod effective_checkpoint_tests {
             self.inner.list_cells(realm_id).await
         }
 
-        async fn sealed_ops_for_cell(
+        async fn state_writes_for_cell(
             &self,
             realm_id: &RealmId,
             cell: &CellRef,
         ) -> StoreResult<Vec<IssuedOp>> {
             self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner.sealed_ops_for_cell(realm_id, cell).await
+            self.inner.state_writes_for_cell(realm_id, cell).await
         }
 
-        async fn sealed_op_batches_for_cell(
+        async fn confirmed_write_batches_for_cell(
             &self,
             realm_id: &RealmId,
             cell: &CellRef,
         ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
             self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner.sealed_op_batches_for_cell(realm_id, cell).await
+            self.inner
+                .confirmed_write_batches_for_cell(realm_id, cell)
+                .await
         }
 
         async fn cached_state(
@@ -3537,7 +3458,7 @@ mod effective_checkpoint_tests {
             realm_id: &RealmId,
             cell: &CellRef,
             view_hash: &Hash,
-        ) -> StoreResult<Option<CellState>> {
+        ) -> StoreResult<Option<ResolvedCellState>> {
             self.inner.cached_state(realm_id, cell, view_hash).await
         }
 
@@ -3546,21 +3467,21 @@ mod effective_checkpoint_tests {
             realm_id: &RealmId,
             cell: &CellRef,
             view_hash: &Hash,
-            state: &CellState,
+            state: &ResolvedCellState,
         ) -> StoreResult<()> {
             self.inner
                 .put_cached_state(realm_id, cell, view_hash, state)
                 .await
         }
 
-        async fn append_sealed_effects(
+        async fn append_confirmed_effects(
             &self,
             realm_id: &RealmId,
             seal: &SealId,
             new_ops: &[(CellRef, IssuedOp)],
         ) -> StoreResult<()> {
             self.inner
-                .append_sealed_effects(realm_id, seal, new_ops)
+                .append_confirmed_effects(realm_id, seal, new_ops)
                 .await
         }
 
@@ -3582,17 +3503,9 @@ mod effective_checkpoint_tests {
             _expected_store_frontier: &[SealId],
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
-            _data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> StoreResult<bool> {
             panic!("checkpoint lookup test must not commit a Seal")
-        }
-
-        async fn data_event_leaf_manifest(
-            &self,
-            _seal_id: &SealId,
-        ) -> StoreResult<Option<BTreeSet<Hash>>> {
-            Ok(None)
         }
 
         async fn effective_state_checkpoint(
@@ -3614,17 +3527,15 @@ mod effective_checkpoint_tests {
         control_event_set_root: Hash,
         state_root: Hash,
     ) -> Seal {
+        assert!(predecessor_refs.len() <= 1);
         let mut seal = Seal {
             id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
             realm_id: realm_id.clone(),
-            predecessor_refs,
+            predecessor_ref: predecessor_refs.into_iter().next(),
             delta: Vec::new(),
             control_event_set_root,
             state_root,
-            completeness_root: test_hash(0x33),
             notary_seq,
-            data_view_root: None,
-            data_event_set_root: None,
             availability_receipt_digests: Vec::new(),
             covered_event_digests: Vec::new(),
             previous_state_root: None,
@@ -3656,7 +3567,7 @@ mod effective_checkpoint_tests {
         let state = BTreeMap::new();
         let covered = BTreeSet::new();
         let state_root = arkret_state::compute_state_root(
-            arkret_state::GovernanceView::values_only(&state),
+            arkret_state::GovernanceView::new(&state),
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
@@ -3691,7 +3602,6 @@ mod effective_checkpoint_tests {
                     covered_event_digests: covered.clone(),
                     covered_seal_ids: closure.clone(),
                     state: state.clone(),
-                    cas_heads: arkret_state::CasHeadsByCell::new(),
                 },
             );
             leaf = Some(seal.id);
@@ -3701,7 +3611,7 @@ mod effective_checkpoint_tests {
             Arc::new(MemoryControlEventStore::default()),
             seal_store,
             cell_store.clone(),
-            Arc::new(MemoryCellRegistry::default()),
+            Arc::new(MemoryCellStateRegistry::default()),
             Arc::new(CheckpointCommitter { checkpoints }),
             "checkpoint-chain-test",
         );
@@ -3736,7 +3646,7 @@ mod effective_checkpoint_tests {
 #[cfg(test)]
 mod control_governance_health_tests {
     use arkret_state::state::{
-        MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
+        MemoryCellStateRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
     };
     use arkret_wire::{Did, Hlc, ScopeRef, project_did_to_core_id};
 
@@ -3753,17 +3663,9 @@ mod control_governance_health_tests {
             _expected_store_frontier: &[SealId],
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
-            _data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> StoreResult<bool> {
             panic!("governance health must not commit a Seal")
-        }
-
-        async fn data_event_leaf_manifest(
-            &self,
-            _seal_id: &SealId,
-        ) -> StoreResult<Option<BTreeSet<Hash>>> {
-            panic!("governance health must not read a Seal manifest")
         }
     }
 
@@ -3772,7 +3674,7 @@ mod control_governance_health_tests {
             Arc::new(MemoryControlEventStore::default()),
             Arc::new(MemorySealStore::default()),
             Arc::new(MemoryCellStore::default()),
-            Arc::new(MemoryCellRegistry::default()),
+            Arc::new(MemoryCellStateRegistry::default()),
             Arc::new(UnusedEventSealCommitter),
             "governance-health-test",
         )
@@ -3816,14 +3718,11 @@ mod control_governance_health_tests {
             let seal = Seal {
                 id: SealId::new(format!("ak:seal:sha256:{index:064x}")).unwrap(),
                 realm_id: event.realm_id.clone(),
-                predecessor_refs: Vec::new(),
+                predecessor_ref: None,
                 delta: vec![ack.proposal_digest.clone()],
                 control_event_set_root: hash(),
                 state_root: hash(),
-                completeness_root: hash(),
                 notary_seq: index,
-                data_view_root: None,
-                data_event_set_root: None,
                 availability_receipt_digests: Vec::new(),
                 covered_event_digests: Vec::new(),
                 previous_state_root: None,
@@ -4052,7 +3951,7 @@ mod control_governance_health_tests {
             let mut live = service.state.lock();
             live.realm_create_cells.insert(
                 realm_id.clone(),
-                arkret_state::lattice::CellState::Value(serde_json::json!([realm_id])),
+                arkret_state::state_model::ResolvedCellState::Value(serde_json::json!([realm_id])),
             );
             live.realm_join_rules
                 .insert(genesis.realm_id.to_string(), "public".to_owned());
@@ -4236,7 +4135,7 @@ mod control_governance_health_tests {
 }
 
 #[cfg(test)]
-mod fsm_registry_tests {
+mod transition_registry_tests {
     use super::*;
 
     #[test]
@@ -4253,12 +4152,12 @@ mod fsm_registry_tests {
     }
 
     #[test]
-    fn live_projection_registry_resolves_the_exact_canonical_fsm_closure() {
+    fn live_projection_registry_resolves_the_exact_canonical_transition_closure() {
         let registry = ProjectionService::try_sdk_cell_registry().unwrap();
-        let contracts = arkret_lattice_registry::canonical_fsm_contracts().unwrap();
+        let contracts = arkret_lattice_registry::canonical_transition_contracts().unwrap();
         assert_eq!(
             contracts.len(),
-            soland_domain::reducer::lattice_kinds::CANONICAL_SHARED_FSM_FAMILY_COUNT
+            soland_domain::reducer::state_model_kinds::CANONICAL_SHARED_TRANSITION_FAMILY_COUNT
         );
         let realm =
             RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
@@ -4268,13 +4167,10 @@ mod fsm_registry_tests {
                 CellRef::new(format!("ak:cell:{}:live-admission", contract.cell_family)).unwrap();
             let binding = registry.resolve(&realm, &cell).unwrap();
             assert_eq!(
-                binding.lattice.kind(),
-                arkret_state::lattice::LatticeKind::Fsm
+                binding.model.kind(),
+                arkret_state::state_model::StateModelKind::SequencedState
             );
-            assert_eq!(
-                binding.bottom_mode,
-                arkret_state::state::EventCellBottom::Reject
-            );
+            assert_eq!(binding.bottom_mode, None);
         }
     }
 }

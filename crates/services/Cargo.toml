@@ -14,6 +14,7 @@ default = []
 test-support = []
 
 [dependencies]
+arkret.workspace = true
 arkret-canonical.workspace = true
 arkret-event-draft.workspace = true
 arkret-identifiers.workspace = true

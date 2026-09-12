@@ -175,7 +175,7 @@ impl SyncCursorStore for PgSyncCursorStore {
         request: &soland_storage::CurrentDetailRequest,
         progress: Option<&soland_storage::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellRegistry,
+        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> PersistenceResult<soland_storage::CurrentDetailOutcome> {
         current_detail::page(&self.pool, request, progress, byte_budget, registry).await
     }

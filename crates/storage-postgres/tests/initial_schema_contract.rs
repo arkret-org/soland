@@ -55,14 +55,6 @@ fn applet_identity_winner_is_independent_from_exact_scope_installations() {
 }
 
 #[test]
-fn seal_data_event_manifest_is_created_and_dropped_symmetrically() {
-    assert!(INITIAL_UP.contains("CREATE TABLE public.state_seal_data_event_manifests"));
-    assert!(INITIAL_UP.contains("leaf_digests text[] NOT NULL"));
-    assert!(INITIAL_UP.contains("state_seal_data_event_manifests_immutable"));
-    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS state_seal_data_event_manifests CASCADE"));
-}
-
-#[test]
 fn seal_effective_state_checkpoint_is_created_and_dropped_symmetrically() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.state_seal_effective_checkpoints"));
     assert!(INITIAL_UP.contains("covered_event_digests text[] NOT NULL"));

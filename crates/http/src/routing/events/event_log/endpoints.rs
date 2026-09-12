@@ -327,7 +327,7 @@ async fn pcr_pending_control(
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     before.sort();
-    if before != request.predecessor_refs {
+    if before.as_slice() != std::slice::from_ref(&request.predecessor_ref) {
         return Err(crate::app_error!(
             FrontierUnavailable,
             "pending PCR query requires the exact current basis"
@@ -359,7 +359,7 @@ async fn pcr_pending_control(
     }
     let outcome = arkret_models_collaboration::governance_dependencies::PcrPendingControlOutcome {
         realm_id: request.realm_id.clone(),
-        predecessor_refs: before,
+        predecessor_ref: request.predecessor_ref.clone(),
         event_digests,
         has_more,
     };
@@ -445,7 +445,7 @@ async fn prepare_pcr_seal(
         signer_gate.principal_id, signer_gate.device_id, signer_gate.target_device_generation_ref
     );
     let predecessor_basis =
-        canonical::canonical_sha256(&request.predecessor_refs).map_err(|error| {
+        canonical::canonical_sha256(&request.predecessor_ref).map_err(|error| {
             crate::app_error!(
                 SchemaViolation,
                 format!("Seal preparation predecessor basis is not canonical-hashable: {error}"),
@@ -468,15 +468,15 @@ async fn prepare_pcr_seal(
         .await
         .map_err(|error| AppError::internal(format!("Seal frontier unavailable: {error}")))?;
     current.sort();
-    if current != request.predecessor_refs {
+    if current.as_slice() != std::slice::from_ref(&request.predecessor_ref) {
         return Err(crate::app_error!(
             FrontierUnavailable,
-            "availability preparation predecessor_refs are not the exact current Seal frontier",
+            "availability preparation predecessor_ref is not the exact current Seal",
         ));
     }
     let predecessor_covered = state
         .projections()
-        .predecessor_covered_events(&request.predecessor_refs)
+        .predecessor_covered_events(std::slice::from_ref(&request.predecessor_ref))
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let mut events = Vec::with_capacity(request.event_digests.len());
@@ -500,14 +500,17 @@ async fn prepare_pcr_seal(
     }
     let predecessor_state = state
         .projections()
-        .effective_state_at(&request.predecessor_refs, &request.realm_id)
+        .effective_state_at(
+            std::slice::from_ref(&request.predecessor_ref),
+            &request.realm_id,
+        )
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let digest_suites = state
         .projections()
         .seal_digest_suites_for_delta(
             &request.realm_id,
-            &request.predecessor_refs,
+            std::slice::from_ref(&request.predecessor_ref),
             &request.event_digests,
         )
         .await
@@ -523,7 +526,7 @@ async fn prepare_pcr_seal(
         .issue_availability_dependencies(
             state,
             &request.realm_id,
-            &request.predecessor_refs,
+            std::slice::from_ref(&request.predecessor_ref),
             &predecessor_state,
             &predecessor_covered.iter().cloned().collect::<Vec<_>>(),
             &events,
@@ -651,7 +654,7 @@ async fn submit_event_seal(
             "Seal submission is limited to the caller's own or delegated Agent principal-control Realm",
         ));
     }
-    let NotarySig::Single(signature) = &seal.notary_signature else {
+    let [signature] = seal.notary_signature.signatures.as_slice() else {
         return Err(crate::app_error!(
             PolicyViolation,
             "principal-control Seal submission requires one bound device signature",
@@ -799,6 +802,64 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             "Direct Conversation founding carries idempotency_key only in its body",
         );
         return;
+    }
+    let carries_transport_credential =
+        req.headers().contains_key("authorization") || req.headers().contains_key("dpop");
+    if !carries_transport_credential
+        && let SolandEventsSubmitRequestBody::Initial(submission) = &submit
+    {
+        let digest_suite = state
+            .projections()
+            .realm_digest_suite(submission.event.realm_id.as_str());
+        if let Ok(publication) =
+            arkret_wire::ProofAuthenticatedPublication::new(submission.clone(), digest_suite)
+        {
+            let signing_key = match verify_federated_event_admission(
+                state,
+                &publication.submission().event,
+                digest_suite,
+            )
+            .await
+            {
+                Ok((_, key)) => key,
+                Err(error) if error.starts_with("dependency_missing:") => {
+                    render_error(res, StatusCode::CONFLICT, "dependency_missing", &error);
+                    return;
+                }
+                Err(error) => {
+                    render_error(res, StatusCode::BAD_REQUEST, "invalid_proof", &error);
+                    return;
+                }
+            };
+            let event = &publication.submission().event;
+            let signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+            let now = crate::wire::now();
+            let session = SessionRecord {
+                token_hash: format!("proof-authenticated:{}", event.event_id),
+                account_pk: None,
+                actor: signer.signing_principal_id().to_string(),
+                device_id: String::new(),
+                audience: state.service_id().clone(),
+                session_public_key: None,
+                agent_session: None,
+                session_grant: None,
+                expires_at: now + chrono::Duration::minutes(5),
+                created_at: now,
+                revoked_at: None,
+            };
+            let admission = InternalEventAdmission::proof_authenticated_event(
+                event,
+                String::new(),
+                signing_key,
+            );
+            match submit_proof_authenticated_publication(state, &session, publication, &admission)
+                .await
+            {
+                Ok(response) => res.render(Json(response.outcome)),
+                Err(error) => render_submit_one_error(res, error),
+            }
+            return;
+        }
     }
     let Some(session) = auth_or_render(state, req, res).await else {
         return;

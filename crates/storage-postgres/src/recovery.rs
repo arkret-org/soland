@@ -665,7 +665,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             // excludes backup insert/delete phantoms while the frozen manifest commits.
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(realm).execute(&mut *conn).await.map_err(PersistenceError::database)?;
             sql_query("LOCK TABLE key_backups IN SHARE MODE").execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_refs ? parent.id) ORDER BY parent.id ASC")
+            let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_ref = parent.id) ORDER BY parent.id ASC")
                 .bind::<Text,_>(realm).load::<SnapshotText>(&mut *conn).await.map_err(PersistenceError::database)?.into_iter().map(|row|Value::String(row.value)).collect::<Vec<_>>();
             if Value::Array(leaves)!=snapshot["seal_basis"]["leaves"] {return Err(PersistenceError::Conflict("backup_frontier_stale".to_owned()).into());}
             let revision=sql_query("SELECT COALESCE((SELECT revision FROM key_backup_list_revisions WHERE actor_id=$1),0)::bigint AS revision")

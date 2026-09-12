@@ -5,7 +5,7 @@ use arkret_models_crypto::{
     MlsAcceptedArtifactOutcome, MlsAcceptedArtifactRequestBody, MlsCommitPayload, MlsEpochHead,
     MlsGovernanceBindingPayload,
 };
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 
 use super::*;
 
@@ -160,7 +160,7 @@ async fn materialize(
         query.mls_group_id.as_str(),
     )
     .map_err(unavailable)?;
-    let Some(CellState::Value(value)) = accepted.get(&cell) else {
+    let Some(ResolvedCellState::Value(value)) = accepted.get(&cell) else {
         return Err(unavailable("MLS epoch has no unique accepted value"));
     };
     let current: MlsEpochHead = serde_json::from_value(value.clone()).map_err(unavailable)?;

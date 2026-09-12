@@ -257,10 +257,10 @@ pub(crate) async fn submit_sidecar_ensure_batch(
         .map_err(SubmitOneError::semantic_schema_violation)?;
     let mut staged = state.projections().snapshot();
     let hlc = soland_domain::hlc::ServerHlc::new("sidecar-ensure-preflight");
-    let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+    let registry = soland_domain::reducer::state_model_kinds::default_cell_family_registry();
     for event in &prepared {
-        if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
-            staged.apply_via_lattice_registry(&event.operation, &event.cell_writes, &hlc, &registry)
+        if let soland_domain::reducer::ProjectionEffect::Rejected { reason } = staged
+            .apply_via_state_model_registry(&event.operation, &event.cell_writes, &hlc, &registry)
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,

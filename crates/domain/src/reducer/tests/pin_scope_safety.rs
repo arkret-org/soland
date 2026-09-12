@@ -197,7 +197,7 @@ fn pin_rejects_quarantined_message_target() {
     seed_scoped_message(&mut state, &hlc);
     state.cells.insert(
         CellRef::new("ak:cell:ak.component.moderation_state.v1:decision-pin-quarantine").unwrap(),
-        CellState::Value(serde_json::json!([{
+        ResolvedCellState::Value(serde_json::json!([{
             "tag": "decision-pin-quarantine",
             "value": {
                 "decision_id": "decision-pin-quarantine",
@@ -223,7 +223,7 @@ fn pin_rejects_active_moderation_decision_head() {
             "ak:cell:ak.component.moderation_state.v1:{MESSAGE_EVENT_ID}"
         ))
         .unwrap(),
-        CellState::Value(serde_json::json!([{
+        ResolvedCellState::Value(serde_json::json!([{
             "tag": "hard_deny:ak:did_core:web:mod.example:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "value": {
                 "decision_id": "ak:event:AaCSkmkJGCJsdlTB9SXNQ9Ohes5_op9NMMetO0Trkf0q",

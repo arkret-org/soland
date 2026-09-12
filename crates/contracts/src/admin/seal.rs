@@ -6,19 +6,13 @@ use serde_json::Value;
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NotaryKind {
-    SingleSigner,
-    Threshold,
-    OpenSet,
-    Mixed,
+    Quorum,
 }
 
 impl NotaryKind {
     pub fn label(&self) -> &'static str {
         match self {
-            NotaryKind::SingleSigner => "single_signer",
-            NotaryKind::Threshold => "threshold",
-            NotaryKind::OpenSet => "open_set",
-            NotaryKind::Mixed => "mixed",
+            NotaryKind::Quorum => "quorum",
         }
     }
 }
@@ -33,12 +27,7 @@ pub struct AdminNotaryValue {
 
 impl AdminNotaryValue {
     pub fn kind(&self) -> NotaryKind {
-        match &self.notary {
-            arkret_wire::NotaryValue::SingleSigner { .. } => NotaryKind::SingleSigner,
-            arkret_wire::NotaryValue::Threshold { .. } => NotaryKind::Threshold,
-            arkret_wire::NotaryValue::OpenSet { .. } => NotaryKind::OpenSet,
-            arkret_wire::NotaryValue::Mixed { .. } => NotaryKind::Mixed,
-        }
+        NotaryKind::Quorum
     }
 
     pub fn kind_label(&self) -> String {
@@ -46,26 +35,11 @@ impl AdminNotaryValue {
     }
 
     pub fn summary(&self) -> String {
-        match &self.notary {
-            arkret_wire::NotaryValue::SingleSigner { signer, .. } => {
-                format!("single_signer({})", signer.actor_id)
-            }
-            arkret_wire::NotaryValue::Threshold {
-                threshold, signers, ..
-            } => format!("threshold({threshold}/{})", signers.len()),
-            arkret_wire::NotaryValue::OpenSet { signers } => {
-                format!("open_set(n={})", signers.len())
-            }
-            arkret_wire::NotaryValue::Mixed {
-                signer,
-                recovery_signers,
-                ..
-            } => format!(
-                "mixed(primary={}, recovery_n={})",
-                signer.actor_id,
-                recovery_signers.len()
-            ),
-        }
+        format!(
+            "quorum(f={}, n={})",
+            self.notary.fault_tolerance,
+            self.notary.signers.len()
+        )
     }
 }
 
@@ -218,11 +192,6 @@ impl BottomKindExt for BottomKind {
     fn label(&self) -> &'static str {
         match self {
             BottomKind::Conflict => "Conflict",
-            BottomKind::InvalidTransition => "Invalid Transition",
-            BottomKind::MissingDependency => "Missing Dependency",
-            BottomKind::Unauthorized => "Unauthorized",
-            BottomKind::NotarySplit => "Notary Split",
-            BottomKind::SchemaError => "Schema Error",
         }
     }
 }

@@ -8,7 +8,7 @@
 //! The claim has exactly two proof forms and they are not interchangeable:
 //! inside the atomic genesis unit the root is the value the batch's own
 //! `ak.realm.create` derived (no accepted Seal covers it yet), and everywhere
-//! else it MUST be read out of an accepted-Seal inclusion proof. Accepting one
+//! else it MUST be read from the Event's signed governance basis. Accepting one
 //! in the other's context would let a genesis-window credential be replayed for
 //! the lifetime of the Realm, so a mismatch is rejected as
 //! `realm_authority_controller_mismatch`.
@@ -147,14 +147,20 @@ async fn accepted_seal_root(
     let cell = arkret_identifiers::CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
         .expect("the authority-root cell ref constant is well-formed");
     let value = match effective.get(&cell) {
-        Some(arkret_state::lattice::CellState::Value(value)) => value.clone(),
-        Some(arkret_state::lattice::CellState::Bottom(_)) => {
+        Some(arkret_state::state_model::ResolvedCellState::Bottom(_)) => {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "realm_authority_root_conflict",
                 "the Realm authority-root cell is in conflict at the Event's governance basis",
             ));
         }
+        Some(state) => state.settled_value().cloned().ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "realm_authority_root_conflict",
+                "the Realm authority-root cell has unresolved concurrent values",
+            )
+        })?,
         None => {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -173,18 +179,26 @@ async fn accepted_seal_root(
     })
 }
 
-/// Seal leaves the Event pins its authorization pre-state to.
+/// Safety references the Event pins its authorization pre-state to.
 ///
-/// A DataEvent names one accepted Seal in `seal_ref`; a Control Move names its
-/// joined basis in `seal_basis.leaves`. An Event with neither carries no
+/// A DataEvent names accepted decisions in `auth_context.authority_refs`; a
+/// Control Move names its predecessor in `seal_basis.leaves`. An Event with neither carries no
 /// accepted-Seal proof at all and cannot speak for the authority root.
 fn governance_basis_leaves(
     object: &serde_json::Map<String, Value>,
 ) -> Result<Vec<arkret_identifiers::SealId>, EventValidationError> {
     let mut raw = Vec::new();
-    if let Some(seal_ref) = event_string_field(object, &["seal_ref"]) {
-        raw.push(seal_ref);
-    }
+    raw.extend(
+        object
+            .get("auth_context")
+            .and_then(Value::as_object)
+            .and_then(|context| context.get("authority_refs"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned),
+    );
     raw.extend(
         object
             .get("seal_basis")

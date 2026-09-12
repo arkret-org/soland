@@ -360,7 +360,7 @@ async fn plan_consent_revoke(
     validate_consent_intent(&holder_account_id, &cell.peer)?;
 
     // The reducer's removal set and the signed payload MUST be the same set
-    // (§3.3): schema validation, audit projection and the lattice reducer all
+    // (§3.3): schema validation, audit projection and the state model reducer all
     // see one revocation set or none of them can be trusted.
     let projected = projected_consent_remove_dots(state, event, cell_id.as_str())?;
     let payload_set = observed_dot_ids.iter().cloned().collect::<BTreeSet<_>>();
@@ -529,7 +529,7 @@ async fn seal_basis_event_view(
         for digest in seal.delta.iter().chain(seal.covered_event_digests.iter()) {
             covered_event_digests.insert(digest.as_str().to_owned());
         }
-        pending.extend(seal.predecessor_refs.iter().cloned());
+        pending.extend(seal.predecessor_ref.iter().cloned());
     }
     Ok(SealBasisEventView {
         covered_event_digests,
@@ -1322,7 +1322,7 @@ async fn plan_holder_quarantine_invalidation(
 /// Record the eager invalidation a committed revoke performed.
 ///
 /// A `consent_scope=any` revoke invalidates every concrete scope's cache
-/// entries; that is a cache rule, not a lattice rule, so it never adds or
+/// entries; that is a cache rule, not a state model rule, so it never adds or
 /// removes a dot the payload did not name.
 async fn emit_consent_revoke_invalidation(
     state: &AppState,

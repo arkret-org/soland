@@ -247,11 +247,11 @@ fn validate_registration_epoch_proof_method(
     verification_method: &str,
     label: &str,
 ) -> Result<(), String> {
-    if event.proofs.iter().any(|proof| {
-        proof
-            .as_producer()
-            .is_none_or(|proof| proof.verification_method != verification_method)
-    }) {
+    if event
+        .proofs
+        .iter()
+        .any(|proof| proof.verification_method != verification_method)
+    {
         return Err(format!(
             "stored {label} Event proof is outside the Applet registration epoch"
         ));

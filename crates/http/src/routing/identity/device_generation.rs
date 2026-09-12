@@ -491,7 +491,7 @@ pub async fn accepted_device_generation_seal_leaves(
             .await
             .map_err(|error| ServiceError::internal(format!("Seal lookup unavailable: {error}")))?
             .ok_or_else(|| ServiceError::internal(format!("Seal {seal_id} is missing")))?;
-        pending.extend(seal.predecessor_refs);
+        pending.extend(seal.predecessor_ref);
     }
     let accepted_snapshot = accepted.iter().cloned().collect::<Vec<_>>();
     for seal_id in accepted_snapshot {
@@ -500,7 +500,7 @@ pub async fn accepted_device_generation_seal_leaves(
             .seal_by_id(&seal_id)
             .await
             .map_err(|error| ServiceError::internal(format!("Seal lookup unavailable: {error}")))?
-            .map(|seal| seal.predecessor_refs)
+            .map(|seal| seal.predecessor_ref)
             .unwrap_or_default();
         let mut seen = BTreeSet::new();
         while let Some(ancestor) = ancestors.pop() {
@@ -517,7 +517,7 @@ pub async fn accepted_device_generation_seal_leaves(
                         ServiceError::internal(format!("Seal lookup unavailable: {error}"))
                     })?
             {
-                ancestors.extend(seal.predecessor_refs);
+                ancestors.extend(seal.predecessor_ref);
             }
         }
     }

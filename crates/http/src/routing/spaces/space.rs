@@ -57,7 +57,7 @@ struct SpaceCellOutcome {
     cell_family: String,
     space_id: String,
     state: String,
-    lattice: String,
+    state_model: String,
     value: Value,
     total: usize,
 }
@@ -122,7 +122,7 @@ async fn get_space_cell(
         cell_family: CHILD_ORDER_CELL_FAMILY.to_owned(),
         space_id,
         state: "value".to_owned(),
-        lattice: arkret_state::lattice::LatticeKind::OrderedLog
+        state_model: arkret_state::state_model::StateModelKind::OrderedLog
             .as_wire_str()
             .to_owned(),
         value,
@@ -641,7 +641,7 @@ pub(crate) async fn invite_token_realm_resolution(
     };
     let Ok(batches) = state
         .projections()
-        .sealed_op_batches_for_cell(&realm_id, &lifecycle_cell)
+        .confirmed_write_batches_for_cell(&realm_id, &lifecycle_cell)
         .await
     else {
         return InviteTokenRealmResolution::FrontierUnavailable;
@@ -651,7 +651,7 @@ pub(crate) async fn invite_token_realm_resolution(
         .filter_map(|(_, ops)| {
             let covered_ops = ops
                 .into_iter()
-                .filter(|issued| covered_events.contains(&issued.op.move_id))
+                .filter(|issued| covered_events.contains(&issued.op.event_id.event_digest()))
                 .collect::<Vec<_>>();
             (!covered_ops.is_empty()).then_some(covered_ops)
         })
@@ -662,9 +662,12 @@ pub(crate) async fn invite_token_realm_resolution(
     let Ok(binding) = state.projections().resolve_cell(&realm_id, &lifecycle_cell) else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };
-    let lifecycle =
-        arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &lifecycle_cell, &batches)
-            .into_value();
+    let Ok(lifecycle) =
+        arkret_state::join_cell_seal_batches(binding.model.as_ref(), &lifecycle_cell, &batches)
+    else {
+        return InviteTokenRealmResolution::FrontierUnavailable;
+    };
+    let lifecycle = lifecycle.into_value();
     match lifecycle
         .as_ref()
         .and_then(|value| value.as_str().or_else(|| value.get("state")?.as_str()))
@@ -884,14 +887,11 @@ mod tests {
             id: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64)))
                 .unwrap(),
             realm_id: RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap(),
-            predecessor_refs,
+            predecessor_ref: predecessor_refs.into_iter().next(),
             delta,
             control_event_set_root: test_hash(0x22),
             state_root: test_hash(0x77),
-            completeness_root: test_hash(0x33),
             notary_seq,
-            data_view_root: None,
-            data_event_set_root: None,
             availability_receipt_digests: Vec::new(),
             covered_event_digests: Vec::new(),
             previous_state_root: None,
@@ -989,16 +989,16 @@ mod tests {
         .unwrap();
         state
             .projections()
-            .test_append_sealed_effects(
+            .test_append_confirmed_effects(
                 &RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap(),
                 &create_seal.id,
                 &[(
                     lifecycle_cell,
-                    arkret_state::lattice::ordered_log::IssuedOp {
+                    arkret_state::state_model::ordered_log::IssuedOp {
                         issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
                             "did:web:owner.example",
                         )),
-                        op: arkret_state::lattice::SealedOp::new(
+                        op: arkret_state::state_model::StateWrite::new(
                             create_move,
                             arkret_wire::LatticeOp {
                                 op_type: arkret_wire::LatticeOpType::Transition,

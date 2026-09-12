@@ -31,7 +31,9 @@ pub fn build_app_state(
 ) -> anyhow::Result<AppState> {
     let cell_registry = soland_services::projection::ProjectionService::try_sdk_cell_registry()
         .map_err(|error| {
-            anyhow::anyhow!("canonical shared FSM registry failed startup validation: {error}")
+            anyhow::anyhow!(
+                "canonical shared transition registry failed startup validation: {error}"
+            )
         })?;
     let stores =
         soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
@@ -95,10 +97,9 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
         expected_store_frontier: &[arkret_wire::SealId],
         new_ops: &[(
             arkret_identifiers::CellRef,
-            arkret_state::lattice::ordered_log::IssuedOp,
+            arkret_state::state_model::ordered_log::IssuedOp,
         )],
         covered: &BTreeSet<arkret_wire::Hash>,
-        data_event_leaf_manifest: Option<&BTreeSet<arkret_wire::Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> arkret_state::state::StoreResult<bool> {
         self.0
@@ -108,17 +109,9 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
                 expected_store_frontier,
                 new_ops,
                 covered,
-                data_event_leaf_manifest,
                 governance_dependencies,
             )
             .await
-    }
-
-    async fn data_event_leaf_manifest(
-        &self,
-        seal_id: &arkret_wire::SealId,
-    ) -> arkret_state::state::StoreResult<Option<BTreeSet<arkret_wire::Hash>>> {
-        self.0.data_event_leaf_manifest(seal_id).await
     }
 
     async fn effective_state_checkpoint(
@@ -138,7 +131,6 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
                         covered_event_digests: checkpoint.covered_event_digests,
                         covered_seal_ids: checkpoint.covered_seal_ids,
                         state: checkpoint.state,
-                        cas_heads: checkpoint.cas_heads,
                     }
                 })
             })

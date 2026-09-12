@@ -12,7 +12,7 @@ use crate::artifacts;
 
 // R3.1 spec-sync (2026-05-27, arkret-spec @ 7157ee8) — Realm-scoped
 // MemberIdentity append-only replacement event. Cell family
-// `ak.component.member.identity.v1`; lattice `ordered_log`; bottom
+// `ak.component.member.identity.v1`; state model `ordered_log`; bottom
 // `expose`. Composite cell subject is
 // `(payload.realm_id, payload.actor_id, payload.segment)`. Reducer
 // dispatch lives in `reducer::apply_member_identity_update`; persistence
@@ -32,8 +32,8 @@ use crate::artifacts;
 // lives client-side (inkson) and at the applet service itself.
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
 // NOT advance the seal frontier / actor_seq). Wire-accepted only.
-// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — agent lifecycle FSM
-// event kinds. `lattice` is `fsm` with `bottom=reject`; deactivate is
+// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — agent lifecycle transition
+// event kinds. `state model` is `transition` with `bottom=reject`; deactivate is
 // terminal. Reducer enforcement of the (active → paused → active →
 // deactivated) transitions lives in `reducer::apply_agent_lifecycle`
 // (REDU-1).
@@ -95,7 +95,7 @@ use crate::artifacts;
 // `ak.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.
 // Reducer maintains a `ak.component.realm.inheritance_policy.v1`
-// cas-register cell; capability derivation runs against the projected
+// registered state model cell; capability derivation runs against the projected
 // chain alongside `ak.capability.derived`.
 // Realm graph + capability derivation event kinds. Reducer dispatch
 // (`apply_realm_link` / `apply_realm_inheritance_policy` /

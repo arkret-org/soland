@@ -812,7 +812,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
         request: &soland_storage::CurrentDetailRequest,
         progress: Option<&soland_storage::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellRegistry,
+        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> crate::ServiceResult<soland_storage::CurrentDetailOutcome> {
         Ok(self
             .0

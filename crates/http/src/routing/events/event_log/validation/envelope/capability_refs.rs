@@ -1,11 +1,10 @@
 use super::*;
 
-/// Verify a DataEvent's authorization against the accepted governance basis at
-/// its `seal_ref`.
+/// Verify a DataEvent's authorization against its signed authority references.
 ///
 /// `event-auth-state-resolution.md` §4.1(3) / §4.3(2): the verifier resolves
 /// every capability the `kind`, the scope and the receiver-derived targets need
-/// from the `seal_ref` governance state — **the producer does not select
+/// from the `auth_context.authority_refs` governance state — **the producer does not select
 /// candidate grants**. `event-and-patch.md` §2.2 states the same in the
 /// negative: `effects` and producer-selected `auth_context.capability_refs` are
 /// not v1 wire fields and a receiver MUST answer `schema_violation` when it
@@ -18,8 +17,8 @@ use super::*;
 ///   (`arkret_schema::project_registered_cell_writes`), which replaces the producer's `effects[]`
 ///   as the set the capability must cover;
 /// - `refs[]` entries with `role=authorized_by` — semantic, non-authoritative citations that MUST
-///   still resolve and be valid at `seal_ref`, exactly as `arkret_state`'s `verify_capability_refs`
-///   requires of a Control Move.
+///   still resolve and be valid at the signed authority basis, exactly as `arkret_state`'s
+///   `verify_capability_refs` requires of a Control Move.
 pub(in crate::routing::events::event_log) async fn validate_data_event_capability_refs(
     state: &AppState,
     _actor_id: &str,
@@ -30,7 +29,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
     derived_cells: &[String],
     realm_authority_root_authorized: bool,
 ) -> Result<(), EventValidationError> {
-    let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
+    let is_data_event = object.contains_key("auth_context");
     if !is_data_event {
         return Ok(());
     }
@@ -48,23 +47,6 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             "effects is not a v1 Event Envelope field; reducer targets are derived from kind + payload",
         ));
     }
-    let seal_ref = object
-        .get("seal_ref")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "DataEvent requires seal_ref to resolve the authorization pre-state",
-            )
-        })?;
-    let seal_id = arkret_identifiers::SealId::new(seal_ref.to_owned()).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "DataEvent seal_ref must be a valid ak:seal id",
-        )
-    })?;
     let realm = RealmId::new(realm_id.to_owned()).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -86,9 +68,41 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "auth_context is closed over {did, key_id, key_epoch, credential_epoch}; effective capabilities are derived from the governance basis at seal_ref",
+            "auth_context is closed over key coordinates and authority_refs; effective capabilities are derived from the signed authority basis",
         ));
     }
+    let authority_refs = auth_context
+        .get("authority_refs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "DataEvent auth_context requires authority_refs",
+            )
+        })?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "DataEvent authority_refs entries must be Seal ids",
+                    )
+                })
+                .and_then(|value| {
+                    arkret_identifiers::SealId::new(value.to_owned()).map_err(|_| {
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "schema_violation",
+                            "DataEvent authority_refs entry is not a valid ak:seal id",
+                        )
+                    })
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     if derived_cells.is_empty() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -104,27 +118,38 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         )
     })?;
 
-    let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id).await?;
+    let state_at_ref = data_event_state_at_authority_refs(state, &realm, &authority_refs).await?;
     let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
-    let auth_time = state
-        .projections()
-        .seal_by_id(&seal_id)
-        .await
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                format!("DataEvent seal_ref lookup failed: {error}"),
-            )
-        })?
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "DataEvent seal_ref is not projected",
-            )
-        })?
-        .sealed_at;
+    let mut auth_time: Option<chrono::DateTime<chrono::Utc>> = None;
+    for authority_ref in &authority_refs {
+        let sealed_at = state
+            .projections()
+            .seal_by_id(authority_ref)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    format!("DataEvent authority reference lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "DataEvent authority reference is not projected",
+                )
+            })?
+            .sealed_at;
+        auth_time = Some(auth_time.map_or(sealed_at, |current| current.max(sealed_at)));
+    }
+    let auth_time = auth_time.ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent authority_refs must not be empty",
+        )
+    })?;
     let historical_snapshot: Vec<crate::authz::Grant> =
         historical_grants.values().cloned().collect();
     // Applet capability checks use the actual producer, including a service
@@ -198,7 +223,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                 StatusCode::FORBIDDEN,
                 "authorization_ref_inactive",
                 format!(
-                    "applet authorization_ref {authorization_ref} is not projected at seal_ref"
+                    "applet authorization_ref {authorization_ref} is not projected at the authority basis"
                 ),
             )
         })?;
@@ -224,7 +249,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                 StatusCode::FORBIDDEN,
                 "authorization_ref_inactive",
                 format!(
-                    "applet authorization_ref {authorization_ref} is revoked, expired, or delegation-broken at seal_ref"
+                    "applet authorization_ref {authorization_ref} is revoked, expired, or delegation-broken at the authority basis"
                 ),
             ));
         }
@@ -261,7 +286,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent authorized_by grant {grant_id} is not projected at seal_ref"),
+                format!("DataEvent authorized_by grant {grant_id} is not projected at the authority basis"),
             )
         })?;
         if crate::authz::grant_revoked_upstream(&historical_snapshot, grant_id, auth_time) {
@@ -417,7 +442,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                     StatusCode::FORBIDDEN,
                     "capability_denied",
                     format!(
-                        "no capability at seal_ref covers action {kind} on derived cell {cell}"
+                        "no capability at the authority basis covers action {kind} on derived cell {cell}"
                     ),
                 ));
             };
@@ -479,10 +504,8 @@ fn data_event_authorized_by_refs(
 }
 
 /// Re-check every capability actually used by this candidate against the
-/// origin's current authoritative control view. This is an admission-time
-/// fence only: accepted/federated Events carry `station_admission` and never
-/// re-enter this gate, so a later revocation blocks new admissions without
-/// invalidating history.
+/// receiver's current known control view. This is a live-admission fence: a
+/// later known revocation blocks new admissions without rewriting history.
 async fn validate_current_data_event_admission(
     state: &AppState,
     realm: &RealmId,
@@ -536,55 +559,67 @@ async fn validate_current_data_event_admission(
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
             "capability_denied",
-            format!("capability {inactive} is not active at origin admission"),
+            format!("capability {inactive} is not active at local admission"),
         ));
     }
     Ok(())
 }
 
-pub(super) async fn data_event_state_at_seal_ref(
+pub(super) async fn data_event_state_at_authority_refs(
     state: &AppState,
     realm: &RealmId,
-    seal_id: &arkret_identifiers::SealId,
+    authority_refs: &[arkret_identifiers::SealId],
 ) -> Result<
-    std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
     EventValidationError,
 > {
-    let seal = state
-        .projections()
-        .seal_by_id(seal_id)
-        .await
-        .map_err(|error| {
-            event_validation_error(
+    if authority_refs.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent authority_refs must not be empty",
+        ));
+    }
+    for authority_ref in authority_refs {
+        let seal = state
+            .projections()
+            .seal_by_id(authority_ref)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    format!("DataEvent authority reference lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "DataEvent authority reference is not projected",
+                )
+            })?;
+        if seal.realm_id != *realm {
+            return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent seal_ref lookup failed: {error}"),
-            )
-        })?;
-    let Some(seal) = seal else {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "DataEvent seal_ref is not projected",
-        ));
-    };
-    if seal.realm_id != *realm {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "DataEvent seal_ref does not belong to the event realm",
-        ));
+                "DataEvent authority reference belongs to another Realm",
+            ));
+        }
     }
 
     let state_at_ref = state
         .projections()
-        .effective_state_at(std::slice::from_ref(seal_id), realm)
+        .effective_state_at(authority_refs, realm)
         .await
         .map_err(|error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent seal_ref pre-state could not be resolved: {error}"),
+                format!("DataEvent authority pre-state could not be resolved: {error}"),
             )
         })?;
 
@@ -594,7 +629,7 @@ pub(super) async fn data_event_state_at_seal_ref(
 pub(super) fn data_event_grants_from_state_at_ref(
     state_at_ref: &std::collections::BTreeMap<
         arkret_identifiers::CellRef,
-        arkret_state::lattice::CellState,
+        arkret_state::state_model::ResolvedCellState,
     >,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
     let mut grants = std::collections::BTreeMap::new();

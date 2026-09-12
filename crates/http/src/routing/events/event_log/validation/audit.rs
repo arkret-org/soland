@@ -356,7 +356,7 @@ mod tests {
         strand_watch_set_payload(others_watch_write().as_object().unwrap())
             .expect("the fixture write carries a valid strand_watch_set payload")
             .cell_ref()
-            .expect("the watch payload resolves its cas_register cell")
+            .expect("the watch payload resolves its causal_register cell")
             .as_str()
             .to_owned()
     }

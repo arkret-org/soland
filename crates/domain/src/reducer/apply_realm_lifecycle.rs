@@ -176,7 +176,7 @@ impl ProjectionState {
                     arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
                 ),
             ),
-            CellState::Value(Value::String(target.to_owned())),
+            ResolvedCellState::Value(Value::String(target.to_owned())),
         );
         ProjectionEffect::RealmLifecycle {
             realm_id,
@@ -321,7 +321,7 @@ impl ProjectionState {
                 realm_id.clone(),
                 arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
             ),
-            CellState::Value(value),
+            ResolvedCellState::Value(value),
         );
         ProjectionEffect::RealmLifecycle {
             realm_id,
@@ -401,7 +401,7 @@ impl ProjectionState {
     /// actor's own initial `null -> join` write. Re-running the ordinary join
     /// gate here would reject every invite-only Realm before it can acquire
     /// its first member. Keep the bypass narrow by independently checking the
-    /// accepted envelope actor and the receiver-derived FSM write before
+    /// accepted envelope actor and the receiver-derived transition write before
     /// materializing the membership projection.
     pub fn apply_validated_realm_bootstrap_membership(
         &mut self,
@@ -473,7 +473,7 @@ impl ProjectionState {
     /// four-Event validator has already established those relationships and
     /// the exact pair. Keep this reducer-side bootstrap bypass scoped to that
     /// caller context and independently require the Direct Conversation Realm
-    /// role, registered reason, absent prior membership and derived FSM write.
+    /// role, registered reason, absent prior membership and derived transition write.
     pub fn apply_validated_direct_conversation_bootstrap_membership(
         &mut self,
         operation: &Operation,
@@ -580,7 +580,7 @@ impl ProjectionState {
         member: String,
         realm_id: String,
     ) -> ProjectionEffect {
-        // Side-band data: `role` lives outside the FSM cell and is captured
+        // Side-band data: `role` lives outside the transition cell and is captured
         // here for the structured cache. `joined_at` is set on the first
         // `join` transition; subsequent transitions preserve the original.
         let role = payload
@@ -627,7 +627,7 @@ impl ProjectionState {
             self.agent_membership_bindings.insert(key.clone(), binding);
         }
 
-        // Update the structured cache with side-band + FSM state mirror.
+        // Update the structured cache with side-band + transition state mirror.
         self.members.insert(
             key.clone(),
             SolandMembershipState {
@@ -678,7 +678,7 @@ impl ProjectionState {
         {
             self.cells.insert(
                 cell_id,
-                CellState::Value(Value::String(new_state.to_owned())),
+                ResolvedCellState::Value(Value::String(new_state.to_owned())),
             );
         }
 
@@ -890,7 +890,7 @@ impl ProjectionState {
     }
 
     /// The registered cell family that backs `ak.realm.profile` display state
-    /// and its CAS-register / bottom mechanics. Its
+    /// and its registered state model / bottom mechanics. Its
     /// wire subject is the literal `null`; `realm_id` is the enclosing
     /// CellStore namespace and remains a side-band map key.
     ///
@@ -912,7 +912,7 @@ impl ProjectionState {
                 let realm_id = operation.realm_id.to_string();
                 if matches!(
                     self.realm_profile_cells.get(&realm_id),
-                    Some(CellState::Bottom(_))
+                    Some(ResolvedCellState::Bottom(_))
                 ) {
                     return Err("cell_bottom_state");
                 }
@@ -964,13 +964,14 @@ impl ProjectionState {
         // Keep the structured cache and the canonical cells map in sync.
         //
         // Per spec event-kind-registry, each ak.realm.* lifecycle event
-        // writes a distinct cell family with its own lattice:
+        // writes a distinct cell family with its own state model:
         //   ak.realm.create     → ak.component.realm.create.v1  (genesis singleton)
-        //   ak.realm.profile    → ak.component.realm.profile.v1 (cas-register, singleton)
-        //   ak.realm.archive    → ak.component.realm.archive.v1 (cas-register, singleton)
-        //   ak.realm.freeze     → ak.component.realm.freeze.v1 (cas-register, singleton)
-        //   ak.realm.tombstone  → ak.component.realm.tombstone.v1 (cas-register, singleton)
-        //   ak.realm.destroy    → ak.component.realm.destroy.v1 (cas-register, singleton)
+        //   ak.realm.profile    → ak.component.realm.profile.v1 (registered state model, singleton)
+        //   ak.realm.archive    → ak.component.realm.archive.v1 (registered state model, singleton)
+        //   ak.realm.freeze     → ak.component.realm.freeze.v1 (registered state model, singleton)
+        //   ak.realm.tombstone  → ak.component.realm.tombstone.v1 (registered state model,
+        // singleton)   ak.realm.destroy    → ak.component.realm.destroy.v1 (registered
+        // state model, singleton)
         //
         // Stream-F (Wave 1B): tombstone and destroy are both terminal but
         // write distinct cell families. Bottom = reject; a second
@@ -1140,7 +1141,7 @@ impl ProjectionState {
 
         // Stream-F (Wave 1B): terminal-state preflight. A Realm already
         // in `tombstoned` or `destroyed` state MUST NOT accept another
-        // terminal-state write (cell family is cas-register with
+        // terminal-state write (cell family is registered state model with
         // bottom=reject; the structured cache mirrors that).
         if let Some(existing) = self.realm_states.get(&realm_id)
             && existing.terminal_state.is_some()
@@ -1307,18 +1308,18 @@ impl ProjectionState {
         }
         realm.updated_at = now;
 
-        // Cells map: synth a CellState::Value per the spec cell family
+        // Cells map: synth a ResolvedCellState::Value per the spec cell family
         // for this canonical kind.
         match &kind {
             arkret_wire::EventKind::RealmCreate => {
                 self.realm_create_cells.insert(
                     realm_id.clone(),
-                    CellState::Value(Value::Array(vec![Value::String(realm_id.clone())])),
+                    ResolvedCellState::Value(Value::Array(vec![Value::String(realm_id.clone())])),
                 );
                 if let Some(genesis) = payload_object {
                     self.realm_null_subject_cells.insert(
                         (realm_id.clone(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-                        CellState::Value(Value::Object(genesis.clone())),
+                        ResolvedCellState::Value(Value::Object(genesis.clone())),
                     );
                 }
                 if let Some(history_access) = payload_object.and_then(|object| {
@@ -1343,12 +1344,12 @@ impl ProjectionState {
                             realm_id.clone(),
                             "ak:cell:ak.component.realm.history_access.v1:null".to_owned(),
                         ),
-                        CellState::Value(Value::String(history_access.to_owned())),
+                        ResolvedCellState::Value(Value::String(history_access.to_owned())),
                     );
                 }
                 if let Some(notary) = payload_object.and_then(|object| object.get("notary")) {
                     self.realm_notary_cells
-                        .insert(realm_id.clone(), CellState::Value(notary.clone()));
+                        .insert(realm_id.clone(), ResolvedCellState::Value(notary.clone()));
                 }
                 if let Some(authority_root) = authority_root {
                     self.realm_null_subject_cells.insert(
@@ -1356,7 +1357,7 @@ impl ProjectionState {
                             realm_id.clone(),
                             arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
                         ),
-                        CellState::Value(authority_root),
+                        ResolvedCellState::Value(authority_root),
                     );
                 }
                 if let Some(reducer_profile) = create_reducer_profile {
@@ -1368,22 +1369,24 @@ impl ProjectionState {
                                 arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
                             ),
                         ),
-                        CellState::Value(Value::String(reducer_profile)),
+                        ResolvedCellState::Value(Value::String(reducer_profile)),
                     );
                 }
                 if let Some(resolution) = principal_genesis_resolution {
                     self.realm_null_subject_cells.insert(
                         (realm_id.clone(), PRINCIPAL_RESOLUTION_CELL.to_owned()),
-                        CellState::Value(resolution),
+                        ResolvedCellState::Value(resolution),
                     );
                 }
                 // The Agent PCR genesis is the sole transition from
-                // the internal FSM state `uninitialized` to the first public
+                // the internal transition state `uninitialized` to the first public
                 // state `active`. Provision admission only reserves/declares
                 // the future PCR and must never activate this cell early.
                 if let Some((agent_actor_id, cell)) = agent_status {
-                    self.cells
-                        .insert(cell, CellState::Value(Value::String("active".to_owned())));
+                    self.cells.insert(
+                        cell,
+                        ResolvedCellState::Value(Value::String("active".to_owned())),
+                    );
                     self.agent_lifecycles
                         .insert(agent_actor_id, AgentLifecycleState::Active);
                 }
@@ -1391,7 +1394,7 @@ impl ProjectionState {
             arkret_wire::EventKind::RealmProfile => {
                 self.realm_profile_cells.insert(
                     realm_id.clone(),
-                    CellState::Value(operation.payload.clone()),
+                    ResolvedCellState::Value(operation.payload.clone()),
                 );
             }
             arkret_wire::EventKind::RealmArchive | arkret_wire::EventKind::RealmRestore => {
@@ -1400,7 +1403,9 @@ impl ProjectionState {
                         realm_id.clone(),
                         "ak:cell:ak.component.realm.archive.v1:null".to_owned(),
                     ),
-                    CellState::Value(Value::Bool(kind == arkret_wire::EventKind::RealmArchive)),
+                    ResolvedCellState::Value(Value::Bool(
+                        kind == arkret_wire::EventKind::RealmArchive,
+                    )),
                 );
             }
             arkret_wire::EventKind::RealmFreeze | arkret_wire::EventKind::RealmUnfreeze => {
@@ -1409,7 +1414,9 @@ impl ProjectionState {
                         realm_id.clone(),
                         "ak:cell:ak.component.realm.freeze.v1:null".to_owned(),
                     ),
-                    CellState::Value(Value::Bool(kind == arkret_wire::EventKind::RealmFreeze)),
+                    ResolvedCellState::Value(Value::Bool(
+                        kind == arkret_wire::EventKind::RealmFreeze,
+                    )),
                 );
             }
             arkret_wire::EventKind::RealmTombstone => {
@@ -1428,7 +1435,7 @@ impl ProjectionState {
                         realm_id.clone(),
                         "ak:cell:ak.component.realm.tombstone.v1:null".to_owned(),
                     ),
-                    CellState::Value(value),
+                    ResolvedCellState::Value(value),
                 );
                 // Tombstone keeps child Space/Strand placement live:
                 // succession transfers the navigation surface to the
@@ -1436,7 +1443,7 @@ impl ProjectionState {
                 // realm_destroyed_orphan cascade fires here.
             }
             arkret_wire::EventKind::RealmDestroy => {
-                // cas-register: terminal {destroyed: true, at: ts}.
+                // registered state model: terminal {destroyed: true, at: ts}.
                 let value = serde_json::json!({
                     "terminal_kind": "destroyed",
                     "destroyed": true,
@@ -1448,7 +1455,7 @@ impl ProjectionState {
                         realm_id.clone(),
                         "ak:cell:ak.component.realm.destroy.v1:null".to_owned(),
                     ),
-                    CellState::Value(value),
+                    ResolvedCellState::Value(value),
                 );
                 // Stream-F (Wave 1B): destroy cascade per spec
                 // §2.5.1 ¶6 + ¶7.

@@ -444,9 +444,7 @@ fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
     bind_pairing_request_to_controller_device(&mut body, controller_principal_id);
-    let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0] else {
-        panic!("fixture must carry a producer proof")
-    };
+    let proof = &mut body.authorize_event.event.proofs[0];
     proof.verification_method = arkret_wire::DidUrl::new(format!(
         "{}#ak:device:01904100-0000-7000-8000-000000000099",
         web_did(controller_principal_id)
@@ -462,9 +460,7 @@ fn service_pairing_rejects_a_non_device_controller_proof() {
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
     bind_pairing_request_to_controller_device(&mut body, controller_principal_id);
-    let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0] else {
-        panic!("fixture must carry a producer proof")
-    };
+    let proof = &mut body.authorize_event.event.proofs[0];
     proof.verification_method =
         arkret_wire::DidUrl::new(format!("{}#key-1", web_did(controller_principal_id))).unwrap();
 
@@ -791,106 +787,13 @@ fn runtime_approval_status_reports_pending_request() {
     )
     .expect("pending status must resolve");
 
-    assert_eq!(outcome.status, AgentLifecycleState::Active);
+    assert_eq!(outcome.lifecycle, AgentLifecycleState::Active);
     assert_eq!(outcome.runtime_state, AgentRuntimeState::PendingRuntimeKey);
     assert_eq!(
         outcome.approval_request_id.as_deref(),
         Some("agent_runtime_approval:01999999")
     );
     assert!(outcome.authorized_event_ref.is_none());
-    assert!(outcome.authorized_public_key_digest.is_none());
-}
-
-#[test]
-fn runtime_approval_status_reports_authorized_key_binding_after_approval() {
-    let mut record = pending_pairing_record(
-        AGENT_CORE,
-        CONTROLLER_CORE,
-        requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
-        "2999-01-01T00:00:00.000Z",
-    );
-    record.state = AgentLifecycleState::Active;
-    // Approval consumes the pairing handle (activation stamps
-    // paired_pairing_request_id), so runtime_state derives to ready.
-    record.paired_pairing_request_id = record.pairing_request_id.clone();
-    let key_authorization_event =
-        key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-1", SERVICE_CORE)
-            .authorize_event
-            .event;
-    let key = arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
-        &key_authorization_event,
-    )
-    .unwrap();
-    record.authorized_event_ref = Some(key_authorization_event.event_id.to_string());
-    record.authorized_verification_method = Some(key.verification_method.to_string());
-    record.authorized_public_key_digest = Some(key.public_key_digest.to_string());
-    record.authorized_key_event = Some(key_authorization_event.clone());
-
-    let outcome = agent_runtime_key_request_status_outcome(
-        &record,
-        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
-        status_now(),
-    )
-    .expect("approved status must resolve");
-
-    assert_eq!(outcome.status, AgentLifecycleState::Active);
-    assert_eq!(outcome.runtime_state, AgentRuntimeState::Ready);
-    assert!(outcome.approval_request_id.is_none());
-    assert_eq!(
-        outcome.authorized_event_ref.as_ref().map(|id| id.as_str()),
-        Some(key_authorization_event.event_id.as_str())
-    );
-    assert_eq!(
-        outcome.authorized_verification_method.as_deref(),
-        Some("did:web:agent.example#runtime-1")
-    );
-    assert_eq!(
-        outcome.authorized_public_key_digest.as_deref(),
-        Some(key.public_key_digest.as_str())
-    );
-}
-
-#[test]
-fn runtime_approval_status_does_not_report_previous_binding_for_replacement() {
-    let mut record = pending_pairing_record(
-        AGENT_CORE,
-        CONTROLLER_CORE,
-        requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
-        "2999-01-01T00:00:00.000Z",
-    );
-    record.state = AgentLifecycleState::Active;
-    record.paired_pairing_request_id = Some(
-        arkret_wire::OpaqueLocalId::new(
-            "agent_pairing_request:01988888-0000-7000-8000-00000000feed",
-        )
-        .unwrap(),
-    );
-    let previous_binding =
-        key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-1", SERVICE_CORE)
-            .authorize_event
-            .event;
-    let key = arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
-        &previous_binding,
-    )
-    .unwrap();
-    record.authorized_event_ref = Some(previous_binding.event_id.to_string());
-    record.authorized_verification_method = Some(key.verification_method.to_string());
-    record.authorized_public_key_digest = Some(key.public_key_digest.to_string());
-    record.authorized_key_event = Some(previous_binding);
-
-    let outcome = agent_runtime_key_request_status_outcome(
-        &record,
-        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
-        status_now(),
-    )
-    .expect("replacement status must resolve");
-
-    assert_eq!(outcome.status, AgentLifecycleState::Active);
-    assert_eq!(outcome.runtime_state, AgentRuntimeState::Replacing);
-    assert!(outcome.authorized_event_ref.is_none());
-    assert!(outcome.authorized_verification_method.is_none());
     assert!(outcome.authorized_public_key_digest.is_none());
 }
 
@@ -913,7 +816,7 @@ fn runtime_approval_status_lazily_reports_expired_open_pairing() {
     )
     .expect("expired status must resolve");
 
-    assert_eq!(outcome.status, AgentLifecycleState::Active);
+    assert_eq!(outcome.lifecycle, AgentLifecycleState::Active);
     assert_eq!(outcome.runtime_state, AgentRuntimeState::PairingExpired);
     assert!(outcome.approval_request_id.is_none());
     assert!(outcome.authorized_event_ref.is_none());

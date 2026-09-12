@@ -8,8 +8,9 @@
 //! `realm_links` / `realm_links_inbound` side-band caches. This module
 //! layers the cross-link semantics on top of that projection:
 //!
-//! 1. **State machine** — links use the SDK's canonical `fsm/reject` transition matrix. General
-//!    directed cycles are valid graph shapes; only a self-reference is rejected at admission.
+//! 1. **State machine** — links use the SDK's canonical `transition/reject` transition matrix.
+//!    General directed cycles are valid graph shapes; only a self-reference is rejected at
+//!    admission.
 //!
 //! 2. **Explicit inheritance** — `realm-links.md §6` requires the child Realm to opt in via
 //!    `ak.realm.inheritance_policy`. Walking the link graph for policy without that opt-in MUST NOT
@@ -574,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_link_accepts_the_sdk_fsm_matrix() {
+    fn apply_link_accepts_the_sdk_transition_matrix() {
         let hlc = ServerHlc::new("test");
         for initial in
             arkret_models_collaboration::governance::realm_governance::REALM_LINK_INITIAL_STATES

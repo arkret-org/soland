@@ -120,7 +120,7 @@ async fn admin_emit_resync_required(
 /// `POST /_soland/admin/events/unauthorized` — emit an `unauthorized`
 /// mid-stream control frame to subscribers of one Space. Use cases:
 /// - Bulk session revocation (compromised refresh token, deleted account).
-/// - Capability lattice change demoted the subscriber's grant below the subscribe threshold
+/// - Capability state model change demoted the subscriber's grant below the subscribe threshold
 ///   mid-session.
 ///
 /// Clients receiving this frame MUST close the stream and re-authenticate

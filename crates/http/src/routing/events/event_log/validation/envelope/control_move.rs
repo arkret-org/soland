@@ -7,14 +7,11 @@ pub(super) fn validate_control_move_seal_basis(
     if object.get("kind").and_then(Value::as_str)
         == Some(arkret_wire::EventKind::RealmCreate.as_str())
     {
-        if object.contains_key("seal_ref")
-            || object.contains_key("auth_context")
-            || object.contains_key("seal_basis")
-        {
+        if object.contains_key("auth_context") || object.contains_key("seal_basis") {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "schema_violation",
-                "ak.realm.create genesis bootstrap must not carry seal_ref, auth_context, or seal_basis",
+                "ak.realm.create genesis bootstrap must not carry auth_context or seal_basis",
             ));
         }
         return Ok(());
@@ -22,10 +19,7 @@ pub(super) fn validate_control_move_seal_basis(
     if object.get("kind").and_then(Value::as_str)
         == Some(arkret_wire::event_kind_str::DEVICE_REANCHOR)
     {
-        if object.contains_key("seal_ref")
-            || object.contains_key("auth_context")
-            || object.contains_key("seal_basis")
-        {
+        if object.contains_key("auth_context") || object.contains_key("seal_basis") {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "schema_violation",
@@ -50,13 +44,12 @@ pub(super) fn validate_control_move_seal_basis(
         return Ok(());
     }
     if allow_realm_bootstrap_followup_without_basis
-        && !object.contains_key("seal_ref")
         && !object.contains_key("auth_context")
         && !object.contains_key("seal_basis")
     {
         return Ok(());
     }
-    if object.contains_key("seal_ref") || object.contains_key("auth_context") {
+    if object.contains_key("auth_context") {
         return Ok(());
     }
     let leaves = object

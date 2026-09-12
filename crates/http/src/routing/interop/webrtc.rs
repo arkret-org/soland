@@ -51,7 +51,7 @@ use crate::wire::{
 /// `/_arkret/self/rtc/ice-config` and `/_arkret/self/rtc/token` (see
 /// `contract-registry.json` / the OpenAPI binding). Call signalling travels
 /// encrypted inside the Signal Extension; the durable call model is the
-/// composite call-cell lattice. Token/ICE authz and focus/ban read the
+/// composite call-cell state model. Token/ICE authz and focus/ban read the
 /// independent durable cells directly.
 pub(super) fn protocol_router() -> Router {
     Router::new()

@@ -159,7 +159,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
             REALM_ID.to_owned(),
             arkret_wire::REALM_GENESIS_CELL.to_owned(),
         ),
-        CellState::Value(serde_json::json!({"digest_algorithm": "sha256"})),
+        ResolvedCellState::Value(serde_json::json!({"digest_algorithm": "sha256"})),
     );
 
     let notary = state.apply(
@@ -168,7 +168,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
             REALM_ID,
             serde_json::json!({
                 "realm_id": REALM_ID,
-                "notary": serde_json::to_value(test_single_signer_notary(
+                "notary": serde_json::to_value(test_f0_notary(
                     "did:web:new-notary.example"
                 )).unwrap()
             }),
@@ -183,10 +183,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
         state
             .realm_notary_cells
             .get(REALM_ID)
-            .and_then(|state| match state {
-                CellState::Value(value) => Some(value),
-                CellState::Bottom(_) => None,
-            })
+            .and_then(ResolvedCellState::settled_value)
             .and_then(|value| value.get("signer"))
             .and_then(|signer| signer.get("actor_id"))
             .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())

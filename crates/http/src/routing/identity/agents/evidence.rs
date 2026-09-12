@@ -1,8 +1,8 @@
 //! Agent signer evidence is a closed current/historical protocol.
 //!
 //! Current statements are reusable within their independent validity windows.
-//! Historical evidence retains the origin-frozen statements and exact durable
-//! acceptance, with all signer dependencies addressed by content.
+//! Historical evidence retains producer-frozen statements and applicable
+//! authorization closures, with all signer dependencies addressed by content.
 
 use std::time::Duration;
 
@@ -36,7 +36,6 @@ pub(crate) enum AgentSignerEvidenceQuerySelector {
         actor: arkret_wire::ActorId,
         verification_method: arkret_wire::DidUrl,
         event_id: arkret_wire::EventId,
-        receiver_id: arkret_wire::DidCoreId,
     },
 }
 
@@ -66,6 +65,53 @@ impl AgentSignerEvidenceQuerySelector {
 pub(crate) enum AgentEvidenceAcquisitionFailure {
     AgentSignerEvidenceMissing,
     AgentAuthorizationInactive,
+}
+
+async fn verify_retained_agent_trust(
+    state: &AppState,
+    request: arkret::AgentHistoricalTrustRequest<'_>,
+    root: &AuthenticatedSignerResolutionEvidence,
+    dependencies: &[GovernanceDependency],
+) -> arkret_wire::Result<()> {
+    match request {
+        arkret::AgentHistoricalTrustRequest::AuthorizationClosure(seal_id) => {
+            let seal = state
+                .projections()
+                .seal_by_id(seal_id)
+                .await
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
+                .ok_or_else(|| {
+                    arkret_wire::WireError::Protocol(
+                        "Agent authorization closure Seal is unavailable".to_owned(),
+                    )
+                })?;
+            let expected_realm = match root {
+                AuthenticatedSignerResolutionEvidence::Agent {
+                    agent_signer_evidence,
+                    ..
+                } => {
+                    &agent_signer_evidence
+                        .admission_evidence()
+                        .agent_authority_state_evidence
+                        .state
+                        .principal_control_realm_id
+                }
+                _ => {
+                    return Err(arkret_wire::WireError::Protocol(
+                        "Agent authorization closure requires Agent evidence".to_owned(),
+                    ));
+                }
+            };
+            if &seal.realm_id != expected_realm {
+                return Err(arkret_wire::WireError::Protocol(
+                    "Agent authorization closure belongs to another Realm".to_owned(),
+                ));
+            }
+            seal.validate_id(seal.state_root.digest_suite()?)?;
+            Ok(())
+        }
+        request => arkret::verify_agent_portable_trust(request, root, dependencies),
+    }
 }
 
 /// Verify portable roots on the Station before reducing them to a self result.
@@ -108,8 +154,9 @@ pub(crate) async fn verified_station_agent_key(
                 move |request| {
                     let root = trust_root.clone();
                     let dependencies = trust_dependencies.clone();
+                    let state = state.clone();
                     Box::pin(async move {
-                        arkret::verify_agent_portable_trust(request, &root, &dependencies)
+                        verify_retained_agent_trust(&state, request, &root, &dependencies).await
                     })
                 },
             )
@@ -124,7 +171,6 @@ pub(crate) async fn verified_station_agent_key(
             actor,
             verification_method,
             event_id,
-            receiver_id,
         } => {
             let event = accepted_event(state, event_id)
                 .await
@@ -140,19 +186,15 @@ pub(crate) async fn verified_station_agent_key(
                 return Err(invalid());
             };
             let AgentSignerEvidence::HistoricalEvent {
-                admission_evidence,
-                event_admission,
-                ..
+                admission_evidence, ..
             } = agent_signer_evidence.as_ref()
             else {
                 return Err(invalid());
             };
-            if event_admission.receiver_id().map_err(|_| invalid())? != *receiver_id
-                || event_admission
-                    .verification_method()
-                    .map_err(|_| invalid())?
-                    != verification_method
-            {
+            let [producer] = event.proofs.as_slice() else {
+                return Err(invalid());
+            };
+            if &producer.verification_method != verification_method {
                 return Err(invalid());
             }
             let material = arkret::verify_agent_historical_event_key(
@@ -162,8 +204,9 @@ pub(crate) async fn verified_station_agent_key(
                 move |request| {
                     let root = trust_root.clone();
                     let dependencies = trust_dependencies.clone();
+                    let state = state.clone();
                     Box::pin(async move {
-                        arkret::verify_agent_portable_trust(request, &root, &dependencies)
+                        verify_retained_agent_trust(&state, request, &root, &dependencies).await
                     })
                 },
             )
@@ -224,6 +267,7 @@ pub(crate) async fn current_agent_signer_evidence(
 async fn assemble_current_agent_signer_evidence(
     state: &AppState,
     selector: &AgentSignerEvidenceQuerySelector,
+    frozen_agent: Option<&AgentPrincipalRecord>,
 ) -> Result<CurrentAgentSignerEvidence, AgentEvidenceAcquisitionFailure> {
     let gate = preflight_controller_gate(state, selector)
         .await
@@ -234,7 +278,7 @@ async fn assemble_current_agent_signer_evidence(
             );
             reason
         })?;
-    produce_current_agent_signer_evidence(state, selector, gate)
+    produce_current_agent_signer_evidence(state, selector, gate, frozen_agent)
         .await
         .map_err(|reason| {
             tracing::warn!(?reason, "Agent current evidence state assembly failed");
@@ -258,9 +302,61 @@ pub(crate) async fn freeze_current_agent_signer_evidence(
     Ok((reference, digest))
 }
 
+pub(crate) fn current_agent_evidence_delivery(
+    actor: arkret_wire::ActorId,
+    verification_method: arkret_wire::DidUrl,
+    root: &AuthenticatedSignerResolutionEvidence,
+    dependencies: Vec<AuthenticatedSignerResolutionEvidence>,
+) -> Result<
+    (
+        arkret_wire::SignerEvidenceRef,
+        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence,
+    ),
+    AppError,
+> {
+    let reference =
+        arkret::signer_evidence_ref(root).map_err(|error| AppError::internal(error.to_string()))?;
+    let compact = arkret_models_collaboration::current_signer_evidence::CompactAgentSignerResolutionEvidence::from_full(root, &[])
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let delivery =
+        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence::Agent {
+            actor,
+            verification_method,
+            authenticated_signer_evidence: compact,
+            dependencies,
+        };
+    let (hydrated_root, _) = delivery
+        .hydrate_complete_agent()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if hydrated_root != *root
+        || arkret::signer_evidence_ref(&hydrated_root)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != reference
+    {
+        return Err(AppError::internal(
+            "Agent signer evidence delivery does not reproduce its frozen root",
+        ));
+    }
+    Ok((reference, delivery))
+}
+
 pub(crate) async fn current_authenticated_agent_signer_evidence(
     state: &AppState,
     selector: &AgentSignerEvidenceQuerySelector,
+) -> Result<
+    (
+        AuthenticatedSignerResolutionEvidence,
+        Vec<AuthenticatedSignerResolutionEvidence>,
+    ),
+    AgentEvidenceAcquisitionFailure,
+> {
+    current_authenticated_agent_signer_evidence_for_record(state, selector, None).await
+}
+
+pub(crate) async fn current_authenticated_agent_signer_evidence_for_record(
+    state: &AppState,
+    selector: &AgentSignerEvidenceQuerySelector,
+    frozen_agent: Option<&AgentPrincipalRecord>,
 ) -> Result<
     (
         AuthenticatedSignerResolutionEvidence,
@@ -272,26 +368,31 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         actor,
         verification_method,
         event_id,
-        receiver_id,
     } = selector
     {
         return historical_authenticated_agent_signer_evidence(
             state,
-            soland_storage::HistoricalAgentSignerEvidenceKey {
-                agent_id: actor.signing_principal_id().clone(),
-                verification_method: verification_method.clone(),
-                event_id: event_id.clone(),
-                receiver_id: receiver_id.clone(),
-            },
+            actor,
+            verification_method,
+            event_id,
         )
         .await;
     }
-    let current = assemble_current_agent_signer_evidence(state, selector)
+    let current = assemble_current_agent_signer_evidence(state, selector, frozen_agent)
         .await
         .map_err(|reason| {
             tracing::warn!(?reason, "Agent current signed state assembly failed");
             reason
         })?;
+    let activation_evidence =
+        frozen_agent
+            .is_some()
+            .then(|| AgentSignerEvidence::HistoricalEvent {
+                schema: current.schema.clone(),
+                admission_evidence: current.admission_evidence.clone(),
+                authorization_closure_refs: Vec::new(),
+                transparency: current.transparency.clone(),
+            });
     let agent_signer_evidence = AgentSignerEvidence::from(current);
     let AgentSignerEvidence::CurrentAdmission {
         admission_evidence, ..
@@ -325,16 +426,25 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         );
         reason
     })?;
-    let root = arkret::build_agent_signer_resolution_evidence(
+    let current_root = arkret::build_agent_signer_evidence(
         agent_signer_evidence,
         &local_service_evidence,
         &account_authority_evidence,
-        None,
     )
     .map_err(|error| {
         tracing::warn!(%error, "Agent current evidence root binding failed");
         AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing
     })?;
+    let activation_root = activation_evidence
+        .map(|evidence| {
+            arkret::build_agent_signer_evidence(
+                evidence,
+                &local_service_evidence,
+                &account_authority_evidence,
+            )
+        })
+        .transpose()
+        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let mut dependencies = Vec::new();
     let mut digests = std::collections::BTreeSet::new();
     for evidence in [local_service_evidence, account_authority_evidence] {
@@ -345,16 +455,20 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
             dependencies.push(evidence);
         }
     }
-    let dependencies = complete_agent_signer_evidence_dependencies(state, &root, dependencies)
-        .await
-        .map_err(|reason| {
-            tracing::warn!(
-                ?reason,
-                "Agent current signer dependency closure is incomplete"
-            );
-            reason
-        })?;
-    let context_key = (root.signer_id().clone(), root.verification_method().clone());
+    let dependencies =
+        complete_agent_signer_evidence_dependencies(state, &current_root, dependencies)
+            .await
+            .map_err(|reason| {
+                tracing::warn!(
+                    ?reason,
+                    "Agent current signer dependency closure is incomplete"
+                );
+                reason
+            })?;
+    let context_key = (
+        current_root.signer_id().clone(),
+        current_root.verification_method().clone(),
+    );
     let previous = state
         .agent_evidence_cache
         .verified_contexts
@@ -375,13 +489,13 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         })
         .collect::<Result<Vec<_>, arkret_wire::WireError>>()
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    let trust_root = std::sync::Arc::new(root.clone());
+    let trust_root = std::sync::Arc::new(current_root.clone());
     let trust_dependencies = std::sync::Arc::new(proof_dependencies.clone());
     let actor = selector.actor().clone();
     let verified = arkret::verify_agent_current_context(
         &actor,
-        root.verification_method(),
-        &root,
+        current_root.verification_method(),
+        &current_root,
         &proof_dependencies,
         chrono::Utc::now(),
         previous.as_ref(),
@@ -398,6 +512,7 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         tracing::warn!(%error, "Agent authority portable verification failed");
         AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing
     })?;
+    let root = activation_root.unwrap_or(current_root);
     persist_agent_signer_evidence_closure(state, &root, &dependencies)
         .await
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
@@ -413,7 +528,9 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
 
 pub(crate) async fn historical_authenticated_agent_signer_evidence(
     state: &AppState,
-    key: soland_storage::HistoricalAgentSignerEvidenceKey,
+    actor: &arkret_wire::ActorId,
+    verification_method: &arkret_wire::DidUrl,
+    event_id: &arkret_wire::EventId,
 ) -> Result<
     (
         AuthenticatedSignerResolutionEvidence,
@@ -421,40 +538,27 @@ pub(crate) async fn historical_authenticated_agent_signer_evidence(
     ),
     AgentEvidenceAcquisitionFailure,
 > {
-    if key.receiver_id == state.service_core_id() {
-        let event = accepted_event(state, &key.event_id).await?;
-        let admission =
-            arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-                accepted_event: event,
-            };
-        let admission = if admission.receiver_id().ok().as_ref() == Some(&key.receiver_id) {
-            admission
-        } else {
-            let record = state
-                .persistence()
-                .idempotency_record(
-                    &key.receiver_id,
-                    &format!(
-                        "agent-event-admission-receipt:{}:{}",
-                        key.event_id, key.receiver_id
-                    ),
-                )
-                .await
-                .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
-                .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-            let receipt = serde_json::from_value(record.response_body)
-                .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-            arkret_models_identity::agent_signer_evidence::AgentEventAdmission::ReceiverReceipt {
-                receipt,
-            }
-        };
-        materialize_historical_agent_signer_evidence(state, admission, "")
-            .await
-            .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+    let event = accepted_event(state, event_id).await?;
+    if event.executed_by.as_ref().unwrap_or(&event.actor_id) != actor {
+        return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
+    let [producer] = event.proofs.as_slice() else {
+        return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
+    };
+    if &producer.verification_method != verification_method {
+        return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
+    }
+    let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+        content_digest: producer
+            .signer_resolution_evidence_ref
+            .as_ref()
+            .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
+            .content_digest()
+            .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?,
+    };
     let store = state.persistence().governance_dependency_store();
     let item = store
-        .get_historical_agent_signer_evidence(&key)
+        .get_unscoped_signer_evidence(&selector)
         .await
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
         .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
@@ -474,16 +578,18 @@ pub(crate) async fn historical_authenticated_agent_signer_evidence(
     else {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     };
-    let AgentSignerEvidence::HistoricalEvent {
-        event_admission, ..
-    } = agent_signer_evidence.as_ref()
-    else {
+    let AgentSignerEvidence::HistoricalEvent { .. } = agent_signer_evidence.as_ref() else {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     };
-    if signer_id != &key.agent_id
-        || verification_method != &key.verification_method
-        || event_admission.event_id() != &key.event_id
-        || event_admission.receiver_id().ok().as_ref() != Some(&key.receiver_id)
+    if signer_id != actor.signing_principal_id()
+        || root.verification_method() != verification_method
+        || root
+            .evidence_ref()
+            .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
+            != *producer
+                .signer_resolution_evidence_ref
+                .as_ref()
+                .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
     {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
@@ -592,6 +698,58 @@ async fn complete_agent_signer_evidence_dependencies(
     Ok(by_digest.into_values().collect())
 }
 
+pub(crate) async fn verified_historical_agent_event_key(
+    state: &AppState,
+    event: &Event,
+    root: &AuthenticatedSignerResolutionEvidence,
+) -> Result<[u8; 32], String> {
+    if !matches!(
+        root,
+        AuthenticatedSignerResolutionEvidence::Agent {
+            agent_signer_evidence,
+            ..
+        } if matches!(agent_signer_evidence.as_ref(), AgentSignerEvidence::HistoricalEvent { .. })
+    ) {
+        return Err("ordinary Agent Event requires historical signer evidence".to_owned());
+    }
+    let dependencies = complete_agent_signer_evidence_dependencies(state, root, Vec::new())
+        .await
+        .map_err(|_| "Agent signer evidence dependency closure is incomplete".to_owned())?;
+    let proof_dependencies = dependencies
+        .iter()
+        .map(|dependency| {
+            Ok(
+                GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                    selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                        content_digest: dependency.canonical_sha256_digest()?,
+                    },
+                    authenticated_signer_resolution_evidence: Box::new(dependency.clone()),
+                },
+            )
+        })
+        .collect::<Result<Vec<_>, arkret_wire::WireError>>()
+        .map_err(|error| error.to_string())?;
+    let trust_root = std::sync::Arc::new(root.clone());
+    let trust_dependencies = std::sync::Arc::new(proof_dependencies.clone());
+    let trust_state = state.clone();
+    let material = arkret::verify_agent_historical_event_key(
+        event,
+        root,
+        &proof_dependencies,
+        move |request| {
+            let root = trust_root.clone();
+            let dependencies = trust_dependencies.clone();
+            let state = trust_state.clone();
+            Box::pin(async move {
+                verify_retained_agent_trust(&state, request, &root, &dependencies).await
+            })
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    material.ed25519_bytes().map_err(|error| error.to_string())
+}
+
 async fn current_service_signer_evidence(
     state: &AppState,
 ) -> Result<AuthenticatedSignerResolutionEvidence, AgentEvidenceAcquisitionFailure> {
@@ -611,6 +769,47 @@ async fn current_service_signer_evidence(
         chrono::Utc::now(),
     )
     .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)
+}
+
+pub(crate) async fn retain_current_service_signer_evidence_ref(
+    state: &AppState,
+    signed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<arkret_wire::SignerEvidenceRef, AppError> {
+    let resolution =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await?;
+    let service_id = resolution.service_id.clone();
+    let (_, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(AppError::internal)?;
+    let evidence =
+        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+            resolution,
+            &service_id,
+            verification_method,
+            signed_at,
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let reference = arkret::signer_evidence_ref(&evidence)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let content_digest = evidence
+        .canonical_sha256_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .persistence()
+        .governance_dependency_store()
+        .put_unscoped_signer_evidence_exact(
+            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                    content_digest,
+                },
+                authenticated_signer_resolution_evidence: Box::new(evidence),
+            },
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(reference)
 }
 
 /// Retain a peer service resolution as a signer-evidence leaf.
@@ -724,41 +923,36 @@ pub(crate) async fn fetch_service_signer_evidence(
     .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)
 }
 
-/// Classify the actual signing principal from the origin-frozen root, including
+/// Classify the actual signing principal from its retained producer evidence, including
 /// Agent execution on another actor's behalf.
 pub(crate) async fn event_has_agent_signer(
     state: &AppState,
     event: &Event,
 ) -> Result<bool, String> {
-    let admission = event
-        .proofs
-        .iter()
-        .find_map(arkret_wire::EventProof::as_station_admission)
-        .ok_or_else(|| "accepted Event omitted its Station admission".to_owned())?;
-    let Some(reference) = &admission.producer_signer_resolution_evidence_ref else {
-        return Ok(false);
+    let [producer] = event.proofs.as_slice() else {
+        return Err("accepted Event does not contain exactly one producer proof".to_owned());
     };
+    let reference = producer
+        .signer_resolution_evidence_ref
+        .as_ref()
+        .ok_or_else(|| {
+            "ordinary Event producer proof has no signer evidence reference".to_owned()
+        })?;
     let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
         content_digest: reference
             .content_digest()
             .map_err(|error| error.to_string())?,
     };
-    let origin =
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-            accepted_event: event.clone(),
-        }
-        .receiver_id()
-        .map_err(|error| error.to_string())?;
-    let dependency = retain_origin_signer_dependency(state, event, &origin, &selector).await?;
+    let dependency = retained_signer_dependency(state, event, &selector).await?;
     let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
         authenticated_signer_resolution_evidence: root,
         ..
     } = dependency
     else {
-        return Err("origin signer dependency has wrong kind".to_owned());
+        return Err("producer signer dependency has wrong kind".to_owned());
     };
     if root.evidence_ref().map_err(|error| error.to_string())? != *reference
-        || root.verification_method() != &admission.producer_verification_method
+        || root.verification_method() != &producer.verification_method
         || root.signer_id()
             != event
                 .executed_by
@@ -766,7 +960,7 @@ pub(crate) async fn event_has_agent_signer(
                 .unwrap_or(&event.actor_id)
                 .signing_principal_id()
     {
-        return Err("origin-frozen signer identity mismatch".to_owned());
+        return Err("retained producer signer identity mismatch".to_owned());
     }
     if !matches!(*root, AuthenticatedSignerResolutionEvidence::Agent { .. }) {
         return Ok(false);
@@ -774,14 +968,6 @@ pub(crate) async fn event_has_agent_signer(
     let mut pending = arkret_models_collaboration::governance_dependencies::governance_attester_evidence_selectors(
         std::slice::from_ref(root.as_ref()),
     ).map_err(|error| error.to_string())?;
-    pending.push(
-        GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-            content_digest: admission
-                .signer_resolution_evidence_ref
-                .content_digest()
-                .map_err(|error| error.to_string())?,
-        },
-    );
     let mut seen = std::collections::BTreeSet::new();
     while let Some(selector) = pending.pop() {
         let GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest } =
@@ -795,7 +981,7 @@ pub(crate) async fn event_has_agent_signer(
         if seen.len() > 64 {
             return Err("Agent signer dependency closure exceeds its limit".to_owned());
         }
-        let dependency = retain_origin_signer_dependency(state, event, &origin, &selector).await?;
+        let dependency = retained_signer_dependency(state, event, &selector).await?;
         let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
             authenticated_signer_resolution_evidence: leaf,
             ..
@@ -810,10 +996,9 @@ pub(crate) async fn event_has_agent_signer(
     Ok(true)
 }
 
-async fn retain_origin_signer_dependency(
+async fn retained_signer_dependency(
     state: &AppState,
     event: &Event,
-    origin: &DidCoreId,
     selector: &GovernanceDependencySelector,
 ) -> Result<GovernanceDependency, String> {
     let store = state.persistence().governance_dependency_store();
@@ -824,39 +1009,17 @@ async fn retain_origin_signer_dependency(
     {
         return Ok(item);
     }
-    let item = if let Some(item) = store
+    let item = store
         .get(&event.realm_id, selector)
         .await
         .map_err(|error| error.to_string())?
-    {
-        item
-    } else {
-        if origin == &state.service_core_id() {
-            return Err("origin-frozen signer evidence is missing".to_owned());
-        }
-        let request = arkret_models_collaboration::governance_dependencies::PeerGovernanceDependencyResolveRequestBody {
-            realm_id: event.realm_id.clone(), selectors: vec![selector.clone()], byte_limit: 8 * 1024 * 1024, history_traversal_access: None,
-        };
-        let outcome =
-            crate::routing::federation::rhrk_acquisition::fetch_peer_governance_dependencies(
-                state, origin, &request,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        outcome
-            .validate_for_peer_request(&request)
-            .map_err(|error| error.to_string())?;
-        let [item] = outcome.items.as_slice() else {
-            return Err("origin-frozen signer evidence is missing".to_owned());
-        };
-        item.clone()
-    };
+        .ok_or_else(|| "retained producer signer evidence is missing".to_owned())?;
     let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
         selector: actual_selector,
         authenticated_signer_resolution_evidence: evidence,
     } = &item
     else {
-        return Err("origin signer dependency has wrong kind".to_owned());
+        return Err("retained signer dependency has wrong kind".to_owned());
     };
     let expected = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
         content_digest: evidence
@@ -864,346 +1027,13 @@ async fn retain_origin_signer_dependency(
             .map_err(|error| error.to_string())?,
     };
     if actual_selector != selector || expected != *selector {
-        return Err("origin signer dependency digest mismatch".to_owned());
+        return Err("retained signer dependency digest mismatch".to_owned());
     }
     store
         .put_unscoped_signer_evidence_exact(item.clone())
         .await
         .map_err(|error| error.to_string())?;
     Ok(item)
-}
-
-pub(crate) async fn materialize_historical_agent_signer_evidence(
-    state: &AppState,
-    event_admission: arkret_models_identity::agent_signer_evidence::AgentEventAdmission,
-    receiver_base_url: &str,
-) -> Result<(), AppError> {
-    let invalid = |error: arkret_wire::WireError| AppError::internal(error.to_string());
-    let agent_id = event_admission.agent_id().clone();
-    let expected_method = event_admission
-        .verification_method()
-        .map_err(invalid)?
-        .clone();
-    let event_id = event_admission.event_id().clone();
-    let receiver_id = event_admission.receiver_id().map_err(invalid)?;
-    let accepted_at = event_admission.receiver_accepted_at().map_err(invalid)?;
-    let producer_ref = event_admission
-        .producer_signer_resolution_evidence_ref()
-        .map_err(invalid)?
-        .clone();
-    let accepted = accepted_event(state, &event_id)
-        .await
-        .map_err(|_| AppError::internal("historical Agent Event is missing"))?;
-    let origin =
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-            accepted_event: accepted,
-        };
-    if event_admission.realm_id() != origin.realm_id()
-        || event_admission.agent_id() != origin.agent_id()
-        || event_admission.verification_method().map_err(invalid)?
-            != origin.verification_method().map_err(invalid)?
-        || event_admission.producer_accepted_at().map_err(invalid)?
-            != origin.producer_accepted_at().map_err(invalid)?
-        || &producer_ref
-            != origin
-                .producer_signer_resolution_evidence_ref()
-                .map_err(invalid)?
-    {
-        return Err(AppError::internal(
-            "historical Agent acceptance differs from the stored Event",
-        ));
-    }
-    match &event_admission {
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-            ..
-        } if event_admission.station_admission().map_err(invalid)?
-            != origin.station_admission().map_err(invalid)? =>
-        {
-            return Err(AppError::internal(
-                "historical Agent acceptance differs from the original Station proof",
-            ));
-        }
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::ReceiverReceipt {
-            ..
-        } if receiver_id == origin.receiver_id().map_err(invalid)?
-            && accepted_at == origin.receiver_accepted_at().map_err(invalid)? =>
-        {
-            return Err(AppError::internal(
-                "same-Station acceptance must reuse its original admission",
-            ));
-        }
-        _ => {}
-    }
-    let store = state.persistence().governance_dependency_store();
-    if let Some(materialized) = store
-        .get_historical_agent_signer_evidence(&soland_storage::HistoricalAgentSignerEvidenceKey {
-            agent_id: agent_id.clone(),
-            verification_method: expected_method.clone(),
-            event_id: event_id.clone(),
-            receiver_id: receiver_id.clone(),
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        return replayed_historical_agent_signer_evidence(materialized, &event_admission);
-    }
-    let original_selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-        content_digest: producer_ref
-            .content_digest()
-            .map_err(|error| AppError::internal(error.to_string()))?,
-    };
-    let original_item = store
-        .get_unscoped_signer_evidence(&original_selector)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::internal("origin-frozen Agent signer evidence is missing"))?;
-    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        authenticated_signer_resolution_evidence: original_root,
-        ..
-    } = original_item
-    else {
-        return Err(AppError::internal(
-            "origin-frozen signer dependency has the wrong kind",
-        ));
-    };
-    if original_root
-        .evidence_ref()
-        .map_err(|error| AppError::internal(error.to_string()))?
-        != producer_ref
-    {
-        return Err(AppError::internal(
-            "receipt producer evidence ref does not resolve byte-exactly",
-        ));
-    }
-    let AuthenticatedSignerResolutionEvidence::Agent {
-        signer_id,
-        verification_method,
-        agent_signer_evidence,
-        attester_signer_evidence_ref,
-        account_authority_signer_evidence_ref,
-        ..
-    } = *original_root
-    else {
-        return Err(AppError::internal(
-            "receipt producer evidence is not an Agent CurrentAdmission root",
-        ));
-    };
-    let AgentSignerEvidence::CurrentAdmission {
-        schema,
-        admission_evidence,
-        transparency,
-        ..
-    } = *agent_signer_evidence
-    else {
-        return Err(AppError::internal(
-            "receipt producer evidence is not an Agent CurrentAdmission root",
-        ));
-    };
-    if signer_id != agent_id || verification_method != expected_method {
-        return Err(AppError::internal(
-            "receipt Agent identity does not match the frozen producer evidence",
-        ));
-    }
-    async fn dependency_by_ref(
-        store: &dyn soland_storage::GovernanceDependencyStore,
-        evidence_ref: &arkret_wire::SignerEvidenceRef,
-    ) -> Result<AuthenticatedSignerResolutionEvidence, AppError> {
-        let content_digest = evidence_ref
-            .content_digest()
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        let item = store
-            .get_unscoped_signer_evidence(
-                &GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-                    content_digest,
-                },
-            )
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| AppError::internal("Agent signer dependency is missing"))?;
-        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-            authenticated_signer_resolution_evidence,
-            ..
-        } = item
-        else {
-            return Err(AppError::internal(
-                "Agent signer dependency has the wrong kind",
-            ));
-        };
-        Ok(*authenticated_signer_resolution_evidence)
-    }
-    let authority_evidence = dependency_by_ref(store, &attester_signer_evidence_ref).await?;
-    let account_authority_evidence =
-        dependency_by_ref(store, &account_authority_signer_evidence_ref).await?;
-    let receipt_method =
-        arkret_signatures::agent_evidence::historical_admission_verification_method(
-            &event_admission,
-        )
-        .map_err(|reason| AppError::internal(reason.as_str()))?;
-    let receiver_evidence = match &event_admission {
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-            ..
-        } => {
-            dependency_by_ref(
-                store,
-                &event_admission
-                    .station_admission()
-                    .map_err(invalid)?
-                    .signer_resolution_evidence_ref,
-            )
-            .await?
-        }
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::ReceiverReceipt {
-            ..
-        } => fetch_service_signer_evidence(
-            state,
-            &receiver_id,
-            (!receiver_base_url.is_empty()).then_some(receiver_base_url),
-            Some(&receipt_method),
-            accepted_at,
-        )
-        .await
-        .map_err(|reason| AppError::internal(format!("{reason:?}")))?,
-    };
-    let AuthenticatedSignerResolutionEvidence::Service {
-        authenticated_resolution,
-        ..
-    } = &receiver_evidence
-    else {
-        return Err(AppError::internal(
-            "receiver signer evidence is not authenticated service evidence",
-        ));
-    };
-    let historical_document = arkret_identity::authenticated_service_document_at(
-        authenticated_resolution,
-        &receiver_id,
-        accepted_at,
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    let receiver_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(
-        &historical_document,
-        receipt_method.as_str(),
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    let receiver_material = PublicKeyMaterial::Ed25519Raw {
-        bytes: receiver_key.to_bytes().to_vec(),
-    };
-    match &event_admission {
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::ReceiverReceipt {
-            receipt,
-        } => {
-            arkret_signatures::agent_evidence::verify_agent_event_admission_receipt(
-                receipt,
-                &receiver_material,
-            )
-            .map_err(|reason| AppError::internal(reason.as_str()))?;
-        }
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-            accepted_event,
-        } => {
-            let suite = accepted_event
-                .event_id
-                .event_digest()
-                .digest_suite()
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            accepted_event
-                .validate_station_admission_binding(suite)
-                .map_err(invalid)?;
-            let proof = event_admission.station_admission().map_err(invalid)?;
-            arkret_signatures::Ed25519DetachedJwsVerifier::new()
-                .verify_detached_jws(
-                    &proof.jws,
-                    &proof.canonical_binding_bytes().map_err(invalid)?,
-                    &receiver_material,
-                )
-                .map_err(|error| AppError::internal(error.to_string()))?;
-        }
-    }
-    let historical = AgentSignerEvidence::HistoricalEvent {
-        schema,
-        admission_evidence,
-        event_admission,
-        transparency,
-    };
-    let historical_root = arkret::build_agent_signer_resolution_evidence(
-        historical,
-        &authority_evidence,
-        &account_authority_evidence,
-        Some(&receiver_evidence),
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    persist_agent_signer_evidence_closure(
-        state,
-        &historical_root,
-        &[
-            authority_evidence,
-            account_authority_evidence,
-            receiver_evidence,
-        ],
-    )
-    .await
-}
-
-/// Replaying one durable acceptance preserves the exact historical root.
-fn replayed_historical_agent_signer_evidence(
-    materialized: GovernanceDependency,
-    expected_admission: &arkret_models_identity::agent_signer_evidence::AgentEventAdmission,
-) -> Result<(), AppError> {
-    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        authenticated_signer_resolution_evidence,
-        ..
-    } = materialized
-    else {
-        return Err(AppError::internal(
-            "materialized historical Agent signer evidence has the wrong kind",
-        ));
-    };
-    let AuthenticatedSignerResolutionEvidence::Agent {
-        agent_signer_evidence,
-        ..
-    } = *authenticated_signer_resolution_evidence
-    else {
-        return Err(AppError::internal(
-            "materialized historical Agent signer evidence has the wrong kind",
-        ));
-    };
-    let AgentSignerEvidence::HistoricalEvent {
-        event_admission, ..
-    } = *agent_signer_evidence
-    else {
-        return Err(AppError::internal(
-            "materialized historical Agent signer evidence has the wrong kind",
-        ));
-    };
-    let same_acceptance = match (&event_admission, expected_admission) {
-        (
-            arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-                accepted_event: stored,
-            },
-            arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-                accepted_event: expected,
-            },
-        ) => {
-            let suite = stored
-                .event_id
-                .event_digest()
-                .digest_suite()
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            expected
-                .validate_station_admission_binding(suite)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            stored.event_digest_with_digest_suite(suite).ok()
-                == expected.event_digest_with_digest_suite(suite).ok()
-                && event_admission.station_admission().ok()
-                    == expected_admission.station_admission().ok()
-        }
-        _ => event_admission == *expected_admission,
-    };
-    if !same_acceptance {
-        return Err(AppError::conflict(
-            "duplicate_conflict: historical Agent signer evidence tuple differs",
-        ));
-    }
-    Ok(())
 }
 
 async fn persist_agent_signer_evidence_closure(
@@ -1399,6 +1229,7 @@ async fn produce_current_agent_signer_evidence(
     state: &AppState,
     selector: &AgentSignerEvidenceQuerySelector,
     gate: ControllerAccountGateAttestation,
+    frozen_agent: Option<&AgentPrincipalRecord>,
 ) -> Result<CurrentAgentSignerEvidence, AgentEvidenceAcquisitionFailure> {
     let AgentSignerEvidenceQuerySelector::CurrentAdmission {
         actor,
@@ -1415,12 +1246,19 @@ async fn produce_current_agent_signer_evidence(
     }
     let agent_id = &account.principal_id;
     let now = chrono::Utc::now();
-    let agent = state
-        .agent_pairings()
-        .agent(agent_id.as_str())
-        .await
-        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
-        .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+    let loaded_agent;
+    let agent = match frozen_agent {
+        Some(agent) => agent,
+        None => {
+            loaded_agent = state
+                .agent_pairings()
+                .agent(agent_id.as_str())
+                .await
+                .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
+                .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+            &loaded_agent
+        }
+    };
     if agent.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active {
         return Err(AgentEvidenceAcquisitionFailure::AgentAuthorizationInactive);
     }
@@ -1474,7 +1312,7 @@ async fn produce_current_agent_signer_evidence(
         &authorized_key.agent_key_id,
     )
     .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    let (key_value, _key_heads, key_proof) =
+    let (key_value, _key_revision, key_proof) =
         witnessed_cell(state, &realm_id, &key_seal, &key_cell_ref).await?;
     let key_value: Vec<AgentKeyCellEntry> = serde_json::from_value(key_value)
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
@@ -1486,7 +1324,7 @@ async fn produce_current_agent_signer_evidence(
             .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let lifecycle_seal = frontier.clone();
     let lifecycle_cell_ref = lifecycle_cell_ref(&agent_actor)?;
-    let (lifecycle_value, lifecycle_heads, lifecycle_proof) =
+    let (lifecycle_value, lifecycle_revision, lifecycle_proof) =
         witnessed_cell(state, &realm_id, &lifecycle_seal, &lifecycle_cell_ref).await?;
     let lifecycle_value: AgentLifecycleStatus = serde_json::from_value(lifecycle_value)
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
@@ -1494,7 +1332,7 @@ async fn produce_current_agent_signer_evidence(
         return Err(AgentEvidenceAcquisitionFailure::AgentAuthorizationInactive);
     }
     let lifecycle =
-        accepted_current_lifecycle(state, &agent_actor, &realm_id, &lifecycle_heads).await?;
+        accepted_current_lifecycle(state, &agent_actor, &realm_id, &lifecycle_revision).await?;
 
     let closure = state
         .projections()
@@ -1584,22 +1422,6 @@ async fn produce_current_agent_signer_evidence(
             seal: lifecycle_seal,
             cell_ref: lifecycle_cell_ref,
             cell_value: lifecycle_value,
-            // `ak.component.agent.status.v1` is an `fsm`, so its section 6.2.1
-            // leaf hashes the head set; a verifier cannot rebuild `leaf_digest`
-            // from the settled status alone.
-            cell_heads: lifecycle_heads
-                .iter()
-                .map(|head| {
-                    Ok(arkret_models_identity::AgentLifecycleHead {
-                        event_id: arkret_wire::EventId::from_event_digest(&head.move_id).map_err(
-                            |_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing,
-                        )?,
-                        value: serde_json::from_value(head.value.clone()).map_err(|_| {
-                            AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing
-                        })?,
-                    })
-                })
-                .collect::<Result<Vec<_>, AgentEvidenceAcquisitionFailure>>()?,
             leaf_digest: lifecycle_proof.leaf_digest,
             leaf_index: lifecycle_proof.leaf_index,
             leaf_count: lifecycle_proof.leaf_count,
@@ -1730,7 +1552,7 @@ async fn witnessed_cell(
 ) -> Result<
     (
         serde_json::Value,
-        Vec<arkret_state::lattice::cas_register::CasHead>,
+        EventId,
         arkret_state::StateInclusionProof,
     ),
     AgentEvidenceAcquisitionFailure,
@@ -1742,36 +1564,26 @@ async fn witnessed_cell(
         .effective_state_at(std::slice::from_ref(&seal.id), realm_id)
         .await
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    let value = effective
-        .get(&cell)
-        .and_then(|value| match value {
-            arkret_state::lattice::CellState::Value(value) => Some(value.clone()),
-            arkret_state::lattice::CellState::Bottom(_) => None,
-        })
-        .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+    let Some(arkret_state::state_model::ResolvedCellState::Sequenced(sequenced)) =
+        effective.get(&cell)
+    else {
+        return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
+    };
+    let value = sequenced.value.clone();
+    let revision_event_id = sequenced.revision_event_id.clone();
     let digest_suite = state
         .projections()
         .seal_digest_suites(seal)
         .await
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?
         .seal_digest_suite;
-    // The branch is over the governance `state_root`, so a causal register in
-    // this view needs its head half to hash the leaf shape spec section 6.2.1
-    // defines. `fsm` is one since section 9.3.1.5, which is why the head set
-    // travels with the witness rather than being rebuilt from the value.
-    let cas_heads = state
-        .projections()
-        .effective_cas_heads_at(std::slice::from_ref(&seal.id), realm_id)
-        .await
-        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let proof = arkret_state::state_inclusion_proof(
-        arkret_state::GovernanceView::new(&effective, &cas_heads),
+        arkret_state::GovernanceView::new(&effective),
         &cell,
         digest_suite,
     )
     .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    let heads = cas_heads.get(&cell).cloned().unwrap_or_default();
-    Ok((value, heads, proof))
+    Ok((value, revision_event_id, proof))
 }
 
 pub(super) fn lifecycle_cell_ref(
@@ -1792,28 +1604,11 @@ async fn accepted_current_lifecycle(
     state: &AppState,
     agent_actor: &arkret_wire::ActorId,
     realm_id: &RealmId,
-    heads: &[arkret_state::lattice::cas_register::CasHead],
+    revision_event_id: &EventId,
 ) -> Result<AcceptedLifecycle, AgentEvidenceAcquisitionFailure> {
-    let missing = AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing;
-    if heads.is_empty()
-        || heads
-            .iter()
-            .any(|head| head.value != serde_json::json!("active"))
-    {
-        return Err(AgentEvidenceAcquisitionFailure::AgentAuthorizationInactive);
-    }
-    // Every active head is authoritative. Choose a stable representative by
-    // content identity, never by caller-controlled timestamps or arrival order.
-    let event_id = heads
-        .iter()
-        .map(|head| EventId::from_event_digest(&head.move_id).map_err(|_| missing))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .min()
-        .ok_or(missing)?;
-    let event = accepted_event(state, &event_id).await?;
+    let event = accepted_event(state, revision_event_id).await?;
     if event.realm_id != *realm_id || event.actor_id != *agent_actor {
-        return Err(missing);
+        return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
     let provenance = match event.kind {
         arkret_wire::EventKind::RealmCreate => AgentLifecycleProvenance::DelegatedPcrGenesis {

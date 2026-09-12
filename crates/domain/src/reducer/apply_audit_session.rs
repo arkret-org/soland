@@ -21,7 +21,7 @@ use arkret_models_collaboration::events_payloads::audit::{
     AuditAttestationPolicy, AuditReleasePayload, AuditSessionPayload, AuditSessionStage,
 };
 use arkret_models_collaboration::governance::audit::AuditReleaseAttestation;
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use arkret_wire::cbs::{LatticeOpType, ProjectedOp};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -70,17 +70,16 @@ impl ProjectionState {
             arkret_wire::CellFamilyId::AUDIT_BINDING_STATE_V1
         ))
         .ok()?;
-        let active = matches!(
-            self.cells.get(&lifecycle),
-            Some(CellState::Value(Value::String(state))) if state == "active"
-        );
+        let active = self
+            .cells
+            .get(&lifecycle)
+            .and_then(ResolvedCellState::settled_value)
+            .and_then(Value::as_str)
+            == Some("active");
         if !active {
             return None;
         }
-        match self.cells.get(&config)? {
-            CellState::Value(value) => Some(value),
-            CellState::Bottom(_) => None,
-        }
+        self.cells.get(&config)?.settled_value()
     }
 
     /// `ak.audit.session.request` / `.authorize` / `.notice` / `.close`.
@@ -187,7 +186,7 @@ impl ProjectionState {
         self.audit_sessions.insert(session_id.clone(), projection);
         self.cells.insert(
             cell,
-            CellState::Value(Value::String(
+            ResolvedCellState::Value(Value::String(
                 audit_session_stage_str(payload.session_state).to_owned(),
             )),
         );
@@ -271,14 +270,15 @@ impl ProjectionState {
             return rejected(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED);
         };
         let mut log = match self.cells.get(&cell) {
-            Some(CellState::Value(Value::Array(entries))) => entries.clone(),
-            Some(CellState::Value(_)) | Some(CellState::Bottom(_)) => {
+            Some(ResolvedCellState::Value(Value::Array(entries))) => entries.clone(),
+            Some(_) => {
                 return rejected(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED);
             }
             None => Vec::new(),
         };
         log.push(value);
-        self.cells.insert(cell, CellState::Value(Value::Array(log)));
+        self.cells
+            .insert(cell, ResolvedCellState::Value(Value::Array(log)));
         ProjectionEffect::AuditReleaseProjected {
             session_id,
             release_id: arkret_identifiers::AuditReleaseId::from_event_id(

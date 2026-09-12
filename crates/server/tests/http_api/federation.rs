@@ -595,18 +595,6 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
         arkret_wire::DidCoreId::new(PEER_SOURCE_ID.to_owned())
             .expect("fixture peer source is a Station core ID"),
     ));
-    if event.seal_ref.is_some() {
-        event.seal_ref = Some(
-            test_realm_basis_for_station(
-                &soland_test_support::app_state(super::common::test_config()),
-                event.realm_id.as_str(),
-                actor_did,
-                PEER_SOURCE_ID,
-            )
-            .seal
-            .id,
-        );
-    }
     let verification_method = soland_test_support::signed_event::fixture_verification_method(
         actor_did,
         "01904100-0000-7000-8000-a11ce0000001",
@@ -629,14 +617,11 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(created_at),
     )
     .expect("federation fixture signs with its development verification method");
-    let mut event = event.into_event();
-    let producer = event.proofs[0]
-        .as_producer()
-        .expect("fixture has one producer proof")
-        .clone();
+    let event = event.into_event();
+    let producer = event.proofs[0].clone();
     arkret_signatures::Ed25519DetachedJwsVerifier::new()
         .verify_detached_jws(
             &producer.jws,
@@ -648,53 +633,6 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
             },
         )
         .expect("fixture producer signature verifies against its admitted key");
-    let admission_verification_method =
-        arkret_wire::DidUrl::new(format!("{PEER_SOURCE_DID}#notary-key"))
-            .expect("fixture admission verification method is a DID URL");
-    let mut admission = arkret_wire::StationAdmissionProof {
-        applet_installation_digest: None,
-        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
-        verification_method: admission_verification_method.clone(),
-        event_digest: producer.event_digest.clone(),
-        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
-            .expect("fixture producer proof digest"),
-        producer_verification_method: producer.verification_method.clone(),
-        producer_signing_key_did: arkret_wire::DidKey::new(format!(
-            "did:key:{}",
-            arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-                producer_signing_key.verifying_key().as_bytes()
-            )
-        ))
-        .expect("fixture producer signing key is a did:key"),
-        producer_signer_resolution_evidence_ref: None,
-        signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
-            "ak:signer_evidence:sha256:{}",
-            "11".repeat(32)
-        ))
-        .expect("fixture signer evidence ref"),
-        accepted_at: event.created_at,
-        jws: String::new(),
-    };
-    let admission_bytes = admission
-        .canonical_binding_bytes()
-        .expect("fixture admission binding canonicalizes");
-    let admission_signing_key = publication_signing_key(admission_verification_method.as_str());
-    admission.jws =
-        arkret_signatures::sign_ed25519_detached_jws(&admission_signing_key, &admission_bytes)
-            .expect("fixture admission detached JWS signs");
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(
-            &admission.jws,
-            &admission_bytes,
-            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                bytes: admission_signing_key.verifying_key().as_bytes().to_vec(),
-            },
-        )
-        .expect("fixture admission signature verifies against the installed peer key");
-    event.proofs.push(admission.into());
-    event
-        .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
-        .expect("fixture admission proof binds the accepted Event");
     serde_json::to_value(event).expect("federation fixture serializes")
 }
 
@@ -1572,9 +1510,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             arkret_schema::CapabilityRiskTier::High => arkret_wire::RiskTier::High,
         },
     );
-    let lease_basis = if let Some(seal_ref) = event.seal_ref.clone() {
-        arkret_wire::offline_publication::LeaseBasisRef::Seal(seal_ref)
-    } else if let Some(seal_basis) = event.seal_basis.clone() {
+    let lease_basis = if let Some(seal_basis) = event.seal_basis.clone() {
         arkret_wire::offline_publication::LeaseBasisRef::Joined(seal_basis)
     } else {
         panic!("federation fixture Event has no publication basis")

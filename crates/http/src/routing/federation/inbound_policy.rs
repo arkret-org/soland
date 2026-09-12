@@ -24,7 +24,7 @@ pub(crate) fn joined_actor_for_principal_route(
     actors.next().is_none().then_some(actor)
 }
 
-pub(crate) async fn federation_actor_origin_acceptable(
+pub(crate) async fn federation_mls_actor_route_acceptable(
     state: &AppState,
     actor: &arkret_wire::ActorId,
     source_id: &str,
@@ -38,7 +38,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
     let actor_key = actor.to_string();
     let principal = actor.signing_principal_id().as_str();
     if let Some(station_id) = event_station_id {
-        if !event_origin_matches_source(source_id, station_id) {
+        if !mls_event_route_matches_source(source_id, station_id) {
             return false;
         }
         if did_deployment_authority(principal).is_some()
@@ -68,7 +68,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
         && actor_has_pending_invite(state, binding_realm, actor).await
 }
 
-fn event_origin_matches_source(source_id: &str, station_id: &str) -> bool {
+fn mls_event_route_matches_source(source_id: &str, station_id: &str) -> bool {
     !source_id.is_empty() && source_id == station_id
 }
 
@@ -127,7 +127,8 @@ fn did_deployment_authority(did: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        did_deployment_authority, event_origin_matches_source, membership_authority_pair_acceptable,
+        did_deployment_authority, membership_authority_pair_acceptable,
+        mls_event_route_matches_source,
     };
 
     fn membership(state: &str, station_id: &str) -> soland_domain::reducer::SolandMembershipState {
@@ -162,14 +163,14 @@ mod tests {
     }
 
     #[test]
-    fn event_origin_requires_the_exact_authenticated_source_service() {
+    fn mls_event_route_requires_the_exact_authenticated_source_service() {
         let source = "ak:did_core:web:remote.example";
-        assert!(event_origin_matches_source(source, source));
-        assert!(!event_origin_matches_source(
+        assert!(mls_event_route_matches_source(source, source));
+        assert!(!mls_event_route_matches_source(
             source,
             "ak:did_core:web:other.example"
         ));
-        assert!(!event_origin_matches_source("", ""));
+        assert!(!mls_event_route_matches_source("", ""));
     }
 
     #[test]
@@ -212,7 +213,7 @@ mod tests {
             super::joined_actor_for_principal_route(&state, &realm, principal, &foreign).is_none()
         );
         assert!(
-            !super::federation_actor_origin_acceptable(
+            !super::federation_mls_actor_route_acceptable(
                 &state,
                 &actor,
                 foreign.as_str(),

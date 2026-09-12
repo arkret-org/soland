@@ -269,9 +269,7 @@ pub fn realm_genesis_payload(
     notary_signer: &arkret_wire::NotarySignerDescriptor,
     trust_domain: &str,
 ) -> Value {
-    let notary = arkret_wire::NotaryValue::single_signer(notary_signer.clone());
-    notary
-        .validate()
+    let notary = arkret_wire::NotaryValue::new(vec![notary_signer.clone()], 0, 0)
         .expect("Realm genesis notary descriptor must be canonical");
     serde_json::json!({
         "object": {
@@ -665,10 +663,9 @@ mod test_construction {
             expected_store_frontier: &[arkret_identifiers::SealId],
             new_ops: &[(
                 arkret_identifiers::CellRef,
-                arkret_state::lattice::ordered_log::IssuedOp,
+                arkret_state::state_model::ordered_log::IssuedOp,
             )],
             covered: &BTreeSet<arkret_identifiers::Hash>,
-            data_event_leaf_manifest: Option<&BTreeSet<arkret_identifiers::Hash>>,
             governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> arkret_state::state::StoreResult<bool> {
             self.0
@@ -678,17 +675,9 @@ mod test_construction {
                     expected_store_frontier,
                     new_ops,
                     covered,
-                    data_event_leaf_manifest,
                     governance_dependencies,
                 )
                 .await
-        }
-
-        async fn data_event_leaf_manifest(
-            &self,
-            seal_id: &arkret_identifiers::SealId,
-        ) -> arkret_state::state::StoreResult<Option<BTreeSet<arkret_identifiers::Hash>>> {
-            self.0.data_event_leaf_manifest(seal_id).await
         }
     }
 
@@ -2009,23 +1998,13 @@ impl AppState {
         leaves: &[arkret_identifiers::SealId],
         realm_id: &arkret_identifiers::RealmId,
     ) -> Result<
-        std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+        std::collections::BTreeMap<
+            arkret_identifiers::CellRef,
+            arkret_state::state_model::ResolvedCellState,
+        >,
         arkret_state::state::SealReject,
     > {
         self.projections.effective_state_at(leaves, realm_id).await
-    }
-
-    /// The `cas_register` head identities of the same view
-    /// [`Self::test_effective_state_at`] resolves. A fixture that recomputes a
-    /// `state_root` needs both halves (spec section 6.2.1).
-    pub async fn test_effective_cas_heads_at(
-        &self,
-        leaves: &[arkret_identifiers::SealId],
-        realm_id: &arkret_identifiers::RealmId,
-    ) -> Result<arkret_state::CasHeadsByCell, arkret_state::state::SealReject> {
-        self.projections
-            .effective_cas_heads_at(leaves, realm_id)
-            .await
     }
 
     pub(crate) fn hlc(&self) -> &ServiceClock {

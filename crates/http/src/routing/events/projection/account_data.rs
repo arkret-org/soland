@@ -11,44 +11,6 @@ use soland_services::operation_semantics as kinds;
 use crate::routing::identity::device_messages::fanout_actor_private_update;
 use crate::state::AppState;
 
-/// Project a `ak.realm.read_receipt_policy` (post-R1.2; was
-/// `ak.space.read_receipt_policy`) durable-event into
-/// `ProjectionState::cells` as a synthesized CasRegister value at the
-/// canonical cell
-/// `ak:cell:ak.component.realm.read_receipt_policy.v1:<realm_id>`.
-/// This unifies the read path with the Move/Seal pipeline: both durable-
-/// event ingestion AND Move/Seal `apply_seal` write to the same cells
-/// map, so `routing::events::effective_read_receipt_policy_for_realm`
-/// queries one source.
-///
-/// Cas-register semantics: the projection writer wins-by-arrival here
-/// (we don't have HLC ordering on synthesized values yet); for full
-/// cas-register conflict semantics writes should go through Move/Seal.
-pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
-    let realm_id = operation.realm_id.clone();
-    let policy: arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy =
-        match serde_json::from_value(operation.payload.clone()) {
-            Ok(policy) => policy,
-            Err(_) => return,
-        };
-
-    // Synthesize a CellState::Value at the canonical cell ref. This lets
-    // the cells-map fast-path serve reads without scanning the durable
-    // Event store on every fanout.
-    let cell_id = match arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.realm.read_receipt_policy.v1:{}",
-        realm_id.as_str()
-    )) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let value = match serde_json::to_value(policy) {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-    state.projections().cache_cell(cell_id, value);
-}
-
 pub(super) fn actor_private_read_cursor_matches_origin(
     origin: &str,
     source_device_id: &str,

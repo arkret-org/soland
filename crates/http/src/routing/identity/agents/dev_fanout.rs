@@ -193,7 +193,7 @@ pub(super) async fn submit_provision_event(
 }
 
 /// AKP-0008 §4.11 — submit a durable lifecycle transition event
-/// (`ak.self.agent.{pause,resume,deactivate}`) driving the FSM reducer.
+/// (`ak.self.agent.{pause,resume,deactivate}`) driving the transition reducer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn validate_durable_agent_lifecycle(
     session: &SessionRecord,
@@ -309,7 +309,7 @@ pub(super) async fn submit_signed_agent_event(
 }
 
 /// AKP-0008 §4.11 — submit a durable lifecycle transition event
-/// (`ak.self.agent.{pause,resume,deactivate}`) driving the FSM reducer.
+/// (`ak.self.agent.{pause,resume,deactivate}`) driving the transition reducer.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn submit_durable_agent_lifecycle(
     state: &AppState,

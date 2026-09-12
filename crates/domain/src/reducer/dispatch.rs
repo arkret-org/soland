@@ -545,7 +545,7 @@ fn apply_applet_discovery_dispatch(
     s.apply_applet_discovery(op, op.created_at)
 }
 
-// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — FSM-lattice
+// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — transition-state model
 // dispatch for `ak.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
 // `Deactivated` is terminal (no transition out, no resume after).
 fn apply_agent_pause_dispatch(
@@ -726,7 +726,7 @@ fn apply_call_recording_start_dispatch(
 
 /// Dispatch for `ak.call.summary`; cell family is
 /// `ak.component.call.summary.v1` (`cell_subject = payload.call_id`,
-/// cas_register, write-once).
+/// causal_register, write-once).
 fn apply_call_summary_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -736,7 +736,7 @@ fn apply_call_summary_dispatch(
 }
 
 /// R3.1 — dispatch for `ak.realm.link`. Projects the typed link payload
-/// into the `ak.component.realm.link.v1` FSM cell + structured
+/// into the `ak.component.realm.link.v1` transition cell + structured
 /// `realm_links` / `realm_links_inbound` caches.
 fn apply_realm_link_dispatch(
     s: &mut ProjectionState,
@@ -747,7 +747,7 @@ fn apply_realm_link_dispatch(
 }
 
 /// SOL-ORG-02 — dispatch for `ak.realm.organization`. Projects the
-/// organization-authorized Realm relationship statement (cas-register cell
+/// organization-authorized Realm relationship statement (registered state model cell
 /// keyed by `(organization_id, relationship)` + structured cache) after the
 /// SDK organization-side verifier passes.
 fn apply_realm_organization_dispatch(
@@ -759,7 +759,7 @@ fn apply_realm_organization_dispatch(
 }
 
 /// R3.2 — dispatch for `ak.realm.inheritance_policy`. Projects the
-/// cas-register cell + structured cache; validates parent grant bounds
+/// registered state model cell + structured cache; validates parent grant bounds
 /// when the relevant parent grant cells are available.
 fn apply_realm_inheritance_policy_dispatch(
     s: &mut ProjectionState,
@@ -964,7 +964,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     );
     // MID-1..6 (R3.1/R3.2 spec-sync, arkret-spec @ b56cab1) —
     // `ak.member.identity.update`. Cell family
-    // `ak.component.member.identity.v1`, lattice `ordered_log`, bottom
+    // `ak.component.member.identity.v1`, state model `ordered_log`, bottom
     // `expose`. The ordered-log projection (effective-set filter,
     // member_display_state_digest materialization) lives on
     // `AppState::member_identity`
@@ -1181,7 +1181,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::AppletDiscovery,
         apply_applet_discovery_dispatch,
     );
-    // REDU-1 (R3 spec-sync) — agent lifecycle FSM dispatch. bottom=reject,
+    // REDU-1 (R3 spec-sync) — agent lifecycle transition dispatch. bottom=reject,
     // deactivate is terminal.
     m.insert(
         arkret_wire::EventKind::SelfAgentPause,
@@ -1256,7 +1256,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_call_recording_start_dispatch,
     );
     // `ak.call.summary` — durable terminal summary projection. Cell family
-    // `ak.component.call.summary.v1`, write-once cas_register (`call-state.md`
+    // `ak.component.call.summary.v1`, write-once causal_register (`call-state.md`
     // §7).
     m.insert(
         arkret_wire::EventKind::CallSummary,

@@ -34,7 +34,7 @@ impl ProjectionState {
             .realm_null_subject_cells
             .get(&key)
             .and_then(|state| match state {
-                CellState::Value(Value::String(value)) => Some(value.as_str()),
+                ResolvedCellState::Value(Value::String(value)) => Some(value.as_str()),
                 _ => None,
             });
         match current {
@@ -67,7 +67,7 @@ impl ProjectionState {
         }
 
         self.realm_null_subject_cells
-            .insert(key, CellState::Value(Value::String(to.to_owned())));
+            .insert(key, ResolvedCellState::Value(Value::String(to.to_owned())));
         ProjectionEffect::RealmBootstrapFacetProjected {
             realm_id,
             kind: arkret_wire::EventKind::RealmHistoryAccess
@@ -131,7 +131,7 @@ impl ProjectionState {
             };
         };
         self.cells
-            .insert(cell, CellState::Value(Value::String(to.to_owned())));
+            .insert(cell, ResolvedCellState::Value(Value::String(to.to_owned())));
         ProjectionEffect::CircleLifecycle {
             circle_id,
             new_state: CircleLifecycleState::Active,

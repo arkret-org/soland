@@ -1450,7 +1450,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
     drop(cleanup_conn);
     let stores = soland_storage_postgres::build_state_resolution_stores(
         Some(pool.clone()),
-        std::sync::Arc::new(arkret_state::state::MemoryCellRegistry::default()),
+        std::sync::Arc::new(arkret_state::state::MemoryCellStateRegistry::default()),
     );
     let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
         device_id: "ak:device:schedule-contract".to_owned(),
@@ -1756,21 +1756,18 @@ fn seal_dependency_contract_seal(
         arkret_state::state::control_event_set_root(covered, arkret_canonical::DigestSuite::Sha256)
             .unwrap();
     let state_root = arkret_state::state::compute_state_root(
-        arkret_state::GovernanceView::values_only(&std::collections::BTreeMap::new()),
+        arkret_state::GovernanceView::new(&std::collections::BTreeMap::new()),
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
     let mut seal = arkret_wire::Seal {
         id: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
         realm_id: realm_id.clone(),
-        predecessor_refs,
+        predecessor_ref: predecessor_refs.into_iter().next(),
         delta: vec![delta],
         control_event_set_root: root.clone(),
         state_root,
-        completeness_root: root,
         notary_seq: 0,
-        data_view_root: None,
-        data_event_set_root: None,
         availability_receipt_digests: vec![availability_digest],
         covered_event_digests: Vec::new(),
         previous_state_root: None,
@@ -1806,8 +1803,6 @@ struct SealDependencyAtomicCounts {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     dependency_edges: i64,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
-    data_event_manifests: i64,
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
     effective_state_checkpoints: i64,
 }
 
@@ -1827,7 +1822,6 @@ async fn seal_dependency_atomic_counts(
            (SELECT COUNT(*) FROM state_seal_control_events WHERE seal_id = $1) AS sealed_markers, \
            (SELECT COUNT(*) FROM governance_dependency_objects WHERE object_digest = $2) AS dependency_objects, \
            (SELECT COUNT(*) FROM governance_dependency_edges WHERE seal_id = $1) AS dependency_edges, \
-           (SELECT COUNT(*) FROM state_seal_data_event_manifests WHERE seal_id = $1) AS data_event_manifests, \
            (SELECT COUNT(*) FROM state_seal_effective_checkpoints WHERE seal_id = $1) AS effective_state_checkpoints",
     )
     .bind::<Text, _>(seal_id.as_str())
@@ -1849,8 +1843,8 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
-    let registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
-        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
+    let registry: std::sync::Arc<dyn arkret_state::state::CellStateRegistry> = std::sync::Arc::new(
+        soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()
             .expect("validated SDK cell registry"),
     );
     let stores =
@@ -1893,27 +1887,13 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     let genesis_covered = [genesis_digest.clone()]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
-    let mut genesis_seal = seal_dependency_contract_seal(
+    let genesis_seal = seal_dependency_contract_seal(
         &realm_id,
         Vec::new(),
         genesis_digest.clone(),
         &genesis_covered,
         genesis_object_digest.clone(),
     );
-    let genesis_manifest =
-        [arkret_identifiers::Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>();
-    genesis_seal.data_event_set_root = Some(
-        arkret_state::event_digest_set_root(
-            &genesis_manifest,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap(),
-    );
-    genesis_seal.id = genesis_seal
-        .derive_id(arkret_canonical::DigestSuite::Sha256)
-        .unwrap();
     let genesis_write = GovernanceDependencyWrite {
         realm_id: realm_id.clone(),
         source: GovernanceDependencySource::Seal(genesis_seal.id.clone()),
@@ -1929,7 +1909,6 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &genesis_covered,
-                Some(&genesis_manifest),
                 std::slice::from_ref(&genesis_write),
             )
             .await
@@ -1942,16 +1921,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert_eq!(committed.sealed_markers, 1);
     assert_eq!(committed.dependency_objects, 1);
     assert_eq!(committed.dependency_edges, 1);
-    assert_eq!(committed.data_event_manifests, 1);
     assert_eq!(committed.effective_state_checkpoints, 1);
-    assert_eq!(
-        stores
-            .event_seal_committer
-            .data_event_leaf_manifest(&genesis_seal.id)
-            .await
-            .unwrap(),
-        Some(genesis_manifest.clone())
-    );
     let restarted = soland_storage_postgres::build_state_resolution_stores(
         Some(pool.clone()),
         stores.cell_registry.clone(),
@@ -1964,15 +1934,6 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             .unwrap()
             .is_empty(),
         "accepted coverage must remove pending work durably"
-    );
-    assert_eq!(
-        restarted
-            .event_seal_committer
-            .data_event_leaf_manifest(&genesis_seal.id)
-            .await
-            .unwrap(),
-        Some(genesis_manifest.clone()),
-        "a reconstructed PostgreSQL adapter must return the byte-identical frozen manifest"
     );
     let checkpoint = restarted
         .event_seal_committer
@@ -2019,7 +1980,6 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &genesis_covered,
-                Some(&genesis_manifest),
                 std::slice::from_ref(&genesis_write),
             )
             .await
@@ -2037,7 +1997,6 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &[],
             &[],
             &genesis_covered,
-            Some(&genesis_manifest),
             &[GovernanceDependencyWrite {
                 realm_id: realm_id.clone(),
                 source: GovernanceDependencySource::Seal(genesis_seal.id.clone()),
@@ -2116,7 +2075,6 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 std::slice::from_ref(&genesis_seal.id),
                 &[],
                 &covered,
-                Some(&std::collections::BTreeSet::new()),
                 &[write],
             )
             .await
@@ -2145,10 +2103,6 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         assert_eq!(
             counts.dependency_edges, 0,
             "{failure} failure leaked a dependency edge"
-        );
-        assert_eq!(
-            counts.data_event_manifests, 0,
-            "{failure} failure leaked a DataEvent manifest"
         );
         assert_eq!(
             counts.effective_state_checkpoints, 0,
@@ -2188,11 +2142,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         edge_index: 0,
         item: cas_dependency,
     };
-    let root_mismatch_manifest =
-        [arkret_identifiers::Hash::new(format!("sha256:{}", "e".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>();
-    let root_mismatch = stores
+    let stale_basis = stores
         .event_seal_committer
         .commit_if_frontier(
             &cas_seal,
@@ -2200,44 +2150,19 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &[],
             &[],
             &cas_covered,
-            Some(&root_mismatch_manifest),
             std::slice::from_ref(&cas_write),
         )
         .await
         .unwrap_err();
     assert!(
-        root_mismatch
+        stale_basis
             .to_string()
-            .contains("data_event_set_root mismatch")
+            .contains("predecessor_ref does not match")
     );
-    let root_mismatch_counts =
+    let stale_basis_counts =
         seal_dependency_atomic_counts(&pool, &cas_seal.id, &cas_object_digest).await;
-    assert_eq!(root_mismatch_counts.seals, 0);
-    assert_eq!(root_mismatch_counts.data_event_manifests, 0);
-    assert_eq!(root_mismatch_counts.effective_state_checkpoints, 0);
-    assert!(
-        !stores
-            .event_seal_committer
-            .commit_if_frontier(
-                &cas_seal,
-                arkret_canonical::DigestSuite::Sha256,
-                &[],
-                &[],
-                &cas_covered,
-                Some(&std::collections::BTreeSet::new()),
-                &[cas_write],
-            )
-            .await
-            .unwrap()
-    );
-    let cas_counts = seal_dependency_atomic_counts(&pool, &cas_seal.id, &cas_object_digest).await;
-    assert_eq!(cas_counts.seals, 0);
-    assert_eq!(cas_counts.cell_ops, 0);
-    assert_eq!(cas_counts.sealed_markers, 0);
-    assert_eq!(cas_counts.dependency_objects, 0);
-    assert_eq!(cas_counts.dependency_edges, 0);
-    assert_eq!(cas_counts.data_event_manifests, 0);
-    assert_eq!(cas_counts.effective_state_checkpoints, 0);
+    assert_eq!(stale_basis_counts.seals, 0);
+    assert_eq!(stale_basis_counts.effective_state_checkpoints, 0);
     assert!(
         stores
             .control_event_store
@@ -2245,33 +2170,6 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             .await
             .unwrap()
             .is_empty()
-    );
-
-    use diesel::sql_types::Text;
-    use diesel_async::RunQueryDsl;
-    let mut conn = pool.get().await.unwrap();
-    diesel::sql_query("DELETE FROM state_seal_data_event_manifests WHERE seal_id = $1")
-        .bind::<Text, _>(genesis_seal.id.as_str())
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    let missing_manifest_retry = stores
-        .event_seal_committer
-        .commit_if_frontier(
-            &genesis_seal,
-            arkret_canonical::DigestSuite::Sha256,
-            &[],
-            &[],
-            &genesis_covered,
-            Some(&genesis_manifest),
-            std::slice::from_ref(&genesis_write),
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        missing_manifest_retry
-            .to_string()
-            .contains("different or missing DataEvent leaf manifest")
     );
 }
 
@@ -2684,10 +2582,11 @@ async fn postgres_adapter_settles_sealed_device_revocations() {
 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
-    let cell_registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
-        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
-            .expect("validated SDK cell registry"),
-    );
+    let cell_registry: std::sync::Arc<dyn arkret_state::state::CellStateRegistry> =
+        std::sync::Arc::new(
+            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()
+                .expect("validated SDK cell registry"),
+        );
     let stores =
         soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), cell_registry);
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
@@ -3344,9 +3243,9 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let seal_id = format!("ak:seal:test:{}", uuid::Uuid::now_v7().simple());
     sql_query(
         "INSERT INTO state_seals \
-         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_refs, is_genesis) \
+         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_ref, is_genesis) \
          VALUES ($1, 'sha256', $2, decode('00', 'hex'), decode('00', 'hex'), \
-                 '{}'::jsonb, '[]'::jsonb, true)",
+                 '{}'::jsonb, NULL, true)",
     )
     .bind::<Text, _>(&seal_id)
     .bind::<Text, _>(&realm_id)
@@ -4002,7 +3901,7 @@ mod control_move_ingress_negatives {
         let fixture = control_anchor_fixture("class-mismatch");
         let stores = soland_storage_postgres::build_state_resolution_stores(
             Some(pool.clone()),
-            std::sync::Arc::new(arkret_state::state::MemoryCellRegistry::default()),
+            std::sync::Arc::new(arkret_state::state::MemoryCellStateRegistry::default()),
         );
 
         stores
@@ -4208,9 +4107,9 @@ async fn fork_seal_pin(pool: &PgPool, record: &soland_storage::CanonicalEventRec
     sql_query(
         "INSERT INTO state_seals \
          (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, \
-          predecessor_refs, is_genesis) \
+          predecessor_ref, is_genesis) \
          VALUES ($1, 'sha256', $2, decode('00', 'hex'), decode('00', 'hex'), \
-                 '{}'::jsonb, '[]'::jsonb, true)",
+                 '{}'::jsonb, NULL, true)",
     )
     .bind::<Text, _>(&seal_id)
     .bind::<Text, _>(&realm_id)
@@ -4688,562 +4587,4 @@ async fn postgres_fork_resolution_collision_verdict_admits_the_winning_preimage(
             .canonical_bytes,
         losing_preimage,
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn postgres_checkpoint_reuses_untouched_cells_and_invalidates_changed_rules() {
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::Arc;
-
-    use arkret_state::lattice::ordered_log::IssuedOp;
-    use arkret_state::lattice::{CellState, LatticeKind, SealedOp};
-    use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
-    use arkret_state::state::{CellRegistry, EventCellBottom, MemoryCellRegistry};
-    use arkret_wire::{CellRef, Hash, LatticeOp, LatticeOpType};
-    use diesel::sql_types::{Jsonb, Text};
-    use diesel::{QueryableByName, sql_query};
-    use diesel_async::RunQueryDsl;
-
-    #[derive(QueryableByName)]
-    struct OpRow {
-        #[diesel(sql_type = Jsonb)]
-        op_json: serde_json::Value,
-    }
-    fn registry(changed: bool) -> Arc<dyn CellRegistry> {
-        let mut registry = MemoryCellRegistry::empty();
-        registry.register(
-            arkret_wire::CellFamilyId::REALM_POLICY_V1,
-            LatticeKind::CasRegister,
-            EventCellBottom::Reject,
-        );
-        if changed {
-            registry.register_fsm(
-                arkret_wire::CellFamilyId::MEMBER_STATE_V1,
-                Some(serde_json::json!("leave")),
-                vec![(serde_json::json!("leave"), serde_json::json!("join"))],
-                EventCellBottom::Reject,
-            );
-        }
-        Arc::new(registry)
-    }
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let realm = arkret_wire::RealmId::new(event_derived_realm_id(
-        format!("checkpoint-cell-reuse:{}", uuid::Uuid::now_v7()).as_bytes(),
-    ))
-    .unwrap();
-    let cells = ["changed", "untouched"].map(|subject| {
-        CellRef::new(format!(
-            "ak:cell:{}:{subject}",
-            arkret_wire::CellFamilyId::REALM_POLICY_V1
-        ))
-        .unwrap()
-    });
-    let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
-        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
-        device_authorize_event_id: format!("ak:event:{}", "b".repeat(43)),
-        device_generation_ref: 1,
-        seal_basis_digest: format!("sha256:{}", "c".repeat(64)),
-    });
-    let mut stores =
-        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), registry(false));
-    let mut covered = BTreeSet::new();
-    let mut frontier = Vec::new();
-    let mut history = BTreeMap::<CellRef, Vec<Vec<IssuedOp>>>::new();
-    let mut previous_move = None;
-    let mut saved_untouched = None;
-    let mut genesis_id = None;
-    for step in 0..3 {
-        if step == 2 {
-            stores = soland_storage_postgres::build_state_resolution_stores(
-                Some(pool.clone()),
-                registry(true),
-            );
-            assert!(
-                stores
-                    .event_seal_committer
-                    .effective_state_checkpoint(&frontier[0])
-                    .await
-                    .unwrap()
-                    .is_none(),
-                "changed rules must not reuse old derived values"
-            );
-        }
-        let (event, digest) = seal_dependency_contract_event(&realm, &format!("cell-step-{step}"));
-        stores
-            .control_event_store
-            .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
-            .await
-            .unwrap();
-        covered.insert(digest.clone());
-        let selected = if step == 0 { &cells[..] } else { &cells[..1] };
-        let ops = selected
-            .iter()
-            .map(|cell| {
-                let issued = IssuedOp {
-                    issuer_id: event.actor_id.clone(),
-                    op: SealedOp::superseding(
-                        digest.clone(),
-                        LatticeOp {
-                            op_type: LatticeOpType::Set,
-                            tag: None,
-                            value: Some(serde_json::json!(step + 1)),
-                            from: None,
-                            to: None,
-                            reason: None,
-                            issuer_seq: None,
-                        },
-                        previous_move.iter().cloned().collect(),
-                    ),
-                };
-                history
-                    .entry(cell.clone())
-                    .or_default()
-                    .push(vec![issued.clone()]);
-                (cell.clone(), issued)
-            })
-            .collect::<Vec<_>>();
-        let mut expected = BTreeMap::new();
-        let mut heads = arkret_state::CasHeadsByCell::new();
-        for (cell, batches) in &history {
-            let binding = stores.cell_registry.resolve(&realm, cell).unwrap();
-            expected.insert(
-                cell.clone(),
-                arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), cell, batches),
-            );
-            heads.insert(
-                cell.clone(),
-                arkret_state::causal_heads_for_batches(binding.lattice.kind(), batches),
-            );
-        }
-        let mut seal = seal_dependency_contract_seal(
-            &realm,
-            frontier.clone(),
-            digest.clone(),
-            &covered,
-            Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
-        );
-        seal.availability_receipt_digests.clear();
-        seal.state_root = arkret_state::compute_state_root(
-            arkret_state::GovernanceView::new(&expected, &heads),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
-        seal.id = seal
-            .derive_id(arkret_canonical::DigestSuite::Sha256)
-            .unwrap();
-        if step == 2 {
-            assert!(
-                stores
-                    .event_seal_committer
-                    .commit_if_frontier(
-                        &seal,
-                        arkret_canonical::DigestSuite::Sha256,
-                        &frontier,
-                        &ops,
-                        &covered,
-                        None,
-                        &[]
-                    )
-                    .await
-                    .is_err(),
-                "context change must read the previously untouched cell history"
-            );
-            let mut conn = pool.get().await.unwrap();
-            sql_query("UPDATE state_cell_ops SET op_json = $1 WHERE seal_id = $2 AND cell_id = $3")
-                .bind::<Jsonb, _>(saved_untouched.as_ref().unwrap())
-                .bind::<Text, _>(genesis_id.as_ref().unwrap())
-                .bind::<Text, _>(cells[1].as_str())
-                .execute(&mut conn)
-                .await
-                .unwrap();
-        }
-        assert!(
-            stores
-                .event_seal_committer
-                .commit_if_frontier(
-                    &seal,
-                    arkret_canonical::DigestSuite::Sha256,
-                    &frontier,
-                    &ops,
-                    &covered,
-                    None,
-                    &[]
-                )
-                .await
-                .unwrap()
-        );
-        let restarted = soland_storage_postgres::build_state_resolution_stores(
-            Some(pool.clone()),
-            registry(step == 2),
-        );
-        let checkpoint = restarted
-            .event_seal_committer
-            .effective_state_checkpoint(&seal.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(checkpoint.state, expected);
-        assert_eq!(checkpoint.cas_heads, heads);
-        assert_eq!(
-            checkpoint.state.get(&cells[1]),
-            Some(&CellState::Value(serde_json::json!(1)))
-        );
-        if step == 0 {
-            let mut conn = pool.get().await.unwrap();
-            let row =
-                sql_query("SELECT op_json FROM state_cell_ops WHERE seal_id = $1 AND cell_id = $2")
-                    .bind::<Text, _>(seal.id.as_str())
-                    .bind::<Text, _>(cells[1].as_str())
-                    .get_result::<OpRow>(&mut conn)
-                    .await
-                    .unwrap();
-            saved_untouched = Some(row.op_json);
-            genesis_id = Some(seal.id.to_string());
-            // A deliberately undecodable untouched row proves that the next
-            // same-context successor does not fetch/decode unrelated history.
-            sql_query("UPDATE state_cell_ops SET op_json = '{}'::jsonb WHERE seal_id = $1 AND cell_id = $2")
-                .bind::<Text, _>(seal.id.as_str()).bind::<Text, _>(cells[1].as_str())
-                .execute(&mut conn).await.unwrap();
-        }
-        previous_move = Some(digest);
-        frontier = vec![seal.id];
-    }
-}
-
-#[tokio::test]
-async fn postgres_agent_pairing_receipts_survive_renewal_and_block_cancelled_activation() {
-    use arkret_models_collaboration::agent_operations::{
-        AgentKeyPairActivationState, AgentLifecycleState,
-    };
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let store = PgAgentStore { pool: pool.clone() };
-    let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let agent = format!("ak:did_core:webvh:zReceipt{suffix}");
-    let method = format!("did:webvh:zReceipt{suffix}:agent.example#runtime-1");
-    let now =
-        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
-    let mut record = AgentPrincipalRecord::new(
-        agent.clone(),
-        "ak:did_core:web:controller.example".into(),
-        event_derived_realm_id(agent.as_bytes()),
-        arkret_wire::DidUrl::new(format!(
-            "did:webvh:zReceipt{suffix}:agent.example#managed-controller"
-        ))
-        .unwrap(),
-        AgentLifecycleState::Paused,
-        now,
-    );
-    record.pairing_request_id = Some(
-        arkret_wire::OpaqueLocalId::new(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
-            .unwrap(),
-    );
-    record.approval_request_id = Some(
-        arkret_wire::OpaqueLocalId::new(format!("agent_runtime_approval:{}", uuid::Uuid::now_v7()))
-            .unwrap(),
-    );
-    record.pairing_code = Some("AAAAAAAAAAAAAAAAAAAAAA".into());
-    record.pairing_expires_at = Some(now + chrono::Duration::minutes(5));
-    record.runtime_key_binding_digest = Some(arkret_canonical::sha256_digest(b"candidate"));
-    let public_key = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
-    record.runtime_public_key_digest = Some(arkret_canonical::sha256_digest(
-        arkret_canonical::base64url_decode(public_key).unwrap(),
-    ));
-    let event = arkret_wire::test_support::raw_event_at("ak.agent.key.authorize",
-        arkret_wire::ScopeRef::Realm { realm_id: arkret_identifiers::RealmId::new(record.principal_control_realm_id.clone()).unwrap() },
-        arkret_identifiers::DidCoreId::new(agent.clone()).unwrap(), arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example").unwrap(), 1,
-        arkret_identifiers::Hlc::new("019f00000000-0001-aabbccdd").unwrap(),
-        serde_json::json!({
-            "agent_id":agent,"key_id":"runtime-1","verification_method":method,
-            "public_key":{"kty":"OKP","kid":method,"algorithm":"Ed25519","key":public_key},
-            "accountable_principal_id":record.controller_principal_id,
-            "agent_key_scope":{"actions":["ak.event.read"],"resources":[{"kind":"realm","realm_id":record.principal_control_realm_id}],"constraints":[]},
-            "audience":["ak:did_core:web:station.example"],"issued_at":now,"expires_at":now+chrono::Duration::hours(1),
-            "approval_evidence":{"kind":"pairing_request","pairing_request_id":record.pairing_request_id,
-                "request_canonical_digest":arkret_canonical::sha256_digest(b"exact pair command"),"approved_by":record.controller_principal_id}
-        }), now).unwrap();
-    arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload::try_from(&event)
-        .expect("the storage fixture has a complete closed Agent authorize payload");
-    let digest = arkret_canonical::sha256_digest(b"exact pair command");
-    // Use the durable accepted Seal publication port, not an empty-basis gate.
-    // Semantic Event/Seal admission is exercised by the public HTTP ceremony;
-    // this contract isolates publication-vs-activation transaction ordering.
-    let registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
-        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
-    );
-    let governance =
-        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), registry);
-    let availability = seal_dependency_contract_availability(&event, "agent-activation");
-    let availability_digest = seal_dependency_contract_digest(&availability);
-    let event_digest =
-        arkret_state::state::control_event_digest(&event, arkret_canonical::DigestSuite::Sha256)
-            .unwrap();
-    governance
-        .control_event_store
-        .put_pending_with_ingress(
-            &event,
-            &arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
-                arkret_state::state::store::AcklessSelfPrincipalIngress {
-                    device_id: "ak:device:01904100-0000-7000-8000-000000000001".into(),
-                    device_authorize_event_id: event.event_id.to_string(),
-                    device_generation_ref: 1,
-                    seal_basis_digest: arkret_canonical::sha256_digest(b"storage-contract-basis"),
-                },
-            ),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .await
-        .unwrap();
-    let covered = [event_digest.clone()].into_iter().collect();
-    let seal = seal_dependency_contract_seal(
-        &event.realm_id,
-        vec![],
-        event_digest,
-        &covered,
-        availability_digest,
-    );
-    let dependency = GovernanceDependencyWrite {
-        realm_id: event.realm_id.clone(),
-        source: GovernanceDependencySource::Seal(seal.id.clone()),
-        edge_index: 0,
-        item: availability,
-    };
-    assert!(
-        governance
-            .event_seal_committer
-            .commit_if_frontier(
-                &seal,
-                arkret_canonical::DigestSuite::Sha256,
-                &[],
-                &[],
-                &covered,
-                None,
-                &[dependency],
-            )
-            .await
-            .unwrap()
-    );
-    record.pending_pairing_commit_intent = Some(soland_storage::PendingAgentPairingCommitIntent {
-        request_digest: digest.clone(),
-        authorize_event_id: event.event_id.to_string(),
-        key_authorization_event: Some(event.clone()),
-    });
-    store.put(record.clone()).await.unwrap();
-    assert_eq!(
-        store
-            .pairing_receipt(event.event_id.as_str())
-            .await
-            .unwrap()
-            .unwrap()
-            .activation_state,
-        AgentKeyPairActivationState::AwaitingAcceptedFrontier
-    );
-    // Admission appends a Station proof without changing the frozen command.
-    // Persistence must compare the original Event and retain the accepted one.
-    let mut accepted_event = event.clone();
-    accepted_event.proofs.push(serde_json::from_value(serde_json::json!({
-        "kind": "station_admission",
-        "verification_method": "did:web:station.example#notary",
-        "event_digest": arkret_canonical::sha256_digest(b"event"),
-        "producer_proof_digest": arkret_canonical::sha256_digest(b"producer"),
-        "producer_verification_method": method,
-        "producer_signing_key_did": "did:key:z6MkmghdggH9iwAwmMypZmN9EsfPGwsbvmum2HkFWXVzrAeE",
-        "signer_resolution_evidence_ref": format!("ak:signer_evidence:{}", arkret_canonical::sha256_digest(b"signer")),
-        "accepted_at": now,
-        "jws": "storage-test-admission-proof"
-    })).unwrap());
-    let activation = soland_storage::AgentRuntimeActivation {
-        agent_id: agent.clone(),
-        approval_request_id: record.approval_request_id.clone().unwrap(),
-        runtime_key_binding_digest: record.runtime_key_binding_digest.clone().unwrap(),
-        pairing_request_id: record.pairing_request_id.clone().unwrap(),
-        paired_request_digest: digest,
-        authorized_event_ref: event.event_id.to_string(),
-        authorized_verification_method: method.clone(),
-        authorized_public_key_digest: record.runtime_public_key_digest.clone().unwrap(),
-        frozen_authorize_event: event.clone(),
-        outcome: AgentKeyPairActivationState::Active,
-        expected_accepted_basis: arkret_wire::SealBasis {
-            leaves: vec![seal.id.clone()],
-        },
-        authorized_key_event: accepted_event.clone(),
-        authorized_at: now,
-    };
-    let mut wrong_frozen_command = activation.clone();
-    wrong_frozen_command.frozen_authorize_event = accepted_event.clone();
-    assert!(
-        !store
-            .activate_runtime_if_current(&wrong_frozen_command)
-            .await
-            .unwrap(),
-        "Station proof addition must not silently change the exact controller command"
-    );
-    let mut stale_basis = activation.clone();
-    stale_basis.expected_accepted_basis.leaves.clear();
-    assert!(
-        store
-            .activate_runtime_if_current(&stale_basis)
-            .await
-            .is_err(),
-        "a stale accepted basis cannot consume the intent"
-    );
-    assert!(
-        store
-            .activate_runtime_if_current(&activation)
-            .await
-            .unwrap()
-    );
-    assert_eq!(
-        store.get(&agent).await.unwrap().unwrap().state,
-        AgentLifecycleState::Paused,
-        "key activation never resumes the lifecycle"
-    );
-    assert_eq!(
-        store
-            .get(&agent)
-            .await
-            .unwrap()
-            .unwrap()
-            .authorized_key_event,
-        Some(accepted_event),
-        "the accepted Station proof must remain available"
-    );
-    assert_eq!(
-        store
-            .pairing_receipt(event.event_id.as_str())
-            .await
-            .unwrap()
-            .unwrap()
-            .activation_state,
-        AgentKeyPairActivationState::Active
-    );
-    let mut renewed = store.get(&agent).await.unwrap().unwrap();
-    renewed.pairing_request_id = Some(
-        arkret_wire::OpaqueLocalId::new(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
-            .unwrap(),
-    );
-    renewed.approval_request_id = Some(
-        arkret_wire::OpaqueLocalId::new(format!("agent_runtime_approval:{}", uuid::Uuid::now_v7()))
-            .unwrap(),
-    );
-    renewed.runtime_public_key_digest = Some(arkret_canonical::sha256_digest(&[1u8; 32]));
-    renewed.runtime_key_binding_digest = Some(arkret_canonical::sha256_digest(b"new candidate"));
-    let mut cancelled_event = event.clone();
-    cancelled_event.actor_seq = 2;
-    cancelled_event
-        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-        .unwrap();
-    renewed.pending_pairing_commit_intent = Some(soland_storage::PendingAgentPairingCommitIntent {
-        request_digest: arkret_canonical::sha256_digest(b"new command"),
-        authorize_event_id: cancelled_event.event_id.to_string(),
-        key_authorization_event: Some(cancelled_event.clone()),
-    });
-    store.put(renewed.clone()).await.unwrap();
-    let next_digest = arkret_state::state::control_event_digest(
-        &cancelled_event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap();
-    governance
-        .control_event_store
-        .put_pending_with_ingress(
-            &cancelled_event,
-            &arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
-                arkret_state::state::store::AcklessSelfPrincipalIngress {
-                    device_id: "ak:device:01904100-0000-7000-8000-000000000001".into(),
-                    device_authorize_event_id: event.event_id.to_string(),
-                    device_generation_ref: 1,
-                    seal_basis_digest: arkret_canonical::sha256_digest(
-                        b"storage-contract-next-basis",
-                    ),
-                },
-            ),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .await
-        .unwrap();
-    let mut next_covered = covered.clone();
-    next_covered.insert(next_digest.clone());
-    let next_availability = seal_dependency_contract_availability(&cancelled_event, "agent-cancel");
-    let next_seal = seal_dependency_contract_seal(
-        &event.realm_id,
-        vec![seal.id.clone()],
-        next_digest,
-        &next_covered,
-        seal_dependency_contract_digest(&next_availability),
-    );
-    let next_dependency = GovernanceDependencyWrite {
-        realm_id: event.realm_id.clone(),
-        source: GovernanceDependencySource::Seal(next_seal.id.clone()),
-        edge_index: 0,
-        item: next_availability,
-    };
-    assert!(
-        governance
-            .event_seal_committer
-            .commit_if_frontier(
-                &next_seal,
-                arkret_canonical::DigestSuite::Sha256,
-                &[seal.id.clone()],
-                &[],
-                &next_covered,
-                None,
-                &[next_dependency]
-            )
-            .await
-            .unwrap()
-    );
-    let mut cancellation = activation.clone();
-    cancellation.approval_request_id = renewed.approval_request_id.clone().unwrap();
-    cancellation.runtime_key_binding_digest = renewed.runtime_key_binding_digest.clone().unwrap();
-    cancellation.pairing_request_id = renewed.pairing_request_id.clone().unwrap();
-    cancellation.paired_request_digest = arkret_canonical::sha256_digest(b"new command");
-    cancellation.authorized_event_ref = cancelled_event.event_id.to_string();
-    cancellation.frozen_authorize_event = cancelled_event.clone();
-    cancellation.authorized_key_event = cancelled_event.clone();
-    cancellation.expected_accepted_basis = arkret_wire::SealBasis {
-        leaves: vec![next_seal.id],
-    };
-    cancellation.outcome = AgentKeyPairActivationState::Cancelled;
-    assert!(
-        store
-            .activate_runtime_if_current(&cancellation)
-            .await
-            .unwrap()
-    );
-    let reopened = PgAgentStore { pool: pool.clone() };
-    assert_eq!(
-        reopened
-            .pairing_receipt(event.event_id.as_str())
-            .await
-            .unwrap()
-            .unwrap()
-            .activation_state,
-        AgentKeyPairActivationState::Active
-    );
-    assert_eq!(
-        reopened
-            .pairing_receipt(cancelled_event.event_id.as_str())
-            .await
-            .unwrap()
-            .unwrap()
-            .activation_state,
-        AgentKeyPairActivationState::Cancelled
-    );
-    cancellation.outcome = AgentKeyPairActivationState::Active;
-    assert!(
-        !reopened
-            .activate_runtime_if_current(&cancellation)
-            .await
-            .unwrap()
-    );
-    use diesel_async::RunQueryDsl;
-    let mut connection = pool.get().await.unwrap();
-    diesel::sql_query("DELETE FROM agent_principals WHERE id=$1")
-        .bind::<diesel::sql_types::Text, _>(&agent)
-        .execute(&mut *connection)
-        .await
-        .unwrap();
 }

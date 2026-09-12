@@ -27,48 +27,48 @@ fn notary_value_from_cell_defaults_to_service_id_when_absent() {
         11,
     );
     let resp = notary_value_from_cell(None, &signer).unwrap();
-    assert_eq!(resp.kind_label(), "single_signer");
-    assert_eq!(resp.notary, arkret_wire::NotaryValue::single_signer(signer));
+    assert_eq!(resp.kind_label(), "quorum");
+    assert_eq!(
+        resp.notary,
+        arkret_wire::NotaryValue::new(vec![signer], 0, 0).unwrap()
+    );
     assert!(!resp.paused);
 }
 
 #[test]
-fn notary_value_from_cell_reads_authoritative_single_signer_form() {
+fn notary_value_from_cell_reads_authoritative_f0_quorum_form() {
     let signer = signer_descriptor("did:web:alice.example", 12);
     let default_signer = signer_descriptor("did:web:server.example", 13);
-    let mut v =
-        serde_json::to_value(arkret_wire::NotaryValue::single_signer(signer.clone())).unwrap();
+    let expected = arkret_wire::NotaryValue::new(vec![signer.clone()], 0, 0).unwrap();
+    let mut v = serde_json::to_value(&expected).unwrap();
     v.as_object_mut()
         .unwrap()
         .insert("paused".to_owned(), json!(false));
     let resp = notary_value_from_cell(Some(&v), &default_signer).unwrap();
-    assert_eq!(resp.kind_label(), "single_signer");
-    assert_eq!(resp.notary, arkret_wire::NotaryValue::single_signer(signer));
+    assert_eq!(resp.kind_label(), "quorum");
+    assert_eq!(resp.notary, expected);
     assert!(!resp.paused);
     let j = serde_json::to_value(&resp).unwrap();
-    assert_eq!(j["notary"]["kind"], "single_signer");
+    assert_eq!(j["notary"]["kind"], "quorum");
     assert_eq!(
-        j["notary"]["signer"]["actor_id"],
+        j["notary"]["signers"][0]["actor_id"],
         json!({"kind": "service", "service_id": "ak:did_core:web:alice.example"})
     );
 }
 
 #[test]
-fn notary_value_from_cell_reads_authoritative_threshold_form() {
+fn notary_value_from_cell_reads_authoritative_f1_quorum_form() {
     let members = vec![
         signer_descriptor("did:web:a.example", 21),
         signer_descriptor("did:web:b.example", 22),
         signer_descriptor("did:web:c.example", 23),
+        signer_descriptor("did:web:d.example", 24),
     ];
-    let notary = arkret_wire::NotaryValue::Threshold {
-        signers: members,
-        threshold: 2,
-        forensic_attribution: arkret_wire::ForensicAttribution::QuorumIntersection,
-    };
+    let notary = arkret_wire::NotaryValue::new(members, 1, 0).unwrap();
     let v = serde_json::to_value(&notary).unwrap();
-    let default_signer = signer_descriptor("did:web:s.example", 24);
+    let default_signer = signer_descriptor("did:web:s.example", 25);
     let resp = notary_value_from_cell(Some(&v), &default_signer).unwrap();
-    assert_eq!(resp.kind_label(), "threshold");
+    assert_eq!(resp.kind_label(), "quorum");
     assert_eq!(resp.notary, notary);
 }
 
@@ -100,7 +100,7 @@ fn bottom_entry_from_non_conflict_kind_has_no_candidate_heads() {
     let bottom = json!({
         "kind": "invalid_transition",
         "event_ids": ["ak:event:x"],
-        "details": "fsm rejected from invited→ban"
+        "details": "transition rejected from invited→ban"
     });
     let entry = bottom_entry_from(
         "ak:space:Aas_EcgKHABrLEjI4EJvOxHIXQVfHYZ_oP4Q_u3xuXRF",

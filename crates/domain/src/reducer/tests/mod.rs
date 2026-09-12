@@ -22,7 +22,7 @@ mod space_container;
 mod stage_axis;
 mod strand_morph;
 
-pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
+pub(super) fn test_f0_notary(did: &str) -> arkret_wire::NotaryValue {
     let did = arkret_identifiers::Did::new(did.to_owned()).unwrap();
     let descriptor = arkret_wire::NotarySignerDescriptor {
         actor_id: arkret_wire::ActorId::service(arkret_wire::project_did_to_core_id(&did).unwrap()),
@@ -38,7 +38,7 @@ pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
         .unwrap(),
     };
     descriptor.validate().unwrap();
-    arkret_wire::NotaryValue::single_signer(descriptor)
+    arkret_wire::NotaryValue::new(vec![descriptor], 0, 0).expect("test f=0 notary")
 }
 
 pub(super) fn account_actor(principal_id: &str) -> arkret_wire::ActorId {
@@ -79,7 +79,7 @@ pub(super) fn install_realm_authority_root(
             realm_id.to_owned(),
             arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ),
-        CellState::Value(serde_json::to_value(value).unwrap()),
+        ResolvedCellState::Value(serde_json::to_value(value).unwrap()),
     );
 }
 

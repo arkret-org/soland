@@ -272,7 +272,7 @@ fn signed_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(now),
     )
     .unwrap();
     let event = event.into_event();
@@ -308,7 +308,7 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
         &mut typed,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(created_at),
     )
     .unwrap();
     let typed = typed.into_event();

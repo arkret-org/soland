@@ -77,7 +77,6 @@ pub(crate) async fn validate_device_authorization_binding(
             let proof_methods = event
                 .proofs
                 .iter()
-                .filter_map(arkret_wire::EventProof::as_producer)
                 .map(|proof| proof.verification_method.as_str())
                 .collect::<Vec<_>>();
             if proof_methods.is_empty()

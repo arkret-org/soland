@@ -54,7 +54,7 @@ use arkret_models_identity::{
     DeviceSummaryStatus, DeviceSummaryVerificationState, PrincipalResolutionAuditEvidence,
     PrincipalResolutionAuditRequest,
 };
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -1238,12 +1238,6 @@ async fn update_profile(
         arkret_wire::AccountId::new(principal_id.clone(), state.service_core_id().clone());
     body.validate_authoring_context(&account_id, &pcr_realm_id, accepted_basis, digest_suite)
         .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
-    let event_digest = Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
-        |error| AppError::param_invalid(format!("profile_event: invalid Event digest: {error}")),
-    )?)
-    .map_err(|error| {
-        AppError::param_invalid(format!("profile_event: invalid Event digest: {error}"))
-    })?;
     let submission = body.profile_event;
     crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
         .await
@@ -1255,22 +1249,11 @@ async fn update_profile(
                 &error.message(),
             )
         })?;
-    let covering_seal_found = state
-        .projections()
-        .seal_covering_event(&event_digest)
-        .await
-        .map_err(|error| {
-            profile_frontier_unavailable(format!(
-                "account profile Event covering Seal lookup failed: {error}"
-            ))
-        })?
-        .is_some();
-    require_profile_event_settled(covering_seal_found)?;
     let accepted = accepted_account_profile_in_realm(state, &principal_id, &pcr_realm_id)
         .await?
         .ok_or_else(|| {
             profile_frontier_unavailable(
-                "accepted account profile Event did not materialize its sealed profile cell",
+                "accepted account profile Event did not materialize its profile cell",
             )
         })?;
     if accepted.basis.profile_id != profile_id {
@@ -1311,16 +1294,6 @@ fn profile_projection_precondition(message: impl Into<String>) -> AppError {
 
 fn profile_frontier_unavailable(message: impl Into<String>) -> AppError {
     crate::app_error!(FrontierUnavailable, message)
-}
-
-fn require_profile_event_settled(covering_seal_found: bool) -> Result<(), AppError> {
-    if covering_seal_found {
-        Ok(())
-    } else {
-        Err(profile_frontier_unavailable(
-            "accepted account profile Event is not yet covered by a settled Seal",
-        ))
-    }
 }
 
 async fn require_current_profile_authority(
@@ -1416,46 +1389,25 @@ async fn accepted_account_profile_in_realm(
         arkret_wire::CellFamilyId::PROFILE_CREATE_V1
     ))
     .map_err(|error| AppError::internal(format!("profile cell id is invalid: {error}")))?;
-    // Profile is an mv-register updated across successor Seals. The generic
-    // projection snapshot keeps a flattened diagnostic cell cache, which
-    // cannot express that successor batches replace earlier heads. Resolve the
-    // value at the accepted Seal leaves so ordered profile updates do not
-    // surface as a synthetic concurrent Bottom.
-    let leaves = state
-        .projections()
-        .realm_seal_leaves(pcr_realm_id)
-        .await
-        .map_err(|error| {
-            profile_frontier_unavailable(format!(
-                "accepted profile Seal frontier is unavailable: {error}"
-            ))
-        })?;
-    if leaves.is_empty() {
-        return Err(profile_frontier_unavailable(
-            "accepted profile create has no settled Seal frontier",
-        ));
-    }
-    let effective_state = state
-        .projections()
-        .effective_state_at(&leaves, pcr_realm_id)
-        .await
-        .map_err(|error| {
-            profile_frontier_unavailable(format!(
-                "accepted profile effective state is unavailable: {error}"
-            ))
-        })?;
-    let cell_value = match effective_state.get(&cell) {
-        Some(CellState::Value(value)) => value.clone(),
-        Some(CellState::Bottom(_)) => {
+    // Profile is ordinary causal state. Its live projection materializes at
+    // ordinary admission and never waits for a covering Seal.
+    let projection = state.projections().snapshot();
+    let cell_value = match projection.realm_cell(pcr_realm_id.as_str(), &cell) {
+        Some(value) if value.settled_value().is_some() => value
+            .settled_value()
+            .expect("checked settled value")
+            .clone(),
+        Some(ResolvedCellState::Bottom(_) | ResolvedCellState::Causal(_)) => {
             return Err(crate::app_error!(
                 FailedPrecondition,
-                "accepted account profile cell is in Bottom",
+                "accepted account profile cell has unresolved concurrent heads",
             )
             .with_wire_code("failed_bottom"));
         }
+        Some(_) => unreachable!("all settled state variants handled above"),
         None => {
             return Err(profile_frontier_unavailable(
-                "accepted profile create has no settled profile cell",
+                "accepted profile create has no materialized profile cell",
             ));
         }
     };
@@ -1540,29 +1492,10 @@ async fn resolved_actor_profile_evidence(
         else {
             continue;
         };
-        let event_digest = Hash::new(
-            event
-                .event_digest_with_digest_suite(candidate.digest_suite)
-                .map_err(|error| {
-                    AppError::internal(format!("Actor Profile Event digest failed: {error}"))
-                })?,
-        )
-        .map_err(|error| AppError::internal(format!("Actor Profile digest invalid: {error}")))?;
-        let Some(accepted_seal) = state
-            .projections()
-            .seal_covering_event(&event_digest)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Actor Profile Seal lookup failed: {error}"))
-            })?
-        else {
-            continue;
-        };
         return Ok(Some(ResolvedActorProfile {
             actor_id: actor_id.clone(),
             actor_profile: accepted.profile.into_inner(),
             profile_event: event,
-            accepted_seal,
         }));
     }
     Ok(None)
@@ -2457,7 +2390,6 @@ pub(crate) fn device_revocation_gate_record(
 
 #[cfg(test)]
 mod tests {
-    use soland_http::error::ErrorCode;
 
     use super::*;
 
@@ -2549,19 +2481,6 @@ mod tests {
             .is_some(),
             "update replay must validate against the accepted create basis"
         );
-    }
-
-    #[test]
-    fn account_profile_write_requires_its_exact_covering_seal() {
-        require_profile_event_settled(true).unwrap();
-
-        let error = require_profile_event_settled(false).unwrap_err();
-        assert_eq!(error.code, ErrorCode::FrontierUnavailable);
-        assert_eq!(
-            error.http_status(),
-            soland_http::error::error_http_status(error.code)
-        );
-        assert!(error.wire_code_override.is_none());
     }
 
     #[test]

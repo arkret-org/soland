@@ -518,7 +518,7 @@ mod tests {
             arkret_wire::EventKind::RealmNotary,
             serde_json::json!({
                 "realm_id": "ak:realm:Ab-zkG-9qydcyuk0bIAwMd1Op6VQjpOjQ1PbK_fCMMmz",
-                "notary": serde_json::to_value(crate::test_single_signer_notary(
+                "notary": serde_json::to_value(crate::test_f0_notary(
                     "did:web:notary.example",
                     31,
                 )).unwrap()

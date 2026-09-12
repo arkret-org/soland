@@ -9,8 +9,7 @@ use arkret_models_collaboration::history_key::{
     OrganizationRecoveryArchiveReplicaOutcome, PeerHistoryTraversalAccess,
     SelfHistoryTraversalAccess,
 };
-use arkret_models_identity::{AgentSignerEvidence, AuthenticatedSignerResolutionEvidence};
-use arkret_wire::{Event, EventProof, Hash, HistoryEffectiveScope, RealmId, Seal, SealId};
+use arkret_wire::{Event, Hash, HistoryEffectiveScope, RealmId, Seal, SealId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
@@ -334,11 +333,6 @@ pub trait GovernanceDependencyStore: Send + Sync {
         selector: &GovernanceDependencySelector,
     ) -> PersistenceResult<Option<GovernanceDependency>>;
 
-    async fn get_historical_agent_signer_evidence(
-        &self,
-        key: &HistoricalAgentSignerEvidenceKey,
-    ) -> PersistenceResult<Option<GovernanceDependency>>;
-
     async fn put_realm_object_exact(
         &self,
         realm_id: &RealmId,
@@ -361,50 +355,6 @@ pub trait GovernanceDependencyStore: Send + Sync {
         realm_id: &RealmId,
         source: &GovernanceDependencySource,
     ) -> PersistenceResult<Vec<GovernanceDependencyEdgeRecord>>;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HistoricalAgentSignerEvidenceKey {
-    pub agent_id: arkret_wire::DidCoreId,
-    pub verification_method: arkret_wire::DidUrl,
-    pub event_id: arkret_wire::EventId,
-    pub receiver_id: arkret_wire::DidCoreId,
-}
-
-pub fn historical_agent_signer_evidence_key(
-    item: &GovernanceDependency,
-) -> PersistenceResult<Option<HistoricalAgentSignerEvidenceKey>> {
-    governance_signer_evidence_canonical(item)?;
-    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        authenticated_signer_resolution_evidence,
-        ..
-    } = item
-    else {
-        return Ok(None);
-    };
-    let AuthenticatedSignerResolutionEvidence::Agent {
-        signer_id,
-        verification_method,
-        agent_signer_evidence,
-        ..
-    } = authenticated_signer_resolution_evidence.as_ref()
-    else {
-        return Ok(None);
-    };
-    let AgentSignerEvidence::HistoricalEvent {
-        event_admission, ..
-    } = agent_signer_evidence.as_ref()
-    else {
-        return Ok(None);
-    };
-    Ok(Some(HistoricalAgentSignerEvidenceKey {
-        agent_id: signer_id.clone(),
-        verification_method: verification_method.clone(),
-        event_id: event_admission.event_id().clone(),
-        receiver_id: event_admission
-            .receiver_id()
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
-    }))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -597,8 +547,7 @@ pub fn history_traversal_retained_object_canonical(
         HistoryTraversalRetainedObject::ControlEvent(event) => {
             let event_digest_suite = event
                 .proofs
-                .iter()
-                .find_map(EventProof::as_producer)
+                .first()
                 .ok_or_else(|| {
                     PersistenceError::SchemaViolation(
                         "retained Control Event omits its producer proof".to_owned(),
@@ -610,15 +559,15 @@ pub fn history_traversal_retained_object_canonical(
             // Canonical storage has no covering Seal or complete anchor unit.
             // Validate the proof regime and byte binding here; the retained-cut
             // verifier owns context-sensitive CBS validation before replay.
-            match event.proofs.as_slice() {
-                [EventProof::Producer(producer)] => producer
-                    .validate_direct_signer_resolution_evidence()
-                    .and_then(|_| {
-                        event.validate_proof_bindings_with_digest_suite(event_digest_suite)
-                    }),
-                _ => event.validate_station_admission_binding(event_digest_suite),
-            }
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            let [producer] = event.proofs.as_slice() else {
+                return Err(PersistenceError::SchemaViolation(
+                    "retained Control Event requires exactly one producer proof".to_owned(),
+                ));
+            };
+            producer
+                .validate_signer_resolution_evidence_ref()
+                .and_then(|_| event.validate_proof_bindings_with_digest_suite(event_digest_suite))
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
             event
                 .verify_event_id_matches_content_with_digest_suite(event_digest_suite)
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;

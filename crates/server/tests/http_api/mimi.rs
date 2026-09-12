@@ -565,11 +565,7 @@ async fn exact_human_mimi_report_body(
     .await;
     let report_event: arkret_wire::Event = serde_json::from_value(report_event).unwrap();
     assert_eq!(report_event.actor_id, reporter_actor);
-    let verification_method = report_event.proofs[0]
-        .as_producer()
-        .unwrap()
-        .verification_method
-        .clone();
+    let verification_method = report_event.proofs[0].verification_method.clone();
     let created_at = chrono::Utc::now();
     let mut body = arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
         reporter_authority: arkret_models_collaboration::http_bodies::MimiReporterAuthority {
@@ -641,7 +637,7 @@ fn sign_mimi_agent_report_event(
         &mut event,
         &signer,
         verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(created_at),
     )
     .unwrap();
     event.into_event()
@@ -782,13 +778,7 @@ fn mimi_report_accepts_exact_human_authority_and_persists_caller_event() {
             let stored: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
             assert_eq!(stored.event_id, event_id);
             assert_eq!(stored.actor_id, body.reporter_authority.actor_id);
-            assert!(matches!(
-                stored.proofs.as_slice(),
-                [
-                    arkret_wire::EventProof::Producer(_),
-                    arkret_wire::EventProof::StationAdmission(_)
-                ]
-            ));
+            assert_eq!(stored.proofs.len(), 1);
         },
     );
 }
@@ -838,13 +828,11 @@ fn mimi_report_accepts_current_agent_proxy_and_freezes_signer_evidence() {
                 .unwrap()
                 .expect("Agent-proxied caller Event is durable");
             let stored: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
-            let producer = stored.proofs[0].as_producer().unwrap();
-            assert!(producer.signer_resolution_evidence_ref.is_none());
-            let admission = stored.proofs[1].as_station_admission().unwrap();
-            let evidence_ref = admission
-                .producer_signer_resolution_evidence_ref
+            let producer = &stored.proofs[0];
+            let evidence_ref = producer
+                .signer_resolution_evidence_ref
                 .as_ref()
-                .expect("Agent admission retains the frozen producer evidence ref");
+                .expect("Agent producer retains the frozen signer evidence ref");
             evidence_ref
                 .content_digest()
                 .expect("the frozen producer evidence ref carries the only digest on the wire");

@@ -5,7 +5,7 @@
 //! 411 forbid the service producing that signature. A fixture that exercises one
 //! of those surfaces therefore has to author and sign the Move itself, which is
 //! more than a request-body change — the envelope owes a CBS basis
-//! (`event-auth-state-resolution.md` section 5) and, on a settled CAS register,
+//! (`event-auth-state-resolution.md` section 5) and, on a settled registered state model,
 //! its own `head_eq` guard.
 //!
 //! This is the one place that knows how to build that envelope, so the HTTP
@@ -360,51 +360,15 @@ pub fn fixture_verification_method(actor_id: &str, device_id: &str) -> DidUrl {
         .expect("fixture verification method is a DID URL")
 }
 
-/// Attach the same complete producer proof used by caller-authored fixtures to
-/// an Event whose content and content-derived identity are already frozen.
-#[must_use]
-/// Sign a fixture Event and append this Station's admission proof.
-///
-/// An Event seeded straight into the store is an *accepted* Event, and an
-/// accepted Event carries exactly one producer proof followed by exactly one
-/// origin Station admission proof. A fixture that stops after the producer
-/// proof produces something no submit path could have produced, and every later
-/// re-validation of an accepted Event rejects it.
-///
-/// The one state a fixture can build that genuinely cannot issue the proof is
-/// [`soland_test_support::app_state_with_service_did`]: it installs a
-/// hand-written service DID, and a `did:webvh` SCID is derived from its own
-/// inception, so no durable WebVH history can exist for a DID that was not
-/// produced by one. Such a Station never accepted anything, so its fixtures get
-/// the producer-signed Event and MUST NOT rely on Seal admission or the MLS
-/// governance frontier — both re-validate the accepted proof set.
+/// Sign an accepted fixture Event with its sole producer proof.
 pub async fn sign_accepted_fixture_event(
-    state: &soland_http::state::AppState,
+    _state: &soland_http::state::AppState,
     event: Event,
     actor_id: &str,
     device_id: &str,
     signing_seed: [u8; 32],
 ) -> Event {
-    let accepted_at = event.created_at;
-    let producer_signing_key_did = arkret_wire::DidKey::new(format!(
-        "did:key:{}",
-        arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            ed25519_dalek::SigningKey::from_bytes(&signing_seed)
-                .verifying_key()
-                .as_bytes(),
-        )
-    ))
-    .expect("fixture producer signing key is a did:key");
-    let signed = sign_fixture_event(event, actor_id, device_id, signing_seed);
-    soland_http::attach_fixture_station_admission_proof(
-        state,
-        signed.clone(),
-        producer_signing_key_did,
-        accepted_at,
-    )
-    .await
-    .expect("fixture Station admission proof")
-    .unwrap_or(signed)
+    sign_fixture_event(event, actor_id, device_id, signing_seed)
 }
 
 pub fn sign_fixture_event(

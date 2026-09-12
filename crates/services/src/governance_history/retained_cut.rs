@@ -7,7 +7,7 @@ use arkret_models_collaboration::governance_dependencies::{
 use arkret_models_collaboration::history_key::{
     HistoryGovernanceTraversalIntent, HistoryGovernanceTraversalRetention,
 };
-use arkret_wire::{Event, EventProof, HistoryEffectiveScope, RealmId, Seal, SealBasis};
+use arkret_wire::{Event, HistoryEffectiveScope, RealmId, Seal, SealBasis};
 
 use super::HistoryPreparationError;
 
@@ -87,11 +87,11 @@ pub fn prepare_retained_history_cut(
             .get(&seal_id)
             .ok_or_else(|| frontier("history retained Seal predecessor closure is incomplete"))?;
         if base_leaves.contains(&seal_id) {
-            if !seal.predecessor_refs.is_empty() {
+            if !seal.predecessor_ref.is_none() {
                 return Err(frontier("history trusted base is not predecessor-free"));
             }
         } else {
-            pending.extend(seal.predecessor_refs.iter().cloned());
+            pending.extend(seal.predecessor_ref.iter().cloned());
         }
     }
     if !base_leaves.is_subset(&expected_seals) || retained_seals != expected_seals {
@@ -119,7 +119,7 @@ pub fn prepare_retained_history_cut(
     let mut anchor_events = BTreeSet::new();
     for seal in retained_seal_map
         .values()
-        .filter(|seal| seal.predecessor_refs.is_empty())
+        .filter(|seal| seal.predecessor_ref.is_none())
     {
         let mut unit = Vec::new();
         for digest in &seal.delta {
@@ -199,14 +199,9 @@ pub fn prepare_retained_history_cut(
                 } else {
                     arkret_wire::event_envelope::EventSubmitContext::Standard
                 };
-                match event.proofs.as_slice() {
-                    [EventProof::Producer(_)] => event
-                        .validate_for_direct_history_structural_in_context(context)
-                        .map_err(|error| frontier(error.to_string()))?,
-                    _ => event
-                        .validate_for_federation_structural_in_context(context, event_digest_suite)
-                        .map_err(|error| frontier(error.to_string()))?,
-                }
+                event
+                    .validate_for_federation_structural_in_context(context, event_digest_suite)
+                    .map_err(|error| frontier(error.to_string()))?;
                 replay_events.push(event.clone());
             }
             (

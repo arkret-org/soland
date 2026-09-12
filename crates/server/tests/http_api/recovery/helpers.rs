@@ -358,19 +358,24 @@ async fn seed_local_notary_authority(
         .first()
         .cloned()
         .expect("notary fixture Seal covers a Control Move");
-    let op = arkret_state::lattice::ordered_log::IssuedOp {
+    let op = arkret_state::state_model::ordered_log::IssuedOp {
         issuer_id: arkret_wire::ActorId::service(
             arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
         ),
-        op: arkret_state::lattice::SealedOp::new(
+        op: arkret_state::state_model::StateWrite::new(
             move_id,
             arkret_wire::LatticeOp {
                 op_type: arkret_wire::LatticeOpType::Set,
                 tag: None,
                 value: Some(
-                    serde_json::to_value(arkret_wire::NotaryValue::single_signer(
-                        state.service_notary_signer_descriptor().unwrap(),
-                    ))
+                    serde_json::to_value(
+                        arkret_wire::NotaryValue::new(
+                            vec![state.service_notary_signer_descriptor().unwrap()],
+                            0,
+                            0,
+                        )
+                        .unwrap(),
+                    )
                     .unwrap(),
                 ),
                 from: None,
@@ -381,7 +386,7 @@ async fn seed_local_notary_authority(
         ),
     };
     state
-        .test_append_sealed_effects(
+        .test_append_confirmed_effects(
             realm_id,
             &seal.id,
             &[(arkret_wire::REALM_NOTARY_CELL.parse().unwrap(), op)],
@@ -898,7 +903,7 @@ pub(crate) async fn post_recovery_policy(
         &mut event,
         &signer,
         &event_verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(event_created_at),
+        arkret_signatures::SignEventOptions::for_native_unit().with_created_at(event_created_at),
     )
     .unwrap();
     let event = event.into_event();
@@ -1028,7 +1033,7 @@ pub(crate) async fn post_recovery_policy(
             if predecessor_state_root.is_none() {
                 predecessor_state_root = Some(seal.state_root.clone());
             }
-            pending.extend(seal.predecessor_refs);
+            pending.extend(seal.predecessor_ref);
         }
         let event_digest = Hash::new(
             event

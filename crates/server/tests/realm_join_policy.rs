@@ -2,10 +2,10 @@
 //!
 //! The gate is a hard pre-admission constraint: when the projected
 //! the `ak.realm.policy_bundle` payload path `join_policy` contains it, `membership=join`
-//! must pass before the member FSM is updated.
+//! must pass before the member transition is updated.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
@@ -220,12 +220,12 @@ fn sealed_policy_payload_wrapper_preserves_join_policy() {
     );
 
     let live_value = match state.realm_policy_bundle_cells.get(REALM_A) {
-        Some(CellState::Value(value)) => value.clone(),
+        Some(ResolvedCellState::Value(value)) => value.clone(),
         other => panic!("expected live policy value, got {other:?}"),
     };
     state.realm_policy_bundle_cells.insert(
         REALM_A.to_owned(),
-        CellState::Value(json!({"value": live_value})),
+        ResolvedCellState::Value(json!({"value": live_value})),
     );
 
     assert!(

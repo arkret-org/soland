@@ -361,7 +361,7 @@ fn signed_actor_private_event_envelope(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new(soland_test_support::fixture_signer_evidence_ref()).with_created_at(now),
     )
     .expect("SDK Event signer accepts actor-private fixture");
     let mut event = event.into_event();
@@ -686,7 +686,9 @@ fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
             &mut foreign_event,
             &signer,
             &verification_method,
-            arkret_signatures::SignEventOptions::new(),
+            arkret_signatures::SignEventOptions::new(
+                soland_test_support::fixture_signer_evidence_ref(),
+            ),
         )
         .unwrap();
         foreign_submission.event = foreign_event.into_event();

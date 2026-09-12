@@ -91,7 +91,7 @@ fn moderation_decision_then_lift_converges_on_cell() {
         Some("ak:did_core:web:mod.example")
     );
     let items = match state.cells.get(&mod_decision_cell_ref()) {
-        Some(CellState::Value(Value::Array(items))) => items,
+        Some(ResolvedCellState::Value(Value::Array(items))) => items,
         other => panic!("moderation target cell should contain an or_set array, got {other:?}"),
     };
     // The add tag is the registered dot, not a decision/issuer/digest triple:
@@ -125,6 +125,6 @@ fn moderation_decision_then_lift_converges_on_cell() {
     assert!(state.moderation_decision_is_lifted(MOD_DECISION_ID));
     assert!(matches!(
         state.cells.get(&mod_decision_cell_ref()),
-        Some(CellState::Value(Value::Array(_)))
+        Some(ResolvedCellState::Value(Value::Array(_)))
     ));
 }

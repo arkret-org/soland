@@ -332,7 +332,7 @@ async fn issue_event_leases(
     } else {
         let mut staged = state.projections().snapshot();
         let hlc = soland_domain::hlc::ServerHlc::new("authorization-lease-preflight");
-        let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+        let registry = soland_domain::reducer::state_model_kinds::default_cell_family_registry();
         for (operation, cell_writes) in projected_operations
             .iter()
             .zip(projected_cell_writes.iter())
@@ -353,8 +353,8 @@ async fn issue_event_leases(
                 _ => None,
             };
             let reducer_operation = contextual_operation.as_ref().unwrap_or(operation);
-            if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
-                staged.apply_via_lattice_registry(reducer_operation, cell_writes, &hlc, &registry)
+            if let soland_domain::reducer::ProjectionEffect::Rejected { reason } = staged
+                .apply_via_state_model_registry(reducer_operation, cell_writes, &hlc, &registry)
             {
                 if soland_services::operation_semantics::canonical_kind_for_operation(operation)
                     == Some(arkret_wire::EventKind::InviteClaim)
@@ -637,15 +637,21 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
 }
 
 fn event_basis(event: &Event) -> Result<LeaseBasisRef, AppError> {
-    if let Some(seal_ref) = &event.seal_ref {
-        return Ok(LeaseBasisRef::Seal(seal_ref.clone()));
+    if let Some(context) = &event.auth_context {
+        let [authority_ref] = context.authority_refs.as_slice() else {
+            return Err(crate::app_error!(
+                SchemaViolation,
+                "Event lease issuance requires one authority reference",
+            ));
+        };
+        return Ok(LeaseBasisRef::Seal(authority_ref.clone()));
     }
     if let Some(seal_basis) = &event.seal_basis {
         return Ok(LeaseBasisRef::Joined(seal_basis.clone()));
     }
     Err(crate::app_error!(
         SchemaViolation,
-        "non-anchor Event lease issuance requires seal_ref or seal_basis",
+        "non-anchor Event lease issuance requires authority_refs or seal_basis",
     ))
 }
 
@@ -805,7 +811,6 @@ fn sign_lease(
         .proofs
         .iter()
         .find_map(|proof| {
-            let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
             (arkret_wire::project_did_to_core_id(&did).ok().as_ref()
@@ -958,7 +963,7 @@ mod tests {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "none",
-                "notary": serde_json::to_value(crate::test_single_signer_notary(
+                "notary": serde_json::to_value(crate::test_f0_notary(
                     ACTOR,
                     33,
                 )).unwrap()

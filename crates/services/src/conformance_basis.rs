@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{CellRef, Did, DidCoreId, Hash, Hlc, RealmId};
-use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
+use arkret_state::state_model::ordered_log::IssuedOp;
 use arkret_wire::{NotarySignerDescriptor, Seal};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -351,9 +351,14 @@ pub fn build_realm_basis(
                     op_type: arkret_wire::LatticeOpType::Set,
                     tag: None,
                     value: Some(
-                        serde_json::to_value(arkret_wire::NotaryValue::single_signer(
-                            notary_signer.descriptor.clone(),
-                        ))
+                        serde_json::to_value(
+                            arkret_wire::NotaryValue::new(
+                                vec![notary_signer.descriptor.clone()],
+                                0,
+                                0,
+                            )
+                            .map_err(|error| error.to_string())?,
+                        )
                         .map_err(|error| error.to_string())?,
                     ),
                     from: None,
@@ -439,7 +444,7 @@ pub fn build_realm_basis(
         notary_signer.descriptor.verification_method.clone(),
     );
     let mut delta = vec![
-        genesis_move,
+        genesis_move.clone(),
         reducer_profile_move,
         authority_root_move.clone(),
         owner_move.clone(),
@@ -451,21 +456,46 @@ pub fn build_realm_basis(
         delta.push(field_scoped_move.clone());
     }
     if install_notary {
-        delta.push(notary_move);
+        delta.push(notary_move.clone());
     }
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    let (control_event_set_root, completeness_root, listed_control_events) =
-        fixture_seal_roots(&issuer, &delta)?;
-    let seal = Seal::sign_single_with_roots(
-        realm.clone(),
+    let (control_event_set_root, listed_control_events) = fixture_seal_roots(&issuer, &delta)?;
+    let configuration_ref = arkret_wire::EventId::from_event_digest(if install_notary {
+        &notary_move
+    } else {
+        &genesis_move
+    })
+    .map_err(|error| error.to_string())?;
+    let command_results = vec![arkret_wire::CommandResult::committed(
+        delta[0].clone(),
+        delta.clone(),
         Vec::new(),
-        delta,
-        control_event_set_root,
-        completeness_root,
-        sealed_state_root(&realm, &ops)?,
-        Hlc::new(FIXTURE_BASIS_HLC).map_err(|error| error.to_string())?,
         arkret_canonical::DigestSuite::Sha256,
-        &signer,
+    )
+    .map_err(|error| error.to_string())?];
+    let seal = Seal::sign_with_signers(
+        arkret_wire::UnsignedSeal {
+            realm_id: realm.clone(),
+            predecessor_ref: None,
+            delta,
+            control_event_set_root,
+            state_root: sealed_state_root(&realm, &ops)?,
+            notary_seq: 0,
+            availability_receipt_digests: Vec::new(),
+            covered_event_digests: Vec::new(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            sealed_at: chrono::Utc::now(),
+            hlc: Hlc::new(FIXTURE_BASIS_HLC).map_err(|error| error.to_string())?,
+            configuration_ref,
+            command_results,
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
+        },
+        0,
+        arkret_canonical::DigestSuite::Sha256,
+        &[&signer],
     )
     .map_err(|error| error.to_string())?;
 
@@ -482,7 +512,7 @@ pub fn build_realm_basis(
 fn fixture_seal_roots(
     issuer: &arkret_wire::ActorId,
     covered: &[Hash],
-) -> Result<(Hash, Hash, Vec<arkret_state::ListedControlEvent>), String> {
+) -> Result<(Hash, Vec<arkret_state::ListedControlEvent>), String> {
     let covered_set = covered.iter().cloned().collect::<BTreeSet<_>>();
     let control_event_set_root =
         arkret_state::control_event_set_root(&covered_set, arkret_canonical::DigestSuite::Sha256)
@@ -496,12 +526,7 @@ fn fixture_seal_roots(
             event_digest: event_digest.clone(),
         })
         .collect::<Vec<_>>();
-    let completeness_root = arkret_state::control_event_completeness_root_from_listed(
-        &listed,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .map_err(|error| error.to_string())?;
-    Ok((control_event_set_root, completeness_root, listed))
+    Ok((control_event_set_root, listed))
 }
 
 fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Hash, String> {
@@ -511,29 +536,25 @@ fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Has
         grouped.entry(cell.clone()).or_default().push(op.clone());
     }
     let mut post_state = BTreeMap::new();
-    let mut cas_heads = arkret_state::CasHeadsByCell::new();
     for (cell, cell_ops) in grouped {
         let binding = registry
             .resolve(realm, &cell)
             .map_err(|error| error.to_string())?;
-        // A `cas_register` cell's state_root leaf carries its heads rather than
-        // its settled value (spec section 6.2.1); both come from these same ops.
-        if arkret_state::is_causal_register(binding.lattice.kind()) {
-            let heads = arkret_state::causal_heads_for_batches(
-                binding.lattice.kind(),
-                std::slice::from_ref(&cell_ops),
-            );
-            if !heads.is_empty() {
-                cas_heads.insert(cell.clone(), heads);
-            }
+        if binding.execution != arkret_wire::EventCellExecution::Security
+            || binding.state_model != arkret_state::state_model::StateModelKind::SequencedState
+        {
+            return Err(format!(
+                "Seal fixture cell {cell} is not sequenced security state"
+            ));
         }
         post_state.insert(
             cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
+            arkret_state::join_cell(binding.model.as_ref(), &cell, &cell_ops)
+                .map_err(|error| error.to_string())?,
         );
     }
     compute_state_root(
-        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_state::GovernanceView::new(&post_state),
         arkret_canonical::DigestSuite::Sha256,
     )
     .map_err(|error| error.to_string())
@@ -617,7 +638,7 @@ fn issued_op(
 ) -> IssuedOp {
     IssuedOp {
         issuer_id: issuer.clone(),
-        op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
+        op: arkret_state::state_model::StateWrite::new(move_id.clone(), op),
     }
 }
 
@@ -662,7 +683,7 @@ fn grant_body(
 
 #[cfg(test)]
 mod tests {
-    use arkret_state::lattice::CellState;
+    use arkret_state::state_model::ResolvedCellState;
     use serde_json::{Value, json};
     use soland_domain::reducer::engine_grant_from_capability_cell_state;
 
@@ -755,7 +776,7 @@ mod tests {
             arkret_wire::REALM_AUTHORITY_ROOT_CELL
         );
 
-        let state = CellState::Value(json!([{"value": body}]));
+        let state = ResolvedCellState::Value(json!([{"value": body}]));
         let grant = engine_grant_from_capability_cell_state(grant_id, &state)
             .expect("content grant must enter the effective capability set");
         assert_eq!(grant.subject_id.signing_principal_id().as_str(), subject);
@@ -809,7 +830,7 @@ mod tests {
         // The constrained grant must parse into the engine projection with its
         // `field_access` constraint intact, or the admission gate would never
         // see it as cover.
-        let state = CellState::Value(json!([{"value": field_scoped.body}]));
+        let state = ResolvedCellState::Value(json!([{"value": field_scoped.body}]));
         let grant = engine_grant_from_capability_cell_state(&field_scoped.grant_id, &state)
             .expect("field-scoped grant must enter the effective capability set");
         assert!(grant.constraints.iter().any(|constraint| matches!(

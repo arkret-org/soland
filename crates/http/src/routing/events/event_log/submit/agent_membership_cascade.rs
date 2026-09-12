@@ -27,17 +27,13 @@ fn cascade_error(
 }
 
 fn event_producer_device_id(event: &arkret_wire::Event) -> Result<String, SubmitOneError> {
-    let producer = event
-        .proofs
-        .iter()
-        .find_map(arkret_wire::EventProof::as_producer)
-        .ok_or_else(|| {
-            cascade_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid_proof",
-                "Agent membership transition is missing its producer proof",
-            )
-        })?;
+    let producer = event.proofs.first().ok_or_else(|| {
+        cascade_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_proof",
+            "Agent membership transition is missing its producer proof",
+        )
+    })?;
     let (controller, fragment) = producer
         .verification_method
         .as_str()
@@ -461,7 +457,7 @@ fn preflight_reducer_batch(
     state: &AppState,
     prepared: &[PreparedAgentMembershipEvent],
 ) -> Result<Vec<arkret_event_draft::ProjectedEventOperation>, SubmitOneError> {
-    let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+    let registry = soland_domain::reducer::state_model_kinds::default_cell_family_registry();
     let mut staged = state.projections().snapshot();
     let mut contextual = Vec::with_capacity(prepared.len());
     for event in prepared {
@@ -469,7 +465,7 @@ fn preflight_reducer_batch(
             &event.operation,
         );
         if let soland_domain::reducer::ProjectionEffect::Rejected { reason } = staged
-            .apply_via_lattice_registry(
+            .apply_via_state_model_registry(
                 &operation,
                 &event.projected_cell_writes,
                 state.hlc(),
@@ -1481,30 +1477,12 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     };
     let mut admitted_producers = BTreeMap::new();
     for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
-        if event.realm_id.as_str() != realm_id || event.actor_id.route_service_id() != &source_id {
+        if event.realm_id.as_str() != realm_id {
             render_error(
                 res,
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                "federated Agent cascade Event authority does not match its source service",
-            );
-            return;
-        }
-        if !crate::routing::federation::federation_actor_origin_acceptable(
-            state,
-            &event.actor_id,
-            source_id.as_str(),
-            Some(event.actor_id.route_service_id().as_str()),
-            realm_id,
-            Some(event.kind.as_str()),
-        )
-        .await
-        {
-            render_error(
-                res,
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "federated Agent cascade actor is outside source authority",
+                "federated Agent cascade Event has the wrong Realm",
             );
             return;
         }
@@ -1529,12 +1507,12 @@ pub(super) async fn submit_agent_membership_cascade_federation(
                 admitted_producers.insert(event.event_id.to_string(), producer);
             }
             Err(error) => {
-                tracing::debug!(%error, event_id = %event.event_id, "federated cascade admission proof rejected");
+                tracing::debug!(%error, event_id = %event.event_id, "federated cascade producer proof rejected");
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
-                    "federated Agent cascade Event has an invalid origin admission proof",
+                    "federated Agent cascade Event has an invalid producer proof",
                 );
                 return;
             }
@@ -1565,30 +1543,6 @@ pub(super) async fn submit_agent_membership_cascade_federation(
                 return;
             }
         }
-    }
-    let initiator = submission
-        .controller_transition
-        .event
-        .executed_by
-        .as_ref()
-        .unwrap_or(&submission.controller_transition.event.actor_id);
-    if !crate::routing::federation::federation_actor_origin_acceptable(
-        state,
-        initiator,
-        source_id.as_str(),
-        Some(source_id.as_str()),
-        realm_id,
-        Some(arkret_wire::EventKind::MemberState.as_str()),
-    )
-    .await
-    {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "federated Agent cascade initiator is outside source authority",
-        );
-        return;
     }
     let mut seals = submission
         .cbs_proof_bundles
@@ -1728,26 +1682,29 @@ mod tests {
         )
         .unwrap();
         let device_id = "ak:device:01904100-0000-7000-8000-000000000001";
-        event.proofs = vec![
-            arkret_wire::ProducerEventProof {
-                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-                proof_purpose: None,
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "did:web:controller.example#{device_id}"
+        event.proofs = vec![arkret_wire::ProducerEventProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            proof_purpose: None,
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "did:web:controller.example#{device_id}"
+            ))
+            .unwrap(),
+            event_digest,
+            signer_resolution_evidence_ref: Some(
+                arkret_wire::SignerEvidenceRef::new(format!(
+                    "ak:signer_evidence:sha256:{}",
+                    "11".repeat(32)
                 ))
                 .unwrap(),
-                event_digest,
-                signer_resolution_evidence_ref: None,
-                created_at: event.created_at,
-                domain: None,
-                audience: None,
-                jws: "fixture.signature".to_owned(),
-            }
-            .into(),
-        ];
+            ),
+            created_at: event.created_at,
+            domain: None,
+            audience: None,
+            jws: "fixture.signature".to_owned(),
+        }];
         assert_eq!(event_producer_device_id(&event).unwrap(), device_id);
 
-        let producer = event.proofs[0].as_producer_mut().unwrap();
+        let producer = &mut event.proofs[0];
         producer.verification_method =
             arkret_wire::DidUrl::new(format!("did:web:other.example#{device_id}")).unwrap();
         assert!(event_producer_device_id(&event).is_err());

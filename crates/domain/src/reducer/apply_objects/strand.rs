@@ -503,7 +503,7 @@ impl ProjectionState {
     }
 
     /// Apply `ak.strand.watch.set`. Writes the watch cell on the
-    /// Move/Seal pipeline (cas-register `ak.component.strand.watch.v1`);
+    /// Move/Seal pipeline (registered state model `ak.component.strand.watch.v1`);
     /// the soland projection records the materialised value into
     /// `projection_strand_watches` via `ProjectionEffect::StrandWatchUpdated`.
     /// The Strand's `updated_at` is NOT bumped — watch is a per-(strand, actor)
@@ -541,7 +541,7 @@ impl ProjectionState {
         };
         // `level` is required at schema layer; here we just project the
         // raw value (string or null). Reducer-level enum validation is
-        // not duplicated — the SDK lattice impl + JSON Schema cover it.
+        // not duplicated — the SDK state model impl + JSON Schema cover it.
         let level = operation.payload.get("level").and_then(|v| {
             if v.is_null() {
                 None

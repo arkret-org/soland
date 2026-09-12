@@ -432,7 +432,7 @@ pub async fn realm_basis(
             .map_err(|error| AppError::internal(format!("construct notary cell ref: {error}")))?;
     let has_existing_notary = !state
         .projections()
-        .sealed_ops_for_cell(&realm_id, &notary_cell)
+        .state_writes_for_cell(&realm_id, &notary_cell)
         .await
         .map_err(|error| AppError::internal(format!("read current notary state: {error}")))?
         .is_empty();
@@ -470,7 +470,7 @@ pub async fn realm_basis(
         .map_err(|error| AppError::internal(format!("store conformance Realm Seal: {error}")))?;
     state
         .projections()
-        .conformance_append_sealed_effects(&basis.seal.realm_id, &basis.seal.id, &basis.ops)
+        .conformance_append_confirmed_effects(&basis.seal.realm_id, &basis.seal.id, &basis.ops)
         .await
         .map_err(|error| {
             AppError::internal(format!("store conformance sealed basis state: {error}"))

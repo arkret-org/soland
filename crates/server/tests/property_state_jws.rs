@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::CellRef;
-use arkret_state::lattice::CellState;
 use arkret_state::state::compute_state_root;
+use arkret_state::state_model::ResolvedCellState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use proptest::prelude::*;
@@ -59,19 +59,19 @@ proptest! {
         for (subject, value) in &entries {
             let cell = CellRef::new(format!("ak:cell:ak.component.test.prop.v1:{subject}"))
                 .expect("generated cell ref is valid");
-            forward.insert(cell, CellState::Value(json!({"value": value})));
+            forward.insert(cell, ResolvedCellState::Value(json!({"value": value})));
         }
 
         let mut reverse = BTreeMap::new();
         for (subject, value) in entries.iter().rev() {
             let cell = CellRef::new(format!("ak:cell:ak.component.test.prop.v1:{subject}"))
                 .expect("generated cell ref is valid");
-            reverse.insert(cell, CellState::Value(json!({"value": value})));
+            reverse.insert(cell, ResolvedCellState::Value(json!({"value": value})));
         }
 
-        let forward_root = compute_state_root(arkret_state::GovernanceView::values_only(&forward), arkret_canonical::DigestSuite::Sha256)
+        let forward_root = compute_state_root(arkret_state::GovernanceView::new(&forward), arkret_canonical::DigestSuite::Sha256)
             .expect("forward root");
-        let reverse_root = compute_state_root(arkret_state::GovernanceView::values_only(&reverse), arkret_canonical::DigestSuite::Sha256)
+        let reverse_root = compute_state_root(arkret_state::GovernanceView::new(&reverse), arkret_canonical::DigestSuite::Sha256)
             .expect("reverse root");
         prop_assert_eq!(forward_root, reverse_root);
     }

@@ -28,7 +28,6 @@ const AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS: usize = 256;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 const IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS: i64 = 30;
 
-mod applet_admission;
 mod backfill;
 pub(in crate::routing) use backfill::{
     admit_frontier_backfill_event, verify_frontier_backfill_event,
@@ -548,6 +547,11 @@ enum InternalEventBinding {
         producer_verification_method: arkret_wire::DidUrl,
         producer_signing_key: arkret_wire::DidKey,
     },
+    ProofAuthenticatedEvent {
+        event_id: String,
+        producer_verification_method: arkret_wire::DidUrl,
+        producer_signing_key: arkret_wire::DidKey,
+    },
     PeerAgentMembershipCascade {
         event_id: String,
         initiator_id: arkret_wire::ActorId,
@@ -726,6 +730,26 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing) fn proof_authenticated_event(
+        event: &arkret_wire::Event,
+        device_id: impl Into<String>,
+        producer_signing_key: arkret_wire::DidKey,
+    ) -> Self {
+        let signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+        Self {
+            realm_id: event.realm_id.to_string(),
+            actor_id: event.actor_id.clone(),
+            session_actor_id: signer.signing_principal_id().to_string(),
+            kind: event.kind.as_str().to_owned(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::ProofAuthenticatedEvent {
+                event_id: event.event_id.to_string(),
+                producer_verification_method: event.proofs[0].verification_method.clone(),
+                producer_signing_key,
+            },
+        }
+    }
+
     pub(in crate::routing) fn peer_agent_membership_cascade(
         realm_id: impl Into<String>,
         actor_id: arkret_wire::ActorId,
@@ -839,6 +863,9 @@ impl InternalEventAdmission {
                 InternalEventBinding::PeerFederatedEvent { event_id, .. } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
+                InternalEventBinding::ProofAuthenticatedEvent { event_id, .. } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
+                }
                 InternalEventBinding::PeerAgentMembershipCascade {
                     event_id,
                     initiator_id,
@@ -894,6 +921,13 @@ impl InternalEventAdmission {
                 Some(producer_signing_key)
             }
             InternalEventBinding::PeerAgentMembershipCascade {
+                producer_verification_method,
+                producer_signing_key,
+                ..
+            } if producer_verification_method.as_str() == verification_method => {
+                Some(producer_signing_key)
+            }
+            InternalEventBinding::ProofAuthenticatedEvent {
                 producer_verification_method,
                 producer_signing_key,
                 ..
@@ -993,6 +1027,7 @@ impl InternalEventAdmission {
             && !matches!(
                 &self.binding,
                 InternalEventBinding::PeerFederatedEvent { .. }
+                    | InternalEventBinding::ProofAuthenticatedEvent { .. }
                     | InternalEventBinding::MimiReporter { .. }
             )
     }
@@ -2365,11 +2400,21 @@ async fn accept_federated_seal_prerequisite(
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(), AppError> {
     let mut roots = Vec::new();
-    if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) {
-        roots.push(
-            arkret_identifiers::SealId::new(seal_ref.to_owned())
-                .map_err(|error| AppError::param_invalid(format!("invalid seal_ref: {error}")))?,
-        );
+    if let Some(authority_refs) = envelope
+        .get("auth_context")
+        .and_then(|context| context.get("authority_refs"))
+        .and_then(Value::as_array)
+    {
+        for authority_ref in authority_refs {
+            let authority_ref = authority_ref.as_str().ok_or_else(|| {
+                AppError::param_invalid("auth_context.authority_refs must contain Seal ids")
+            })?;
+            roots.push(
+                arkret_identifiers::SealId::new(authority_ref.to_owned()).map_err(|error| {
+                    AppError::param_invalid(format!("invalid authority reference: {error}"))
+                })?,
+            );
+        }
     }
     if let Some(leaves) = envelope
         .get("seal_basis")
@@ -2420,7 +2465,7 @@ async fn accept_federated_seal_prerequisite(
         let predecessors = seals
             .iter()
             .filter(|seal| required.contains(&seal.id))
-            .flat_map(|seal| seal.predecessor_refs.iter().cloned())
+            .flat_map(|seal| seal.predecessor_ref.iter().cloned())
             .collect::<Vec<_>>();
         required.extend(predecessors);
         if required.len() == before {
@@ -2439,7 +2484,7 @@ async fn accept_federated_seal_prerequisite(
                 "federated Seal prerequisite belongs to another Realm",
             ));
         }
-        for predecessor in &seal.predecessor_refs {
+        for predecessor in seal.predecessor_ref.as_slice() {
             if relevant
                 .iter()
                 .any(|candidate| &candidate.id == predecessor)
@@ -2536,35 +2581,60 @@ async fn accept_federated_seal_prerequisite(
 pub(in crate::routing) async fn verify_federated_event_admission(
     state: &AppState,
     event: &arkret_wire::Event,
-    digest_suite: arkret_canonical::DigestSuite,
+    _digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), String> {
-    event
-        .validate_station_admission_structure(digest_suite)
-        .map_err(|error| error.to_string())?;
-    let [
-        arkret_wire::EventProof::Producer(producer),
-        arkret_wire::EventProof::StationAdmission(admission),
-    ] = event.proofs.as_slice()
-    else {
-        return Err("accepted Event proof set is not closed".to_owned());
+    let [producer] = event.proofs.as_slice() else {
+        return Err("accepted Event must carry exactly one producer proof".to_owned());
     };
-    if event.executed_by.is_some() && admission.producer_signer_resolution_evidence_ref.is_none() {
-        return Err("Agent admission omitted its frozen producer signer evidence".to_owned());
+    let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+        content_digest: producer
+            .signer_resolution_evidence_ref
+            .as_ref()
+            .ok_or_else(|| "ordinary Event producer proof must reference signer evidence".to_owned())?
+            .content_digest()
+            .map_err(|error| format!("producer signer evidence reference is invalid: {error}"))?,
+    };
+    let dependency = state
+        .persistence()
+        .governance_dependency_store()
+        .get_unscoped_signer_evidence(&selector)
+        .await
+        .map_err(|error| format!("producer signer evidence lookup failed: {error}"))?
+        .ok_or_else(|| "dependency_missing: producer signer evidence is unavailable".to_owned())?;
+    let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        authenticated_signer_resolution_evidence: evidence,
+        ..
+    } = dependency
+    else {
+        return Err("producer signer evidence selector resolved to the wrong kind".to_owned());
+    };
+    let signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+    if evidence.signer_id() != signer.signing_principal_id() {
+        return Err("producer signer evidence does not bind the Event signer".to_owned());
     }
-    let producer_multibase = admission
-        .producer_signing_key_did
-        .as_str()
-        .strip_prefix("did:key:")
-        .ok_or_else(|| "admitted producer key is not an Ed25519 did:key".to_owned())?;
-    let producer_key = arkret_canonical::decode_ed25519_multibase(producer_multibase)
-        .map_err(|error| format!("admitted producer key is invalid: {error}"))?;
-    verify_federated_producer_event_proof(event, producer, &producer_key)?;
-    let origin = applet_admission::historical_installation_origin(state, event).await?;
-    applet_admission::verify_historical_station_signature(state, event, &origin).await?;
-    Ok((
-        producer.verification_method.clone(),
-        admission.producer_signing_key_did.clone(),
+    if evidence.verification_method() != &producer.verification_method {
+        return Err("producer signer evidence does not bind the verification method".to_owned());
+    }
+    let public_key = if matches!(
+        evidence.as_ref(),
+        arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent { .. }
+    ) {
+        crate::routing::identity::agents::evidence::verified_historical_agent_event_key(
+            state, event, &evidence,
+        )
+        .await?
+    } else {
+        arkret_models_identity::ed25519_verification_key_from_evidence(&evidence)
+            .map_err(|error| format!("producer signer evidence is invalid: {error}"))?
+            .public_key
+    };
+    verify_federated_producer_event_proof(event, producer, &public_key)?;
+    let key = arkret_wire::DidKey::new(format!(
+        "did:key:{}",
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(&public_key)
     ))
+    .map_err(|error| format!("producer signer evidence key is invalid: {error}"))?;
+    Ok((producer.verification_method.clone(), key))
 }
 
 pub(super) fn trusted_federated_event_digest_suites(
@@ -2694,13 +2764,13 @@ async fn validate_federation_batch_admission(
             verify_federated_event_admission(state, event, digest_suite)
                 .await
                 .map_err(|error| {
-                    tracing::debug!(%error, event_id = %event.event_id, "federated Event admission proof rejected");
+                    tracing::debug!(%error, event_id = %event.event_id, "federated Event producer proof rejected");
                     if error.starts_with("dependency_missing:") {
                         return crate::app_error!(DependencyMissing, "frozen admission authority dependency is unavailable");
                     }
                     crate::app_error!(
                         SignatureInvalid,
-                        "federated Event does not carry a valid origin Station admission proof"
+                        "federated Event does not carry a valid producer proof and signer evidence"
                     )
                     .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
                 })?;
@@ -3029,7 +3099,6 @@ pub(crate) async fn submit_federation_events(
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
     let mut quarantine = Vec::new();
-    let mut agent_event_admissions = Vec::new();
     let created_at = now();
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
     let profile_gate = match crate::routing::federation::federation_profile_intersection_for_peer(
@@ -3142,7 +3211,7 @@ pub(crate) async fn submit_federation_events(
                 )
             })
             .collect::<Vec<_>>();
-        // Federation transports the origin's immutable publication evidence.
+        // Federation transports the producer's immutable publication evidence.
         // The leases above have already been structurally and cryptographically
         // verified against their Events; preserve them through the shared
         // bootstrap path so the destination does not try to mint replacement
@@ -3229,25 +3298,6 @@ pub(crate) async fn submit_federation_events(
         };
         let actor = event_actor.signing_principal_id().to_string();
         let event_kind = event_string_field_from_value(&envelope, "kind");
-        let event_station_id = event_actor.route_service_id().to_string();
-        if envelope.get("applet_id").is_none()
-            && !crate::routing::federation::federation_actor_origin_acceptable(
-                state,
-                &event_actor,
-                &source_id,
-                Some(&event_station_id),
-                &binding_realm,
-                event_kind.as_deref(),
-            )
-            .await
-        {
-            rejected.push(rejected_item(
-                id,
-                ReasonCode::from_wire("capability_denied"),
-                Some("actor is outside the authenticated source service authority".to_owned()),
-            ));
-            continue;
-        }
         if let Err(rejection) = profile_gate.enforce_event(&envelope) {
             rejected.push(rejected_item(
                 id,
@@ -3342,9 +3392,9 @@ pub(crate) async fn submit_federation_events(
                 submissions
                     .iter()
                     .find(|submission| submission.event.event_id.as_str() == id)
-                    .and_then(|submission| submission.event.seal_ref.clone())
-                    .into_iter()
-                    .collect()
+                    .and_then(|submission| submission.event.auth_context.as_ref())
+                    .map(|context| context.authority_refs.clone())
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -3361,11 +3411,6 @@ pub(crate) async fn submit_federation_events(
             rejected.push(item);
             continue;
         }
-        let typed_event = submissions
-            .iter()
-            .find(|submission| submission.event.event_id.as_str() == id)
-            .map(|submission| &submission.event)
-            .expect("federation envelope came from the typed submission");
         if let Some(evidence) = inbound_publication_evidence.get(&id)
             && let Err(error) = store_inbound_publication_evidence(state, evidence).await
         {
@@ -3376,23 +3421,6 @@ pub(crate) async fn submit_federation_events(
             ));
             continue;
         }
-        let prepared_agent_receipt =
-            match prepare_agent_event_admission_receipt(state, typed_event, created_at).await {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    render_error(
-                        res,
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "temporarily_unavailable",
-                        &error,
-                    );
-                    return;
-                }
-            };
-        let receipt_idempotency = prepared_agent_receipt
-            .as_ref()
-            .and_then(|prepared| prepared.idempotency.clone())
-            .map(SubmitCommitIdempotency::Prepared);
         match submit_event_value_with_context(
             state,
             &session,
@@ -3400,7 +3428,7 @@ pub(crate) async fn submit_federation_events(
             SubmitEventContext {
                 internal_admission: Some(&admission),
                 // No lease is handed to the local minting path: this Event was
-                // already receipted by its origin ingress, and the transported
+                // already receipted by an ingress Station, and the transported
                 // evidence is stored verbatim below instead.
                 control_proposal_ack: inbound_control_proposal_acks.get(&id),
                 ackless_self_principal_admission_evidence: submissions
@@ -3419,35 +3447,12 @@ pub(crate) async fn submit_federation_events(
                 ..SubmitEventContext::empty()
             },
             SubmitMode::Commit(Box::new(SubmitCommitOptions {
-                idempotency: receipt_idempotency,
                 ..SubmitCommitOptions::none()
             })),
         )
         .await
         {
             Ok(response) => {
-                match load_agent_event_admission(state, typed_event).await {
-                    Ok(Some(receipt)) => agent_event_admissions.push(receipt),
-                    Ok(None) if prepared_agent_receipt.is_none() => {}
-                    Ok(None) => {
-                        render_error(
-                            res,
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "temporarily_unavailable",
-                            "accepted Agent Event is missing its atomic receipt",
-                        );
-                        return;
-                    }
-                    Err(error) => {
-                        render_error(
-                            res,
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "temporarily_unavailable",
-                            &error,
-                        );
-                        return;
-                    }
-                }
                 if response.duplicate {
                     duplicate.push(response.event_id);
                 } else {
@@ -3507,7 +3512,7 @@ pub(crate) async fn submit_federation_events(
         status_label,
     )
     .await;
-    let mut outcome = events_submit_outcome(
+    let outcome = events_submit_outcome(
         status,
         accepted,
         duplicate,
@@ -3515,151 +3520,7 @@ pub(crate) async fn submit_federation_events(
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     );
-    outcome.agent_event_admissions = agent_event_admissions;
     res.render(Json(outcome));
-}
-
-struct PreparedAgentEventAdmissionReceipt {
-    idempotency: Option<soland_services::events::IdempotentResponse>,
-}
-
-async fn prepare_agent_event_admission_receipt(
-    state: &AppState,
-    event: &arkret_wire::Event,
-    accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Option<PreparedAgentEventAdmissionReceipt>, String> {
-    use arkret_models_identity::agent_signer_evidence::{
-        AgentDetachedJws, AgentEventAdmissionReceipt,
-    };
-
-    if !crate::routing::identity::agents::evidence::event_has_agent_signer(state, event).await? {
-        return Ok(None);
-    }
-    let Some(admission) = event.proofs.iter().find_map(|proof| match proof {
-        arkret_wire::EventProof::StationAdmission(value) => Some(value),
-        arkret_wire::EventProof::Producer(_) => None,
-    }) else {
-        return Err("federated Event omitted its Station admission proof".to_owned());
-    };
-    let origin =
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-            accepted_event: event.clone(),
-        };
-    if origin.receiver_id().map_err(|error| error.to_string())? == state.service_core_id() {
-        return Ok(None);
-    }
-    let Some(producer_evidence_ref) = admission.producer_signer_resolution_evidence_ref.clone()
-    else {
-        return Ok(None);
-    };
-    let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| format!("receiver service id is invalid: {error}"))?;
-    let (_, receiver_method) = state
-        .current_service_receipt_binding()
-        .await
-        .map_err(|error| format!("receiver receipt method is unavailable: {error}"))?;
-    let receipt_key = format!(
-        "agent-event-admission-receipt:{}:{}",
-        event.event_id, receiver_id
-    );
-    if let Some(record) = state
-        .persistence()
-        .idempotency_record(&receiver_id, &receipt_key)
-        .await
-        .map_err(|error| format!("receipt lookup failed: {error}"))?
-    {
-        serde_json::from_value::<AgentEventAdmissionReceipt>(record.response_body)
-            .map_err(|error| format!("stored receipt is invalid: {error}"))?;
-        return Ok(Some(PreparedAgentEventAdmissionReceipt {
-            idempotency: None,
-        }));
-    }
-    let mut receipt = AgentEventAdmissionReceipt {
-        schema: arkret_wire::NonEmptyString::new(
-            arkret_wire::SchemaId::AGENT_SIGNER_ADMISSION_RECEIPT_V1.to_owned(),
-        )
-        .map_err(|error| error.to_string())?,
-        event_id: event.event_id.clone(),
-        realm_id: event.realm_id.clone(),
-        producer_accepted_at: admission.accepted_at,
-        accepted_at,
-        agent_id: event
-            .executed_by
-            .as_ref()
-            .unwrap_or(&event.actor_id)
-            .signing_principal_id()
-            .clone(),
-        verification_method: admission.producer_verification_method.clone(),
-        producer_signer_resolution_evidence_ref: producer_evidence_ref,
-        receiver_id: receiver_id.clone(),
-        proof: AgentDetachedJws {
-            kind: arkret_wire::NonEmptyString::new("detached_jws".to_owned())
-                .map_err(|error| error.to_string())?,
-            jws: arkret_wire::NonEmptyString::new("pending".to_owned())
-                .map_err(|error| error.to_string())?,
-        },
-    };
-    arkret_signatures::agent_evidence::sign_agent_event_admission_receipt(
-        &mut receipt,
-        &receiver_method,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| error.to_string())?;
-    let body = serde_json::to_value(&receipt)
-        .map_err(|error| format!("receipt encoding failed: {error}"))?;
-    Ok(Some(PreparedAgentEventAdmissionReceipt {
-        idempotency: Some(soland_services::events::IdempotentResponse {
-            authenticated_actor: arkret_wire::ActorId::service(receiver_id.clone()),
-            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
-            key: receipt_key,
-            request_hash: event.event_id.as_str().to_owned(),
-            status: 200,
-            body,
-            created_at: accepted_at,
-            expires_at: accepted_at + chrono::Duration::days(36500),
-        }),
-    }))
-}
-
-async fn load_agent_event_admission(
-    state: &AppState,
-    event: &arkret_wire::Event,
-) -> Result<Option<arkret_models_identity::agent_signer_evidence::AgentEventAdmission>, String> {
-    if !crate::routing::identity::agents::evidence::event_has_agent_signer(state, event).await? {
-        return Ok(None);
-    }
-    event
-        .proofs
-        .iter()
-        .any(|proof| matches!(proof, arkret_wire::EventProof::StationAdmission(_)))
-        .then_some(())
-        .ok_or_else(|| "federated Event omitted its Station admission proof".to_owned())?;
-    let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| format!("receiver service id is invalid: {error}"))?;
-    let origin =
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::StationAdmission {
-            accepted_event: event.clone(),
-        };
-    if origin.receiver_id().map_err(|error| error.to_string())? == receiver_id {
-        return Ok(Some(origin));
-    }
-    let receipt_key = format!(
-        "agent-event-admission-receipt:{}:{}",
-        event.event_id, receiver_id
-    );
-    let stored = state
-        .persistence()
-        .idempotency_record(&receiver_id, &receipt_key)
-        .await
-        .map_err(|error| format!("receipt replay lookup failed: {error}"))?
-        .ok_or_else(|| "atomic receipt did not become visible".to_owned())?;
-    let stored = serde_json::from_value(stored.response_body)
-        .map_err(|error| format!("stored receipt is invalid: {error}"))?;
-    Ok(Some(
-        arkret_models_identity::agent_signer_evidence::AgentEventAdmission::ReceiverReceipt {
-            receipt: stored,
-        },
-    ))
 }
 
 async fn submit_direct_conversation_federation(
@@ -3717,23 +3578,12 @@ async fn submit_direct_conversation_federation(
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let event_station_ids = submission
-        .events
-        .iter()
-        .map(|item| item.event.actor_id.route_service_id().as_str())
-        .collect::<Vec<_>>();
-    if arkret_wire::DidCoreId::new(source_id.to_owned()).is_err()
-        || !direct_founding_origin_ids_match(
-            source_id,
-            receipt.issuer_id.as_str(),
-            &event_station_ids,
-        )
-    {
+    if arkret_wire::DidCoreId::new(source_id.to_owned()).is_err() {
         render_error(
             res,
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "authenticated source, founding receipt issuer and every Event Station must match",
+            "authenticated source service id is invalid",
         );
         return;
     }
@@ -3835,7 +3685,7 @@ async fn submit_direct_conversation_federation(
                     res,
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
-                    &format!("founding Event admission proof is invalid: {error}"),
+                    &format!("founding Event producer proof is invalid: {error}"),
                 );
                 return;
             }
@@ -3944,19 +3794,6 @@ async fn submit_direct_conversation_federation(
     }
 }
 
-fn direct_founding_origin_ids_match(
-    source_id: &str,
-    receipt_issuer_id: &str,
-    event_station_ids: &[&str],
-) -> bool {
-    !source_id.is_empty()
-        && source_id == receipt_issuer_id
-        && event_station_ids.len() == 3
-        && event_station_ids
-            .iter()
-            .all(|station_id| *station_id == source_id)
-}
-
 pub(super) fn event_actor_from_value(value: &Value) -> Option<arkret_wire::ActorId> {
     serde_json::from_value(value.get("actor_id")?.clone()).ok()
 }
@@ -4016,8 +3853,6 @@ use outcome::*;
 use post_commit::*;
 use preflight::*;
 use projection_preflight::*;
-#[cfg(feature = "test-support")]
-pub use value::attach_fixture_station_admission_proof;
 pub(in crate::routing::events::event_log) use value::replay_ackless_self_principal_ingress;
 pub(super) use value::validate_membership_compensation_live_state;
 use value::*;
@@ -4026,7 +3861,7 @@ pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
     submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
-    submit_mimi_reporter_initial_event_submission,
+    submit_mimi_reporter_initial_event_submission, submit_proof_authenticated_publication,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no
 // re-export here; `event_log.rs` names it directly.

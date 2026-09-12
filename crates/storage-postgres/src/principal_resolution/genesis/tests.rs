@@ -137,7 +137,7 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
         "derived readiness cannot establish or suppress the pre-Seal branch"
     );
     let registry =
-        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+        soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry().unwrap();
     super::super::PgPrincipalResolutionStore { pool: pool.clone() }
         .current_principal(&slot.account_id, &registry)
         .await
@@ -272,7 +272,7 @@ async fn current_identity_survives_index_eviction_but_requires_the_initial_curre
         .unwrap();
 
     let registry =
-        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+        soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry().unwrap();
     let principal_store = super::super::PgPrincipalResolutionStore { pool: pool.clone() };
     let mut conn = pg_conn(&pool).await.unwrap();
     sql_query("DELETE FROM principal_resolutions WHERE principal_id=$1 AND station_id=$2")

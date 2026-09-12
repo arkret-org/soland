@@ -99,23 +99,6 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         .enforce_event(&envelope)
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, error.code, error.message))?;
     let realm_id = event.realm_id.as_str();
-    if event.applet_id.is_none()
-        && !crate::routing::federation::federation_actor_origin_acceptable(
-            state,
-            &event.actor_id,
-            source_id,
-            Some(event.actor_id.route_service_id().as_str()),
-            realm_id,
-            Some(event.kind.as_str()),
-        )
-        .await
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "backfill actor is outside authenticated peer authority",
-        ));
-    }
     if event.kind == arkret_wire::EventKind::MlsWelcome {
         crate::routing::mls::validate_federated_welcome_peer_claim(
             state,
@@ -165,19 +148,6 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         method,
         key,
     );
-    let prepared = prepare_agent_event_admission_receipt(state, event, created_at)
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "temporarily_unavailable",
-                error,
-            )
-        })?;
-    let idempotency = prepared
-        .as_ref()
-        .and_then(|receipt| receipt.idempotency.clone())
-        .map(SubmitCommitIdempotency::Prepared);
     submit_event_value_with_context(
         state,
         &session,
@@ -193,10 +163,7 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
             membership_compensation_evidence: submission.membership_compensation_evidence.as_ref(),
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(Box::new(SubmitCommitOptions {
-            idempotency,
-            ..SubmitCommitOptions::none()
-        })),
+        SubmitMode::Commit(Box::new(SubmitCommitOptions::none())),
     )
     .await
 }

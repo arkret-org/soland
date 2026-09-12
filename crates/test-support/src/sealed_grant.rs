@@ -26,9 +26,9 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, EventId, GrantId, Hash, Hlc, RealmId, SealId};
-use arkret_state::lattice::CellState;
-use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
+use arkret_state::state_model::ResolvedCellState;
+use arkret_state::state_model::ordered_log::IssuedOp;
 use arkret_wire::{Seal, SealBasis};
 use sha2::{Digest, Sha256};
 use soland_http::state::AppState;
@@ -103,7 +103,7 @@ pub async fn seal_accepted_capability_grant(
     let projected_op = direct.op.clone();
     let op = IssuedOp {
         issuer_id: event.actor_id.clone(),
-        op: arkret_state::lattice::SealedOp::new(move_id.clone(), projected_op),
+        op: arkret_state::state_model::StateWrite::new(move_id.clone(), projected_op),
     };
     let state_root = state_root_for(state, &realm, &predecessors, &expected_cell, &op).await;
 
@@ -138,7 +138,7 @@ pub async fn seal_accepted_capability_grant(
         .await
         .expect("fixture accepted grant Seal put");
     state
-        .test_append_sealed_effects(&realm, &seal.id, &[(expected_cell, op)])
+        .test_append_confirmed_effects(&realm, &seal.id, &[(expected_cell, op)])
         .await
         .expect("fixture accepted grant sealed effects");
     state
@@ -173,34 +173,23 @@ async fn state_root_for(
             .await
             .expect("fixture predecessor Seal state is valid")
     };
-    // The predecessor view carries `cas_register` cells (the Realm notary among
-    // them), whose state_root leaves are their head sets rather than their
-    // settled values (spec section 6.2.1). The grant this fixture adds is an
-    // `or_set`, so it contributes no head.
-    let cas_heads = if predecessors.is_empty() {
-        arkret_state::CasHeadsByCell::new()
-    } else {
-        state
-            .test_effective_cas_heads_at(predecessors, realm)
-            .await
-            .expect("fixture predecessor Seal heads are valid")
-    };
     insert_new_grant_cell(
         &mut post_state,
         cell.clone(),
-        arkret_state::join_cell(binding.lattice.as_ref(), cell, std::slice::from_ref(op)),
+        arkret_state::join_cell(binding.model.as_ref(), cell, std::slice::from_ref(op))
+            .expect("fixture capability cell resolves"),
     );
     compute_state_root(
-        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_state::GovernanceView::new(&post_state),
         arkret_canonical::DigestSuite::Sha256,
     )
     .expect("fixture grant post-state root")
 }
 
 fn insert_new_grant_cell(
-    post_state: &mut BTreeMap<CellRef, CellState>,
+    post_state: &mut BTreeMap<CellRef, ResolvedCellState>,
     cell: CellRef,
-    joined: CellState,
+    joined: ResolvedCellState,
 ) {
     assert!(
         !post_state.contains_key(&cell),
@@ -238,7 +227,7 @@ mod tests {
     #[test]
     fn event_derived_grant_cell_is_inserted_once() {
         let cell = grant_cell();
-        let joined = CellState::Value(serde_json::json!([{"value": "grant"}]));
+        let joined = ResolvedCellState::Value(serde_json::json!([{"value": "grant"}]));
         let mut post_state = BTreeMap::new();
 
         insert_new_grant_cell(&mut post_state, cell.clone(), joined.clone());
@@ -252,7 +241,7 @@ mod tests {
     )]
     fn predecessor_cannot_replay_the_event_derived_grant_cell() {
         let cell = grant_cell();
-        let joined = CellState::Value(serde_json::json!([{"value": "grant"}]));
+        let joined = ResolvedCellState::Value(serde_json::json!([{"value": "grant"}]));
         let mut post_state = BTreeMap::from([(cell.clone(), joined.clone())]);
 
         insert_new_grant_cell(&mut post_state, cell, joined);

@@ -209,8 +209,10 @@ impl ProjectionState {
         if let Ok(cell) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.circle.history_access.v1:{circle_id}"
         )) {
-            self.cells
-                .insert(cell, CellState::Value(Value::String(history_access)));
+            self.cells.insert(
+                cell,
+                ResolvedCellState::Value(Value::String(history_access)),
+            );
         }
         ProjectionEffect::CircleLifecycle {
             circle_id: circle_id.to_owned(),

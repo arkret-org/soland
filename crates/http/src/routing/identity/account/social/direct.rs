@@ -235,7 +235,10 @@ pub(crate) async fn validate_direct_message_bootstrap(
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
     derived_cells: &[String],
-    state_at_ref: &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    state_at_ref: &BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
 ) -> Result<(), &'static str> {
     if object.contains_key("executed_by") || object.contains_key("applet_id") {
         return Err("provisional message requires the direct founder author");
@@ -331,7 +334,7 @@ pub(crate) async fn validate_direct_message_bootstrap(
     })
     .map_err(|_| "founding Realm scope invalid")?;
     if !state_at_ref.iter().any(|(cell, state)| cell.as_str().starts_with("ak:cell:ak.component.mls.epoch.v1:")
-        && matches!(state, arkret_state::lattice::CellState::Value(value)
+        && matches!(state, arkret_state::state_model::ResolvedCellState::Value(value)
             if value.get("transition_ref").and_then(Value::as_str) == Some(current_ref.as_str())
                 && value.get("effective_scope") == Some(&scope)
                 && value.get("content_scheme").and_then(Value::as_str) == Some("mls_exporter_aead_v1"))) {
@@ -385,7 +388,10 @@ pub(crate) async fn validate_direct_message_participant(
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
     derived_cells: &[String],
-    state_at_ref: &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    state_at_ref: &BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
 ) -> Result<(), &'static str> {
     if object.contains_key("executed_by") || object.contains_key("applet_id") {
         return Err("direct participant source requires a direct author");
@@ -548,7 +554,10 @@ async fn validate_current_direct_pair_authority(
 }
 
 fn direct_message_seal_covers(
-    state_at_ref: &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    state_at_ref: &BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
     binding_cell: &str,
     binding_payload: &Value,
     timeline: &str,
@@ -557,7 +566,7 @@ fn direct_message_seal_covers(
     derived_cells.len() == 1 && derived_cells[0] == timeline
         && state_at_ref.iter().any(|(cell, value)| {
             cell.as_str() == binding_cell && matches!(value,
-                arkret_state::lattice::CellState::Value(value) if value.as_array().is_some_and(|entries|
+                arkret_state::state_model::ResolvedCellState::Value(value) if value.as_array().is_some_and(|entries|
                     entries.iter().any(|entry| entry.get("value") == Some(binding_payload))))
         })
 }
@@ -568,14 +577,14 @@ mod participant_authority_tests {
 
     #[test]
     fn direct_message_seal_rejects_missing_conflicted_foreign_or_widened_authority() {
-        use arkret_state::lattice::CellState;
+        use arkret_state::state_model::ResolvedCellState;
         let cell = "ak:cell:ak.component.direct_conversation.binding.v1:pair";
         let timeline = "ak:cell:ak.component.strand.discussion.timeline.v1:main";
         let payload = serde_json::json!({"realm_id": "realm-a", "main_strand_id": "main"});
         let writes = vec![timeline.to_owned()];
         let state = BTreeMap::from([(
             arkret_identifiers::CellRef::new(cell).unwrap(),
-            CellState::Value(serde_json::json!([{"tag":"endorsement", "value":payload}])),
+            ResolvedCellState::Value(serde_json::json!([{"tag":"endorsement", "value":payload}])),
         )]);
         assert!(direct_message_seal_covers(
             &state, cell, &payload, timeline, &writes
@@ -589,7 +598,7 @@ mod participant_authority_tests {
         ));
         let bottom = BTreeMap::from([(
             arkret_identifiers::CellRef::new(cell).unwrap(),
-            CellState::Bottom(arkret_wire::Bottom::new(
+            ResolvedCellState::Bottom(arkret_wire::Bottom::new(
                 arkret_wire::BottomKind::Conflict,
                 Vec::new(),
             )),

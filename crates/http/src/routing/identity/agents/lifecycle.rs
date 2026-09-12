@@ -1152,7 +1152,7 @@ pub(super) async fn lifecycle_transition(
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
     let previous_status = record.state;
-    // Drive the FSM reducer with the exact durable
+    // Drive the transition reducer with the exact durable
     // `ak.self.agent.{pause,resume,deactivate}` Event authored as the Agent and
     // executed/signed by its controller. Deactivation uses the same single
     // lifecycle Event, without auxiliary key/grant revocation Events.
@@ -1172,7 +1172,7 @@ pub(super) async fn lifecycle_transition(
     .await?;
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
-    // FSM; this row is the read-side projection consumed by the HTTP API).
+    // transition; this row is the read-side projection consumed by the HTTP API).
     let mut updated_record = record;
     updated_record.state = new_state;
     updated_record.state_changed_at = Some(status_changed_at);

@@ -227,7 +227,6 @@ async fn historical_agent_key_result(
         actor: historical.actor.clone(),
         verification_method: historical.verification_method.clone(),
         event_id: historical.event_id.clone(),
-        receiver_id: state.service_core_id(),
     };
     let (root, dependencies) =
         super::agents::evidence::current_authenticated_agent_signer_evidence(state, &selector)
@@ -250,7 +249,7 @@ async fn historical_agent_key_result(
         return None;
     };
     let arkret_models_identity::AgentSignerEvidence::HistoricalEvent {
-        event_admission, ..
+        admission_evidence, ..
     } = agent_signer_evidence.as_ref()
     else {
         return None;
@@ -260,7 +259,11 @@ async fn historical_agent_key_result(
             selector: historical.clone(),
             status: SignerEvidenceResolvedStatus::Resolved,
             key,
-            accepted_at: event_admission.producer_accepted_at().ok()?,
+            accepted_at: admission_evidence
+                .agent_authority_state_evidence
+                .state
+                .authorization
+                .accepted_at,
         },
     ))
 }

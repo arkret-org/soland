@@ -377,30 +377,13 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 
     // The LeafNode signature_key (byte-equal to the proof key after the
     // claim admission) verifies the detached JWS over the proof binding.
-    let proof = arkret_wire::ProducerEventProof {
-        kind: "detached_jws".to_owned(),
-        proof_purpose: None,
-        verification_method: proof_verification_method,
-        event_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
-            proof_binding_bytes,
-        ))
-        .map_err(|error| author_credential_invalid(format!("binding digest: {error}")))?,
-        signer_resolution_evidence_ref: None,
-        created_at: chrono::Utc::now(),
-        domain: None,
-        audience: None,
-        jws: jws.to_owned(),
-    };
     let material = PublicKeyMaterial::Ed25519Raw {
         bytes: proof_public_key.to_vec(),
     };
     // §2.10.3 / §3 — the key is the active MLS LeafNode signature key; this
     // branch performs zero DID resolution.
-    let outcome = Ed25519DetachedJwsVerifier::new().verify_detached_jws(
-        &proof.jws,
-        proof_binding_bytes,
-        &material,
-    );
+    let outcome =
+        Ed25519DetachedJwsVerifier::new().verify_detached_jws(jws, proof_binding_bytes, &material);
     crate::metrics::record_signature_verify(
         crate::metrics::SIGNATURE_SCHEME_MINIMAL_METADATA,
         outcome.is_ok(),

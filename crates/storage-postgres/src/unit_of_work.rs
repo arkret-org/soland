@@ -89,25 +89,20 @@ async fn ensure_applet_admission_in_transaction(
     let Some(applet_id) = &event.applet_id else {
         return Ok(());
     };
-    let Some(admission) = event
-        .proofs
-        .last()
-        .and_then(arkret_wire::EventProof::as_station_admission)
-    else {
-        return Ok(());
-    };
-    let digest = admission
-        .applet_installation_digest
-        .as_ref()
+    let scope_key = soland_storage::applet_effective_scope_key(&event.scope_ref)?;
+    let install = sql_query("SELECT record FROM applet_installations WHERE applet_id = $1 AND effective_scope_key = $2 FOR UPDATE")
+        .bind::<Text, _>(applet_id.as_str()).bind::<Text, _>(&scope_key)
+        .get_result::<AppletAdmissionRecordRow>(conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(fail)?;
-    let authority = request.governance_dependencies.iter().find_map(|write| match &write.item {
-        arkret_models_collaboration::governance_dependencies::GovernanceDependency::AppletInstallationAuthority {
-            selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AppletInstallationAuthority { content_digest },
-            applet_installation_authority,
-        } if content_digest == digest => Some(applet_installation_authority),
-        _ => None,
-    }).ok_or_else(fail)?;
-    let target = authority.registration_event.actor_id.route_service_id();
+    let bot_actor = install
+        .record
+        .pointer("/package/bot_actor_id")
+        .cloned()
+        .ok_or_else(fail)
+        .and_then(|value| {
+            serde_json::from_value::<arkret_wire::ActorId>(value).map_err(|_| fail())
+        })?;
+    let target = bot_actor.route_service_id();
     let identity = sql_query("SELECT record FROM applet_managed_identities WHERE applet_id = $1 AND target_station_id = $2 FOR UPDATE")
         .bind::<Text, _>(applet_id.as_str()).bind::<Text, _>(target.as_str())
         .get_result::<AppletAdmissionRecordRow>(conn).await.optional().map_err(PersistenceError::database)?
@@ -119,11 +114,6 @@ async fn ensure_applet_admission_in_transaction(
     {
         return Err(fail());
     }
-    let scope_key = soland_storage::applet_effective_scope_key(&event.scope_ref)?;
-    let install = sql_query("SELECT record FROM applet_installations WHERE applet_id = $1 AND effective_scope_key = $2 FOR UPDATE")
-        .bind::<Text, _>(applet_id.as_str()).bind::<Text, _>(&scope_key)
-        .get_result::<AppletAdmissionRecordRow>(conn).await.optional().map_err(PersistenceError::database)?
-        .ok_or_else(fail)?;
     if install
         .record
         .get("revoked_at")
@@ -135,11 +125,6 @@ async fn ensure_applet_admission_in_transaction(
                 .and_then(serde_json::Value::as_str),
             Some("installed" | "partially_installed")
         )
-        || install
-            .record
-            .pointer("/registration_event/event_id")
-            .and_then(serde_json::Value::as_str)
-            != Some(authority.registration_event.event_id.as_str())
     {
         return Err(fail());
     }
@@ -1193,7 +1178,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
             // Control/Data routing is defined by the typed Event plane. A
             // closed genesis anchor is a basis-free Control Move; a DataEvent
-            // instead carries `seal_ref` plus `auth_context`.
+            // instead carries `auth_context` with its authority references.
             let is_control_move = typed_event.kind.is_control_plane();
             if is_control_move {
                 let event_digest = typed_event

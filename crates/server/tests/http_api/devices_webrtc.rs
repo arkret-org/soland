@@ -3,7 +3,7 @@
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
 use arkret_identifiers::CellRef;
-use arkret_state::lattice::CellState;
+use arkret_state::state_model::ResolvedCellState;
 
 use super::common::*;
 
@@ -1409,7 +1409,7 @@ fn seed_call_state(
             CellRef::new(format!("ak:cell:ak.component.call.focus.v1:{call_id}")).unwrap();
         state.test_projection().lock().cells.insert(
             cell_id,
-            CellState::Value(serde_json::json!({"session_focus": focus})),
+            ResolvedCellState::Value(serde_json::json!({"session_focus": focus})),
         );
     }
     if !moderation_values.is_empty() {
@@ -1429,7 +1429,7 @@ fn seed_call_state(
             .test_projection()
             .lock()
             .cells
-            .insert(cell_id, CellState::Value(Value::Array(effective)));
+            .insert(cell_id, ResolvedCellState::Value(Value::Array(effective)));
     }
 }
 
@@ -1444,7 +1444,7 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
         .realm_null_subject_cells
         .insert(
             (demo_realm_id().to_owned(), cell_id.as_str().to_owned()),
-            CellState::Value(serde_json::json!({"value": media_service})),
+            ResolvedCellState::Value(serde_json::json!({"value": media_service})),
         );
 }
 

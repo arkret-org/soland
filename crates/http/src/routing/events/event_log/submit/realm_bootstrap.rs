@@ -131,7 +131,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     let contexts = std::slice::from_ref(&context);
     let mut validated = Vec::with_capacity(envelopes.len());
     for (index, (envelope, typed)) in envelopes.iter().zip(&typed_events).enumerate() {
-        super::value::validate_origin_submission_shape(state, session, typed)?;
+        super::value::validate_producer_submission_shape(state, session, typed)?;
         validated.push(
             validate_event_envelope_with_context(
                 state,

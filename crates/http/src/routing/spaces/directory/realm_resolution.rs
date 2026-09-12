@@ -801,26 +801,12 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .await
             .ok()
             .flatten()
-            .map(|(profile, _)| match profile {
-                arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => {
-                    std::iter::once(signer.actor_id.to_string()).collect()
-                }
-                arkret_wire::notary::NotaryValue::Threshold { signers, .. }
-                | arkret_wire::notary::NotaryValue::OpenSet { signers } => signers
+            .map(|(profile, _)| {
+                profile
+                    .signers
                     .into_iter()
                     .map(|member| member.actor_id.to_string())
-                    .collect(),
-                arkret_wire::notary::NotaryValue::Mixed {
-                    signer,
-                    recovery_signers,
-                    ..
-                } => std::iter::once(signer.actor_id.to_string())
-                    .chain(
-                        recovery_signers
-                            .into_iter()
-                            .map(|member| member.actor_id.to_string()),
-                    )
-                    .collect(),
+                    .collect()
             })
             .unwrap_or_default();
     if authority_ids.is_empty() {

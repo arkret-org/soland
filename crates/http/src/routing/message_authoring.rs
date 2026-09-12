@@ -196,6 +196,12 @@ async fn prepare(
         .map_err(|e| AppError::internal(e.to_string()))?;
     leaves.sort();
     leaves.dedup();
+    let [authority_ref] = leaves.as_slice() else {
+        return Err(AppError::new(
+            ErrorCode::FrontierUnavailable,
+            "message preparation requires one accepted Realm authority head",
+        ));
+    };
     arkret_wire::SealBasis {
         leaves: leaves.clone(),
     }
@@ -216,6 +222,7 @@ async fn prepare(
         .map_err(invalid)?,
         key_epoch: 0,
         credential_epoch: None,
+        authority_refs: vec![authority_ref.clone()],
     };
     let direct = state
         .projections()
@@ -249,43 +256,40 @@ async fn prepare(
     };
     let mut outcome = None;
     let mut failure = None;
-    'basis: for seal in leaves {
-        let suite = state
-            .projections()
-            .predecessor_digest_suite(&body.realm_id, std::slice::from_ref(&seal))
-            .await
-            .map_err(|e| AppError::new(ErrorCode::FrontierUnavailable, e.to_string()))?;
-        for authority in &authorities {
-            let draft = MessagePrepareOutcome::prepare(
-                &body,
-                frontier.clone(),
-                scope.clone(),
-                seal.clone(),
-                auth.clone(),
-                authority
-                    .map(AuthorizationRef::new)
-                    .transpose()
-                    .map_err(invalid)?,
-                direct_binding.clone(),
-                suite,
-                observed_at,
-            )
-            .map_err(invalid)?;
-            let authored = draft.validate_for_request(&body).map_err(invalid)?;
-            match crate::routing::events::event_log::validate_message_authoring_candidate(
-                state,
-                authored.event(),
-                suite,
-            )
-            .await
-            {
-                Ok(()) => {
-                    outcome = Some(draft);
-                    break 'basis;
-                }
-                Err(error) => {
-                    failure = Some(error);
-                }
+    let suite = state
+        .projections()
+        .predecessor_digest_suite(&body.realm_id, std::slice::from_ref(authority_ref))
+        .await
+        .map_err(|e| AppError::new(ErrorCode::FrontierUnavailable, e.to_string()))?;
+    for authority in &authorities {
+        let draft = MessagePrepareOutcome::prepare(
+            &body,
+            frontier.clone(),
+            scope.clone(),
+            auth.clone(),
+            authority
+                .map(AuthorizationRef::new)
+                .transpose()
+                .map_err(invalid)?,
+            direct_binding.clone(),
+            suite,
+            observed_at,
+        )
+        .map_err(invalid)?;
+        let authored = draft.validate_for_request(&body).map_err(invalid)?;
+        match crate::routing::events::event_log::validate_message_authoring_candidate(
+            state,
+            authored.event(),
+            suite,
+        )
+        .await
+        {
+            Ok(()) => {
+                outcome = Some(draft);
+                break;
+            }
+            Err(error) => {
+                failure = Some(error);
             }
         }
     }

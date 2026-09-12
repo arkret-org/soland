@@ -630,10 +630,10 @@ async fn contact_list_rows(
     Ok(out)
 }
 
-/// Map a stored contact FSM status to its actor-relative [`ContactState`].
+/// Map a stored contact transition status to its actor-relative [`ContactState`].
 ///
 /// Returns `None` for an unrecognized stored status. `status` is written
-/// by the server-side contact FSM (never request-controlled), so an
+/// by the server-side contact transition (never request-controlled), so an
 /// unknown value implies a migration / partial-write / writer bug; read
 /// paths fail soft (skip the row) and write outcomes surface an internal
 /// error rather than panicking and taking down the whole endpoint.

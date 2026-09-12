@@ -7,8 +7,7 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
-    FrankingDataEventInclusionProof, FrankingProof, FrankingSealObservationOutcome,
-    FrankingSealObservationRequest,
+    FrankingProof, FrankingSealObservationOutcome, FrankingSealObservationRequest,
 };
 use arkret_wire::{ActorId, EventKind, ScopeRef};
 use ed25519_dalek::Signer as _;
@@ -133,6 +132,7 @@ pub(crate) async fn prepare_franking_proof_event(
         key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
         key_epoch: 0,
         credential_epoch: None,
+        authority_refs: vec![seal.id.clone()],
     };
     let digest_suite = state.projections().realm_digest_suite(realm_id);
     let mut event = arkret_event_draft::TypedEventDraft::<
@@ -147,7 +147,6 @@ pub(crate) async fn prepare_franking_proof_event(
     .and_then(|draft| {
         draft
             .with_prev_refs(prev_refs)
-            .with_seal_ref(seal.id)
             .with_auth_context(auth_context)
             .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
     })
@@ -157,11 +156,16 @@ pub(crate) async fn prepare_franking_proof_event(
         service_did,
         verification_method.clone(),
     );
+    let signer_evidence_ref =
+        crate::routing::identity::agents::evidence::retain_current_service_signer_evidence_ref(
+            state, created_at,
+        )
+        .await?;
     arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new(signer_evidence_ref).with_created_at(created_at),
     )
     .map_err(|error| AppError::internal(format!("franking Event signing failed: {error}")))?;
     let session = soland_services::identity::SessionIdentityState {
@@ -895,8 +899,6 @@ async fn materialize_franking_seal_observation(
     {
         return Err(franking_observation_not_found());
     }
-    let proof_digest = Hash::new(proof_record.canonical_digest.clone())
-        .map_err(|error| AppError::internal(format!("invalid franking Event digest: {error}")))?;
     let realm_id = proof.realm_id.clone();
     let leaves = state
         .projections()
@@ -932,29 +934,38 @@ async fn materialize_franking_seal_observation(
             right.id.as_str(),
         ))
     });
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("franking Event closure lookup failed: {error}")))?;
+    let mut events = std::collections::BTreeMap::new();
+    for record in records {
+        if record.realm_id.as_deref() != Some(realm_id.as_str()) {
+            continue;
+        }
+        let event = parse_accepted_event(&record)?;
+        events.insert(event.event_id.clone(), event);
+    }
     let mut observation = None;
     for seal in seals {
-        let Some(declared_root) = seal.data_event_set_root.as_ref() else {
-            continue;
-        };
-        let Some(digests) = state
-            .projections()
-            .data_event_leaf_manifest(&seal.id)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("read frozen DataEvent leaf manifest: {error}"))
-            })?
-        else {
-            continue;
-        };
-        let Some(inclusion) = frozen_manifest_inclusion(declared_root, &digests, &proof_digest)?
-        else {
-            continue;
-        };
-        observation = Some((seal, inclusion));
-        break;
+        for anchor in &seal.existence_anchors {
+            let Some(ancestry_events) = existence_anchor_closure(
+                anchor,
+                &proof_event.event_id,
+                &events,
+            )? else {
+                continue;
+            };
+            observation = Some((seal, anchor.clone(), ancestry_events));
+            break;
+        }
+        if observation.is_some() {
+            break;
+        }
     }
-    let (covering_seal, inclusion) = observation.ok_or_else(franking_observation_not_found)?;
+    let (covering_seal, existence_anchor, ancestry_events) =
+        observation.ok_or_else(franking_observation_not_found)?;
     let authenticated =
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
             .await?;
@@ -974,42 +985,46 @@ async fn materialize_franking_seal_observation(
         proof_event,
         target_event,
         covering_seal,
-        data_event_inclusion_proof: FrankingDataEventInclusionProof {
-            leaf_digest: inclusion.leaf_digest,
-            leaf_index: inclusion.leaf_index,
-            leaf_count: inclusion.leaf_count,
-            audit_path: inclusion.audit_path,
-        },
         service_signer_evidence,
+        existence_anchor,
+        ancestry_events,
     })
 }
 
-fn frozen_manifest_inclusion(
-    declared_root: &Hash,
-    manifest: &BTreeSet<Hash>,
-    proof_digest: &Hash,
-) -> Result<Option<arkret_state::EventDigestSetInclusionProof>, AppError> {
-    let suite_name = declared_root
-        .as_str()
-        .split_once(':')
-        .map(|(suite, _)| suite)
-        .ok_or_else(|| AppError::internal("invalid data_event_set_root suite"))?;
-    let digest_suite = arkret_canonical::digest_suite(suite_name).map_err(|error| {
-        AppError::internal(format!("invalid data_event_set_root suite: {error}"))
-    })?;
-    let recomputed = arkret_state::event_digest_set_root(manifest, digest_suite)
-        .map_err(|error| AppError::internal(format!("recompute data_event_set_root: {error}")))?;
-    if &recomputed != declared_root {
-        return Err(AppError::internal(
-            "accepted Seal data_event_set_root does not match its frozen leaf manifest",
-        ));
+fn existence_anchor_closure(
+    anchor: &arkret_wire::ExistenceAnchor,
+    proof_event_id: &EventId,
+    events: &std::collections::BTreeMap<EventId, arkret_wire::Event>,
+) -> Result<Option<Vec<arkret_wire::Event>>, AppError> {
+    anchor
+        .validate_structural()
+        .map_err(|error| AppError::internal(format!("invalid retained existence anchor: {error}")))?;
+    let mut pending = anchor.frontier.clone();
+    let mut visited = BTreeSet::new();
+    let mut contains_proof = false;
+    while let Some(event_id) = pending.pop() {
+        if !visited.insert(event_id.clone()) {
+            continue;
+        }
+        if visited.len() > 4096 {
+            return Ok(None);
+        }
+        let Some(event) = events.get(&event_id) else {
+            return Ok(None);
+        };
+        contains_proof |= &event_id == proof_event_id;
+        pending.extend(event.prev_refs.iter().cloned());
     }
-    if !manifest.contains(proof_digest) {
+    if !contains_proof {
         return Ok(None);
     }
-    arkret_state::event_digest_set_inclusion_proof(manifest, proof_digest, digest_suite)
-        .map(Some)
-        .map_err(|error| AppError::internal(format!("build franking inclusion proof: {error}")))
+    let mut ancestry_events = visited
+        .into_iter()
+        .filter(|event_id| event_id != proof_event_id)
+        .filter_map(|event_id| events.get(&event_id).cloned())
+        .collect::<Vec<_>>();
+    ancestry_events.sort_by(|left, right| left.event_id.cmp(&right.event_id));
+    Ok(Some(ancestry_events))
 }
 
 #[endpoint(

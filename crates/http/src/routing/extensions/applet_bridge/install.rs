@@ -363,11 +363,16 @@ fn validate_bot_managed_actor_unit(
             AppError::param_invalid(format!("Bot PCR genesis object is invalid: {error}"))
                 .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
-    let expected_host_notary = arkret_wire::NotaryValue::single_signer(
-        state
-            .service_notary_signer_descriptor()
-            .map_err(AppError::internal)?,
-    );
+    let expected_host_notary = arkret_wire::NotaryValue::new(
+        vec![
+            state
+                .service_notary_signer_descriptor()
+                .map_err(AppError::internal)?,
+        ],
+        0,
+        0,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
     validate_hosted_applet_pcr_notary(&genesis_object.notary, &expected_host_notary)?;
     let provision_ref_count = genesis
         .refs
@@ -433,11 +438,7 @@ fn validate_bot_managed_actor_unit(
             .proofs
             .iter()
             .chain(profile.proofs.iter())
-            .any(|proof| {
-                proof.as_producer().is_none_or(|proof| {
-                    proof.verification_method != registration_verification_method
-                })
-            })
+            .any(|proof| proof.verification_method != registration_verification_method)
     {
         return Err(AppError::param_invalid(
             "Bot accountability/profile Events do not close the managed actor creation unit",
@@ -1659,9 +1660,12 @@ mod tests {
     #[test]
     fn hosted_applet_pcr_notary_rejects_actor_and_self_reported_descriptors() {
         let state = production_test_state();
-        let expected = arkret_wire::NotaryValue::single_signer(
-            state.service_notary_signer_descriptor().unwrap(),
-        );
+        let expected = arkret_wire::NotaryValue::new(
+            vec![state.service_notary_signer_descriptor().unwrap()],
+            0,
+            0,
+        )
+        .unwrap();
         validate_hosted_applet_pcr_notary(&expected, &expected).unwrap();
 
         let actor_did = Did::new("did:web:actor.example".to_owned()).unwrap();
@@ -1674,7 +1678,7 @@ mod tests {
         .unwrap();
         assert!(
             validate_hosted_applet_pcr_notary(
-                &arkret_wire::NotaryValue::single_signer(actor_descriptor),
+                &arkret_wire::NotaryValue::new(vec![actor_descriptor], 0, 0).unwrap(),
                 &expected,
             )
             .is_err()
@@ -1690,7 +1694,7 @@ mod tests {
         .unwrap();
         assert!(
             validate_hosted_applet_pcr_notary(
-                &arkret_wire::NotaryValue::single_signer(self_reported_descriptor),
+                &arkret_wire::NotaryValue::new(vec![self_reported_descriptor], 0, 0).unwrap(),
                 &expected,
             )
             .is_err()

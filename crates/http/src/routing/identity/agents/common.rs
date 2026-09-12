@@ -766,6 +766,14 @@ pub(super) fn agent_key_state_from_record(
         .active_binding
         .as_ref()
         .map(|binding| binding.authorized_event_ref.clone());
+    let signer_resolution_evidence_ref = runtime_bindings
+        .active_binding
+        .as_ref()
+        .map(|binding| binding.signer_resolution_evidence_ref.clone());
+    let current_signer_evidence = runtime_bindings
+        .active_binding
+        .as_ref()
+        .map(|binding| binding.current_signer_evidence.clone());
     let agent_id = arkret_wire::DidCoreId::new(record.id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
     if controller_account_id.principal_id.as_str() != record.controller_principal_id {
@@ -817,6 +825,8 @@ pub(super) fn agent_key_state_from_record(
             .and(record.approval_requested_at),
         authorized_event_ref,
         active_authorizations,
+        signer_resolution_evidence_ref,
+        current_signer_evidence,
         runtime_verifier_material: None,
     })
 }

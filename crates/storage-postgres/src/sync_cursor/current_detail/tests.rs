@@ -43,7 +43,7 @@ async fn baseline_budget_does_not_complete_or_change_snapshot_and_authority_chan
     let database = crate::test_database::TestDatabase::lease().await;
     let pool = database.pool();
     let registry =
-        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
+        soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry().unwrap();
     let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
         arkret_canonical::DigestSuite::Sha256,
         arkret_canonical::sha256_bytes(b"current window realm"),

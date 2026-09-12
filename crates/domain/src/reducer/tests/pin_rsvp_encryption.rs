@@ -44,7 +44,7 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
             REALM_ID.to_owned(),
             arkret_wire::REALM_GENESIS_CELL.to_owned(),
         ),
-        arkret_state::lattice::CellState::Value(
+        arkret_state::state_model::ResolvedCellState::Value(
             serde_json::json!({"encryption_profile": "mls_rfc9420"}),
         ),
     );
@@ -103,7 +103,7 @@ fn rsvp_payload(encrypted_response: Value) -> Value {
     rsvp_payload_for("accepted", Value::Null, encrypted_response)
 }
 
-/// `entry` is the whole lattice value, so the basis and the response travel
+/// `entry` is the whole state model value, so the basis and the response travel
 /// together and every head can be interpreted on its own.
 fn rsvp_payload_for(status: &str, occurrence: Value, _unused: Value) -> Value {
     serde_json::json!({

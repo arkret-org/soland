@@ -319,7 +319,10 @@ async fn verify_signal_scope_authority(
 }
 
 fn signal_actor_joined_in_view(
-    view: &std::collections::BTreeMap<arkret_wire::CellRef, arkret_state::lattice::CellState>,
+    view: &std::collections::BTreeMap<
+        arkret_wire::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
     scope: &arkret_wire::ScopeRef,
     actor: &arkret_wire::ActorId,
 ) -> Result<bool, AppError> {
@@ -334,7 +337,7 @@ fn signal_actor_joined_in_view(
         &member_subject,
     ))
     .map_err(|error| signal_invalid(format!("signal Realm membership cell: {error}")))?;
-    if !matches!(view.get(&realm_cell), Some(arkret_state::lattice::CellState::Value(value)) if value.as_str() == Some("join"))
+    if !matches!(view.get(&realm_cell), Some(arkret_state::state_model::ResolvedCellState::Value(value)) if value.as_str() == Some("join"))
     {
         return Ok(false);
     }
@@ -352,12 +355,15 @@ fn signal_actor_joined_in_view(
     ))
     .map_err(|error| signal_invalid(format!("signal Circle membership cell: {error}")))?;
     Ok(
-        matches!(view.get(&circle_cell), Some(arkret_state::lattice::CellState::Value(value)) if value.as_str() == Some("join")),
+        matches!(view.get(&circle_cell), Some(arkret_state::state_model::ResolvedCellState::Value(value)) if value.as_str() == Some("join")),
     )
 }
 
 fn signal_actor_has_realm_action_in_view(
-    view: &std::collections::BTreeMap<arkret_wire::CellRef, arkret_state::lattice::CellState>,
+    view: &std::collections::BTreeMap<
+        arkret_wire::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
     realm: &arkret_wire::RealmId,
     actor: &arkret_wire::ActorId,
     action: &str,
@@ -367,12 +373,12 @@ fn signal_actor_has_realm_action_in_view(
     let root_controller = root_cell
         .as_ref()
         .and_then(|cell| view.get(cell))
-        .and_then(|state| match state {
-            arkret_state::lattice::CellState::Value(value) => serde_json::from_value::<
-                arkret_policy::realm_bootstrap::RealmAuthorityRootValue,
-            >(value.clone())
-            .ok(),
-            arkret_state::lattice::CellState::Bottom(_) => None,
+        .and_then(arkret_state::state_model::ResolvedCellState::settled_value)
+        .and_then(|value| {
+            serde_json::from_value::<arkret_policy::realm_bootstrap::RealmAuthorityRootValue>(
+                value.clone(),
+            )
+            .ok()
         })
         .map(|root| root.controller_actor_id);
     if root_controller.as_ref() == Some(actor)
@@ -413,11 +419,12 @@ fn signal_actor_has_realm_action_in_view(
 }
 
 fn signal_capability_cell_state_for_realm(
-    cell_state: &arkret_state::lattice::CellState,
+    cell_state: &arkret_state::state_model::ResolvedCellState,
     realm: &arkret_wire::RealmId,
-) -> arkret_state::lattice::CellState {
+) -> arkret_state::state_model::ResolvedCellState {
     let mut scoped = cell_state.clone();
-    let arkret_state::lattice::CellState::Value(serde_json::Value::Array(items)) = &mut scoped
+    let arkret_state::state_model::ResolvedCellState::Value(serde_json::Value::Array(items)) =
+        &mut scoped
     else {
         return scoped;
     };
@@ -1394,7 +1401,7 @@ mod tests {
             view.insert(
                 arkret_wire::CellRef::new(arkret_wire::cell::subject_cell(family, &subject))
                     .unwrap(),
-                arkret_state::lattice::CellState::Value(json!("join")),
+                arkret_state::state_model::ResolvedCellState::Value(json!("join")),
             );
         }
         assert!(
@@ -1434,7 +1441,7 @@ mod tests {
         let mut view = std::collections::BTreeMap::new();
         view.insert(
             cell,
-            arkret_state::lattice::CellState::Value(json!([{
+            arkret_state::state_model::ResolvedCellState::Value(json!([{
                 "tag": "ak:event:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM:0",
                 "value": {"grant": {
                     "issuer_id": actor.clone(),

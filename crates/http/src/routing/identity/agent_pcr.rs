@@ -784,7 +784,7 @@ fn validate_agent_pcr_genesis_effect(
     }
     // v1 carries no producer `effects[]`: the canonical genesis writes
     // are derived from `kind + payload` by the registered `ak.realm.create`
-    // contract. Only the targets are asserted — the lattice ops come from the
+    // contract. Only the targets are asserted — the state model ops come from the
     // registered `effect_projection`.
     let derived = arkret_schema::project_registered_cell_writes(
         &event,
@@ -1197,7 +1197,7 @@ mod tests {
         let payload = arkret_bootstrap::build_agent_pcr_create_payload(
             arkret_bootstrap::AgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
-                notary: crate::test_single_signer_notary(AGENT_DID, 42),
+                notary: crate::test_f0_notary(AGENT_DID, 42),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     did: arkret_identifiers::Did::new(AGENT_DID).unwrap(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),

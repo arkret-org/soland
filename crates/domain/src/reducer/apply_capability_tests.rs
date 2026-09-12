@@ -17,7 +17,7 @@ fn fixture_event_id_for_operation(operation_id: &str) -> String {
 }
 
 mod cbs_capability_cell_tests {
-    use arkret_state::lattice::CellState;
+    use arkret_state::state_model::ResolvedCellState;
     use serde_json::{Value, json};
 
     use super::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
@@ -30,7 +30,7 @@ mod cbs_capability_cell_tests {
     fn engine_grant_reads_registry_projected_wrapper() {
         let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
         let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
-        let state = CellState::Value(Value::Array(vec![json!({
+        let state = ResolvedCellState::Value(Value::Array(vec![json!({
             "tag": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk:0",
             "value": {
                 "grant_id": grant_id,
@@ -892,7 +892,9 @@ mod agent_key_tests {
                 REALM.to_owned(),
                 arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
             ),
-            arkret_state::lattice::CellState::Value(serde_json::to_value(&root).unwrap()),
+            arkret_state::state_model::ResolvedCellState::Value(
+                serde_json::to_value(&root).unwrap(),
+            ),
         );
         assert!(state.issuer_has_projected_capability(
             &actor(AGENT),
@@ -908,7 +910,9 @@ mod agent_key_tests {
                 REALM.to_owned(),
                 arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
             ),
-            arkret_state::lattice::CellState::Value(serde_json::to_value(root).unwrap()),
+            arkret_state::state_model::ResolvedCellState::Value(
+                serde_json::to_value(root).unwrap(),
+            ),
         );
         assert!(!state.issuer_has_projected_capability(
             &actor(AGENT),
@@ -1349,7 +1353,7 @@ mod authority_cycle_tests {
         // CellStore persists the registry-projected producer body; simulate
         // the authoritative reload that replaces the live enriched cache.
         let parent_cell = ProjectionState::capability_grant_cell_ref(G_A).unwrap();
-        let arkret_state::lattice::CellState::Value(serde_json::Value::Array(items)) =
+        let arkret_state::state_model::ResolvedCellState::Value(serde_json::Value::Array(items)) =
             proj.cells.get_mut(&parent_cell).unwrap()
         else {
             panic!("capability parent cell must be an or_set");
@@ -1528,7 +1532,7 @@ mod realm_owner_authority_tests {
     fn declare_profiles(state: &mut ProjectionState, profiles: &[&str]) {
         state.realm_null_subject_cells.insert(
             (REALM.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-            arkret_state::lattice::CellState::Value(json!({
+            arkret_state::state_model::ResolvedCellState::Value(json!({
                 "schema_refs": profiles,
             })),
         );

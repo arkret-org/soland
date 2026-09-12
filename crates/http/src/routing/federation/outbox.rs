@@ -660,12 +660,16 @@ fn peer_event_partial_retry(
     let required_targets = retained_events
         .iter()
         .flat_map(|event| {
-            event.seal_ref.iter().chain(
-                event
-                    .seal_basis
-                    .iter()
-                    .flat_map(|basis| basis.leaves.iter()),
-            )
+            event
+                .auth_context
+                .iter()
+                .flat_map(|context| context.authority_refs.iter())
+                .chain(
+                    event
+                        .seal_basis
+                        .iter()
+                        .flat_map(|basis| basis.leaves.iter()),
+                )
         })
         .collect::<std::collections::BTreeSet<_>>();
     request
@@ -1297,21 +1301,6 @@ impl FederationDispatcher {
                         None,
                         now,
                     )
-                } else if (200..300).contains(&status)
-                    && let Err(error) = self
-                        .capture_agent_event_admissions(&row, &body_text, &peer_target.base_url)
-                        .await
-                {
-                    self.transport_retry(
-                        &row,
-                        &lease_token,
-                        attempts,
-                        Some(status),
-                        error_code::TRANSPORT_ERROR,
-                        excerpt(&format!("agent_receipt_handoff: {error}")),
-                        None,
-                        now,
-                    )
                 } else if let Err(error) = &account_status_resubmission {
                     self.transport_retry(
                         &row,
@@ -1352,94 +1341,6 @@ impl FederationDispatcher {
             }
         };
         self.commit(command).await;
-    }
-
-    async fn capture_agent_event_admissions(
-        &self,
-        row: &PendingFederationDelivery,
-        response_body: &str,
-        peer_base_url: &str,
-    ) -> Result<(), String> {
-        if row.delivery.endpoint != "/_arkret/peer/events" {
-            return Ok(());
-        }
-        let request: arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody =
-            serde_json::from_str(&row.delivery.payload_json)
-                .map_err(|error| format!("federation request decode failed: {error}"))?;
-        let arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody::Batch(
-            request,
-        ) = request
-        else {
-            return Ok(());
-        };
-        let outcome: arkret_models_collaboration::http_bodies::EventsSubmitOutcome =
-            serde_json::from_str(response_body)
-                .map_err(|error| format!("federation outcome decode failed: {error}"))?;
-        outcome
-            .validate_delivery_invariants()
-            .map_err(|error| format!("federation outcome validation failed: {error}"))?;
-        let delivered = outcome
-            .accepted
-            .iter()
-            .chain(&outcome.duplicate)
-            .collect::<std::collections::BTreeSet<_>>();
-        let mut expected = std::collections::BTreeMap::new();
-        for submission in &request.events {
-            let Some(admission) = submission
-                .event
-                .proofs
-                .iter()
-                .find_map(|proof| match proof {
-                    arkret_wire::EventProof::StationAdmission(value) => Some(value),
-                    arkret_wire::EventProof::Producer(_) => None,
-                })
-            else {
-                continue;
-            };
-            if delivered.contains(&submission.event.event_id)
-                && crate::routing::identity::agents::evidence::event_has_agent_signer(
-                    &self.state,
-                    &submission.event,
-                )
-                .await?
-            {
-                expected.insert(
-                    submission.event.event_id.clone(),
-                    (&submission.event, admission),
-                );
-            }
-        }
-        if expected.len() != outcome.agent_event_admissions.len() {
-            return Err("accepted Agent Event receipt set is incomplete".to_owned());
-        }
-        for receipt in outcome.agent_event_admissions {
-            let Some((event, admission)) = expected.remove(receipt.event_id()) else {
-                return Err("outcome contains an unexpected Agent Event receipt".to_owned());
-            };
-            let signer_id = event.executed_by.as_ref().unwrap_or(&event.actor_id);
-            if receipt.realm_id() != &event.realm_id
-                || receipt.producer_accepted_at().ok() != Some(admission.accepted_at)
-                || receipt.agent_id() != signer_id.signing_principal_id()
-                || receipt.verification_method().ok()
-                    != Some(&admission.producer_verification_method)
-                || receipt.producer_signer_resolution_evidence_ref().ok()
-                    != admission.producer_signer_resolution_evidence_ref.as_ref()
-                || receipt.receiver_id().ok().as_ref() != Some(&row.delivery.peer_id)
-            {
-                return Err("Agent Event receipt does not match the delivered Event".to_owned());
-            }
-            crate::routing::identity::agents::evidence::materialize_historical_agent_signer_evidence(
-                &self.state,
-                receipt,
-                peer_base_url,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        }
-        if !expected.is_empty() {
-            return Err("accepted Agent Event receipt set is incomplete".to_owned());
-        }
-        Ok(())
     }
 
     async fn capture_history_response_relay_outcome(
@@ -2581,16 +2482,14 @@ mod tests {
                 issued_at,
             )
             .unwrap();
-            // A data-plane reducer input is a DataEvent: it MUST carry
-            // `seal_ref` + `auth_context` (`event-and-patch.md` 2.4).
-            event.seal_ref = Some(
+            let authority_ref =
                 arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
-                    .unwrap(),
-            );
+                    .unwrap();
             event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
                 key_id: arkret_wire::OpaqueLocalId::new("device-1").unwrap(),
                 key_epoch: 0,
                 credential_epoch: None,
+                authority_refs: vec![authority_ref],
             });
             event.event_id = event
                 .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
@@ -2601,53 +2500,26 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-            event.proofs = vec![
-                arkret_wire::ProducerEventProof {
-                    kind: "detached_jws".to_owned(),
-                    verification_method: arkret_wire::DidUrl::new(
-                        "did:webvh:z6mkalice:alice.example#device-1",
-                    )
-                    .unwrap(),
-                    event_digest: event_digest.clone(),
-                    signer_resolution_evidence_ref: None,
-                    created_at: issued_at,
-                    domain: None,
-                    audience: None,
-                    proof_purpose: None,
-                    jws: "a..b".to_owned(),
-                }
-                .into(),
-            ];
-            let producer_proof = event.proofs[0]
-                .as_producer()
-                .expect("fixture producer proof")
-                .clone();
-            event.proofs.push(
-                arkret_wire::primitives::StationAdmissionProof {
-        applet_installation_digest: None,
-                    kind: arkret_wire::primitives::StationAdmissionProofKind::StationAdmission,
-                    verification_method: arkret_wire::DidUrl::new(
-                        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#federation-fanout-key",
-                    )
-                    .unwrap(),
-                    event_digest: producer_proof.event_digest.clone(),
-                    producer_proof_digest: arkret_wire::primitives::StationAdmissionProof::producer_proof_digest(&producer_proof).unwrap(),
-                    producer_verification_method: producer_proof.verification_method.clone(),
-                    producer_signing_key_did: arkret_wire::DidKey::new(
-                        "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuVkhY7g94pVQyG98x",
-                    )
-                    .unwrap(),
-                    producer_signer_resolution_evidence_ref: None,
-                    signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+            event.proofs = vec![arkret_wire::ProducerEventProof {
+                kind: "detached_jws".to_owned(),
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:webvh:z6mkalice:alice.example#device-1",
+                )
+                .unwrap(),
+                event_digest: event_digest.clone(),
+                signer_resolution_evidence_ref: Some(
+                    arkret_wire::SignerEvidenceRef::new(format!(
                         "ak:signer_evidence:sha256:{}",
                         "11".repeat(32)
                     ))
                     .unwrap(),
-                    accepted_at: issued_at,
-                    jws: "admission..signature".to_owned(),
-                }
-                .into(),
-            );
+                ),
+                created_at: issued_at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: "a..b".to_owned(),
+            }];
             let event_digest = arkret_identifiers::Hash::new(
                 event
                     .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)

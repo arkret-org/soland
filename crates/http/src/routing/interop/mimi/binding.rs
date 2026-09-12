@@ -467,7 +467,6 @@ pub(super) async fn admit_mimi_room_binding_event(
     let device_id = event
         .proofs
         .first()
-        .and_then(arkret_wire::EventProof::as_producer)
         .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
         .map(|(_, fragment)| fragment.to_owned())
         .ok_or_else(|| {

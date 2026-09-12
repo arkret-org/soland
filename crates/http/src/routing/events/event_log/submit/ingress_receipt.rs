@@ -60,7 +60,11 @@ pub(in crate::routing) async fn validate_authorization_lease_for_event(
         ));
     }
     match &lease.basis_ref {
-        arkret_wire::LeaseBasisRef::Seal(seal) if event.seal_ref.as_ref() == Some(seal) => {}
+        arkret_wire::LeaseBasisRef::Seal(seal)
+            if event
+                .auth_context
+                .as_ref()
+                .is_some_and(|context| context.authority_refs.as_slice() == [seal.clone()]) => {}
         arkret_wire::LeaseBasisRef::Joined(basis) if event.seal_basis.as_ref() == Some(basis) => {}
         arkret_wire::LeaseBasisRef::AnchorUnit(_) => {
             // The complete ordered-unit binding is checked once at the batch
