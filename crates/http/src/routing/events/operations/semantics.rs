@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 
@@ -11,10 +9,6 @@ pub fn validate_operation_semantics(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    let mut active_series_heads = BTreeMap::<
-        (String, String),
-        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead,
-    >::new();
     for operation in operations {
         operation
             .validate_payload_object()
@@ -41,51 +35,21 @@ pub fn validate_operation_semantics(
         validate_reaction_target_kind(&kind, operation)?;
         validate_operation_payload_schema(&kind, operation)?;
         if kind == arkret_wire::EventKind::KeyBackupActiveSeries {
-            validate_key_backup_active_series_transition(
-                state,
-                operation,
-                &mut active_series_heads,
-            )?;
+            validate_key_backup_active_series_structure(operation)?;
         }
     }
     Ok(())
 }
 
-fn validate_key_backup_active_series_transition(
-    state: &AppState,
-    operation: &Operation,
-    heads: &mut BTreeMap<
-        (String, String),
-        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead,
-    >,
-) -> Result<(), &'static str> {
+fn validate_key_backup_active_series_structure(operation: &Operation) -> Result<(), &'static str> {
     let record = operation
         .typed_payload::<arkret_wire::event_spec::KeyBackupActiveSeries>()
         .map_err(|_| "key_backup_active_series_schema_violation")?;
-    let key = (
-        record.actor_id.to_string(),
-        record.backup_kind.as_str().to_owned(),
-    );
-    let current = heads.get(&key).cloned().or_else(|| {
-        state
-            .projections()
-            .snapshot()
-            .key_backup_active_series_head(&key.0, &key.1)
-    });
-    let next =
-        arkret_models_collaboration::events_payloads::validate_key_backup_active_series_transition(
-            current.as_ref(),
-            &record,
-        )
-        .map_err(active_series_transition_reason)?;
-    heads.insert(key, next);
-    Ok(())
-}
-
-fn active_series_transition_reason(
-    error: arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesTransitionError,
-) -> &'static str {
-    error.reason_code()
+    // Pointer transitions belong to the exact staged safety Cell during Seal
+    // execution. The current live cache is neither the signed basis nor the
+    // state after preceding members of this command unit.
+    arkret_models_collaboration::events_payloads::validate_key_backup_active_series_record(&record)
+        .map_err(|error| error.reason_code())
 }
 
 /// strand-and-message.md §9.8.2 — v1 core reactions may only target a
@@ -435,7 +399,7 @@ mod tests {
     const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 
     #[test]
-    fn active_series_admission_uses_full_actor_and_rejects_existing_pointer_fork() {
+    fn active_series_preflight_does_not_confuse_live_cache_with_command_execution_state() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -472,26 +436,35 @@ mod tests {
             arkret_wire::EventKind::KeyBackupActiveSeries,
             payload.clone(),
         );
-        state.projections().apply(&accepted, state.hlc());
-        let mut heads = BTreeMap::new();
-        validate_key_backup_active_series_transition(&state, &accepted, &mut heads).unwrap();
-        let mut fork = payload.clone();
-        fork["issued_at"] = serde_json::json!("2026-04-27T00:00:01.000Z");
-        let fork = operation(arkret_wire::EventKind::KeyBackupActiveSeries, fork);
-        assert_eq!(
-            validate_key_backup_active_series_transition(&state, &fork, &mut BTreeMap::new()),
-            Err("key_backup_active_series_pointer_version_fork"),
+        let mut projection = soland_domain::reducer::ProjectionState::new();
+        assert!(matches!(
+            projection.apply(&accepted, state.hlc()),
+            soland_domain::reducer::ProjectionEffect::KeyBackupActiveSeriesProjected { .. }
+        ));
+        assert!(
+            projection
+                .key_backup_active_series_head(
+                    &actor("ak:did_core:web:station-a.example").to_string(),
+                    "secret_storage"
+                )
+                .is_some()
         );
+        state.projections().install_snapshot(projection);
+        validate_key_backup_active_series_structure(&accepted).unwrap();
+        let mut old_basis_candidate = payload.clone();
+        old_basis_candidate["issued_at"] = serde_json::json!("2026-04-27T00:00:01.000Z");
+        let old_basis_candidate = operation(
+            arkret_wire::EventKind::KeyBackupActiveSeries,
+            old_basis_candidate,
+        );
+        validate_key_backup_active_series_structure(&old_basis_candidate).unwrap();
         let mut other = payload;
         other["actor_id"] =
             serde_json::to_value(actor("ak:did_core:web:station-b.example")).unwrap();
         let other = operation(arkret_wire::EventKind::KeyBackupActiveSeries, other);
-        validate_key_backup_active_series_transition(&state, &other, &mut heads).unwrap();
-        assert_eq!(
-            heads.len(),
-            2,
-            "the same principal at two Stations has independent pointers"
-        );
+        validate_key_backup_active_series_structure(&other).unwrap();
+        // Admission checks shape only. Actual same-version forks, gaps and
+        // stale safety revisions are rejected by shared command execution.
     }
 
     fn operation(kind: impl AsRef<str>, payload: Value) -> Operation {

@@ -46,6 +46,11 @@ use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_pers
 mod confirmed_commands;
 pub mod tombstone;
 
+/// A confirmed metadata mutation is awaiting reconstruction at its exact head.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("confirmed metadata projection is temporarily unavailable")]
+pub struct MetadataProjectionPending;
+
 fn projection_event_ref(operation: &Operation) -> String {
     operation.context.event_id.to_string()
 }
@@ -166,6 +171,7 @@ pub struct ProjectionService {
     event_seal_committer: Arc<dyn EventSealCommitPort>,
     control_decision_commit_lock: Arc<AsyncMutex<()>>,
     confirmed_projection_lock: Arc<AsyncMutex<()>>,
+    pending_backup_metadata: Arc<Mutex<BTreeSet<(String, String)>>>,
     history_authority_view_cas_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
 }
@@ -406,6 +412,7 @@ impl ProjectionService {
             event_seal_committer,
             control_decision_commit_lock: Arc::new(AsyncMutex::new(())),
             confirmed_projection_lock: Arc::new(AsyncMutex::new(())),
+            pending_backup_metadata: Arc::new(Mutex::new(BTreeSet::new())),
             history_authority_view_cas_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
@@ -1600,8 +1607,7 @@ impl ProjectionService {
         )
         .await?;
         let committed = self
-            .event_seal_committer()
-            .commit_if_head(
+            .commit_seal_with_metadata_fence(
                 seal,
                 digest_suites.seal_digest_suite,
                 seal.predecessor_ref.as_ref(),
@@ -1686,8 +1692,7 @@ impl ProjectionService {
         )
         .await?;
         let committed = self
-            .event_seal_committer()
-            .commit_if_head(
+            .commit_seal_with_metadata_fence(
                 seal,
                 digest_suites.seal_digest_suite,
                 seal.predecessor_ref.as_ref(),
@@ -1829,16 +1834,15 @@ impl ProjectionService {
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
-        self.event_seal_committer()
-            .commit_if_head(
-                seal,
-                digest_suite,
-                expected_store_head,
-                new_ops,
-                covered,
-                governance_dependencies,
-            )
-            .await
+        self.commit_seal_with_metadata_fence(
+            seal,
+            digest_suite,
+            expected_store_head,
+            new_ops,
+            covered,
+            governance_dependencies,
+        )
+        .await
     }
 
     #[doc(hidden)]
@@ -2941,33 +2945,47 @@ impl ProjectionService {
         &self,
         actor_id: &str,
         backup_kind: &str,
-    ) -> Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeries> {
+    ) -> Result<
+        Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeries>,
+        MetadataProjectionPending,
+    > {
+        let pending = self.pending_backup_metadata.lock();
+        if pending.contains(&(actor_id.to_owned(), backup_kind.to_owned())) {
+            return Err(MetadataProjectionPending);
+        }
         let state = self.state.lock();
-        let row = state.key_backup_active_series(actor_id, backup_kind)?;
-        Some(
-            arkret_models_collaboration::events_payloads::KeyBackupActiveSeries {
-                schema: arkret_wire::SchemaId::KEY_BACKUP_ACTIVE_SERIES_V1.to_owned(),
-                actor_id: serde_json::from_str(&row.actor_id).ok()?,
-                backup_kind: arkret_models_crypto::BackupKind::try_from(row.backup_kind.as_str())
+        let Some(row) = state.key_backup_active_series(actor_id, backup_kind) else {
+            return Ok(None);
+        };
+        let record = (|| {
+            Some(
+                arkret_models_collaboration::events_payloads::KeyBackupActiveSeries {
+                    schema: arkret_wire::SchemaId::KEY_BACKUP_ACTIVE_SERIES_V1.to_owned(),
+                    actor_id: serde_json::from_str(&row.actor_id).ok()?,
+                    backup_kind: arkret_models_crypto::BackupKind::try_from(
+                        row.backup_kind.as_str(),
+                    )
                     .ok()?,
-                active_series_id: arkret_identifiers::BackupSeriesId::new(
-                    row.active_series_id.clone(),
-                )
-                .ok()?,
-                series_pointer_version: row.series_pointer_version,
-                previous_series_ids: row
-                    .previous_series_ids
-                    .iter()
-                    .cloned()
-                    .map(arkret_identifiers::BackupSeriesId::new)
-                    .collect::<Result<Vec<_>, _>>()
+                    active_series_id: arkret_identifiers::BackupSeriesId::new(
+                        row.active_series_id.clone(),
+                    )
                     .ok()?,
-                frontier_ref: row.frontier_ref.clone(),
-                issued_at: row.issued_at,
-                auth_data: row.auth_data.clone(),
-                extra: row.extra.clone(),
-            },
-        )
+                    series_pointer_version: row.series_pointer_version,
+                    previous_series_ids: row
+                        .previous_series_ids
+                        .iter()
+                        .cloned()
+                        .map(arkret_identifiers::BackupSeriesId::new)
+                        .collect::<Result<Vec<_>, _>>()
+                        .ok()?,
+                    frontier_ref: row.frontier_ref.clone(),
+                    issued_at: row.issued_at,
+                    auth_data: row.auth_data.clone(),
+                    extra: row.extra.clone(),
+                },
+            )
+        })();
+        record.map(Some).ok_or(MetadataProjectionPending)
     }
 
     pub fn bind_circle_mls_group(

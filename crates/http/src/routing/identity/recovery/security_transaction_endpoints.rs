@@ -11,6 +11,15 @@ use soland_services::identity::{
 
 use super::*;
 
+fn pending_backup_projection(
+    _: soland_services::projection::MetadataProjectionPending,
+) -> AppError {
+    crate::app_error!(
+        TemporarilyUnavailable,
+        "confirmed backup pointer is awaiting reconstruction; retry the same operation"
+    )
+}
+
 fn transaction_account(request: &SecurityTransactionCreateRequest) -> &arkret_wire::AccountId {
     match request {
         SecurityTransactionCreateRequest::Recovery(request) => &request.account_id,
@@ -948,6 +957,7 @@ pub(crate) async fn backup_series_erase_command(
                 &transaction_actor.to_string(),
                 backup_rotation_kind_name(rotation.backup_kind),
             )
+            .map_err(pending_backup_projection)?
             .ok_or_else(|| {
                 crate::app_error!(
                     FailedPrecondition,
@@ -2050,6 +2060,17 @@ fn security_transaction_service_error(error: soland_services::ServiceError) -> A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_confirmed_backup_pointer_returns_retryable_unavailable() {
+        let error =
+            pending_backup_projection(soland_services::projection::MetadataProjectionPending);
+        assert_eq!(
+            error.http_status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(error.wire_code(), "temporarily_unavailable");
+    }
 
     fn core(name: &str) -> DidCoreId {
         DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap()

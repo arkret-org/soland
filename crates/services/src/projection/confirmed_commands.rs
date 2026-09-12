@@ -1,5 +1,7 @@
 use super::*;
 
+mod metadata_fence;
+
 impl ProjectionService {
     pub async fn reserve_signing_body(
         &self,
@@ -67,6 +69,10 @@ impl ProjectionService {
     /// Rebuild only metadata whose entire non-genesis units are metadata-only.
     /// The caller holds confirmed_projection_guard through publication. This
     /// does not discharge any mixed unit, mirror, or notification obligation.
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "the authority CAS spans final exact-head validation, atomic persistence and installation"
+    )]
     pub(crate) async fn recover_confirmed_metadata(
         &self,
         realm: &RealmId,
@@ -133,9 +139,12 @@ impl ProjectionService {
             }
             next = seal.predecessor_ref;
         }
-        if publish.is_empty() {
+        if !events.iter().any(|event| metadata_kind(&event.kind)) {
             return Ok(publish);
         }
+        // A genesis-only prefix still supplies confirmed baseline metadata.
+        // Installing it clears commit-time pending markers without publishing
+        // individual members of the mixed genesis unit.
         let mut rebuilt = ProjectionState::new();
         let mut agent_subjects = BTreeSet::new();
         let mut backup_subjects = BTreeSet::new();
@@ -215,15 +224,7 @@ impl ProjectionService {
                 });
             }
         }
-        if self
-            .realm_seal_head(realm)
-            .await
-            .map_err(|e| e.to_string())?
-            .as_ref()
-            != Some(&head)
-        {
-            return Err("confirmed prefix advanced during metadata recovery; retry".into());
-        }
+        let _authority = self.confirmed_metadata_install_guard(realm, &head).await?;
         // No live effect precedes the durable all-member append. Exact retry
         // recomputes the same outputs, including the fixed reception timestamp.
         persistence
@@ -231,7 +232,7 @@ impl ProjectionService {
             .append_batch(timeline)
             .await
             .map_err(|e| e.to_string())?;
-        let _authority = self.history_authority_view_cas_guard();
+        let mut pending = self.pending_backup_metadata.lock();
         let mut live = self.state.lock();
         for agent in agent_subjects {
             live.agent_authorized_keys.remove(&agent);
@@ -241,7 +242,8 @@ impl ProjectionService {
         }
         for subject in backup_subjects {
             if let Some(value) = rebuilt.key_backup_active_series.remove(&subject) {
-                live.key_backup_active_series.insert(subject, value);
+                live.key_backup_active_series.insert(subject.clone(), value);
+                pending.remove(&subject);
             }
         }
         // Canonical safety cells remain owned by Seal application. Installing
