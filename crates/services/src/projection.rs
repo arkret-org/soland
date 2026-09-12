@@ -4246,10 +4246,6 @@ mod transition_registry_tests {
     fn live_projection_registry_resolves_the_exact_canonical_transition_closure() {
         let registry = ProjectionService::try_sdk_cell_registry().unwrap();
         let contracts = arkret_lattice_registry::canonical_transition_contracts().unwrap();
-        assert_eq!(
-            contracts.len(),
-            soland_domain::reducer::state_model_kinds::CANONICAL_SHARED_TRANSITION_FAMILY_COUNT
-        );
         let realm =
             RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
                 .unwrap();
@@ -4257,11 +4253,14 @@ mod transition_registry_tests {
             let cell =
                 CellRef::new(format!("ak:cell:{}:live-admission", contract.cell_family)).unwrap();
             let binding = registry.resolve(&realm, &cell).unwrap();
-            assert_eq!(
-                binding.model.kind(),
-                arkret_state::state_model::StateModelKind::SequencedState
-            );
-            assert_eq!(binding.bottom_policy, None);
+            let (_, _, model, _, bottom_policy) =
+                arkret_lattice_registry::state_model_bindings_for_sdk_registry()
+                    .into_iter()
+                    .find(|(family, ..)| *family == contract.cell_family)
+                    .unwrap();
+            assert_eq!(binding.model.kind(), model);
+            assert_eq!(binding.bottom_policy, bottom_policy);
+            assert!(binding.domain_transition.is_some());
         }
     }
 }

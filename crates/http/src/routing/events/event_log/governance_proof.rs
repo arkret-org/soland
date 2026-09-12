@@ -2155,30 +2155,6 @@ mod tests {
         );
     }
 
-    fn issued_transition(
-        move_byte: u8,
-        from: serde_json::Value,
-        to: serde_json::Value,
-    ) -> IssuedOp {
-        IssuedOp {
-            issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
-                "did:web:alice.example",
-            )),
-            op: StateWrite::new(
-                Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
-                LatticeOp {
-                    op_type: LatticeOpType::Transition,
-                    tag: None,
-                    value: None,
-                    from: Some(from),
-                    to: Some(to),
-                    reason: None,
-                    issuer_seq: None,
-                },
-            ),
-        }
-    }
-
     fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
         IssuedOp {
             issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
