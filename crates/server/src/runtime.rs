@@ -94,7 +94,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
         &self,
         seal: &arkret_wire::Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_head: Option<&SealId>,
+        expected_store_head: Option<&arkret_wire::SealId>,
         new_ops: &[(
             arkret_identifiers::CellRef,
             arkret_state::state_model::ordered_log::IssuedOp,
