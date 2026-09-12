@@ -173,7 +173,7 @@ async fn replay_projection_event(
                 event.event_id
             ))
         })?;
-        // Projection events are written only after admission succeeds. Restore
+        // This replay source was selected from confirmed command results. Restore
         // that trusted verdict on the reducer-only DTO; the canonical Event
         // payload remains closed and never persists this internal field.
         payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));
@@ -193,6 +193,7 @@ pub async fn hydrate_sidecar_projections(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     _hydration_hlc: &soland_domain::hlc::ServerHlc,
+    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::SidecarProjection;
 
@@ -213,12 +214,7 @@ pub async fn hydrate_sidecar_projections(
         );
     }
 
-    let mut events = persistence.projection_events().snapshot_all().await?;
-    events.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
+    let events = confirmed_projection_events(persistence, projection).await?;
     for event in events {
         if event.event_kind == arkret_wire::EventKind::SidecarCreate.as_str() {
             let Ok(event_id) = arkret_wire::EventId::new(event.event_id.clone()) else {
@@ -238,13 +234,9 @@ pub async fn hydrate_sidecar_context_projections(
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
+    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
-    let mut events = persistence.projection_events().snapshot_all().await?;
-    events.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
+    let events = confirmed_projection_events(persistence, projection).await?;
     for event in events {
         if event.event_kind == arkret_wire::EventKind::SidecarContextAttach.as_str() {
             replay_projection_event(
@@ -261,49 +253,108 @@ pub async fn hydrate_sidecar_context_projections(
     Ok(())
 }
 
-fn canonical_event_has_genesis_authority_exemption(
-    record: &soland_storage::CanonicalEventRecord,
-) -> bool {
-    record.envelope.get("seal_basis").is_none() && record.envelope.get("auth_context").is_none()
+/// Select security effects in confirmed command order and independent
+/// ordinary sources. A member of a pending/rejected unit is never ordinary
+/// merely because that member has no security write of its own.
+async fn confirmed_hydration_records(
+    persistence: &dyn soland_storage::PersistenceStore,
+    projection: &crate::projection::ProjectionService,
+) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
+    let records = persistence.events().snapshot_all().await?;
+    let realms = records
+        .iter()
+        .filter_map(|record| record.realm_id.as_ref())
+        .map(|realm| {
+            RealmId::new(realm.clone())
+                .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let by_id = records
+        .iter()
+        .map(|record| (record.event_id.as_str(), record))
+        .collect::<BTreeMap<_, _>>();
+    let mut result = Vec::new();
+    let mut seen = BTreeSet::new();
+    for realm in realms {
+        for event in projection
+            .confirmed_command_events(&realm)
+            .await
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
+        {
+            let record = by_id.get(event.event_id.as_str()).ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "confirmed Event canonical source unavailable".into(),
+                )
+            })?;
+            if record.realm_id.as_deref() != Some(realm.as_str())
+                || serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+                    soland_storage::PersistenceError::Internal(error.to_string())
+                })? != event
+            {
+                return Err(soland_storage::PersistenceError::Internal(
+                    "confirmed Event source mismatch".into(),
+                ));
+            }
+            if seen.insert(record.event_id.clone()) {
+                result.push((*record).clone());
+            }
+        }
+    }
+    for record in records {
+        if seen.contains(&record.event_id) {
+            continue;
+        }
+        let event = serde_json::from_value::<Event>(record.envelope.clone())
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
+        if event.auth_context.is_some()
+            && arkret_schema::classify_event_execution(&event)
+                .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
+                == Some(arkret_wire::CbsEffectPlane::Data)
+            && projection
+                .control_proposal_snapshot(&event.event_id.event_digest())
+                .await
+                .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
+                .is_none()
+        {
+            result.push(record);
+        }
+    }
+    Ok(result)
 }
 
-fn canonical_prev_refers_to(record: &soland_storage::CanonicalEventRecord, event_id: &str) -> bool {
-    record
-        .envelope
-        .get("prev_refs")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|refs| refs.iter().any(|value| value.as_str() == Some(event_id)))
+async fn confirmed_projection_events(
+    persistence: &dyn soland_storage::PersistenceStore,
+    projection: &crate::projection::ProjectionService,
+) -> soland_storage::PersistenceResult<Vec<soland_storage::ProjectionEventRecord>> {
+    let mut indexed = persistence
+        .projection_events()
+        .snapshot_all()
+        .await?
+        .into_iter()
+        .map(|event| (event.event_id.clone(), event))
+        .collect::<BTreeMap<_, _>>();
+    Ok(confirmed_hydration_records(persistence, projection)
+        .await?
+        .into_iter()
+        .filter_map(|record| indexed.remove(&record.event_id))
+        .collect())
 }
 
-/// Rebuild ordinary Realm genesis from the canonical Event source of truth.
-///
-/// A bootstrap transaction is delimited by the normative authority rule, not
-/// by timestamps: its founding/facet Events are the consecutive same-actor
-/// chain entries that use the genesis no-Seal exception.  The first later
-/// Control Move must carry a Seal basis and therefore cannot be mistaken for
-/// part of genesis.  The resulting unit is passed back through the shared SDK
-/// validator before the same staged reducers used by live admission run.
+/// Rebuild ordinary Realm genesis from its exact confirmed command unit.
+/// Raw admission, actor sequence and timestamps confer no execution outcome.
 async fn hydrate_canonical_realm_bootstraps(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
+    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::ProjectionEffect;
 
-    let mut records = persistence.events().snapshot_all().await?;
-    records.sort_by(|left, right| {
-        left.realm_id
-            .cmp(&right.realm_id)
-            .then_with(|| left.actor_id.cmp(&right.actor_id))
-            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
-
-    for (create_index, create) in records
+    let records = confirmed_hydration_records(persistence, projection).await?;
+    for create in records
         .iter()
-        .enumerate()
-        .filter(|(_, record)| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+        .filter(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
     {
         // PCR and Agent control Realms have their own closed genesis
         // protocols. They are durable canonical Events too, but they are not
@@ -335,47 +386,31 @@ async fn hydrate_canonical_realm_bootstraps(
             continue;
         }
 
-        let mut unit = vec![create];
+        let realm_id = RealmId::new(create.realm_id.clone().ok_or_else(|| {
+            soland_storage::PersistenceError::Internal("confirmed Realm create has no Realm".into())
+        })?)
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
+        let Some(typed_events) = projection
+            .confirmed_genesis_unit(&realm_id)
+            .await
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
+        else {
+            continue;
+        };
         let direct_conversation = create_payload.object.purpose == RealmPurpose::DirectConversation;
-        let mut previous_event_id = create.event_id.as_str();
-        let mut expected_seq = create.actor_seq.saturating_add(1);
-        for candidate in records.iter().skip(create_index + 1) {
-            if direct_conversation && unit.len() == 4 {
-                break;
-            }
-            if candidate.realm_id != create.realm_id || candidate.actor_id != create.actor_id {
-                break;
-            }
-            if candidate.actor_seq < expected_seq {
-                continue;
-            }
-            if candidate.actor_seq != expected_seq
-                || !canonical_prev_refers_to(candidate, previous_event_id)
-                || !canonical_event_has_genesis_authority_exemption(candidate)
-            {
-                break;
-            }
-            if !arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(
-                &arkret_wire::EventKind::from(&candidate.kind),
-            ) && !(direct_conversation
-                && candidate.kind == arkret_wire::EventKind::StrandCreate.as_str())
-            {
-                break;
-            }
-            unit.push(candidate);
-            previous_event_id = candidate.event_id.as_str();
-            expected_seq = expected_seq.saturating_add(1);
-        }
-
-        let typed_events = unit
+        let unit = typed_events
             .iter()
-            .map(|record| serde_json::from_value::<Event>(record.envelope.clone()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                soland_storage::PersistenceError::Internal(format!(
-                    "canonical Realm bootstrap failed SDK Event decode: {error}"
-                ))
-            })?;
+            .map(|event| {
+                records
+                    .iter()
+                    .find(|record| record.event_id == event.event_id.as_str())
+                    .ok_or_else(|| {
+                        soland_storage::PersistenceError::Internal(
+                            "confirmed bootstrap source unavailable".into(),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&typed_events).map_err(
             |error| {
                 soland_storage::PersistenceError::Internal(format!(
@@ -455,18 +490,19 @@ async fn hydrate_canonical_realm_bootstraps(
 /// their genesis is admitted inside a closed Agent or Applet aggregate.
 /// Once accepted, however, the canonical genesis and its ordinary
 /// `ak.identity.resolution.update` successors are the sole source of current
-/// identity state. Replay therefore derives the same registered cells as live
-/// admission, in acceptance order. Agent lifecycle must be restored before
+/// identity state. Replay therefore derives the same registered cells in
+/// confirmed command order. Agent lifecycle must be restored before
 /// ordinary Realm membership is replayed; Applet PCRs never gain Agent status.
 async fn hydrate_managed_pcr_identity(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
+    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::ProjectionEffect;
 
-    let records = persistence.events().snapshot_all().await?;
+    let records = confirmed_hydration_records(persistence, projection).await?;
     let mut managed_pcr_realms = BTreeSet::new();
     for record in records
         .iter()
@@ -492,7 +528,7 @@ async fn hydrate_managed_pcr_identity(
         }
     }
 
-    let mut lineage = records
+    let lineage = records
         .into_iter()
         .filter(|record| {
             managed_pcr_realms.contains(&record.realm_id)
@@ -506,12 +542,6 @@ async fn hydrate_managed_pcr_identity(
                 )
         })
         .collect::<Vec<_>>();
-    lineage.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
 
     let mut genesis_by_realm = BTreeMap::new();
     let mut current_by_realm = BTreeMap::new();
@@ -658,10 +688,11 @@ pub async fn hydrate_canonical_realm_memberships(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     projection_adapter: &dyn HydrationProjectionAdapter,
+    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::ProjectionEffect;
 
-    let all_records = persistence.events().snapshot_all().await?;
+    let all_records = confirmed_hydration_records(persistence, projection).await?;
     let invite_times = all_records
         .iter()
         .filter(|record| record.kind == arkret_wire::EventKind::InviteCreate.as_str())
@@ -676,7 +707,7 @@ pub async fn hydrate_canonical_realm_memberships(
             ))
         })
         .collect::<BTreeMap<_, _>>();
-    let mut records = all_records
+    let records = all_records
         .into_iter()
         .filter(|record| {
             matches!(
@@ -685,12 +716,6 @@ pub async fn hydrate_canonical_realm_memberships(
             )
         })
         .collect::<Vec<_>>();
-    records.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
 
     for record in records {
         let Some(operation) = projection_adapter
@@ -765,6 +790,7 @@ pub async fn hydrate_projections_from_persistence(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     projection_adapter: &dyn HydrationProjectionAdapter,
+    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
         CircleLifecycleState, CircleMembershipState, CircleProjection,
@@ -776,19 +802,32 @@ pub async fn hydrate_projections_from_persistence(
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
 
-    hydrate_managed_pcr_identity(persistence, proj, &hydration_hlc, projection_adapter).await?;
-    hydrate_canonical_realm_bootstraps(persistence, proj, &hydration_hlc, projection_adapter)
-        .await?;
-    hydrate_canonical_realm_memberships(persistence, proj, projection_adapter).await?;
-    hydrate_sidecar_projections(persistence, proj, &hydration_hlc).await?;
+    hydrate_managed_pcr_identity(
+        persistence,
+        proj,
+        &hydration_hlc,
+        projection_adapter,
+        projection,
+    )
+    .await?;
+    hydrate_canonical_realm_bootstraps(
+        persistence,
+        proj,
+        &hydration_hlc,
+        projection_adapter,
+        projection,
+    )
+    .await?;
+    hydrate_canonical_realm_memberships(persistence, proj, projection_adapter, projection).await?;
+    hydrate_sidecar_projections(persistence, proj, &hydration_hlc, projection).await?;
 
     // Agent key authorization is consulted by sidecar eligibility, while
     // `ak.key_backup.active_series` is the canonical selector for every
     // backup class. Neither projection has active mirror-table integration,
     // so restore them from the durable event stream. Agent authorize/revoke
-    // transitions must be replayed in global acceptance order; querying each
+    // transitions must retain confirmed command order; querying each
     // kind independently would lose their relative ordering.
-    let events = persistence.projection_events().snapshot_all().await?;
+    let events = confirmed_projection_events(persistence, projection).await?;
     for event in events.iter().cloned() {
         let projection_name = match arkret_wire::EventKind::from_wire(&event.event_kind) {
             arkret_wire::EventKind::AgentKeyAuthorize | arkret_wire::EventKind::AgentKeyRevoke => {
@@ -1234,12 +1273,11 @@ pub async fn hydrate_projections_from_persistence(
             }
         }
     }
-    for event in persistence
-        .projection_events()
-        .snapshot_kind(arkret_wire::EventKind::MlsCommit.as_str())
-        .await?
+    for event in events
+        .iter()
+        .filter(|event| event.event_kind == arkret_wire::EventKind::MlsCommit.as_str())
     {
-        proj.accepted_mls_commit_refs.insert(event.event_id);
+        proj.accepted_mls_commit_refs.insert(event.event_id.clone());
     }
     // The Strand mirror intentionally stores only common index fields. Replay
     // the accepted projection events after mirror hydration so Calendar
@@ -1248,7 +1286,7 @@ pub async fn hydrate_projections_from_persistence(
     // a process restart from their canonical durable source. Poll responses
     // are replayed from the Event log into PollState and deliberately do not
     // create standalone MessageState timeline rows.
-    let mut replay_events = events
+    let replay_events = events
         .into_iter()
         .filter(|event| {
             matches!(
@@ -1264,11 +1302,6 @@ pub async fn hydrate_projections_from_persistence(
             )
         })
         .collect::<Vec<_>>();
-    replay_events.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
     for event in replay_events {
         replay_projection_event(
             persistence,
@@ -1282,27 +1315,26 @@ pub async fn hydrate_projections_from_persistence(
     }
     // Run after object mirrors because a native Sidecar attachment validates
     // that its referenced source Relation or Strand already exists.
-    hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc, projection_adapter)
-        .await?;
+    hydrate_sidecar_context_projections(
+        persistence,
+        proj,
+        &hydration_hlc,
+        projection_adapter,
+        projection,
+    )
+    .await?;
     Ok(())
 }
 
 pub async fn hydrate_realms_from_canonical_events(
     persistence: &dyn soland_storage::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
-) {
-    let Ok(mut events) = persistence.events().snapshot_all().await else {
-        return;
-    };
-    events.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
+    projection: &crate::projection::ProjectionService,
+) -> soland_storage::PersistenceResult<()> {
+    let events = confirmed_hydration_records(persistence, projection).await?;
 
     // Directory entries are the replay roots for every subsequent Realm
-    // facet. Hydrate all accepted genesis Events first so bootstrap Events
+    // facet. Hydrate all confirmed genesis Events first so bootstrap Events
     // that share one transaction timestamp never depend on storage iteration
     // order.
     for record in events
@@ -1339,6 +1371,7 @@ pub async fn hydrate_realms_from_canonical_events(
             hydrate_realm_policy_event(persistence, record).await;
         }
     }
+    Ok(())
 }
 
 pub fn reconcile_hydrated_agent_memberships(
@@ -1393,7 +1426,7 @@ pub fn hydrate_realm_profile_event(
 /// `leave`/`ban` removes them. Other transitions (`invite`/`knock`) do not
 /// affect the directory member set (they live in the structured membership
 /// projection, consistent with the live `apply_membership` path). Events are
-/// replayed in persisted (chronological) order, so the `ak.realm.create` that
+/// replayed in confirmed command order, so the `ak.realm.create` that
 /// seeds the directory entry is always applied before any membership delta.
 pub fn hydrate_realm_member_state_event(
     realms: &mut RealmDirectoryIndex,

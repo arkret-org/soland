@@ -697,10 +697,14 @@ impl PersistenceHandle {
         crate::governance_history::GovernanceHistoryService::new(self.persistence.clone())
     }
 
-    pub async fn hydrate_realm_directory(&self) -> RealmDirectoryIndex {
+    pub async fn hydrate_realm_directory(
+        &self,
+        projection: &ProjectionService,
+    ) -> PersistenceResult<RealmDirectoryIndex> {
         let mut realms = RealmDirectoryIndex::new();
-        hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realms).await;
-        realms
+        hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realms, projection)
+            .await?;
+        Ok(realms)
     }
 
     pub async fn hydrate_projection(

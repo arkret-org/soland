@@ -43,6 +43,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
 
+mod confirmed_commands;
 pub mod tombstone;
 
 fn projection_event_ref(operation: &Operation) -> String {
@@ -434,7 +435,8 @@ impl ProjectionService {
         realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
         let mut state = ProjectionState::new();
-        hydrate_projections_from_persistence(persistence, &mut state, projection_adapter).await?;
+        hydrate_projections_from_persistence(persistence, &mut state, projection_adapter, self)
+            .await?;
         state.replay_resolved_pending(self.clock());
         for realm_id in realm_ids {
             if let Err(error) = state
@@ -878,6 +880,101 @@ impl ProjectionService {
 
     pub async fn seal_by_id(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
         self.seal_store().get(seal_id).await
+    }
+
+    /// Read only execution effects in the local durable confirmed prefix.
+    /// Canonical admission and timestamps never select or order these members.
+    pub async fn confirmed_command_events(
+        &self,
+        realm_id: &RealmId,
+    ) -> StoreResult<Vec<arkret_wire::Event>> {
+        self.confirmed_prefix_events(realm_id, false).await
+    }
+
+    /// Recover the exact genesis unit, including its ordinary initialization
+    /// members, from its single committed command outcome.
+    pub async fn confirmed_genesis_unit(
+        &self,
+        realm_id: &RealmId,
+    ) -> StoreResult<Option<Vec<arkret_wire::Event>>> {
+        let events = self.confirmed_prefix_events(realm_id, true).await?;
+        Ok((!events.is_empty()).then_some(events))
+    }
+
+    async fn confirmed_prefix_events(
+        &self,
+        realm_id: &RealmId,
+        genesis_only: bool,
+    ) -> StoreResult<Vec<arkret_wire::Event>> {
+        let Some(mut next) = self.realm_seal_head(realm_id).await? else {
+            return Ok(Vec::new());
+        };
+        let mut visited = BTreeSet::new();
+        let mut prefix = Vec::new();
+        loop {
+            if !visited.insert(next.clone()) {
+                return Err(StoreError::Conflict(
+                    "confirmed Seal predecessor cycle".into(),
+                ));
+            }
+            let seal = self
+                .seal_by_id(&next)
+                .await?
+                .ok_or_else(|| StoreError::Conflict("confirmed Seal is unavailable".into()))?;
+            if seal.realm_id != *realm_id || seal.id != next {
+                return Err(StoreError::Conflict(
+                    "confirmed Seal identity or Realm mismatch".into(),
+                ));
+            }
+            let previous = seal.predecessor_ref.clone();
+            prefix.push(seal);
+            match previous {
+                Some(id) => next = id,
+                None => break,
+            }
+        }
+        prefix.reverse();
+        let mut events = Vec::new();
+        for seal in prefix
+            .iter()
+            .take(if genesis_only { 1 } else { prefix.len() })
+        {
+            if seal.predecessor_ref.is_none() && seal.command_results.len() != 1 {
+                return Err(StoreError::Conflict(
+                    "genesis must have one command unit".into(),
+                ));
+            }
+            for (command_index, result) in seal.command_results.iter().enumerate() {
+                if result.outcome != arkret_wire::CommandOutcome::Committed {
+                    continue;
+                }
+                for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
+                    let snapshot =
+                        self.control_proposal_snapshot(digest)
+                            .await?
+                            .ok_or_else(|| {
+                                StoreError::Conflict(
+                                    "confirmed command member is unavailable".into(),
+                                )
+                            })?;
+                    if !matches!(snapshot.command_decisions.as_slice(), [decision] if decision.seal_id == seal.id && decision.command_index as usize == command_index && decision.member_index as usize == member_index && decision.outcome == arkret_wire::CommandOutcome::Committed)
+                    {
+                        return Err(StoreError::Conflict(
+                            "confirmed command has no unique matching member decision".into(),
+                        ));
+                    }
+                    if snapshot.event.event_id.event_digest() != *digest
+                        || snapshot.event.realm_id != *realm_id
+                    {
+                        return Err(StoreError::Conflict(
+                            "confirmed command member identity mismatch".into(),
+                        ));
+                    }
+                    events.push(snapshot.event);
+                }
+            }
+        }
+        Ok(events)
     }
 
     pub async fn seals_covering_event(&self, event_digest: &Hash) -> StoreResult<Vec<Seal>> {

@@ -1578,7 +1578,10 @@ impl AppState {
         // Build the hydrated views off-lock (the async DB reads must not hold
         // a std::sync Mutex guard across `.await`), then merge under a short
         // synchronous critical section.
-        let realm_updates = self.persistence.hydrate_realm_directory().await;
+        let realm_updates = self
+            .persistence
+            .hydrate_realm_directory(&self.projections)
+            .await?;
         for (_, entry) in realm_updates.entries_iter() {
             self.realm_directory.upsert(entry.clone());
         }
@@ -1586,9 +1589,8 @@ impl AppState {
         let hydrated_realm_ids: Vec<RealmId> = {
             let realms = self.realm_directory.snapshot();
             realms
-                .search(Default::default())
-                .into_iter()
-                .filter_map(|entry| RealmId::new(entry.realm_id.to_string()).ok())
+                .entries_iter()
+                .map(|(_, entry)| entry.realm_id.clone())
                 .collect()
         };
         self.persistence
@@ -1598,6 +1600,11 @@ impl AppState {
                 hydrated_realm_ids.clone(),
             )
             .await?;
+        for realm_id in &hydrated_realm_ids {
+            crate::routing::events::event_log::publish_confirmed_realm_bootstrap(self, realm_id)
+                .await
+                .map_err(soland_services::ServiceError::Internal)?;
+        }
         let mut reconciled_realms = self.realm_directory.snapshot();
         soland_services::hydration::reconcile_hydrated_agent_memberships(
             &mut reconciled_realms,
@@ -1653,12 +1660,21 @@ impl AppState {
             }
         }
 
-        // `ak.component.direct_conversation.binding.v1` is an or_set, so fold
-        // order carries no meaning: every accepted endorsement is a compatible
-        // add and nothing supersedes anything (`contact-and-direct-conversation.md`
-        // §8.3). The payload is `deny_unknown_fields` and carries no
-        // `binding_state` / `supersedes_binding_ref`, so there is nothing to
-        // order on either.
+        // Direct binding is an ordered safety set. Rebuild only confirmed
+        // command effects; an admitted pending endorsement grants no binding.
+        let mut confirmed_bindings = std::collections::BTreeSet::new();
+        for realm_id in &hydrated_realm_ids {
+            for event in self
+                .projections
+                .confirmed_command_events(realm_id)
+                .await
+                .map_err(|error| soland_services::ServiceError::Internal(error.to_string()))?
+            {
+                if event.kind == arkret_wire::EventKind::DirectConversationBound {
+                    confirmed_bindings.insert(event.event_id.to_string());
+                }
+            }
+        }
         let direct_binding_records = self
             .event_queries()
             .canonical_events()
@@ -1666,6 +1682,7 @@ impl AppState {
             .into_iter()
             .filter(|record| {
                 record.kind == arkret_wire::EventKind::DirectConversationBound.as_str()
+                    && confirmed_bindings.contains(&record.event_id)
             })
             .collect::<Vec<_>>();
         for record in direct_binding_records {
@@ -2269,6 +2286,162 @@ mod membership_hydration_tests {
 
     use super::*;
 
+    struct ReadOnlyHydrationCommitter;
+
+    #[async_trait::async_trait]
+    impl soland_services::projection::EventSealCommitPort for ReadOnlyHydrationCommitter {
+        async fn commit_if_head(
+            &self,
+            _seal: &arkret_wire::Seal,
+            _suite: arkret_canonical::DigestSuite,
+            _head: Option<&arkret_wire::SealId>,
+            _ops: &[(
+                arkret_wire::CellRef,
+                arkret_state::state_model::ordered_log::IssuedOp,
+            )],
+            _covered: &BTreeSet<arkret_wire::Hash>,
+            _dependencies: &[soland_storage::GovernanceDependencyWrite],
+        ) -> arkret_state::state::StoreResult<bool> {
+            panic!("hydration is read-only")
+        }
+    }
+
+    /// A consumer fixture for an already verified local command store. This
+    /// exercises exact result membership and replay, not notary admission or
+    /// cryptographic verification. Fixture order is explicitly assigned here;
+    /// production hydration must read the signed command order instead.
+    async fn hydration_command_view(
+        store: &dyn PersistenceStore,
+        outcome: Option<arkret_wire::CommandOutcome>,
+    ) -> ProjectionService {
+        use arkret_state::state::{ControlEventStore, SealStore};
+        use arkret_wire::PayloadSigner as _;
+
+        let controls = Arc::new(arkret_state::state::MemoryControlEventStore::default());
+        let seals = Arc::new(arkret_state::state::MemorySealStore::default());
+        let suite = arkret_canonical::DigestSuite::Sha256;
+        let signer = arkret_test_kit::proof::StructuralOnlyPayloadSigner::new(
+            arkret_wire::Did::new("did:web:hydration.example").unwrap(),
+            arkret_wire::DidUrl::new("did:web:hydration.example#notary").unwrap(),
+        );
+        let mut by_realm = BTreeMap::<RealmId, Vec<CanonicalEventRecord>>::new();
+        for record in store.events().snapshot_all().await.unwrap() {
+            let event: arkret_wire::Event =
+                serde_json::from_value(record.envelope.clone()).unwrap();
+            by_realm.entry(event.realm_id).or_default().push(record);
+        }
+        for (realm, mut records) in by_realm {
+            records.sort_by(|a, b| {
+                a.received_at
+                    .cmp(&b.received_at)
+                    .then(a.actor_seq.cmp(&b.actor_seq))
+                    .then(a.event_id.cmp(&b.event_id))
+            });
+            let mut members = Vec::new();
+            for record in &records {
+                let event: arkret_wire::Event =
+                    serde_json::from_value(record.envelope.clone()).unwrap();
+                let ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+                    realm.clone(),
+                    event.event_id.event_digest(),
+                    arkret_wire::Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
+                    record.received_at,
+                    arkret_wire::ControlProposalDecisionPolicy::protocol_maximum(),
+                    &signer,
+                )
+                .unwrap();
+                members.push(arkret_state::state::ControlUnitIngressMember {
+                    event,
+                    digest_suite: suite,
+                    ingress: arkret_state::state::ControlProposalIngress::AckRequired(
+                        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![
+                            ack,
+                        ])
+                        .unwrap(),
+                    ),
+                });
+            }
+            let digests = controls
+                .put_pending_unit_with_ingress(&members)
+                .await
+                .unwrap();
+            let Some(outcome) = outcome else {
+                continue;
+            };
+            let result = match outcome {
+                arkret_wire::CommandOutcome::Committed => {
+                    arkret_wire::SealCommandOutcome::committed(
+                        digests[0].clone(),
+                        digests.clone(),
+                        Vec::new(),
+                        suite,
+                    )
+                }
+                arkret_wire::CommandOutcome::Rejected => arkret_wire::SealCommandOutcome::rejected(
+                    digests[0].clone(),
+                    digests.clone(),
+                    arkret_wire::ReasonCode::ActorSignatureRevoked,
+                    suite,
+                ),
+            }
+            .unwrap();
+            let mut delta = if outcome == arkret_wire::CommandOutcome::Committed {
+                digests.clone()
+            } else {
+                Vec::new()
+            };
+            delta.sort();
+            let unsigned = arkret_wire::UnsignedSeal {
+                realm_id: realm,
+                predecessor_ref: None,
+                delta,
+                control_event_set_root: arkret_state::control_event_set_root(
+                    &digests.into_iter().collect(),
+                    suite,
+                )
+                .unwrap(),
+                state_root: arkret_state::compute_state_root(
+                    arkret_state::GovernanceView::new(&BTreeMap::new()),
+                    suite,
+                )
+                .unwrap(),
+                notary_seq: 0,
+                availability_receipt_digests: Vec::new(),
+                covered_event_digests: Vec::new(),
+                previous_state_root: None,
+                previous_digest_algorithm: None,
+                sealed_at: records.last().unwrap().received_at,
+                hlc: arkret_wire::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+                configuration_ref: members[0].event.event_id.clone(),
+                command_results: vec![result],
+                authorization_closures: Vec::new(),
+                existence_anchors: Vec::new(),
+                transaction_records: Vec::new(),
+            };
+            let bytes = arkret_canonical::canonical_json_bytes(&unsigned).unwrap();
+            let seal = arkret_wire::Seal::from_canonical_body_and_signature(
+                &bytes,
+                arkret_wire::MultiSignature {
+                    kind: arkret_wire::MultiSigKind::MultiSig,
+                    signatures: vec![signer.sign_payload(&bytes).unwrap().into()],
+                    view: 0,
+                },
+                suite,
+            )
+            .unwrap();
+            controls.record_seal_command_results(&seal).await.unwrap();
+            assert!(seals.put_if_head(&seal, None, suite).await.unwrap());
+        }
+        ProjectionService::new(
+            controls,
+            seals,
+            Arc::new(arkret_state::state::MemoryCellStore::default()),
+            ProjectionService::sdk_cell_registry(),
+            Arc::new(ReadOnlyHydrationCommitter),
+            "hydration-consumer",
+        )
+    }
+
     #[test]
     fn app_state_uses_the_bootstrap_resolved_signing_seed() {
         let config = AppConfig::test_default();
@@ -2289,6 +2462,149 @@ mod membership_hydration_tests {
         );
 
         assert_eq!(state.notary_signing_key().to_bytes(), resolved_seed);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_hydration_requires_the_exact_committed_unit() {
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
+        let service_did = arkret_wire::Did::new("did:web:hydration.example").unwrap();
+        let service_id = arkret_wire::project_did_to_core_id(&service_did).unwrap();
+        let create = development_demo_genesis_event(&service_did, &service_id, [7; 32]);
+        let realm = create.realm_id.clone();
+        let actor = create.actor_id.clone();
+        let received_at = create.created_at;
+        let mut events = vec![create.event().clone()];
+        let followups = [
+            (
+                arkret_wire::EventKind::RealmProfile,
+                serde_json::json!({"schema": "ak.schema.realm_profile.v1", "title": "Confirmed bootstrap"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmPolicyBundle,
+                serde_json::json!({"policy_revision": 1, "content_encryption_floor": "allow_plaintext"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmJoinRule,
+                serde_json::json!({"value": "invite"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmHistoryAccess,
+                serde_json::json!({"from": null, "to": "since_join"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmDiscovery,
+                serde_json::json!({"value": "listed"}),
+            ),
+            (
+                arkret_wire::EventKind::MemberState,
+                serde_json::json!({"realm_id": realm, "member_id": actor, "membership": "join"}),
+            ),
+        ];
+        for (index, (kind, payload)) in followups.into_iter().enumerate() {
+            let mut event = arkret_wire::test_support::raw_event_at(
+                kind.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                actor.signing_principal_id().clone(),
+                actor.route_service_id().clone(),
+                (index + 1) as u64,
+                arkret_wire::Hlc::new(format!("019041000000-{:04x}-aabbccdd", index + 1)).unwrap(),
+                payload,
+                received_at,
+            )
+            .unwrap();
+            event.prev_refs = vec![events.last().unwrap().event_id.clone()];
+            if kind == arkret_wire::EventKind::MemberState {
+                let subject =
+                    arkret_wire::composite_subject(&[actor.canonical_key().unwrap()]).unwrap();
+                event.preconditions = vec![
+                    serde_json::from_value(serde_json::json!({
+                        "cell_id": format!("ak:cell:ak.component.member.state.v1:{subject}"),
+                        "predicate": {"op": "head_eq", "value": null}
+                    }))
+                    .unwrap(),
+                ];
+            }
+            event
+                .refresh_content_bound_identity_with_digest_suite(
+                    arkret_canonical::DigestSuite::Sha256,
+                )
+                .unwrap();
+            events.push(event);
+        }
+        for event in &mut events {
+            crate::test_event::attach_structural_only_producer_proof(
+                event,
+                arkret_wire::DidUrl::new("did:web:alice.example#device").unwrap(),
+            );
+        }
+        arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events).unwrap();
+        for event in &events {
+            let bytes =
+                arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+            store
+                .events()
+                .put(CanonicalEventRecord {
+                    event_id: event.event_id.to_string(),
+                    actor_id: event.actor_id.to_string(),
+                    actor_seq: event.actor_seq,
+                    realm_id: Some(realm.to_string()),
+                    kind: event.kind.to_string(),
+                    schema_id: "ak.schema.event.v1".to_owned(),
+                    digest_suite: arkret_canonical::DigestSuite::Sha256,
+                    canonical_digest: arkret_canonical::sha256_digest(&bytes),
+                    canonical_bytes: bytes,
+                    envelope: serde_json::to_value(event).unwrap(),
+                    received_at,
+                })
+                .await
+                .unwrap();
+        }
+        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
+            let view = hydration_command_view(&store, outcome).await;
+            let mut restored = ProjectionState::new();
+            hydrate_projections_from_persistence(
+                &store,
+                &mut restored,
+                &RuntimeHydrationProjectionAdapter,
+                &view,
+            )
+            .await
+            .unwrap();
+            assert!(!restored.realm_states.contains_key(realm.as_str()));
+            assert!(restored.realm_create_log(realm.as_str()).is_none());
+            assert!(
+                restored
+                    .member(realm.as_str(), &actor.to_string())
+                    .is_none()
+            );
+            let mut directory = RealmDirectoryIndex::new();
+            hydrate_realms_from_canonical_events(&store, &mut directory, &view)
+                .await
+                .unwrap();
+            assert!(directory.get(&realm).is_none());
+        }
+        let view =
+            hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await;
+        let mut restored = ProjectionState::new();
+        hydrate_projections_from_persistence(
+            &store,
+            &mut restored,
+            &RuntimeHydrationProjectionAdapter,
+            &view,
+        )
+        .await
+        .unwrap();
+        assert!(restored.realm_create_log(realm.as_str()).is_some());
+        assert_eq!(
+            restored
+                .member(realm.as_str(), &actor.to_string())
+                .unwrap()
+                .state,
+            "join"
+        );
     }
 
     fn canonical_projection_source_event(
@@ -2493,10 +2809,17 @@ mod membership_hydration_tests {
                 &store,
                 &mut projection,
                 &RuntimeHydrationProjectionAdapter,
+                &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
             )
             .await
             .unwrap();
-            hydrate_realms_from_canonical_events(&store, &mut directory).await;
+            hydrate_realms_from_canonical_events(
+                &store,
+                &mut directory,
+                &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
+            )
+            .await
+            .unwrap();
             let membership = projection.member(realm_id, &actor.to_string()).unwrap();
             assert_eq!(membership.state, "join");
             assert_eq!(
@@ -2535,10 +2858,17 @@ mod membership_hydration_tests {
             &store,
             &mut restarted,
             &RuntimeHydrationProjectionAdapter,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
         )
         .await
         .unwrap();
-        hydrate_realms_from_canonical_events(&store, &mut directory).await;
+        hydrate_realms_from_canonical_events(
+            &store,
+            &mut directory,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             restarted
                 .member(realm_id, &actor.to_string())
@@ -2592,6 +2922,7 @@ mod membership_hydration_tests {
             &store,
             &mut projection,
             &RuntimeHydrationProjectionAdapter,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
         )
         .await
         .expect("hydrate reducer memberships");
@@ -2723,9 +3054,14 @@ mod membership_hydration_tests {
             .expect("init genesis");
 
         let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
-            .await
-            .expect("hydrate projections");
+        hydrate_projections_from_persistence(
+            &store,
+            &mut proj,
+            &RuntimeHydrationProjectionAdapter,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
+        )
+        .await
+        .expect("hydrate projections");
 
         // KeyPackage projection is rebuilt → the claim selector can find it.
         let kp = proj
@@ -2868,9 +3204,14 @@ mod membership_hydration_tests {
         assert_eq!(appended, ProjectionEventAppendOutcome::Inserted);
 
         let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
-            .await
-            .expect("hydrate active-series projection");
+        hydrate_projections_from_persistence(
+            &store,
+            &mut proj,
+            &RuntimeHydrationProjectionAdapter,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
+        )
+        .await
+        .expect("hydrate active-series projection");
 
         let pointer = proj
             .key_backup_active_series(
@@ -2943,6 +3284,7 @@ mod membership_hydration_tests {
                 &store,
                 &mut poisoned,
                 &RuntimeHydrationProjectionAdapter,
+                &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await
             )
             .await
             .is_err(),
@@ -3077,9 +3419,14 @@ mod membership_hydration_tests {
 
         let mut proj = ProjectionState::new();
         assert!(!proj.agent_has_authorized_key(agent_id));
-        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
-            .await
-            .expect("hydrate agent-key authorization");
+        hydrate_projections_from_persistence(
+            &store,
+            &mut proj,
+            &RuntimeHydrationProjectionAdapter,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
+        )
+        .await
+        .expect("hydrate agent-key authorization");
 
         assert!(proj.agent_has_authorized_key(agent_id));
         assert_eq!(
@@ -3120,9 +3467,14 @@ mod membership_hydration_tests {
             .expect("put realm metadata");
 
         let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
-            .await
-            .expect("hydrate projections");
+        hydrate_projections_from_persistence(
+            &store,
+            &mut proj,
+            &RuntimeHydrationProjectionAdapter,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
+        )
+        .await
+        .expect("hydrate projections");
 
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));
@@ -3186,7 +3538,13 @@ mod membership_hydration_tests {
             .unwrap();
 
         let mut realms = RealmDirectoryIndex::new();
-        hydrate_realms_from_canonical_events(&store, &mut realms).await;
+        hydrate_realms_from_canonical_events(
+            &store,
+            &mut realms,
+            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
+        )
+        .await
+        .unwrap();
 
         let meta = store.realm_meta().get(realm_id).await.unwrap().unwrap();
         assert!(meta.plaintext_visible_services.contains(service_id));
