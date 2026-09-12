@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arkret_identifiers::{CellRef, EventId, Hash, RealmId, SealId};
-use arkret_state::state::store::{ControlProposalIngress, ControlUnitIngressMember};
+use arkret_state::state::store::ControlUnitIngressMember;
 use arkret_state::state::{
     CellStateRegistry, CellStore, ControlEventStore, ControlProposalSnapshot,
     ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
@@ -3074,7 +3074,9 @@ mod event_seal_commit_tests {
 
     use arkret_identifiers::Hlc;
     use arkret_state::SealStore;
-    use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
+    use arkret_state::state::store::{
+        AcklessSelfPrincipalIngress, ControlProposalIngress, ControlUnitIngressMember,
+    };
     use arkret_state::state_model::ResolvedCellState;
     use arkret_wire::{LatticeOpType, SealSignature};
     use chrono::Utc;

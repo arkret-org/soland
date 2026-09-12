@@ -716,7 +716,7 @@ impl ProjectionState {
                     }
                 }
                 arkret_wire::cbs::LatticeOpType::Set => {
-                    (arkret_state::state_model::SequencedState::new(
+                    arkret_state::state_model::SequencedState::new(
                         arkret_wire::EventCellValueShape::Register,
                     )
                     .apply(
@@ -726,10 +726,10 @@ impl ProjectionState {
                             op.clone(),
                         ),
                     )
-                    .ok())
+                    .ok()
                 }
                 arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => {
-                    (arkret_state::state_model::SequencedState::new(
+                    arkret_state::state_model::SequencedState::new(
                         arkret_wire::EventCellValueShape::Set,
                     )
                     .apply(
@@ -739,7 +739,7 @@ impl ProjectionState {
                             op.clone(),
                         ),
                     )
-                    .ok())
+                    .ok()
                 }
                 _ => None,
             };
