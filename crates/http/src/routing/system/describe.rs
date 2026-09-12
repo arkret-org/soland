@@ -19,7 +19,6 @@
 use arkret_identity::service_identity::DidCoreIdentityState;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
-use arkret_wire::ProfileId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;

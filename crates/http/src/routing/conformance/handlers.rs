@@ -28,7 +28,7 @@
 //! set (`[200, 404, 405, 501]`).
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use arkret_hlc::{Cursor, CursorPurpose};
 use arkret_server::{CursorAuthority, CursorAuthorityError, CursorBindingContext};

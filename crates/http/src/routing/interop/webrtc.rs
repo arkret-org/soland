@@ -14,7 +14,6 @@
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CallId, CellRef, DeviceId, RealmId};
-use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::events_payloads::{
     RealmMediaServicePayload, RealmMediaServiceValue,
 };

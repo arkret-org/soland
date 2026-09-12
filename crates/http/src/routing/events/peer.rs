@@ -138,7 +138,6 @@ async fn retained_federation_submission(
     .map_err(|error| AppError::internal(error.to_string()))?;
     let publication_event = state
         .persistence()
-        .events()
         .publication_event_for_approval(&event.event_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

@@ -170,7 +170,6 @@ pub use admission::{
 pub(crate) mod endpoints;
 pub(crate) mod governance_proof;
 mod history_authority;
-mod membership_authority;
 mod mls_accepted_artifact;
 mod mls_welcome_refs;
 pub(in crate::routing::events) use endpoints::router;

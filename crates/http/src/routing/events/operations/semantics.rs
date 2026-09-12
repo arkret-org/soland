@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use serde_json::Value;
 
 use super::*;

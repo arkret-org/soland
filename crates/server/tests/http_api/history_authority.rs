@@ -1,5 +1,5 @@
 use arkret_models_collaboration::history_key::{
-    MembershipAuthorityOutcome, MembershipAuthorityRequestBody,
+    HistoryAuthorityOutcome, HistoryAuthorityRequestBody,
 };
 
 use super::common::*;
@@ -7,9 +7,9 @@ use super::common::*;
 async fn read(
     state: &AppState,
     token: &str,
-    query: &MembershipAuthorityRequestBody,
+    query: &HistoryAuthorityRequestBody,
 ) -> salvo::Response {
-    TestClient::post("http://server/_arkret/self/seals/membership-authority")
+    TestClient::post("http://server/_arkret/self/seals/history-authority")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(query).unwrap())
@@ -18,8 +18,8 @@ async fn read(
 }
 
 #[test]
-fn membership_authority_uses_current_join_and_enforces_visibility_and_basis() {
-    run_on_deep_stack("membership_authority_current", current_body);
+fn history_authority_returns_current_join_without_mls_and_enforces_visibility_and_basis() {
+    run_on_deep_stack("history_authority_current", current_body);
 }
 
 async fn current_body() {
@@ -36,7 +36,7 @@ async fn current_body() {
             .await
             .unwrap();
     let actor = fixture_account_actor(&state, "did:web:alice.example");
-    let query = MembershipAuthorityRequestBody {
+    let query = HistoryAuthorityRequestBody {
         effective_scope: arkret_wire::HistoryEffectiveScope::Realm {
             realm_id: demo_realm_id().parse().unwrap(),
         },
@@ -51,7 +51,7 @@ async fn current_body() {
         "{}",
         response.take_string().await.unwrap_or_default()
     );
-    let result: MembershipAuthorityOutcome = response.take_json().await.unwrap();
+    let result: HistoryAuthorityOutcome = response.take_json().await.unwrap();
     result
         .validate_for_account(&query, actor.as_account_id().unwrap())
         .unwrap();
@@ -61,22 +61,15 @@ async fn current_body() {
         .await
         .unwrap();
     assert_eq!(&result.authorization_incarnation, expected.incarnation());
-    // A current membership alone cannot invent an MLS history floor.
-    let history_query = arkret_models_collaboration::history_key::HistoryAuthorityRequestBody {
-        effective_scope: query.effective_scope.clone(),
-        actor_id: query.actor_id.clone(),
-        seal_basis: query.seal_basis.clone(),
-    };
-    let pending: Value = TestClient::post("http://server/_arkret/self/seals/history-authority")
+    // Current membership succeeds before MLS exists, without inventing epoch 0.
+    assert_eq!(result.join_epoch, None);
+    assert_eq!(result.history_floor_epoch, None);
+    let removed = TestClient::post("http://server/_arkret/self/seals/membership-authority")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&history_query).unwrap())
+        .json(&query)
         .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(problem_code(&pending), "frontier_unavailable");
+        .await;
+    assert_eq!(removed.status_code, Some(StatusCode::NOT_FOUND));
     let mut stale = query.clone();
     stale.seal_basis.leaves = vec![
         format!("ak:seal:sha256:{}", "b".repeat(64))

@@ -132,8 +132,7 @@ pub(super) async fn push_register(
     let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
         state, &session,
     )
-    .await
-    .map_err(|(_, code, message)| AppError::from_rejection(canonical_error_code(code), message))?;
+    .await?;
     if account_id.station_id.as_str() != state.service_id() {
         return Err(AppError::param_invalid(
             "registration account must belong to this Station",
@@ -245,8 +244,7 @@ pub(super) async fn push_unregister(
     let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
         state, &session,
     )
-    .await
-    .map_err(|(_, code, message)| AppError::from_rejection(canonical_error_code(code), message))?;
+    .await?;
     if account_id.station_id.as_str() != state.service_id() {
         return Err(AppError::param_invalid(
             "registration account must belong to this Station",

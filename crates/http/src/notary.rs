@@ -1670,7 +1670,6 @@ impl NotaryWorker {
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         if !local_service_is_eligible_availability_holder(
             state,
-            realm_id,
             predecessor_state,
             predecessor_covered_events,
             &holder_service_id,
@@ -1891,7 +1890,6 @@ fn availability_authority_is_genesis(predecessor_ref: Option<&SealId>) -> bool {
 
 async fn local_service_is_eligible_availability_holder(
     state: &AppState,
-    realm_id: &RealmId,
     predecessor_state: &BTreeMap<CellRef, ResolvedCellState>,
     predecessor_covered_events: &[Hash],
     service_id: &arkret_wire::DidCoreId,

@@ -269,7 +269,7 @@ pub fn realm_genesis_payload(
     notary_signer: &arkret_wire::NotarySignerDescriptor,
     trust_domain: &str,
 ) -> Value {
-    let notary = arkret_wire::NotaryValue::new(notary_signer.clone())
+    let notary = arkret_wire::NotaryValue::new(notary_signer.clone(), 0)
         .expect("Realm genesis notary descriptor must be canonical");
     serde_json::json!({
         "object": {
@@ -2315,7 +2315,6 @@ mod membership_hydration_tests {
         outcome: Option<arkret_wire::CommandOutcome>,
     ) -> ProjectionService {
         use arkret_state::state::{ControlEventStore, SealStore};
-        use arkret_wire::PayloadSigner as _;
 
         let controls = Arc::new(arkret_state::state::MemoryControlEventStore::default());
         let seals = Arc::new(arkret_state::state::MemorySealStore::default());

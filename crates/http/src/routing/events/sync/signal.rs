@@ -1150,6 +1150,9 @@ pub(crate) async fn admitted_signal_frame(
         state, session, &request,
     )
     .await?;
+    outcome
+        .validate_for_request(&request)
+        .map_err(structural_error)?;
     let Some(SignerKeyQueryOutcome::Current(result)) = outcome.results.into_iter().next() else {
         return Err(signal_rail_unavailable("verify current sender authority"));
     };
@@ -1174,7 +1177,12 @@ pub(crate) async fn admitted_signal_frame(
     }
     let authority = arkret_wire::SignalDeliveryAuthority {
         recipient_account_id: recipient,
-        key: result.key,
+        key: arkret_wire::StationSigningKey {
+            actor: result.selector.actor().clone(),
+            verification_method: result.selector.verification_method().clone(),
+            public_key_b64u: result.key.public_key_b64u,
+            authorization_ref: result.key.authorization_ref,
+        },
     };
     authority
         .validate_for_envelope(&envelope)

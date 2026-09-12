@@ -660,7 +660,6 @@ async fn federation_submissions(
             }
             _ => state
                 .persistence()
-                .events()
                 .publication_event_for_approval(&event.event_id)
                 .await
                 .map_err(|error| error.to_string())?,

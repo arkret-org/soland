@@ -31,6 +31,17 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    /// Load immutable pending publication material without granting finality.
+    pub async fn publication_event_for_approval(
+        &self,
+        approval_event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<arkret_wire::Event>> {
+        self.persistence
+            .events()
+            .publication_event_for_approval(approval_event_id)
+            .await
+    }
+
     /// Read the bounded Welcome discovery index without exposing its store.
     pub async fn discover_mls_welcome_refs(
         &self,
