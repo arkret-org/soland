@@ -763,7 +763,13 @@ mod tests {
             arkret_wire::REALM_AUTHORITY_ROOT_CELL
         );
 
-        let state = ResolvedCellState::Value(json!([{"value": body}]));
+        let state = ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
+            revision_event_id: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [1; 32],
+            ),
+            value: json!([{"tag_id": arkret_schema::or_set_dot(arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [1; 32]).as_str(), 0), "value": body}]),
+        });
         let grant = engine_grant_from_capability_cell_state(grant_id, &state)
             .expect("content grant must enter the effective capability set");
         assert_eq!(grant.subject_id.signing_principal_id().as_str(), subject);
@@ -817,7 +823,13 @@ mod tests {
         // The constrained grant must parse into the engine projection with its
         // `field_access` constraint intact, or the admission gate would never
         // see it as cover.
-        let state = ResolvedCellState::Value(json!([{"value": field_scoped.body}]));
+        let state = ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
+            revision_event_id: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [1; 32],
+            ),
+            value: json!([{"tag_id": arkret_schema::or_set_dot(arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [1; 32]).as_str(), 0), "value": field_scoped.body}]),
+        });
         let grant = engine_grant_from_capability_cell_state(&field_scoped.grant_id, &state)
             .expect("field-scoped grant must enter the effective capability set");
         assert!(grant.constraints.iter().any(|constraint| matches!(

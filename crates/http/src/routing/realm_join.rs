@@ -696,22 +696,12 @@ async fn verify_peer_bootstrap(
     requested_cells.extend(lifecycle_cell.iter().cloned());
     let registry = arkret_lattice_registry::try_build_sdk_state_registry()
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    let audits = arkret_schema::CapabilityAuthorityAuditIndex::from_events(
-        &verified.checkpoint.accepted_events,
-    );
     let values = arkret_state::mls_governance_proof::materialize_registered_cell_values_at_basis_from_verified_checkpoint(
         &verified.checkpoint,
         &outcome.governance_facts.seal_basis,
         &requested_cells,
         &registry,
-        |event, digest_suite| {
-            arkret_schema::project_registered_cell_writes_with_authority_resolver(
-                event,
-                digest_suite,
-                &|grant_id| audits.resolve(grant_id),
-            )
-            .map_err(|error| error.to_string())
-        },
+        arkret::project_control_writes_at_state,
     )
     .await
     .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;

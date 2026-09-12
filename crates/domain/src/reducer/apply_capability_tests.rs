@@ -30,32 +30,38 @@ mod cbs_capability_cell_tests {
     fn engine_grant_reads_registry_projected_wrapper() {
         let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
         let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
-        let state = ResolvedCellState::Value(Value::Array(vec![json!({
-            "tag": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk:0",
-            "value": {
-                "grant_id": grant_id,
-                "grant": {
-                    "id": grant_id,
-                    "realm_id": realm_id,
-                    "issuer_id": actor("ak:did_core:web:owner.example"),
-                    "issuer_authority_refs": [{
-                        "kind": "realm_root",
+        let state = ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
+            revision_event_id: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [1; 32],
+            ),
+            value: Value::Array(vec![json!({
+                "tag_id": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk:0",
+                "value": {
+                    "grant_id": grant_id,
+                    "grant": {
+                        "id": grant_id,
                         "realm_id": realm_id,
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
-                        "authority_generation": 0
-                    }],
-                    "subject": actor("ak:did_core:web:owner.example"),
-                    "actions": ["ak.realm.admin"],
-                    "resources": [{
-                        "kind": "realm",
-                        "realm_id": realm_id,
-                        "match_scope": "realm_wide"
-                    }],
-                    "issued_at": "2026-07-28T00:00:00.000Z"
+                        "issuer_id": actor("ak:did_core:web:owner.example"),
+                        "issuer_authority_refs": [{
+                            "kind": "realm_root",
+                            "realm_id": realm_id,
+                            "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                            "controller_epoch_at_issuance": 0,
+                            "authority_generation": 0
+                        }],
+                        "subject": actor("ak:did_core:web:owner.example"),
+                        "actions": ["ak.realm.admin"],
+                        "resources": [{
+                            "kind": "realm",
+                            "realm_id": realm_id,
+                            "match_scope": "realm_wide"
+                        }],
+                        "issued_at": "2026-07-28T00:00:00.000Z"
+                    }
                 }
-            }
-        })]));
+            })]),
+        });
 
         let grant = engine_grant_from_capability_cell_state(grant_id, &state)
             .expect("the CBS registry wrapper must resolve to an effective grant");
@@ -973,7 +979,10 @@ mod agent_key_tests {
             relinquished,
             crate::reducer::ProjectionEffect::CapabilityRelinquishProjected { .. }
         ));
-        assert!(state.effective_engine_grant(GRANT).unwrap().revoked);
+        assert!(state.effective_engine_grant(GRANT).is_none());
+        assert!(state.capability_grant_metadata[GRANT].revoked);
+        let cell = ProjectionState::capability_grant_cell_ref(GRANT).unwrap();
+        assert_eq!(state.cells[&cell].settled_value(), Some(&json!([])));
     }
 }
 
@@ -1353,12 +1362,12 @@ mod authority_cycle_tests {
         // CellStore persists the registry-projected producer body; simulate
         // the authoritative reload that replaces the live enriched cache.
         let parent_cell = ProjectionState::capability_grant_cell_ref(G_A).unwrap();
-        let arkret_state::state_model::ResolvedCellState::Value(serde_json::Value::Array(items)) =
+        let arkret_state::state_model::ResolvedCellState::Sequenced(state) =
             proj.cells.get_mut(&parent_cell).unwrap()
         else {
-            panic!("capability parent cell must be an or_set");
+            panic!("capability parent cell must be sequenced");
         };
-        for item in items {
+        for item in state.value.as_array_mut().unwrap() {
             let body = if item.get("value").is_some() {
                 item.get_mut("value").unwrap()
             } else {

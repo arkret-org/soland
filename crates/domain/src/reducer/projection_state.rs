@@ -25,6 +25,9 @@ use crate::hlc::ServerHlc;
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
 pub struct ProjectionState {
+    /// Rebuildable historical grant metadata for routing and history queries.
+    /// Current authorization always reads the canonical active safety set.
+    pub capability_grant_metadata: BTreeMap<String, crate::capability::Grant>,
     /// Messages keyed by event_id. LWW by created_at.
     pub messages: BTreeMap<String, MessageState>,
     /// Reactions keyed by (event_id, actor, reaction_key). OR-Set.
@@ -924,6 +927,26 @@ impl ProjectionState {
         resolved_cells: impl IntoIterator<Item = (CellRef, ResolvedCellState)>,
     ) {
         for (cell, resolved) in resolved_cells {
+            if let Ok(id) = arkret_wire::CellId::from_ref(&cell)
+                && id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+            {
+                let grant_id = id.subject();
+                if let Some(mut grant) =
+                    super::engine_grant_from_capability_cell_state(grant_id, &resolved)
+                {
+                    if grant.realm_id.is_empty() {
+                        grant.realm_id = realm_id.to_string();
+                    }
+                    self.capability_grant_metadata
+                        .insert(grant_id.to_owned(), grant);
+                } else if let ResolvedCellState::Sequenced(state) = &resolved
+                    && state.value.as_array().is_some_and(Vec::is_empty)
+                    && let Some(grant) = self.capability_grant_metadata.get_mut(grant_id)
+                {
+                    grant.revoked = true;
+                }
+            }
+
             match cell.as_str() {
                 arkret_wire::REALM_PROFILE_CELL => {
                     self.realm_profile_cells

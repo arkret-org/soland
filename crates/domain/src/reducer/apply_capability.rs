@@ -1,32 +1,9 @@
-//! P1 — capability control-plane projection.
+//! Capability commands materialize a confirmed sequenced safety set.
 //!
-//! Projects `ak.capability.grant` / `ak.capability.revoke` /
-//! the canonical cells declared by
-//! `event-kind-registry.json`:
-//!
-//! - grant / revoke → `ak.component.capability.grant.v1` (or_set, one cell per GrantId). plus its
-//!   `issuer_authority_refs` chain references.
-//!
-//! Convergence rules (capabilities.md §12.1):
-//! - **grant** = or_set **add**. The add dot is the reducer-deterministic
-//!   `ak:operation:<operation_id>` (the soland reducer's per-event handle; the spec's
-//!   `ak:event:<event_id>:<effect_index>` is the wire form). value = the canonical grant snapshot.
-//! - **revoke** = or_set **observed-remove** on the *same* grant cell. We mark the surviving add(s)
-//!   `revoked` (the read path filters `revoked*`). Terminal: a later re-add of the same `grant_id`
-//!   MUST NOT revive a removed add — once a cell holds a revoked entry for the grant, every add
-//!   carries the revoked tombstone forward.
-//! - `bottom` is **inert** for or_set: we never produce a Bottom cell here.
-//!
-//! Acceptance / fail-closed: the envelope-level CBS discipline is enforced at
-//! event ingest: ordinary Events use `auth_context.authority_refs`, while reducer-input
-//! Control Moves with effects must carry `seal_basis.leaves`. The reducer
-//! trusts that gate and does the *structural* acceptance checks reachable at
-//! the `Operation` boundary — a present
-//! an Event-derived `grant_id`, a parseable issuer, and (for grant) a non-empty grant body.
-//! Missing structural inputs ⇒ `Rejected` (P3 fail-closed), never a silent
-//! no-op. This mirrors `apply_capability_derived`, which likewise validates
-//! structure/causality against projected cells rather than re-running the
-//! Seal acceptance judgment.
+//! Registered add/remove operations use the SDK state model. Revocation
+//! removes active entries; the remaining safety revision prevents an old
+//! grant Event from reviving them. Rebuildable historical metadata supports
+//! routing and history queries but never grants current authority.
 
 use arkret_wire::CapabilityActionId;
 
@@ -155,6 +132,7 @@ pub fn engine_grant_from_cell_body(
     body: &Value,
     revoked: bool,
 ) -> Option<crate::capability::Grant> {
+    let authority_projection = body;
     let body = grant_body(body);
     if validate_grant_body_scope(body).is_err() {
         return None;
@@ -185,9 +163,13 @@ pub fn engine_grant_from_cell_body(
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
     let issuer_authority_refs = engine_authority_refs_from_body(body);
-    let authority_depth = body.get("authority_depth").and_then(Value::as_u64);
-    let authority_root_refs = body
+    let authority_depth = authority_projection
+        .get("authority_depth")
+        .or_else(|| body.get("authority_depth"))
+        .and_then(Value::as_u64);
+    let authority_root_refs = authority_projection
         .get("authority_root_refs")
+        .or_else(|| body.get("authority_root_refs"))
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default();
@@ -211,24 +193,21 @@ pub fn engine_grant_from_capability_cell_state(
     grant_id: &str,
     cell_state: &ResolvedCellState,
 ) -> Option<crate::capability::Grant> {
-    let ResolvedCellState::Value(Value::Array(items)) = cell_state else {
+    let ResolvedCellState::Sequenced(state) = cell_state else {
         return None;
     };
+    let items = state.value.as_array()?;
     if items.is_empty() {
         return None;
     }
-    let revoked = items.iter().any(|item| {
-        let value = item.get("value").unwrap_or(item);
-        grant_snapshot_from_value(value).revoked
-    });
     let last = items.last()?;
     let body = last.get("value").unwrap_or(last);
-    engine_grant_from_cell_body(grant_id, body, revoked)
+    engine_grant_from_cell_body(grant_id, body, false)
 }
 
 /// The single active-grant predicate for the accepted capability projection.
 ///
-/// Realm pin, revocation tombstone, effective expiry from temporal constraints,
+/// Realm pin, active-set membership, effective expiry from temporal constraints,
 /// and action / resource
 /// matching all live here so a fix to any one of them cannot be applied at one
 /// call site while another keeps admitting the grant. Callers layer their own
@@ -609,31 +588,13 @@ fn body_has_terminal_authority_control(body: &Value) -> bool {
         })
 }
 
-/// Build the canonical or_set item value stored under a grant cell. We keep
-/// the full grant body so the existing `grant_snapshot_from_value` reader
-/// (actions / resources / constraints / realm_id / expires_at / revoked)
-/// resolves it unchanged, and stamp a normalized `grant_id` / `realm_id`.
-fn grant_item_value(
-    operation: &Operation,
-    grant_id: &str,
-    revoked: bool,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Value {
+/// Build historical metadata without changing the canonical safety Cell value.
+fn grant_metadata_value(operation: &Operation, grant_id: &str) -> Value {
     let mut body = grant_body(&operation.payload).clone();
-    if !body.is_object() {
-        body = serde_json::json!({});
-    }
     if let Value::Object(map) = &mut body {
         map.insert("grant_id".to_owned(), Value::String(grant_id.to_owned()));
-        map.insert("id".to_owned(), Value::String(grant_id.to_owned()));
         map.entry("realm_id".to_owned())
             .or_insert_with(|| Value::String(operation.realm_id.to_string()));
-        if revoked {
-            map.insert("revoked".to_owned(), Value::Bool(true));
-            map.entry("revoked_at".to_owned()).or_insert_with(|| {
-                Value::String(arkret_canonical::format_timestamp_canonical(now))
-            });
-        }
     }
     body
 }
@@ -646,25 +607,31 @@ impl ProjectionState {
         .ok()
     }
 
-    /// Read the current or_set item array for a grant cell (empty when the
-    /// cell is absent / Bottom / not an array).
+    /// Read the current active safety-set entries. Removed grants are absent.
     fn capability_cell_items(&self, cell_ref: &CellRef) -> Vec<Value> {
-        match self.cells.get(cell_ref) {
-            Some(ResolvedCellState::Value(Value::Array(items))) => items.clone(),
-            _ => Vec::new(),
-        }
+        let Some(ResolvedCellState::Sequenced(state)) = self.cells.get(cell_ref) else {
+            return Vec::new();
+        };
+        state.value.as_array().cloned().unwrap_or_default()
     }
 
     /// Every grant currently projected on a `ak.component.capability.grant.v1`
-    /// cell, resolved to its effective engine shape (latest add body + carried
-    /// revocation tombstone). No realm / action / resource / temporal filtering
-    /// happens here — that is [`projected_grant_is_active_for`]'s single
-    /// responsibility.
+    /// cell, resolved to its effective engine shape (current active body). No realm / action /
+    /// resource / temporal filtering happens here — that is [`projected_grant_is_active_for`]'s
+    /// single responsibility.
     fn projected_capability_grants(&self) -> impl Iterator<Item = crate::capability::Grant> + '_ {
         const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
         self.cells.iter().filter_map(|(cell_ref, cell_state)| {
             let grant_id = cell_ref.as_str().strip_prefix(CELL_PREFIX)?;
-            engine_grant_from_capability_cell_state(grant_id, cell_state)
+            let mut grant = engine_grant_from_capability_cell_state(grant_id, cell_state)?;
+            if grant.realm_id.is_empty() {
+                grant.realm_id = self
+                    .capability_grant_metadata
+                    .get(grant_id)?
+                    .realm_id
+                    .clone();
+            }
+            Some(grant)
         })
     }
 
@@ -1109,36 +1076,26 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// True when any existing or_set item for this cell is already
-    /// observed-removed (revoked). Drives the §12.1 terminal rule: once a
-    /// grant_id has been revoked, re-adds stay revoked.
-    fn capability_cell_has_revoked_item(items: &[Value]) -> bool {
-        items.iter().any(|item| {
-            let value = item.get("value").unwrap_or(item);
-            grant_snapshot_from_value(value).revoked
-        })
-    }
-
-    /// P1 — derive the engine-shaped effective `Grant` for one grant cell so
-    /// the projection driver can fold it into the `SolandAuthzEngine` read
-    /// index. Returns `None` when the cell is absent / carries no resolvable
-    /// grant body. The returned `revoked` flag is set when *any* surviving
-    /// add for this grant_id is observed-removed (the §12.1 terminal rule
-    /// means a re-add never revives, so a single revoked item makes the whole
-    /// grant_id revoked).
+    /// Materialize a grant only while its canonical safety set is active.
     pub fn effective_engine_grant(&self, grant_id: &str) -> Option<crate::capability::Grant> {
         let cell_ref = Self::capability_grant_cell_ref(grant_id)?;
         let items = self.capability_cell_items(&cell_ref);
         if items.is_empty() {
             return None;
         }
-        let revoked = Self::capability_cell_has_revoked_item(&items);
         // Use the most recent add's body for the live grant attributes
         // (actions / resource / subject / issuer). All adds for a grant_id
         // describe the same grant; the last one wins on attributes.
         let last = items.last()?;
         let body = last.get("value").unwrap_or(last);
-        let mut grant = engine_grant_from_cell_body(grant_id, body, revoked)?;
+        let mut grant = engine_grant_from_cell_body(grant_id, body, false)?;
+        if grant.realm_id.is_empty() {
+            grant.realm_id = self
+                .capability_grant_metadata
+                .get(grant_id)?
+                .realm_id
+                .clone();
+        }
         // Sealed cells contain the registry-projected grant body. Authority
         // depth/root audit fields are reducer-derived and therefore are not
         // producer-authored members of that body. Re-derive them from the
@@ -1231,11 +1188,11 @@ impl ProjectionState {
         live
     }
 
-    /// P1 — project `ak.capability.grant` as an or_set add on the grant cell.
+    /// P1 — project `ak.capability.grant` as an confirmed safety-set add on the grant cell.
     pub(crate) fn apply_capability_grant(
         &mut self,
         operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         // Grant identity is the genesis Event identity with a typed prefix.
         // Reject producer-supplied copies even at this internal boundary so a
@@ -1299,11 +1256,19 @@ impl ProjectionState {
             };
         };
 
-        let mut items = self.capability_cell_items(&cell_ref);
-        // §12.1 terminal: a re-add of an already observed-removed grant_id
-        // does NOT revive. Carry the revoked tombstone onto the new add.
-        let terminal_revoked = Self::capability_cell_has_revoked_item(&items);
-        let mut value = grant_item_value(operation, &grant_id, terminal_revoked, now);
+        // A confirmed removal retains a revision and an empty active set.
+        // Replaying the original grant Event must not revive that grant.
+        if let Some(current) = self.cells.get(&cell_ref) {
+            let ResolvedCellState::Sequenced(current) = current else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                };
+            };
+            if current.value.as_array().is_some_and(Vec::is_empty) {
+                return ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id };
+            }
+        }
+        let mut value = operation.payload.clone();
         // capabilities.md §10 — `authority_depth` and `authority_root_refs[]`
         // are reducer-derived, so an author cannot misreport how far its
         // authority spread or which root it came from. A `grant` ref that is
@@ -1340,17 +1305,46 @@ impl ProjectionState {
                 reason: "capability_add_dot_unresolved".to_owned(),
             };
         };
-        items.push(serde_json::json!({
-            "tag": tag,
-            "value": value,
-        }));
-        self.cells
-            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
+        let write = arkret_state::state_model::StateWrite::new(
+            operation.context.event_id.clone(),
+            arkret_wire::LatticeOp {
+                op_type: arkret_wire::LatticeOpType::Add,
+                tag: Some(tag),
+                value: Some(value.clone()),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        );
+        let model =
+            arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+        let Ok(next) = model.apply(self.cells.get(&cell_ref), &write) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        self.cells.insert(cell_ref, next);
+        let mut metadata = grant_metadata_value(operation, &grant_id);
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert(
+                "authority_depth".to_owned(),
+                value["authority_depth"].clone(),
+            );
+            object.insert(
+                "authority_root_refs".to_owned(),
+                value["authority_root_refs"].clone(),
+            );
+        }
+        if let Some(grant) = engine_grant_from_cell_body(&grant_id, &metadata, false) {
+            self.capability_grant_metadata
+                .insert(grant_id.clone(), grant);
+        }
 
         ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id }
     }
 
-    /// P1 — project `ak.capability.revoke` as an or_set observed-remove on the
+    /// P1 — project `ak.capability.revoke` as an confirmed safety-set removal on the
     /// target grant cell. The revoke locates the cell by the top-level
     /// `grant_id` (capabilities.md §12 — payload carries the grant_id, no
     /// frontier). Idempotent: revoking an already-revoked grant is a no-op
@@ -1370,7 +1364,10 @@ impl ProjectionState {
                 reason: "capability_revoke_grant_id_missing".to_owned(),
             };
         };
-        let Some(target) = self.effective_engine_grant(&grant_id) else {
+        let Some(target) = self
+            .effective_engine_grant(&grant_id)
+            .or_else(|| self.capability_grant_metadata.get(&grant_id).cloned())
+        else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
         let actor_is_target_issuer = operation.context.sender == target.issuer_id;
@@ -1403,7 +1400,10 @@ impl ProjectionState {
                 reason: "capability_relinquish_grant_id_missing".to_owned(),
             };
         };
-        let Some(target) = self.effective_engine_grant(&grant_id) else {
+        let Some(target) = self
+            .effective_engine_grant(&grant_id)
+            .or_else(|| self.capability_grant_metadata.get(&grant_id).cloned())
+        else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
         if operation.context.sender != target.subject_id {
@@ -1418,7 +1418,7 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
         grant_id: &str,
-        now: chrono::DateTime<chrono::Utc>,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
@@ -1427,25 +1427,43 @@ impl ProjectionState {
             };
         };
 
-        let mut items = self.capability_cell_items(&cell_ref);
-        let revoked_at = arkret_canonical::format_timestamp_canonical(now);
-        debug_assert!(!items.is_empty(), "unknown grants go dependency-pending");
-        // Observed-remove: mark every surviving add for this grant_id removed
-        // (terminal). Repeated revoke/relinquish is idempotent.
-        for item in &mut items {
-            let target = if item.get("value").is_some() {
-                item.get_mut("value").expect("value present")
-            } else {
-                item
+        let items = self.capability_cell_items(&cell_ref);
+        let model =
+            arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+        let mut next = self.cells.get(&cell_ref).cloned();
+        for item in &items {
+            let Some(tag) = item.get("tag_id").and_then(Value::as_str) else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                };
             };
-            if let Value::Object(map) = target {
-                map.insert("revoked".to_owned(), Value::Bool(true));
-                map.entry("revoked_at".to_owned())
-                    .or_insert_with(|| Value::String(revoked_at.clone()));
+            let write = arkret_state::state_model::StateWrite::new(
+                operation.context.event_id.clone(),
+                arkret_wire::LatticeOp {
+                    op_type: arkret_wire::LatticeOpType::Remove,
+                    tag: Some(tag.to_owned()),
+                    value: None,
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            );
+            match model.apply(next.as_ref(), &write) {
+                Ok(state) => next = Some(state),
+                Err(_) => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                    };
+                }
             }
         }
-        self.cells
-            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
+        if let Some(next) = next {
+            self.cells.insert(cell_ref, next);
+        }
+        if let Some(grant) = self.capability_grant_metadata.get_mut(grant_id) {
+            grant.revoked = true;
+        }
 
         if crate::kinds::canonical_kind_for_operation(operation)
             == Some(arkret_wire::EventKind::CapabilityRelinquish)
@@ -1714,35 +1732,11 @@ impl ProjectionState {
         &self,
         subject_id: &arkret_wire::ActorId,
     ) -> Vec<(String, String)> {
-        let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
-        let mut locations = std::collections::BTreeSet::new();
-        for (cell_ref, cell_state) in &self.cells {
-            if !cell_ref.as_str().starts_with(cell_prefix) {
-                continue;
-            }
-            let ResolvedCellState::Value(Value::Array(items)) = cell_state else {
-                continue;
-            };
-            for item in items {
-                let body = item.get("value").unwrap_or(item);
-                let subject_matches = body
-                    .get("subject")
-                    .cloned()
-                    .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
-                    .as_ref()
-                    == Some(subject_id);
-                if subject_matches
-                    && let Some(grant_id) = body
-                        .get("grant_id")
-                        .or_else(|| body.get("id"))
-                        .and_then(Value::as_str)
-                    && let Some(realm_id) = body.get("realm_id").and_then(Value::as_str)
-                {
-                    locations.insert((grant_id.to_owned(), realm_id.to_owned()));
-                }
-            }
-        }
-        locations.into_iter().collect()
+        self.capability_grant_metadata
+            .values()
+            .filter(|grant| &grant.subject_id == subject_id)
+            .map(|grant| (grant.grant_id.clone(), grant.realm_id.clone()))
+            .collect()
     }
 
     /// Non-terminal grants for `subject_id`, including pending Agent grants
@@ -1758,62 +1752,26 @@ impl ProjectionState {
                     return false;
                 };
                 let items = self.capability_cell_items(&cell_ref);
-                !items.is_empty() && !Self::capability_cell_has_revoked_item(&items)
+                !items.is_empty()
             })
             .collect()
     }
 
-    /// `sync/federation.md` §4.4 Capability Revoke Fanout — the set of peer
-    /// service DIDs whose federation service delegation for `realm_id` has been
-    /// revoked. A "service delegation" is a capability grant whose `subject` is
-    /// a service DID (`did:`-prefixed). Once such a grant carries a revoked
-    /// tombstone (or_set observed-remove, terminal per capabilities.md §12.1),
-    /// the source Station MUST stop pushing future events for that
-    /// Realm to the revoked peer. Scanning the grant cells keeps this derivable
-    /// from durable capability events with no extra durable column.
+    /// Confirmed historical revocations identify peer fanout destinations.
+    /// This metadata is rebuilt from grant Events; the empty active safety
+    /// set remains the sole current authorization result after removal.
     pub fn federation_delivery_revoked_peers(
         &self,
         realm_id: &str,
     ) -> std::collections::BTreeSet<String> {
-        let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
-        let mut revoked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for (cell_ref, cell_state) in &self.cells {
-            if !cell_ref.as_str().starts_with(cell_prefix) {
-                continue;
-            }
-            let ResolvedCellState::Value(Value::Array(items)) = cell_state else {
-                continue;
-            };
-            // Terminal or_set semantics: if any surviving add for this grant
-            // cell is revoked, the whole grant_id is revoked (capabilities.md
-            // §12.1). Snapshot subject + grant realm from the latest add.
-            let any_revoked = items.iter().any(|item| {
-                let body = item.get("value").unwrap_or(item);
-                body.get("revoked")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            });
-            if !any_revoked {
-                continue;
-            }
-            let Some(last) = items.last() else {
-                continue;
-            };
-            let body = last.get("value").unwrap_or(last);
-            let grant_realm = body
-                .get("realm_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if grant_realm != realm_id {
-                continue;
-            }
-            if let Some(subject) = body.get("subject").and_then(Value::as_str)
-                && subject.starts_with("ak:did_core:")
-            {
-                revoked.insert(subject.to_owned());
-            }
-        }
-        revoked
+        self.capability_grant_metadata
+            .values()
+            .filter(|grant| grant.revoked && grant.realm_id == realm_id)
+            .filter_map(|grant| match &grant.subject_id {
+                arkret_wire::ActorId::Service { service_id } => Some(service_id.to_string()),
+                arkret_wire::ActorId::Account { .. } => None,
+            })
+            .collect()
     }
 
     pub fn active_agent_key_authorizations(&self, agent_id: &str) -> Vec<(String, String)> {
