@@ -943,9 +943,24 @@ impl NotaryWorker {
         }
 
         let mut proof_results = BTreeMap::<Hash, Result<(), String>>::new();
+        let mut signed_basis_states = BTreeMap::new();
         for member in units.iter().flat_map(|unit| &unit.events) {
             let digest = &member.digest;
             let event = &member.event;
+            let basis_state = match &event.seal_basis {
+                Some(basis) => state
+                    .projections()
+                    .effective_state_at(&basis.leaves, realm_id)
+                    .await
+                    .map_err(|error| NotaryError::ApplySeal(error.to_string()))?,
+                None if predecessor_ref.is_none() => BTreeMap::new(),
+                None => {
+                    return Err(NotaryError::Construction(
+                        "non-genesis control Event lacks a signed Seal basis".to_owned(),
+                    ));
+                }
+            };
+            signed_basis_states.insert(digest.clone(), basis_state);
             let ack = state.projections().control_proposal_ack(digest).await?;
             if let Some(ack) = ack {
                 if ack.proposal_digest != *digest || ack.realm_id != *realm_id {
@@ -991,7 +1006,7 @@ impl NotaryWorker {
             units,
             result_digest_suite,
             predecessor_ref.is_none(),
-            |member, staged_state| {
+            |member, staged_state, unit_entry_state| {
                 let proof_result = proof_results.get(&member.digest).cloned().ok_or_else(|| {
                     OrderedControlBatchAbort::Infrastructure(
                         "prepared proof result is unavailable".to_owned(),
@@ -1003,6 +1018,10 @@ impl NotaryWorker {
                         &member.event,
                         realm_id,
                         staged_state,
+                        signed_basis_states
+                            .get(&member.digest)
+                            .expect("prepared signed basis state"),
+                        unit_entry_state,
                         member.digest_suite,
                         |candidate| {
                             if candidate != &member.event {

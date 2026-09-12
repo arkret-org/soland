@@ -1420,102 +1420,13 @@ impl ProjectionService {
 
     /// Run `event-auth-state-resolution.md` §5.1 steps 1-5 over one Control
     /// Move and return its receiver-derived writes.
-    pub fn verify_control_move<F>(
-        &self,
-        event: &Event,
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-        verify_proofs: F,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
-    where
-        F: Fn(&Event) -> Result<(), String>,
-    {
-        self.verify_control_move_in_context(
-            event,
-            realm_id,
-            pre_state,
-            verify_proofs,
-            arkret_wire::event_envelope::EventSubmitContext::Standard,
-        )
-    }
-
-    pub fn verify_control_move_in_context<F>(
-        &self,
-        event: &Event,
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-        verify_proofs: F,
-        context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
-    where
-        F: Fn(&Event) -> Result<(), String>,
-    {
-        self.verify_control_move_in_context_with_digest_suite(
-            event,
-            realm_id,
-            pre_state,
-            self.realm_digest_suite(realm_id.as_str()),
-            verify_proofs,
-            context,
-        )
-    }
-
-    pub fn verify_control_move_in_context_with_digest_suite<F>(
-        &self,
-        event: &Event,
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-        digest_suite: arkret_canonical::DigestSuite,
-        verify_proofs: F,
-        context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
-    where
-        F: Fn(&Event) -> Result<(), String>,
-    {
-        arkret_state::verify_control_move_in_context(
-            event,
-            arkret_state::ControlMoveVerificationContext {
-                realm_id,
-                pre_state,
-                registry: self.cell_registry(),
-                digest_suite,
-                submit_context: context,
-            },
-            verify_proofs,
-            |event| self.project_cell_writes_with_digest_suite(event, digest_suite),
-        )
-    }
-
-    /// Verify a Control Move already committed by the local accepted-event
-    /// admission lane. This retains proof, CBS-basis, state-resolution, and
-    /// state model checks while using the accepted-event projection path for the
-    /// previously frozen `ak.invite.cancel` binding.
-    pub fn verify_accepted_control_move_in_context<F>(
-        &self,
-        event: &Event,
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-        verify_proofs: F,
-        context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
-    where
-        F: Fn(&Event) -> Result<(), String>,
-    {
-        self.verify_accepted_control_move_in_context_with_digest_suite(
-            event,
-            realm_id,
-            pre_state,
-            self.realm_digest_suite(realm_id.as_str()),
-            verify_proofs,
-            context,
-        )
-    }
-
     pub fn verify_accepted_control_move_in_context_with_digest_suite<F>(
         &self,
         event: &Event,
         realm_id: &RealmId,
         pre_state: &BTreeMap<CellRef, ResolvedCellState>,
+        signed_basis_state: &BTreeMap<CellRef, ResolvedCellState>,
+        revision_state: &BTreeMap<CellRef, ResolvedCellState>,
         digest_suite: arkret_canonical::DigestSuite,
         verify_proofs: F,
         context: arkret_wire::event_envelope::EventSubmitContext,
@@ -1523,18 +1434,81 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String>,
     {
+        let projection = self
+            .project_control_writes_at_state(event, digest_suite, pre_state)
+            .map_err(ControlMoveReject::ProjectionFailed)?;
         arkret_state::verify_accepted_control_move_in_context(
             event,
             arkret_state::ControlMoveVerificationContext {
                 realm_id,
                 pre_state,
+                signed_basis_state,
+                revision_state,
+                additional_security_reads: &projection.security_reads,
                 registry: self.cell_registry(),
                 digest_suite,
                 submit_context: context,
             },
             verify_proofs,
-            |event| self.project_accepted_cell_writes_with_digest_suite(event, digest_suite),
+            |_| Ok(projection.writes.clone()),
         )
+    }
+
+    /// Resolve registry projections from the exact execution state and retain
+    /// every authority Cell consulted by the projection evaluator.
+    pub fn project_control_writes_at_state(
+        &self,
+        event: &Event,
+        digest_suite: arkret_canonical::DigestSuite,
+        state: &BTreeMap<CellRef, ResolvedCellState>,
+    ) -> Result<arkret_state::ControlProjection, String> {
+        fn authority_audit(
+            grant_id: &str,
+            state: &BTreeMap<CellRef, ResolvedCellState>,
+            reads: &std::cell::RefCell<BTreeSet<CellRef>>,
+            visiting: &BTreeSet<String>,
+        ) -> Option<arkret_schema::CapabilityAuthorityAudit> {
+            if visiting.len() >= 64 || visiting.contains(grant_id) {
+                return None;
+            }
+            let cell = CellRef::new(format!(
+                "ak:cell:{}:{grant_id}",
+                arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+            ))
+            .ok()?;
+            reads.borrow_mut().insert(cell.clone());
+            let ResolvedCellState::Sequenced(value) = state.get(&cell)? else {
+                return None;
+            };
+            let last = value.value.as_array()?.last()?;
+            let body = last.get("value")?;
+            let grant = body.get("grant").unwrap_or(body);
+            let mut visiting = visiting.clone();
+            visiting.insert(grant_id.to_owned());
+            arkret_schema::derive_capability_authority_audit(grant, &|parent| {
+                authority_audit(parent, state, reads, &visiting)
+            })
+            .ok()
+        }
+        let reads = std::cell::RefCell::new(BTreeSet::new());
+        let mut frozen = arkret_schema::FrozenPreState::new();
+        for (cell, value) in state {
+            if let Some(value) = value.settled_value() {
+                frozen.insert(cell.clone(), value.clone());
+            }
+        }
+        let writes =
+            arkret_schema::project_registered_cell_writes_with_pre_state_and_authority_resolver(
+                event,
+                digest_suite,
+                &frozen,
+                &|grant_id| authority_audit(grant_id, state, &reads, &BTreeSet::new()),
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(arkret_state::ControlProjection {
+            writes,
+            security_reads: reads.into_inner().into_iter().collect(),
+        })
     }
 
     pub async fn apply_seal<F>(
@@ -1576,7 +1550,9 @@ impl ProjectionService {
             self.cell_registry(),
             digest_suites,
             |event, _digest_suite| verify_proofs(event),
-            |event, digest_suite| self.project_cell_writes_with_digest_suite(event, digest_suite),
+            |event, digest_suite, state| {
+                self.project_control_writes_at_state(event, digest_suite, state)
+            },
             context,
         )
         .await?;
@@ -1625,7 +1601,9 @@ impl ProjectionService {
             self.cell_registry(),
             digest_suites,
             |event, _digest_suite| verify_proofs(event),
-            |event, digest_suite| self.project_cell_writes_with_digest_suite(event, digest_suite),
+            |event, digest_suite, state| {
+                self.project_control_writes_at_state(event, digest_suite, state)
+            },
             context,
         )
         .await
@@ -1658,8 +1636,8 @@ impl ProjectionService {
             self.cell_registry(),
             digest_suites,
             |event, _digest_suite| verify_proofs(event),
-            |event, digest_suite| {
-                self.project_accepted_cell_writes_with_digest_suite(event, digest_suite)
+            |event, digest_suite, state| {
+                self.project_control_writes_at_state(event, digest_suite, state)
             },
             context,
         )
