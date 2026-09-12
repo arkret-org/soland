@@ -379,7 +379,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         &super::agents::genesis_projector,
     )
     .unwrap();
-    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+    let proposal_member = arkret_wire::ControlProposalAck::issue_with_signer(
         agent_pcr_realm.clone(),
         arkret_wire::Hash::new(
             authorize
@@ -394,10 +394,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     )
     .unwrap();
     let mut authorize_submission = arkret_wire::EventInitialSubmission::online(authorize);
-    authorize_submission.control_proposal_ack = Some(
-        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![proposal_member])
-            .unwrap(),
-    );
+    authorize_submission.control_proposal_ack = Some(proposal_member);
 
     let request_uuid = outcome
         .pairing_request_id
@@ -803,12 +800,8 @@ async fn verify_owned_agent_direct_founding(
         let create_payload = direct_conversation_realm_create_payload(
             arkret_wire::GenesisSalt::generate().unwrap(),
             state.config().trust_domain.clone(),
-            arkret_wire::NotaryValue::new(
-                vec![state.service_notary_signer_descriptor().unwrap()],
-                0,
-                0,
-            )
-            .unwrap(),
+            arkret_wire::NotaryValue::new(state.service_notary_signer_descriptor().unwrap(), 0)
+                .unwrap(),
             created_at,
         )
         .unwrap();

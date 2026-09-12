@@ -1642,7 +1642,6 @@ pub struct MlsCommitState {
     pub genesis_event_ref: String,
     pub governance_binding: MlsGovernanceBindingPayload,
     pub accepted_commit_ref: Option<String>,
-    pub frontier_contested: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1688,12 +1687,6 @@ pub trait MlsCommitReadPort: Send + Sync {
         &self,
         command: AdvanceMlsEpochCommand,
     ) -> ServiceResult<Option<MlsCommitState>>;
-    async fn mark_frontier_contested(
-        &self,
-        effective_scope: &ScopeRef,
-        group_id: &str,
-        epoch: u64,
-    ) -> ServiceResult<Option<MlsCommitState>>;
 }
 
 #[derive(Clone)]
@@ -1737,17 +1730,6 @@ impl MlsCommitQueryService {
         command: AdvanceMlsEpochCommand,
     ) -> ServiceResult<Option<MlsCommitState>> {
         self.commits.advance_epoch(command).await
-    }
-
-    pub async fn mark_frontier_contested(
-        &self,
-        effective_scope: &ScopeRef,
-        group_id: &str,
-        epoch: u64,
-    ) -> ServiceResult<Option<MlsCommitState>> {
-        self.commits
-            .mark_frontier_contested(effective_scope, group_id, epoch)
-            .await
     }
 }
 

@@ -202,11 +202,7 @@ async fn validate_accepted_group_state(
             coordinates.epoch, epoch_row.epoch
         )));
     }
-    if epoch_row.epoch == coordinates.epoch && epoch_row.frontier_contested {
-        return Err(author_credential_invalid(
-            "envelope epoch sits on a contested (⊥) frontier",
-        ));
-    }
+
     Ok(())
 }
 
@@ -284,9 +280,7 @@ pub(in crate::routing::events::event_log) async fn validate_pairwise_session_hol
         .await
         .map_err(|error| format!("pairwise holder MLS state lookup failed: {error}"))?
         .ok_or_else(|| "pairwise holder MLS state is unavailable".to_owned())?;
-    if current.frontier_contested {
-        return Err("pairwise holder MLS frontier is contested".to_owned());
-    }
+
     let coordinates = MinimalMetadataAuthorCoordinates {
         group_id: group_id.to_owned(),
         epoch: current.epoch,

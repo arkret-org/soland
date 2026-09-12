@@ -25,7 +25,7 @@ pub use arkret_models_discovery::{
     RealmJoinCandidateSource, RealmJoinMethod,
 };
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
-pub use arkret_models_integration::{OkOutcome, PushNotifyOutcome, PushNotifyRequestBody};
+pub use arkret_models_integration::OkOutcome;
 use arkret_wire::{
     MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES,
     MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH, ProfileId,
@@ -702,7 +702,6 @@ pub fn describe(
                     "blob.upload.attachment_preview",
                     "blob.upload.thumbnail",
                     "blob.upload.full_text_index",
-                    "push.notify.visible_notification",
                     "search.index.full_text_index"
                 ],
                 "requires_data_classes": true

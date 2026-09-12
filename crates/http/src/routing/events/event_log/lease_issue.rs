@@ -969,7 +969,7 @@ mod tests {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "none",
-                "notary": serde_json::to_value(crate::test_f0_notary(
+                "notary": serde_json::to_value(crate::test_notary(
                     ACTOR,
                     33,
                 )).unwrap()

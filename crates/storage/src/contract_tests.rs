@@ -2305,7 +2305,9 @@ fn contract_control_proposal_ack(
     now: chrono::DateTime<Utc>,
 ) -> arkret_wire::ControlProposalAck {
     let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+    let mut authority_ack = arkret_wire::ControlProposalAck {
+        kind: arkret_wire::ControlProposalAckKind::SignedAck,
+        defer_count: 0,
         realm_id: arkret_wire::RealmId::new(record.realm_id.clone().expect("accepted Event Realm"))
             .expect("typed realm id"),
         proposal_digest: Hash::new(record.canonical_digest.clone()).expect("typed digest"),
@@ -2326,10 +2328,9 @@ fn contract_control_proposal_ack(
         },
     };
     authority_ack.signature.payload_digest = authority_ack
-        .authority_ack_digest()
+        .ack_body_digest()
         .expect("authority Ack digest");
-    arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy)
-        .expect("valid Control Proposal Ack")
+    authority_ack
 }
 
 pub async fn assert_event_commit_unit_of_work_contract(
@@ -5373,15 +5374,11 @@ fn contract_covering_seal(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::MultiSignature {
-            kind: arkret_wire::MultiSigKind::MultiSig,
-            signatures: vec![arkret_wire::SealSignature {
-                verification_method: DidUrl::new("did:key:z6MkFixture#z6MkFixture")
-                    .expect("fixture verification method"),
-                payload_digest: placeholder,
-                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-            }],
-            view: 0,
+        notary_signature: arkret_wire::SealSignature {
+            verification_method: DidUrl::new("did:key:z6MkFixture#z6MkFixture")
+                .expect("fixture verification method"),
+            payload_digest: placeholder,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
         },
         sealed_at,
         hlc: arkret_wire::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).expect("fixture HLC"),
@@ -5392,7 +5389,6 @@ fn contract_covering_seal(
         command_results: vec![command_result],
         authorization_closures: Vec::new(),
         existence_anchors: Vec::new(),
-        transaction_records: Vec::new(),
     };
     seal.id = seal
         .derive_id(arkret_canonical::DigestSuite::Sha256)

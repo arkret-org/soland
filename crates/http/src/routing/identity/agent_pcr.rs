@@ -1268,7 +1268,7 @@ mod tests {
         let payload = arkret_bootstrap::build_agent_pcr_create_payload(
             arkret_bootstrap::AgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
-                notary: crate::test_f0_notary(AGENT_DID, 42),
+                notary: crate::test_notary(AGENT_DID, 42),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     did: arkret_identifiers::Did::new(AGENT_DID).unwrap(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),

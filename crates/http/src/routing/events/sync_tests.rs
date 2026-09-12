@@ -692,7 +692,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
-                "notary": crate::test_f0_notary(ROSTER_ACTOR_DID, 9)
+                "notary": crate::test_notary(ROSTER_ACTOR_DID, 9)
             }
         }),
     );

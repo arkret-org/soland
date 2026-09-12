@@ -140,16 +140,18 @@ pub async fn seal_accepted_capability_grant(
             vec![move_id.clone()],
             vec![arkret_wire::CommandResultEffect {
                 cell_id: expected_cell.clone(),
-                state: arkret_wire::CommandResultCellState {
-                    revision_event_id: event.event_id.clone(),
-                    value: effect_value,
-                },
+                state: arkret_wire::CanonicalCellState::SequencedState(
+                    arkret_wire::CanonicalSequencedState {
+                        revision_event_id: event.event_id.clone(),
+                        value: effect_value,
+                    },
+                ),
             }],
             arkret_canonical::DigestSuite::Sha256,
         )
         .expect("fixture grant command result"),
     ];
-    let seal = Seal::sign_with_signers(
+    let seal = Seal::sign_with_signer(
         arkret_wire::UnsignedSeal {
             realm_id: realm.clone(),
             predecessor_ref: Some(predecessor_ref.clone()),
@@ -169,11 +171,9 @@ pub async fn seal_accepted_capability_grant(
             command_results,
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
-            transaction_records: Vec::new(),
         },
-        0,
         arkret_canonical::DigestSuite::Sha256,
-        &[&signer],
+        &signer,
     )
     .expect("fixture accepted grant Seal");
 

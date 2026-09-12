@@ -283,7 +283,6 @@ pub(super) async fn enforce_mimi_submit_binding(
         .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
     if current.epoch != epoch
-        || current.frontier_contested
         || arkret_canonical::canonical_json_bytes(&current.governance_binding).map_err(|error| {
             AppError::internal(format!("MLS frontier canonicalization: {error}"))
         })? != arkret_canonical::canonical_json_bytes(governance_binding).map_err(|error| {

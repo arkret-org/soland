@@ -452,24 +452,6 @@ async fn signal_peer_roles_body() {
             .status_code,
         Some(StatusCode::OK)
     );
-    source
-        .test_persistence()
-        .mls_commits()
-        .mark_frontier_contested(
-            &serde_json::to_value(&scope).unwrap(),
-            &scope.canonical_mls_group_id().unwrap(),
-            0,
-        )
-        .await
-        .unwrap();
-    assert!(
-        source
-            .test_admit_outbound_signal(destination.service_id(), &envelope)
-            .await
-            .unwrap_err()
-            .message
-            .contains("contested")
-    );
 }
 
 fn publication_signing_key(verification_method: &str) -> ed25519_dalek::SigningKey {
@@ -1615,7 +1597,9 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
     let control_proposal_ack = event.seal_basis.as_ref().map(|_| {
         let policy = arkret_wire::ControlProposalDecisionPolicy::default();
         let authority_set_digest = authority_set_ref.authority_set_digest.clone();
-        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+        let mut authority_ack = arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            defer_count: 0,
             realm_id: event.realm_id.clone(),
             proposal_digest: event_digest.clone(),
             received_at: issued_at,
@@ -1634,7 +1618,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             },
         };
         authority_ack.signature.payload_digest = authority_ack
-            .authority_ack_digest()
+            .ack_body_digest()
             .expect("fixture proposal authority Ack digest");
         arkret_wire::ControlProposalAck {
             kind: arkret_wire::ControlProposalAckKind::SignedAck,
@@ -1645,7 +1629,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             absolute_due_at: issued_at + policy.absolute_horizon,
             defer_count: 0,
             authority_set_ref: authority_set_digest,
-            authority_acks: vec![authority_ack],
+            signature: authority_ack.signature,
         }
     });
     arkret_wire::EventFederationSubmission {

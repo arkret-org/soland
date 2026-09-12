@@ -221,7 +221,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "encryption_profile": "mls_rfc9420",
                 "security_class": "standard",
                 "digest_algorithm": "sha256",
-                "notary": serde_json::to_value(crate::test_f0_notary(
+                "notary": serde_json::to_value(crate::test_notary(
                     "did:web:alice.example",
                     32,
                 )).unwrap()

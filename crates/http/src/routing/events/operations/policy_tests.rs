@@ -42,7 +42,7 @@ fn alice_notary() -> arkret_wire::NotaryValue {
         verifying_key.as_bytes(),
     )
     .unwrap();
-    arkret_wire::NotaryValue::new(vec![descriptor], 0, 0).unwrap()
+    arkret_wire::NotaryValue::new(descriptor, 0).unwrap()
 }
 
 fn test_config() -> crate::config::AppConfig {

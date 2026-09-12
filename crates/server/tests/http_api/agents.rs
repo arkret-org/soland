@@ -109,8 +109,8 @@ fn principal_control_notary(
     account_id: arkret_wire::AccountId,
     principal_did: &str,
 ) -> arkret_wire::NotaryValue {
-    let mut notary = soland_test_support::cbs_basis::test_f0_notary(principal_did);
-    let signer = notary.signers.first_mut().expect("f=0 signer");
+    let mut notary = soland_test_support::cbs_basis::test_notary(principal_did);
+    let signer = &mut notary.signer;
     // A PCR is owned by this exact Account, not by a Service that happens to
     // use the same signing principal. Preserve the fixture's frozen key.
     signer.actor_id = arkret_wire::ActorId::account(account_id);
@@ -129,7 +129,7 @@ fn principal_control_notary_keeps_the_exact_station_account() {
         arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
     );
     let notary = principal_control_notary(account.clone(), principal_did);
-    let signer = notary.signers.first().expect("f=0 signer");
+    let signer = &notary.signer;
     assert_eq!(signer.actor_id, arkret_wire::ActorId::account(account));
     assert_ne!(
         signer.actor_id,
@@ -404,7 +404,7 @@ pub(crate) async fn seed_active_controller_device_generation(
                 .unwrap(),
         )
         .unwrap();
-        let authority_ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+        let authority_ack = arkret_wire::ControlProposalAck::issue_with_signer(
             realm.clone(),
             proposal_digest,
             bootstrap_authority_set_ref.clone(),
@@ -413,10 +413,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             &bootstrap_signer,
         )
         .unwrap();
-        let ack = arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![
-            authority_ack,
-        ])
-        .unwrap();
+        let ack = authority_ack;
         state
             .test_put_pending_control_event_with_ack(
                 event,
@@ -1384,7 +1381,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     )
     .unwrap();
     let proposal_policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+    let proposal_member = arkret_wire::ControlProposalAck::issue_with_signer(
         pcr_genesis.realm_id.clone(),
         arkret_wire::Hash::new(
             pcr_genesis
@@ -1399,10 +1396,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     )
     .unwrap();
     let mut genesis_submission = arkret_wire::EventInitialSubmission::online(pcr_genesis);
-    genesis_submission.control_proposal_ack = Some(
-        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![proposal_member])
-            .unwrap(),
-    );
+    genesis_submission.control_proposal_ack = Some(proposal_member);
     genesis_submission
         .validate_structural_in_context(
             arkret_wire::EventSubmitContext::AnchorUnit,
@@ -1624,7 +1618,6 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
         event
             .validate_proof_bindings_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
-        assert_eq!(event.proofs.len(), 2);
         assert_eq!(event.proofs.len(), 1);
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();

@@ -69,7 +69,9 @@ fn unit() -> (
     let acks = records
         .iter()
         .map(|r| {
-            let mut member = arkret_wire::ControlProposalAuthorityAck {
+            let mut member = arkret_wire::ControlProposalAck {
+                kind: arkret_wire::ControlProposalAckKind::SignedAck,
+                defer_count: 0,
                 realm_id: slot.realm_id.parse().unwrap(),
                 proposal_digest: r.canonical_digest.parse().unwrap(),
                 received_at: time,
@@ -84,7 +86,7 @@ fn unit() -> (
                     jws: "e30..c2ln".into(),
                 },
             };
-            member.signature.payload_digest = member.authority_ack_digest().unwrap();
+            member.signature.payload_digest = member.ack_body_digest().unwrap();
             arkret_wire::ControlProposalAck {
                 kind: arkret_wire::ControlProposalAckKind::SignedAck,
                 realm_id: member.realm_id.clone(),
@@ -94,7 +96,7 @@ fn unit() -> (
                 absolute_due_at: member.absolute_due_at,
                 defer_count: 0,
                 authority_set_ref: member.authority_set_ref.clone(),
-                authority_acks: vec![member],
+                signature: member.signature,
             }
         })
         .collect();

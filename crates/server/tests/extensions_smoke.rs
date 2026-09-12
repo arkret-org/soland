@@ -352,8 +352,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 value: Some(
                     serde_json::to_value(
                         arkret_wire::NotaryValue::new(
-                            vec![state.service_notary_signer_descriptor().unwrap()],
-                            0,
+                            state.service_notary_signer_descriptor().unwrap(),
                             0,
                         )
                         .unwrap(),
@@ -424,7 +423,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             .unwrap(),
     )
     .unwrap();
-    let create_authority_ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+    let create_authority_ack = arkret_wire::ControlProposalAck::issue_with_signer(
         realm.clone(),
         move_id.clone(),
         authority_set_ref.clone(),
@@ -433,10 +432,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         &signer,
     )
     .unwrap();
-    let create_ack = arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![
-        create_authority_ack,
-    ])
-    .unwrap();
+    let create_ack = create_authority_ack;
     state
         .test_put_pending_control_event_with_ack(
             &create,
@@ -455,7 +451,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         ))
         .await
         .unwrap();
-    let admin_grant_authority_ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+    let admin_grant_authority_ack = arkret_wire::ControlProposalAck::issue_with_signer(
         realm.clone(),
         admin_grant_move_id.clone(),
         authority_set_ref,
@@ -464,11 +460,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         &signer,
     )
     .unwrap();
-    let admin_grant_ack =
-        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![
-            admin_grant_authority_ack,
-        ])
-        .unwrap();
+    let admin_grant_ack = admin_grant_authority_ack;
     state
         .test_put_pending_control_event_with_ack(
             &admin_grant_event,
@@ -840,7 +832,7 @@ fn applet_managed_pcr_genesis_event(
         arkret_canonical::DigestSuite::Sha256,
         arkret_wire::SecurityClass::HighAssurance,
         arkret_wire::EncryptionProfile::MlsRfc9420,
-        arkret_wire::NotaryValue::new(vec![target_station_notary], 0, 0).unwrap(),
+        arkret_wire::NotaryValue::new(target_station_notary, 0).unwrap(),
     )
     .expect("fixture Applet-managed PCR genesis");
     let mut event = arkret_wire::test_support::raw_event_at(
@@ -1322,8 +1314,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         .expect("formal Bot PCR genesis stores its AckRequired ingress proof");
     assert_eq!(pcr_ack.realm_id, pcr_genesis.realm_id);
     assert_eq!(pcr_ack.proposal_digest, pcr_digest);
-    assert_eq!(pcr_ack.authority_acks.len(), 1);
-    let authority_ack = &pcr_ack.authority_acks[0];
+    let authority_ack = &pcr_ack;
     let host_notary = state.service_notary_signer_descriptor().unwrap();
     assert_eq!(
         authority_ack.signature.verification_method,

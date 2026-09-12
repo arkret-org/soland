@@ -539,7 +539,7 @@ async fn seed_agent_grant_session_with_suite(
         &super::agents::genesis_projector,
     )
     .unwrap();
-    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+    let proposal_member = arkret_wire::ControlProposalAck::issue_with_signer(
         agent_pcr_realm.clone(),
         arkret_wire::Hash::new(
             authorize_event
@@ -553,9 +553,7 @@ async fn seed_agent_grant_session_with_suite(
         &controller_signer,
     )
     .unwrap();
-    let proposal_ack =
-        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![proposal_member])
-            .unwrap();
+    let proposal_ack = proposal_member;
     let authorize_event_id = authorize_event.event_id.clone();
     let key_authorization_event = authorize_event.clone();
     let intent = soland_storage::AgentPairingCommitIntent {

@@ -67,8 +67,7 @@ async fn validate_encryption_context(
         .accepted_commit_ref
         .as_deref()
         .unwrap_or(&current.genesis_event_ref);
-    if current.frontier_contested
-        || current.effective_scope != *scope
+    if current.effective_scope != *scope
         || current.epoch != encrypted_content.encryption_context.epoch()
         || current_ref
             != encrypted_content

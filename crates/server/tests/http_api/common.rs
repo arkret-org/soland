@@ -909,7 +909,7 @@ pub(crate) async fn seed_test_realm(
         arkret_canonical::DigestSuite::Sha256,
     )
     .await;
-    let bootstrap_seal = arkret_wire::Seal::sign_with_signers(
+    let bootstrap_seal = arkret_wire::Seal::sign_with_signer(
         arkret_wire::UnsignedSeal {
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
             predecessor_ref: None,
@@ -933,11 +933,9 @@ pub(crate) async fn seed_test_realm(
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
-            transaction_records: Vec::new(),
         },
-        0,
         arkret_canonical::DigestSuite::Sha256,
-        &[&seal_signer],
+        &seal_signer,
     )
     .unwrap();
     state

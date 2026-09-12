@@ -787,22 +787,6 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
             .map(application_mls_commit)
             .transpose()?)
     }
-
-    async fn mark_frontier_contested(
-        &self,
-        effective_scope: &arkret_wire::ScopeRef,
-        group_id: &str,
-        epoch: u64,
-    ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
-        let effective_scope = encode_mls_contract(effective_scope, "effective_scope")?;
-        Ok(self
-            .0
-            .mls_commits()
-            .mark_frontier_contested(&effective_scope, group_id, epoch)
-            .await?
-            .map(application_mls_commit)
-            .transpose()?)
-    }
 }
 
 fn application_mls_commit(
@@ -816,7 +800,6 @@ fn application_mls_commit(
         genesis_event_ref: commit.genesis_event_ref,
         governance_binding: decode_mls_contract(commit.governance_binding, "governance_binding")?,
         accepted_commit_ref: commit.accepted_commit_ref,
-        frontier_contested: commit.frontier_contested,
     })
 }
 
@@ -1112,7 +1095,7 @@ fn persistence_mls_welcome(
         intended_realm_id: welcome.intended_realm_id,
         welcome_bytes: welcome.welcome_bytes,
         key_package_id: welcome.key_package_id,
-        epoch: welcome.epoch(),
+        epoch: welcome.epoch,
         commit_ref: welcome.commit_ref,
         governance_binding: serde_json::to_value(welcome.governance_binding)
             .expect("typed MLS governance binding must serialize"),

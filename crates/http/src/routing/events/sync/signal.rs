@@ -935,8 +935,7 @@ async fn verify_signal_mls_basis(
         .accepted_commit_ref
         .as_deref()
         .unwrap_or(&current.genesis_event_ref);
-    if current.frontier_contested
-        || current.effective_scope != envelope.scope_ref
+    if current.effective_scope != envelope.scope_ref
         || current.epoch != envelope.encrypted_payload.epoch
         || current_ref != envelope.encrypted_payload.key_ref.group_state_ref
         || current.governance_binding.effective_scope() != &envelope.scope_ref

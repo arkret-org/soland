@@ -510,7 +510,7 @@ mod agent_pcr_batch_tests {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            crate::test_f0_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
+            crate::test_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
         )
         .unwrap();
         let payload =

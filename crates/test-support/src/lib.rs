@@ -665,7 +665,7 @@ pub async fn sign_test_seal(
             })
             .collect()
     };
-    arkret_wire::Seal::sign_with_signers(
+    arkret_wire::Seal::sign_with_signer(
         arkret_wire::UnsignedSeal {
             realm_id,
             predecessor_ref,
@@ -683,11 +683,9 @@ pub async fn sign_test_seal(
             command_results,
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
-            transaction_records: Vec::new(),
         },
-        0,
         digest_suite,
-        &[signer],
+        signer,
     )
     .expect("sign fixture Seal")
 }

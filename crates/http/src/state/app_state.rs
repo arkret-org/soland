@@ -269,7 +269,7 @@ pub fn realm_genesis_payload(
     notary_signer: &arkret_wire::NotarySignerDescriptor,
     trust_domain: &str,
 ) -> Value {
-    let notary = arkret_wire::NotaryValue::new(vec![notary_signer.clone()], 0, 0)
+    let notary = arkret_wire::NotaryValue::new(notary_signer.clone())
         .expect("Realm genesis notary descriptor must be canonical");
     serde_json::json!({
         "object": {
@@ -2341,7 +2341,7 @@ mod membership_hydration_tests {
             for record in &records {
                 let event: arkret_wire::Event =
                     serde_json::from_value(record.envelope.clone()).unwrap();
-                let ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+                let ack = arkret_wire::ControlProposalAck::issue_with_signer(
                     realm.clone(),
                     event.event_id.event_digest(),
                     arkret_wire::Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
@@ -2353,12 +2353,7 @@ mod membership_hydration_tests {
                 members.push(arkret_state::state::ControlUnitIngressMember {
                     event,
                     digest_suite: suite,
-                    ingress: arkret_state::state::ControlProposalIngress::AckRequired(
-                        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![
-                            ack,
-                        ])
-                        .unwrap(),
-                    ),
+                    ingress: arkret_state::state::ControlProposalIngress::AckRequired(ack),
                 });
             }
             let digests = controls
@@ -2416,19 +2411,8 @@ mod membership_hydration_tests {
                 command_results: vec![result],
                 authorization_closures: Vec::new(),
                 existence_anchors: Vec::new(),
-                transaction_records: Vec::new(),
             };
-            let bytes = arkret_canonical::canonical_json_bytes(&unsigned).unwrap();
-            let seal = arkret_wire::Seal::from_canonical_body_and_signature(
-                &bytes,
-                arkret_wire::MultiSignature {
-                    kind: arkret_wire::MultiSigKind::MultiSig,
-                    signatures: vec![signer.sign_payload(&bytes).unwrap().into()],
-                    view: 0,
-                },
-                suite,
-            )
-            .unwrap();
+            let seal = arkret_wire::Seal::sign_with_signer(unsigned, suite, &signer).unwrap();
             controls.record_seal_command_results(&seal).await.unwrap();
             assert!(seals.put_if_head(&seal, None, suite).await.unwrap());
         }

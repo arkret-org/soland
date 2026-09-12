@@ -321,7 +321,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let notary = serde_json::to_value(test_f0_notary("did:web:alice")).unwrap();
+    let notary = serde_json::to_value(test_notary("did:web:alice")).unwrap();
     apply_projected_create(
         &mut state,
         realm_id,
@@ -403,7 +403,7 @@ fn audit_regression_realm_non_create_ignores_closed_create_identity_fields() {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
-                "notary": serde_json::to_value(test_f0_notary("did:web:alice"))
+                "notary": serde_json::to_value(test_notary("did:web:alice"))
                     .unwrap(),
             }
         }),
@@ -456,7 +456,7 @@ fn audit_regression_realm_create_requires_nested_identity_fields() {
                     "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                     "security_class": "standard",
                     "encryption_profile": "mls_rfc9420",
-                    "notary": serde_json::to_value(test_f0_notary("did:web:alice"))
+                    "notary": serde_json::to_value(test_notary("did:web:alice"))
                         .unwrap(),
                 },
                 "trust_domain": "ak:trust_domain:example.net",
@@ -671,7 +671,7 @@ fn realm_freeze_requires_explicit_unfreeze_and_preserves_archive() {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
-                "notary": serde_json::to_value(test_f0_notary("did:web:alice"))
+                "notary": serde_json::to_value(test_notary("did:web:alice"))
                     .unwrap(),
             }
         }),
@@ -830,7 +830,7 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let notary = serde_json::to_value(test_f0_notary("did:web:notary.example")).unwrap();
+    let notary = serde_json::to_value(test_notary("did:web:notary.example")).unwrap();
     let payload = serde_json::json!({
         "object": {
             "schema": "ak.schema.realm_genesis.v1",
@@ -866,7 +866,7 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
                 None
             }
         }),
-        Some(&serde_json::to_value(test_f0_notary("did:web:notary.example")).unwrap())
+        Some(&serde_json::to_value(test_notary("did:web:notary.example")).unwrap())
     );
 
     let duplicate = apply_projected_create(&mut state, realm_id, payload, &hlc);
@@ -887,7 +887,7 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
-        test_f0_notary("did:web:alice.example"),
+        test_notary("did:web:alice.example"),
         chrono::Utc::now(),
     )
     .unwrap();
@@ -942,7 +942,7 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
             "digest_algorithm": "sha256",
             "security_class": "standard",
             "encryption_profile": "mls_rfc9420",
-            "notary": serde_json::to_value(test_f0_notary(
+            "notary": serde_json::to_value(test_notary(
                 "did:web:alice.example"
             )).unwrap()
         })),
@@ -1480,7 +1480,7 @@ fn agent_genesis_activates_agent_status_cell_once() {
         arkret_canonical::DigestSuite::Sha256,
         arkret_wire::SecurityClass::HighAssurance,
         arkret_wire::EncryptionProfile::MlsRfc9420,
-        test_f0_notary("did:webvh:z6mkreducertest:reducer-test.example"),
+        test_notary("did:webvh:z6mkreducertest:reducer-test.example"),
     )
     .unwrap();
     let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
@@ -1564,7 +1564,7 @@ fn agent_genesis_requires_the_registered_status_projection() {
         arkret_canonical::DigestSuite::Sha256,
         arkret_wire::SecurityClass::HighAssurance,
         arkret_wire::EncryptionProfile::MlsRfc9420,
-        test_f0_notary("did:webvh:z6mkreducertest:reducer-test.example"),
+        test_notary("did:webvh:z6mkreducertest:reducer-test.example"),
     )
     .unwrap();
     let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)

@@ -190,7 +190,7 @@ pub(crate) async fn direct_group_state_for_realm(
     let Some(commit) = matching.next() else {
         return Ok(None);
     };
-    if matching.next().is_some() || commit.frontier_contested {
+    if matching.next().is_some() {
         return Ok(None);
     }
     let state_ref = commit

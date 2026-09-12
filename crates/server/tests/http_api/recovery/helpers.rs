@@ -370,8 +370,7 @@ async fn seed_local_notary_authority(
                 value: Some(
                     serde_json::to_value(
                         arkret_wire::NotaryValue::new(
-                            vec![state.service_notary_signer_descriptor().unwrap()],
-                            0,
+                            state.service_notary_signer_descriptor().unwrap(),
                             0,
                         )
                         .unwrap(),
@@ -987,7 +986,7 @@ pub(crate) async fn post_recovery_policy(
         absolute_due_at: authority_ack.absolute_due_at,
         defer_count: 0,
         authority_set_ref: authority_ack.authority_set_ref.clone(),
-        authority_acks: vec![authority_ack],
+        signature: authority_ack.signature,
     };
     let request = arkret_models_crypto::RecoveryPolicyPublishRequest {
         event: event.clone(),

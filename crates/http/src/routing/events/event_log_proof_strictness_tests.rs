@@ -1403,11 +1403,7 @@ async fn insert_ordinary_event_seal_with(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::MultiSignature {
-            kind: arkret_wire::MultiSigKind::MultiSig,
-            signatures: vec![ordinary_event_dummy_signature()],
-            view: 0,
-        },
+        notary_signature: ordinary_event_dummy_signature(),
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
@@ -1415,7 +1411,6 @@ async fn insert_ordinary_event_seal_with(
         command_results,
         authorization_closures: Vec::new(),
         existence_anchors: Vec::new(),
-        transaction_records: Vec::new(),
     };
     seal.id = seal
         .derive_id(arkret_canonical::DigestSuite::Sha256)
@@ -1583,11 +1578,7 @@ async fn insert_ordinary_event_revocation_successor(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::MultiSignature {
-            kind: arkret_wire::MultiSigKind::MultiSig,
-            signatures: vec![ordinary_event_dummy_signature()],
-            view: 0,
-        },
+        notary_signature: ordinary_event_dummy_signature(),
         sealed_at,
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0001-aabbccdd".to_owned()).unwrap(),
         configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
@@ -1603,7 +1594,6 @@ async fn insert_ordinary_event_revocation_successor(
         ],
         authorization_closures: Vec::new(),
         existence_anchors: Vec::new(),
-        transaction_records: Vec::new(),
     };
     successor.id = successor
         .derive_id(arkret_canonical::DigestSuite::Sha256)
