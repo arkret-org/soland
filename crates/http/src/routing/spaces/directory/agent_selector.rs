@@ -1,4 +1,3 @@
-use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 
 use super::*;
@@ -71,8 +70,7 @@ fn selector_disclosure_allowed(
     controller: &arkret_wire::AccountId,
     request: &DirectoryResolveAgentSelectorRequestBody,
 ) -> bool {
-    let requester_is_controller =
-        request.requester_id == controller.principal_id;
+    let requester_is_controller = request.requester_id == controller.principal_id;
     if claim.visibility == HandleVisibility::Private && !requester_is_controller {
         return false;
     }

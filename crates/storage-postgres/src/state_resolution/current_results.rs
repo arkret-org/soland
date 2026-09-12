@@ -365,6 +365,10 @@ fn origin_binding(
     }
     let target = match target_class {
         "realm" => CurrentTarget::Realm,
+        "member" if event.kind == arkret_wire::EventKind::InviteAccept => CurrentTarget::Member {
+            // The registered invite-accept member effect targets the signing Account.
+            actor_id: event.actor_id.clone(),
+        },
         "member" => CurrentTarget::Member {
             actor_id: serde_json::from_value::<ActorId>(
                 payload

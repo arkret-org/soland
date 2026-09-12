@@ -904,6 +904,16 @@ mod tests {
                 ..crate::config::AppConfig::test_default()
             },
         );
+        for operation in [
+            arkret_wire::ServiceOperationId::SelfMessagesCommandPrepareV1,
+            arkret_wire::ServiceOperationId::SelfRealmJoinCommandPrepareV1,
+            arkret_wire::ServiceOperationId::PeerRealmJoinReadBootstrapV1,
+        ] {
+            assert!(
+                description
+                    .supports_operation_binding(operation, arkret_wire::BindingKind::HttpJson,)
+            );
+        }
         let value = serde_json::to_value(description).expect("description serializes");
         assert_eq!(
             value["limits"]["mls_governance_proof"]["max_exact_response_bytes"],

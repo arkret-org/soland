@@ -740,8 +740,9 @@ fn realm_freeze_requires_explicit_unfreeze_and_preserves_archive() {
     );
     assert!(!state.realm_is_archived(realm_id));
     assert!(!state.realm_ordinary_writes_blocked(realm_id));
-    let realm = RealmId::new(realm_id.to_owned()).unwrap();
-    let cell = arkret_wire::CellRef::new("ak:cell:ak.component.realm.freeze.v1:null".to_owned()).unwrap();
+    let realm = arkret_wire::RealmId::new(realm_id.to_owned()).unwrap();
+    let cell =
+        arkret_wire::CellRef::new("ak:cell:ak.component.realm.freeze.v1:null".to_owned()).unwrap();
     let bottom = arkret_wire::Bottom::new(arkret_wire::BottomKind::Conflict, vec![cell.clone()]);
     state.install_reloaded_cells(&realm, [(cell.clone(), CellState::Bottom(bottom))]);
     assert!(state.realm_ordinary_writes_blocked(realm_id));

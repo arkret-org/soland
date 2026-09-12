@@ -195,37 +195,85 @@ async fn validate_created_at_causal_lower_bound(
 /// Read-only preparation preflight. This cannot produce an admission token or
 /// enter the submit pipeline: the signed Event is validated again on submit.
 pub(in crate::routing) async fn validate_message_authoring_candidate(
-    state: &AppState, event: &Event, suite: arkret_canonical::DigestSuite,
+    state: &AppState,
+    event: &Event,
+    suite: arkret_canonical::DigestSuite,
 ) -> Result<(), AppError> {
     let render = |error: EventValidationError| {
         let mut result = AppError::from_rejection(
-            ErrorCode::from_wire(error.code).unwrap_or(ErrorCode::PolicyViolation), error.message);
-        if let Some(reason) = error.reason_code { result = result.with_reason_code(reason); }
+            ErrorCode::from_wire(error.code).unwrap_or(ErrorCode::PolicyViolation),
+            error.message,
+        );
+        if let Some(reason) = error.reason_code {
+            result = result.with_reason_code(reason);
+        }
         result
     };
     if event.kind != arkret_wire::EventKind::MessageCreate || !event.proofs.is_empty() {
-        return Err(AppError::new(ErrorCode::SchemaViolation, "expected unsigned Message candidate"));
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "expected unsigned Message candidate",
+        ));
     }
     let value = serde_json::to_value(event).map_err(|e| AppError::internal(e.to_string()))?;
-    let object = value.as_object().ok_or_else(|| AppError::internal("Event is not an object"))?;
-    validate_created_at_causal_lower_bound(state, object, &event.prev_refs).await.map_err(render)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| AppError::internal("Event is not an object"))?;
+    validate_created_at_causal_lower_bound(state, object, &event.prev_refs)
+        .await
+        .map_err(render)?;
     let cells = derived_data_event_cells(&value, object, suite).map_err(render)?;
-    realm_authority_root::validate_realm_authority_root_authorization(state, object,
-        event.kind.as_str(), event.realm_id.as_str(), &event.actor_id, false, &[]).await.map_err(render)?;
-    let root = event.authorization_ref.as_ref().is_some_and(|r| r.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL);
-    validate_data_event_capability_refs(state, event.actor_id.signing_principal_id().as_str(),
-        state.service_id(), event.realm_id.as_str(), event.kind.as_str(), object, &cells, root).await.map_err(render)?;
-    let operation_id = super::super::super::sdk_projection::event_operation_id(&value, event.event_id.as_str())
-        .ok_or_else(|| AppError::internal("cannot derive operation identity"))?;
-    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(operation_id,
-        arkret_wire::OperationKind::Create, None, event, suite)
-        .map_err(|e| AppError::new(ErrorCode::SchemaViolation, e.to_string()))?;
+    realm_authority_root::validate_realm_authority_root_authorization(
+        state,
+        object,
+        event.kind.as_str(),
+        event.realm_id.as_str(),
+        &event.actor_id,
+        false,
+        &[],
+    )
+    .await
+    .map_err(render)?;
+    let root = event
+        .authorization_ref
+        .as_ref()
+        .is_some_and(|r| r.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL);
+    validate_data_event_capability_refs(
+        state,
+        event.actor_id.signing_principal_id().as_str(),
+        state.service_id(),
+        event.realm_id.as_str(),
+        event.kind.as_str(),
+        object,
+        &cells,
+        root,
+    )
+    .await
+    .map_err(render)?;
+    let operation_id =
+        super::super::super::sdk_projection::event_operation_id(&value, event.event_id.as_str())
+            .ok_or_else(|| AppError::internal("cannot derive operation identity"))?;
+    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        operation_id,
+        arkret_wire::OperationKind::Create,
+        None,
+        event,
+        suite,
+    )
+    .map_err(|e| AppError::new(ErrorCode::SchemaViolation, e.to_string()))?;
     let operations = std::slice::from_ref(&operation);
-    validate_operation_semantics(state, operations).map_err(|reason| AppError::new(ErrorCode::SchemaViolation, reason))?;
-    for result in [validate_operation_policy(state, operations).await,
-        validate_content_encryption_floor(state, operations).await] {
-        result.map_err(|reason| AppError::from_rejection(
-            ErrorCode::from_wire(reason).unwrap_or(ErrorCode::FailedPrecondition), reason))?;
+    validate_operation_semantics(state, operations)
+        .map_err(|reason| AppError::new(ErrorCode::SchemaViolation, reason))?;
+    for result in [
+        validate_operation_policy(state, operations).await,
+        validate_content_encryption_floor(state, operations).await,
+    ] {
+        result.map_err(|reason| {
+            AppError::from_rejection(
+                ErrorCode::from_wire(reason).unwrap_or(ErrorCode::FailedPrecondition),
+                reason,
+            )
+        })?;
     }
     Ok(())
 }
@@ -556,10 +604,48 @@ async fn validate_event_envelope_with_ingress(
             reason,
         ));
     }
-    let realm_frozen = state
-        .projections()
-        .snapshot()
-        .realm_ordinary_writes_blocked(realm_id.as_str());
+    let is_direct_conversation_founding = realm_bootstrap_contexts
+        .iter()
+        .any(|context| context.direct_conversation_founding);
+    let is_realm_bootstrap_followup = is_direct_conversation_founding
+        || (is_realm_bootstrap_followup_kind(&kind)
+            && realm_bootstrap_contexts.iter().any(|context| {
+                context.realm_id == realm_id.as_str() && context.actor_id == actor.to_string()
+            }));
+    let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
+        && realm_bootstrap_contexts.iter().any(|context| {
+            context.realm_id == realm_id.as_str()
+                && context.actor_id == actor.to_string()
+                && context
+                    .identity_anchor_event_id
+                    .as_deref()
+                    .is_some_and(|anchor| {
+                        object
+                            .get("prev_refs")
+                            .and_then(Value::as_array)
+                            .is_some_and(|refs| refs.len() == 1 && refs[0].as_str() == Some(anchor))
+                    })
+        });
+    let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DeviceReanchor.as_str()
+        && realm_bootstrap_contexts.iter().any(|context| {
+            context.realm_id == realm_id.as_str()
+                && context.actor_id == actor.to_string()
+                && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
+        });
+    // A closed founding unit is checked before its Realm exists. Only its
+    // staged follow-ups may use the initial facet values; an accepted frozen
+    // or archived cell still blocks even if the ordinary index is absent.
+    let staged_creation = !realm_exists_in_index(state, realm_id.as_str())
+        && realm_bootstrap_contexts
+            .iter()
+            .any(|context| context.realm_id == realm_id.as_str())
+        && (is_realm_bootstrap_followup || is_identity_anchor_authorize);
+    let realm_frozen = {
+        let projection = state.projections().snapshot();
+        projection.realm_is_archived(realm_id.as_str())
+            || projection.realm_is_frozen(realm_id.as_str())
+            || (!staged_creation && projection.realm_ordinary_writes_blocked(realm_id.as_str()))
+    };
     if let Some(reason) = frozen_realm_check(
         realm_frozen && kind != arkret_wire::EventKind::RealmCreate.as_str(),
         &kind,
@@ -720,34 +806,6 @@ async fn validate_event_envelope_with_ingress(
         realm_id.as_str(),
     )
     .await;
-    let is_direct_conversation_founding = realm_bootstrap_contexts
-        .iter()
-        .any(|context| context.direct_conversation_founding);
-    let is_realm_bootstrap_followup = is_direct_conversation_founding
-        || (is_realm_bootstrap_followup_kind(&kind)
-            && realm_bootstrap_contexts.iter().any(|context| {
-                context.realm_id == realm_id.as_str() && context.actor_id == actor.to_string()
-            }));
-    let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
-        && realm_bootstrap_contexts.iter().any(|context| {
-            context.realm_id == realm_id.as_str()
-                && context.actor_id == actor.to_string()
-                && context
-                    .identity_anchor_event_id
-                    .as_deref()
-                    .is_some_and(|anchor| {
-                        object
-                            .get("prev_refs")
-                            .and_then(Value::as_array)
-                            .is_some_and(|refs| refs.len() == 1 && refs[0].as_str() == Some(anchor))
-                    })
-        });
-    let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DeviceReanchor.as_str()
-        && realm_bootstrap_contexts.iter().any(|context| {
-            context.realm_id == realm_id.as_str()
-                && context.actor_id == actor.to_string()
-                && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
-        });
     // join-policy.md §7.1 — a not-yet-member applicant MUST be able to submit
     // their own `ak.member.state{membership=knock}` (and the profile-private
     // application sub-payload it carries). Gate / review enforcement happens at

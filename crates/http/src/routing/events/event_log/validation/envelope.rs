@@ -217,8 +217,9 @@ use control_move::*;
 #[cfg(test)]
 pub(crate) use envelope_core::validate_event_envelope;
 pub(crate) use envelope_core::validate_event_envelope_with_context;
-pub(in crate::routing) use envelope_core::validate_private_invite_envelope;
-pub(in crate::routing) use envelope_core::validate_message_authoring_candidate;
+pub(in crate::routing) use envelope_core::{
+    validate_message_authoring_candidate, validate_private_invite_envelope,
+};
 pub(crate) use features_schema::{
     event_requirements_schema_id, validate_event_critical_features,
     validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,

@@ -685,11 +685,7 @@ impl NotaryWorker {
         // Ed25519 vs dev shape-only) — notary must use the same one as
         // peer-event admission, otherwise pending Moves that passed admission
         // could still be rejected at seal time.
-        // The replay-window check is also enforced per Move so long-pending
-        // Moves whose hlc has aged out get dropped instead of resurrected into
-        // a fresh Seal. The window is per touched cell family, and v1 has no
-        // producer effects array, so the writes come from the registry
-        // projection.
+        // Advisory display timestamps do not affect pending Move finality.
         let (accepted, rejected) = self
             .validate_candidate_moves(
                 state,
@@ -960,8 +956,6 @@ impl NotaryWorker {
         allow_self_principal_ingress: bool,
     ) -> Result<(Vec<AcceptedControlMove>, Vec<RejectedControlMove>), NotaryError> {
         let verifier = select_jws_verifier(state);
-        let replay_default = state.config().jws_replay_window_seconds;
-        let replay_overrides = &state.config().jws_replay_window_per_family;
         let ordered = arkret_state::state::deterministic_order(pending);
         let predecessor_closure = state
             .projections()
@@ -1014,20 +1008,7 @@ impl NotaryWorker {
                     "locally signed Control Move {digest} has no immutable Control Proposal Ack"
                 )));
             }
-            let Some(hlc) = event.hlc.clone() else {
-                rejected.push((
-                    digest,
-                    event.event_id.to_string(),
-                    event.kind.as_str().to_owned(),
-                    event.preconditions.clone(),
-                    ControlMoveRejection::new(
-                        ControlProposalRejectReason::SchemaViolation,
-                        "Control Move carries no hlc",
-                    ),
-                ));
-                continue;
-            };
-            let writes = match state
+            let _writes = match state
                 .projections()
                 .project_accepted_cell_writes_with_digest_suite(&event, move_digest_suite)
             {
@@ -1046,32 +1027,8 @@ impl NotaryWorker {
                     continue;
                 }
             };
-            // A closed anchor unit has already passed its dedicated admission
-            // transaction and may need to be sealed after restart or delayed
-            // coordinator recovery. Applying the ordinary Move replay window
-            // here would make an accepted Realm permanently unsealable.
-            if !leaves.is_empty()
-                && let Err(reject) = crate::jws_verify::verify_replay_window_for_projection(
-                    &hlc,
-                    &writes,
-                    replay_default,
-                    replay_overrides,
-                )
-            {
-                // The Move's own HLC is outside the accepted freshness window:
-                // the envelope is invalid, not the pre-state it reads.
-                rejected.push((
-                    digest,
-                    event.event_id.to_string(),
-                    event.kind.as_str().to_owned(),
-                    event.preconditions.clone(),
-                    ControlMoveRejection::new(
-                        ControlProposalRejectReason::SchemaViolation,
-                        format!("replay_window: {reject}"),
-                    ),
-                ));
-                continue;
-            }
+            // Advisory HLC does not participate in Control Move authorization or finality.
+            // Ordinary admission and the verifier below own proof and publication validity.
             let context = if leaves.is_empty() {
                 arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
             } else {

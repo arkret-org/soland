@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn validate_realm_lifecycle_write_gate(
     state: &AppState,
     operation: &Operation,
+    operations: &[Operation],
 ) -> Result<(), &'static str> {
     let kind = kinds::canonical_kind(operation);
     let realm_id = operation.realm_id.as_str();
@@ -12,9 +13,21 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     {
         return Err("realm_terminal_state");
     }
-    if projection.realm_ordinary_writes_blocked(realm_id)
-        && !arkret_wire::events::kinds::realm_write_gate_exempt(&kind, &operation.payload)
-    {
+    // A new Realm's closed founding batch has no durable projection yet.
+    // Its genesis and registered follow-ups use initial facets, while actual
+    // archive/freeze cells are always enforced. Batch validation still owns
+    // the complete founding shape and authority checks.
+    let staged_creation = (kind == arkret_wire::EventKind::RealmCreate
+        || arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(&kind))
+        && operations.iter().any(|candidate| {
+            kinds::canonical_kind_for_operation(candidate)
+                == Some(arkret_wire::EventKind::RealmCreate)
+                && candidate.realm_id == operation.realm_id
+        });
+    let blocked = projection.realm_is_archived(realm_id)
+        || projection.realm_is_frozen(realm_id)
+        || (!staged_creation && projection.realm_ordinary_writes_blocked(realm_id));
+    if blocked && !arkret_wire::events::kinds::realm_write_gate_exempt(&kind, &operation.payload) {
         return Err(arkret_wire::ErrorCode::REALM_FROZEN);
     }
     Ok(())

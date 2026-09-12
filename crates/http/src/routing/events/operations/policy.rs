@@ -241,7 +241,7 @@ async fn validate_one_operation_policy(
     agent_membership_cascade: bool,
 ) -> Result<(), &'static str> {
     {
-        validate_realm_lifecycle_write_gate(state, operation)?;
+        validate_realm_lifecycle_write_gate(state, operation, operations)?;
         let cleanup_transition = agent_membership_cascade_cleanup_transition(operation);
         if cleanup_transition && !agent_membership_cascade {
             return Err("agent_membership_cascade_required");

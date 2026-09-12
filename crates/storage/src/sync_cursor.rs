@@ -1,3 +1,5 @@
+use arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly;
+
 use super::{CursorRevocation, PersistenceResult, Utc, Value, async_trait};
 /// Private durable account summary read position; never a wire cursor.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -57,6 +59,16 @@ pub struct SyncCursorRecord {
 /// Presenting another cursor never revokes older immutable retry authorities.
 #[async_trait]
 pub trait SyncCursorStore: Send + Sync {
+    /// Mutable private download progress, separate from immutable wire cursors.
+    async fn realm_join_download(
+        &self,
+        key: &str,
+    ) -> PersistenceResult<Option<RealmJoinBootstrapAssembly>>;
+    async fn save_realm_join_download(
+        &self,
+        key: &str,
+        assembly: &RealmJoinBootstrapAssembly,
+    ) -> PersistenceResult<()>;
     async fn current_detail_page(
         &self,
         request: &super::CurrentDetailRequest,

@@ -793,6 +793,20 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
 
 #[async_trait::async_trait]
 impl crate::sync::CursorStorePort for PersistenceCursorStore {
+    async fn realm_join_download(&self, key: &str) -> crate::ServiceResult<Option<arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly>>{
+        Ok(self.0.sync_cursors().realm_join_download(key).await?)
+    }
+    async fn save_realm_join_download(
+        &self,
+        key: &str,
+        assembly: &arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly,
+    ) -> crate::ServiceResult<()> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .save_realm_join_download(key, assembly)
+            .await?)
+    }
     async fn current_detail_page(
         &self,
         request: &soland_storage::CurrentDetailRequest,

@@ -5,9 +5,16 @@ use super::{
 };
 mod current_detail;
 mod retention;
+use arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly;
 use diesel_async::AsyncConnection;
 pub struct PgSyncCursorStore {
     pub pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct RealmJoinDownloadRow {
+    #[diesel(sql_type = Jsonb)]
+    assembly: Value,
 }
 #[derive(QueryableByName)]
 struct AccountWatermarksRow {
@@ -115,6 +122,54 @@ impl From<SyncCursorRow> for SyncCursorRecord {
 }
 #[async_trait]
 impl SyncCursorStore for PgSyncCursorStore {
+    async fn realm_join_download(
+        &self,
+        key: &str,
+    ) -> PersistenceResult<Option<RealmJoinBootstrapAssembly>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT assembly FROM realm_join_downloads WHERE context_key = $1 AND expires_at > CURRENT_TIMESTAMP")
+            .bind::<Text, _>(key)
+            .get_result::<RealmJoinDownloadRow>(&mut *conn).await.optional()
+            .map_err(PersistenceError::database)?
+            .map(|row| serde_json::from_value(row.assembly).map_err(PersistenceError::database)).transpose()
+    }
+
+    async fn save_realm_join_download(
+        &self,
+        key: &str,
+        assembly: &RealmJoinBootstrapAssembly,
+    ) -> PersistenceResult<()> {
+        if assembly.first.expires_at <= Utc::now() {
+            return Err(PersistenceError::Conflict(
+                "bootstrap download expired".into(),
+            ));
+        }
+        let value = serde_json::to_value(assembly).map_err(PersistenceError::database)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async |conn| {
+            sql_query("DELETE FROM realm_join_downloads WHERE expires_at <= CURRENT_TIMESTAMP")
+                .execute(conn).await.map_err(PersistenceError::database)?;
+            let written = sql_query(
+                "INSERT INTO realm_join_downloads (context_key, assembly, expires_at) VALUES ($1, $2, $3) \
+                 ON CONFLICT (context_key) DO UPDATE SET assembly = EXCLUDED.assembly \
+                 WHERE realm_join_downloads.assembly->'first' = EXCLUDED.assembly->'first' \
+                   AND ((realm_join_downloads.assembly->>'next_page')::bigint < (EXCLUDED.assembly->>'next_page')::bigint \
+                        AND realm_join_downloads.assembly->'next_cursor' <> 'null'::jsonb \
+                        OR realm_join_downloads.assembly = EXCLUDED.assembly)"
+            ).bind::<Text, _>(key).bind::<Jsonb, _>(&value)
+                .bind::<Timestamptz, _>(assembly.first.expires_at)
+                .execute(conn).await.map_err(PersistenceError::database)?;
+            if written != 1 {
+                return Err(PersistenceError::Conflict("bootstrap download context or progress changed".into()).into());
+            }
+            Ok(())
+        }).await.map_err(crate::PgTransactionError::into_persistence)
+    }
+
     async fn current_detail_page(
         &self,
         request: &soland_storage::CurrentDetailRequest,
@@ -448,6 +503,122 @@ mod account_summary_query_tests {
     use diesel_async::SimpleAsyncConnection;
 
     use super::*;
+
+    #[tokio::test]
+    async fn bootstrap_download_resumes_durably_without_mutating_wire_cursors() {
+        use arkret_models_collaboration::governance::realm_join_intake::{
+            RealmJoinBootstrapOutcome, RealmJoinBootstrapRequestBody, RealmJoinGovernanceFacts,
+            RealmJoinIntent,
+        };
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let store = PgSyncCursorStore { pool: pool.clone() };
+        let request = RealmJoinBootstrapRequestBody {
+            request_id: "ak:request:01970000-0000-7000-8000-000000000031"
+                .parse()
+                .unwrap(),
+            realm_id: "ak:realm:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
+                .parse()
+                .unwrap(),
+            applicant_account_id: arkret_wire::AccountId::new(
+                "ak:did_core:web:applicant.example".parse().unwrap(),
+                "ak:did_core:web:origin.example".parse().unwrap(),
+            ),
+            intent: RealmJoinIntent::Knock {},
+        };
+        let observed_at =
+            chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+        let mut page = RealmJoinBootstrapOutcome {
+            request_id: request.request_id.clone(),
+            realm_id: request.realm_id.clone(),
+            applicant_account_id: request.applicant_account_id.clone(),
+            request_digest: request.request_digest().unwrap(),
+            governance_facts: RealmJoinGovernanceFacts {
+                join_rule: arkret_wire::JoinRule::Knock,
+                seal_basis: arkret_wire::SealBasis {
+                    leaves: vec![
+                        format!("ak:seal:sha256:{}", "1".repeat(64))
+                            .parse()
+                            .unwrap(),
+                    ],
+                },
+                digest_algorithm: arkret_canonical::DigestSuite::Sha256,
+                encryption_profile: arkret_wire::EncryptionProfile::MlsRfc9420,
+            },
+            page_index: 0,
+            records: vec![],
+            next_cursor: Some("next-page".into()),
+            observed_at,
+            expires_at: observed_at + chrono::Duration::seconds(300),
+        };
+        let first = RealmJoinBootstrapAssembly::new(page.clone(), &request).unwrap();
+        store
+            .save_realm_join_download("download-test", &first)
+            .await
+            .unwrap();
+        page.page_index = 1;
+        page.next_cursor = None;
+        let mut complete = first.clone();
+        complete.append(page, &request).unwrap();
+        store
+            .save_realm_join_download("download-test", &complete)
+            .await
+            .unwrap();
+        store
+            .save_realm_join_download("download-test", &complete)
+            .await
+            .unwrap();
+
+        // A fresh adapter must recover the terminal page, not the initial one.
+        let restarted = PgSyncCursorStore { pool };
+        let restored = restarted
+            .realm_join_download("download-test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.next_page, 2);
+        restored.finish(Utc::now()).unwrap();
+        assert!(
+            restarted
+                .save_realm_join_download("download-test", &first)
+                .await
+                .is_err()
+        );
+        let mut changed_context = complete.clone();
+        changed_context.first.request_digest =
+            format!("sha256:{}", "2".repeat(64)).parse().unwrap();
+        assert!(
+            restarted
+                .save_realm_join_download("download-test", &changed_context)
+                .await
+                .is_err()
+        );
+
+        let mut cursor = SyncCursorRecord {
+            handle: "immutable-cursor-test".into(),
+            binding_subject: None,
+            device_id: None,
+            service_id: request.applicant_account_id.station_id,
+            filter_digest: None,
+            purpose: "stream".into(),
+            positions: Some(serde_json::json!({"page": 0})),
+            target: None,
+            issued_at_ms: observed_at.timestamp_millis(),
+            expires_at_ms: complete.first.expires_at.timestamp_millis(),
+        };
+        restarted.upsert(&cursor).await.unwrap();
+        cursor.positions = Some(serde_json::json!({"page": 1}));
+        restarted.upsert(&cursor).await.unwrap();
+        assert_eq!(
+            restarted
+                .get(&cursor.handle)
+                .await
+                .unwrap()
+                .unwrap()
+                .positions,
+            Some(serde_json::json!({"page": 0}))
+        );
+    }
 
     #[tokio::test]
     async fn frozen_pages_keep_scan_keys_and_recheck_current_permission() {

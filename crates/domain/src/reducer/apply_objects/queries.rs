@@ -516,9 +516,38 @@ impl ProjectionState {
             // entry and therefore does not re-run entry gates or the join rule.
             return Ok(());
         }
-        let join_rule =
-            (!hard_gates_only).then(|| self.realm_default_join_rule(operation.realm_id.as_str()));
-        let is_self_authored = operation.context.sender.to_string() == member;
+        self.check_join_request_gates(
+            operation.realm_id.as_str(),
+            member,
+            hard_gates_only,
+            operation.context.sender.to_string() == member,
+            operation
+                .payload
+                .get("gate_proofs")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            operation.created_at,
+        )
+    }
+
+    /// The same entry gates govern request-authorized bootstrap disclosure.
+    pub fn check_join_request_gates(
+        &self,
+        realm_id: &str,
+        member: &str,
+        hard_gates_only: bool,
+        is_self_authored: bool,
+        raw_proofs: &[Value],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), &'static str> {
+        if matches!(
+            self.realm_policy_bundle_cells.get(realm_id),
+            Some(CellState::Bottom(_))
+        ) {
+            return Err("gate_check_failed");
+        }
+        let join_rule = (!hard_gates_only).then(|| self.realm_default_join_rule(realm_id));
         if join_rule.is_some_and(|rule| matches!(rule, "invite" | "closed")) && is_self_authored {
             return Err("gate_check_failed");
         }
@@ -528,8 +557,7 @@ impl ProjectionState {
         // admits, which is the silent degradation this fails closed on.
         let automatic_gate_required =
             join_rule.is_some_and(|rule| matches!(rule, "restricted" | "knock_restricted"));
-        let Some(join_policy) = self.realm_join_policy_cell_value(operation.realm_id.as_str())
-        else {
+        let Some(join_policy) = self.realm_join_policy_cell_value(realm_id) else {
             return if automatic_gate_required {
                 Err("gate_check_failed")
             } else {
@@ -550,12 +578,6 @@ impl ProjectionState {
         // carrier. Parsing them here rather than probing member names is what
         // makes two implementations agree on what a proof even is: the private
         // shape this used to accept was never in the schema.
-        let raw_proofs = operation
-            .payload
-            .get("gate_proofs")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
         if raw_proofs.len() > 16 {
             return Err("gate_check_failed");
         }
@@ -601,10 +623,9 @@ impl ProjectionState {
                         }
                         arkret_wire::ActorId::Account { .. }
                             if self.agent_lifecycles.contains_key(member)
-                                || self.agent_membership_bindings.contains_key(&(
-                                    operation.realm_id.to_string(),
-                                    member.to_owned(),
-                                )) =>
+                                || self
+                                    .agent_membership_bindings
+                                    .contains_key(&(realm_id.to_owned(), member.to_owned())) =>
                         {
                             PrincipalAdmissionSubjectClass::Agent
                         }
@@ -616,14 +637,7 @@ impl ProjectionState {
                         return Err("gate_check_failed");
                     }
                 }
-                Some("cooldown")
-                    if self.cooldown_gate_blocks_join(
-                        gate,
-                        operation.realm_id.as_str(),
-                        member,
-                        operation.created_at,
-                    ) =>
-                {
+                Some("cooldown") if self.cooldown_gate_blocks_join(gate, realm_id, member, now) => {
                     return Err("gate_check_failed");
                 }
                 _ => {}
@@ -663,8 +677,8 @@ impl ProjectionState {
                         member,
                         &applicant_actor_id,
                         &policy_digest,
-                        operation.realm_id.as_str(),
-                        operation.created_at,
+                        realm_id,
+                        now,
                     ) {
                         return Err("gate_check_failed");
                     }
@@ -679,8 +693,8 @@ impl ProjectionState {
                         member,
                         &applicant_actor_id,
                         &policy_digest,
-                        operation.realm_id.as_str(),
-                        operation.created_at,
+                        realm_id,
+                        now,
                     ) {
                         return Ok(());
                     }

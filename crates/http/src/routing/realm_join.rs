@@ -11,16 +11,14 @@ use arkret_models_collaboration::governance::membership_invite::{
     InviteAcceptPayload, JoinGateProof, MembershipPayload, MembershipPayloadState,
 };
 use arkret_models_collaboration::governance::realm_join_intake::{
-    RealmJoinBootstrapOutcome, RealmJoinBootstrapRequestBody, RealmJoinCellPresence,
-    RealmJoinCellStateProof, RealmJoinGovernanceFacts, RealmJoinIntent,
-    RealmJoinInviteAcceptPrecondition, RealmJoinMemberStatePrecondition,
-    RealmJoinPreconditionEvidence, RealmJoinPrepareOutcome, RealmJoinPrepareRequestBody,
-    RealmJoinTransition, RealmJoinUnsignedEvent,
+    RealmJoinBootstrapOutcome, RealmJoinBootstrapRequestBody, RealmJoinGovernanceFacts,
+    RealmJoinIntent, RealmJoinPrepareOutcome, RealmJoinPrepareRequestBody, RealmJoinTransition,
+    RealmJoinUnsignedEvent,
 };
 use arkret_schema::InviteLiveTargetSlot;
 use arkret_wire::{
-    ActorId, Base64UrlString, CellRef, EncryptionProfile, ErrorCode, Event, JoinRule, Precondition,
-    Predicate, PredicateOp, SemanticRefProof, SemanticRefProofKind, SemanticRefProofRootField,
+    ActorId, CellRef, EncryptionProfile, ErrorCode, Event, JoinRule, Precondition, Predicate,
+    PredicateOp,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -31,6 +29,11 @@ use soland_http::result::{JsonResult, json_ok};
 use crate::routing::events::event_log::VerifiedActorPredecessors;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
+mod pages;
+use arkret_models_collaboration::governance::realm_join_bootstrap::{
+    RealmJoinBootstrapAssembly, RealmJoinBootstrapContinuation, RealmJoinBootstrapReadRequest,
+    RealmJoinBootstrapRecord,
+};
 
 const PREPARE_TTL_MINUTES: i64 = 5;
 const PEER_BOOTSTRAP_TIMING_BUCKET: StdDuration = StdDuration::from_millis(80);
@@ -54,153 +57,6 @@ pub(super) fn peer_router() -> Router {
 
 fn realm_join_not_found() -> AppError {
     AppError::not_found("Realm join bootstrap not found")
-}
-
-fn state_proof_to_semantic(
-    root_digest: arkret_wire::Hash,
-    leaf_preimage: Vec<u8>,
-    proof: arkret_state::StateInclusionProof,
-) -> Result<SemanticRefProof, AppError> {
-    Ok(SemanticRefProof {
-        kind: SemanticRefProofKind::Rfc6962Merkle,
-        root_field: SemanticRefProofRootField::StateRoot,
-        root_digest,
-        leaf_canonical_preimage_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
-            &leaf_preimage,
-        ))
-        .map_err(|error| AppError::internal(error.to_string()))?,
-        leaf_digest: proof.leaf_digest,
-        audit_path: proof.inclusion_proof,
-        leaf_index: proof.leaf_index,
-        leaf_count: proof.leaf_count,
-    })
-}
-
-fn state_root_member_cells(
-    cells: &std::collections::BTreeMap<CellRef, arkret_state::lattice::CellState>,
-    cas_heads: &arkret_state::CasHeadsByCell,
-) -> Result<Vec<CellRef>, AppError> {
-    let mut members = BTreeSet::new();
-    for (cell, heads) in cas_heads {
-        if !heads.is_empty() {
-            members.insert(cell.clone());
-        }
-    }
-    for (cell, value) in cells {
-        if arkret_wire::is_registered_causal_register_cell(cell.as_str()) {
-            if !cas_heads.contains_key(cell) {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "verified Realm state omits causal-register heads",
-                ));
-            }
-            continue;
-        }
-        if matches!(value, arkret_state::lattice::CellState::Value(_)) {
-            members.insert(cell.clone());
-        }
-    }
-    Ok(members.into_iter().collect())
-}
-
-fn semantic_state_inclusion(
-    view: arkret_state::GovernanceView<'_>,
-    cell: &CellRef,
-    root_digest: &arkret_wire::Hash,
-    digest_suite: arkret_canonical::DigestSuite,
-) -> Result<SemanticRefProof, AppError> {
-    let preimage = arkret_state::state_leaf_canonical_preimage(view, cell)
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    let proof = arkret_state::state_inclusion_proof(view, cell, digest_suite)
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    state_proof_to_semantic(root_digest.clone(), preimage, proof)
-}
-
-async fn cell_state_proof_at_seal(
-    state: &AppState,
-    realm_id: &arkret_wire::RealmId,
-    seal_ref: &arkret_wire::SealId,
-    cell_id: &CellRef,
-) -> Result<RealmJoinCellStateProof, AppError> {
-    let seal = state
-        .projections()
-        .seal_by_id(seal_ref)
-        .await
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
-        .filter(|seal| seal.realm_id == *realm_id)
-        .ok_or_else(|| crate::app_error!(FrontierUnavailable, "Realm Seal leaf is unavailable"))?;
-    let digest_suite = state
-        .projections()
-        .seal_digest_suites(&seal)
-        .await
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
-        .seal_digest_suite;
-    let cells = state
-        .projections()
-        .effective_state_at(std::slice::from_ref(seal_ref), realm_id)
-        .await
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    let cas_heads = state
-        .projections()
-        .effective_cas_heads_at(std::slice::from_ref(seal_ref), realm_id)
-        .await
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    let view = arkret_state::GovernanceView::new(&cells, &cas_heads);
-    let computed_root = arkret_state::compute_state_root(view, digest_suite)
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    if computed_root != seal.state_root {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "verified Realm state does not match its Seal state_root",
-        ));
-    }
-    let members = state_root_member_cells(&cells, &cas_heads)?;
-    if members.binary_search(cell_id).is_ok() {
-        return Ok(RealmJoinCellStateProof {
-            cell_id: cell_id.clone(),
-            seal_ref: seal_ref.clone(),
-            presence: RealmJoinCellPresence::Present,
-            inclusion: Some(semantic_state_inclusion(
-                view,
-                cell_id,
-                &seal.state_root,
-                digest_suite,
-            )?),
-            neighbors: None,
-        });
-    }
-
-    let insertion = members.partition_point(|cell| cell < cell_id);
-    let neighbor_cells = match (insertion.checked_sub(1), members.get(insertion)) {
-        (Some(left), Some(right)) => vec![members[left].clone(), right.clone()],
-        (Some(left), None) => vec![members[left].clone()],
-        (None, Some(right)) => vec![right.clone()],
-        (None, None) => Vec::new(),
-    };
-    let neighbors = neighbor_cells
-        .iter()
-        .map(|neighbor| semantic_state_inclusion(view, neighbor, &seal.state_root, digest_suite))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(RealmJoinCellStateProof {
-        cell_id: cell_id.clone(),
-        seal_ref: seal_ref.clone(),
-        presence: RealmJoinCellPresence::Absent,
-        inclusion: None,
-        neighbors: Some(neighbors),
-    })
-}
-
-async fn cell_state_proofs(
-    state: &AppState,
-    realm_id: &arkret_wire::RealmId,
-    leaves: &[arkret_wire::SealId],
-    cell_id: &CellRef,
-) -> Result<Vec<RealmJoinCellStateProof>, AppError> {
-    let mut proofs = Vec::with_capacity(leaves.len());
-    for leaf in leaves {
-        proofs.push(cell_state_proof_at_seal(state, realm_id, leaf, cell_id).await?);
-    }
-    Ok(proofs)
 }
 
 fn member_state_cell(account_id: &arkret_wire::AccountId) -> Result<CellRef, AppError> {
@@ -248,88 +104,6 @@ async fn applicant_predecessors(
     Ok(events)
 }
 
-async fn bootstrap_precondition_evidence(
-    state: &AppState,
-    request: &RealmJoinBootstrapRequestBody,
-    seal_basis: &arkret_wire::SealBasis,
-) -> Result<RealmJoinPreconditionEvidence, AppError> {
-    match &request.intent {
-        RealmJoinIntent::MemberJoin { .. } | RealmJoinIntent::Knock {} => {
-            let cell = member_state_cell(&request.applicant_account_id)?;
-            let evidence = RealmJoinMemberStatePrecondition {
-                member_state_proofs: cell_state_proofs(
-                    state,
-                    &request.realm_id,
-                    &seal_basis.leaves,
-                    &cell,
-                )
-                .await?,
-            };
-            Ok(match request.intent {
-                RealmJoinIntent::MemberJoin { .. } => {
-                    RealmJoinPreconditionEvidence::MemberJoin(evidence)
-                }
-                RealmJoinIntent::Knock {} => RealmJoinPreconditionEvidence::Knock(evidence),
-                RealmJoinIntent::InviteAccept { .. } => unreachable!(),
-            })
-        }
-        RealmJoinIntent::InviteAccept { invite_id, .. } => {
-            let live_target_cell =
-                arkret_schema::invite_live_target_cell(&request.applicant_account_id)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            let lifecycle_cell = invite_lifecycle_cell(invite_id)?;
-            let joined = state
-                .projections()
-                .effective_state_at(&seal_basis.leaves, &request.realm_id)
-                .await
-                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-            let event_id = joined
-                .get(&live_target_cell)
-                .and_then(|state| match state {
-                    arkret_state::lattice::CellState::Value(value) => value.as_str(),
-                    arkret_state::lattice::CellState::Bottom(_) => None,
-                })
-                .and_then(|value| arkret_wire::EventId::new(value.to_owned()).ok())
-                .ok_or_else(realm_join_not_found)?;
-            let record = state
-                .event_queries()
-                .canonical_event(event_id.as_str())
-                .await
-                .map_err(|error| AppError::internal(format!("Realm invite Event lookup: {error}")))?
-                .ok_or_else(realm_join_not_found)?;
-            let invite_move =
-                serde_json::from_value::<Event>(record.envelope).map_err(|error| {
-                    AppError::internal(format!("stored invite Event is invalid: {error}"))
-                })?;
-            if invite_move.event_id != event_id
-                || invite_move.realm_id != request.realm_id
-                || invite_move.kind != arkret_wire::EventKind::InviteCreate
-            {
-                return Err(realm_join_not_found());
-            }
-            Ok(RealmJoinPreconditionEvidence::InviteAccept(
-                RealmJoinInviteAcceptPrecondition {
-                    live_target_proofs: cell_state_proofs(
-                        state,
-                        &request.realm_id,
-                        &seal_basis.leaves,
-                        &live_target_cell,
-                    )
-                    .await?,
-                    invite_lifecycle_proofs: cell_state_proofs(
-                        state,
-                        &request.realm_id,
-                        &seal_basis.leaves,
-                        &lifecycle_cell,
-                    )
-                    .await?,
-                    invite_move,
-                },
-            ))
-        }
-    }
-}
-
 #[salvo::oapi::endpoint(operation_id = "ak.peer.realm_join.read.bootstrap", tags("realm_join"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.realm_join.read.bootstrap.v1"))]
 async fn peer_bootstrap(
@@ -352,299 +126,22 @@ async fn peer_bootstrap_inner(
     crate::routing::events::peer::validate_peer_request(state, req, true).await?;
     let source_id = crate::routing::events::peer::source_id_from_request(req)?;
     let request = req
-        .parse_json::<RealmJoinBootstrapRequestBody>()
+        .parse_json::<RealmJoinBootstrapReadRequest>()
         .await
-        .map_err(|_| AppError::json_invalid("invalid Realm join bootstrap request"))?;
-    request.validate().map_err(validation)?;
-    if request.applicant_account_id.station_id.as_str() != source_id {
-        return Err(realm_join_not_found());
-    }
-    if state.realm_join_bootstrap_rate_limited(
-        request.realm_id.as_str(),
-        request.applicant_account_id.to_string().as_str(),
-    ) {
-        return Err(crate::app_error!(
-            RateLimited,
-            "Realm join bootstrap rate limit exceeded",
-        ));
-    }
-
-    let observed_at = crate::wire::now();
-    let rule = crate::routing::spaces::directory::realm_resolution::realm_join_rule(
-        state,
-        request.realm_id.as_str(),
-    );
-    let intent_expiry = match &request.intent {
-        RealmJoinIntent::InviteAccept {
-            invite_id,
-            invite_token,
-        } => {
-            let expected_invitee = request.applicant_account_id.to_string();
-            let invite = state
-                .realm_invites()
-                .get(invite_id.as_str())
-                .await
-                .map_err(|error| AppError::internal(format!("Realm invite lookup: {error}")))?
-                .filter(|invite| {
-                    invite.realm_id == request.realm_id.as_str()
-                        && invite.invitee_id.as_deref() == Some(expected_invitee.as_str())
-                        && invite.invite_token == invite_token.as_str()
-                        && matches!(invite.status.as_str(), "pending" | "claimed")
-                        && invite.expires_at.is_none_or(|expiry| expiry > observed_at)
-                })
-                .ok_or_else(realm_join_not_found)?;
-            invite.expires_at
-        }
-        RealmJoinIntent::MemberJoin { .. } | RealmJoinIntent::Knock {}
-            if rule_allows_intent(&rule, &request.intent) =>
-        {
-            None
-        }
-        RealmJoinIntent::MemberJoin { .. } | RealmJoinIntent::Knock {} => {
-            return Err(realm_join_not_found());
-        }
-    };
-
-    let mut leaves = state
-        .projections()
-        .realm_seal_leaves(&request.realm_id)
-        .await
-        .map_err(|_| crate::app_error!(FrontierUnavailable, "Realm join frontier unavailable"))?;
-    leaves.sort();
-    leaves.dedup();
-    let seal_basis = arkret_wire::SealBasis { leaves };
-    if seal_basis.leaves.is_empty() || seal_basis.validate_protocol_bounds().is_err() {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "Realm join frontier unavailable",
-        ));
-    }
-    let digest_algorithm = state
-        .projections()
-        .predecessor_digest_suite(&request.realm_id, &seal_basis.leaves)
-        .await
-        .map_err(|_| crate::app_error!(FrontierUnavailable, "Realm digest suite unavailable"))?;
-    let encryption_profile = state
-        .projections()
-        .snapshot()
-        .realm_encryption_profile(request.realm_id.as_str())
-        .and_then(|value| serde_json::from_value(serde_json::Value::String(value)).ok())
-        .ok_or_else(|| {
-            crate::app_error!(FrontierUnavailable, "Realm encryption profile unavailable")
-        })?;
-    let targets = seal_basis.leaves.iter().cloned().collect::<BTreeSet<_>>();
-    let dependency_bundles =
-        crate::routing::events::event_log::cbs_proof_bundles_for_targets(state, &targets)
-            .await
-            .map_err(|error| crate::app_error!(FrontierUnavailable, error))?;
-    let precondition_evidence =
-        bootstrap_precondition_evidence(state, &request, &seal_basis).await?;
-    let applicant_predecessor_events =
-        applicant_predecessors(state, &request.realm_id, &request.applicant_account_id).await?;
-    let outcome = RealmJoinBootstrapOutcome {
-        request_id: request.request_id.clone(),
-        realm_id: request.realm_id.clone(),
-        applicant_account_id: request.applicant_account_id.clone(),
-        request_digest: request.request_digest().map_err(validation)?,
-        governance_facts: RealmJoinGovernanceFacts {
-            join_rule: join_rule(&rule),
-            seal_basis,
-            digest_algorithm,
-            encryption_profile,
-        },
-        dependency_bundles,
-        precondition_evidence,
-        applicant_predecessor_events,
-        observed_at,
-        expires_at: intent_expiry
-            .map(|expiry| expiry.min(observed_at + chrono::Duration::minutes(PREPARE_TTL_MINUTES)))
-            .unwrap_or_else(|| observed_at + chrono::Duration::minutes(PREPARE_TTL_MINUTES)),
-    };
-    outcome.validate_for_request(&request).map_err(validation)?;
-    json_ok(outcome)
-}
-
-fn state_leaf_value(
-    proof: &SemanticRefProof,
-    state_root: &arkret_wire::Hash,
-    expected_cell: &CellRef,
-) -> Result<serde_json::Value, AppError> {
-    if proof.root_field != SemanticRefProofRootField::StateRoot || proof.root_digest != *state_root
-    {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "Realm join state proof is not bound to the selected Seal",
-        ));
-    }
-    let suite = state_root
-        .digest_suite()
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    let preimage = arkret_canonical::base64url_decode(proof.leaf_canonical_preimage_b64u.as_str())
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    let value: serde_json::Value = serde_json::from_slice(&preimage)
-        .map_err(|_| crate::app_error!(FrontierUnavailable, "invalid Realm join state leaf"))?;
-    if arkret_canonical::canonical_json_bytes(&value)
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
-        != preimage
-    {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "Realm join state leaf is not canonical",
-        ));
-    }
-    if value.get("cell").and_then(serde_json::Value::as_str) != Some(expected_cell.as_str()) {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "Realm join state proof resolves another cell",
-        ));
-    }
-    let mut leaf_input = Vec::with_capacity(preimage.len() + 1);
-    leaf_input.push(0);
-    leaf_input.extend_from_slice(&preimage);
-    let leaf_digest = arkret_wire::Hash::new(arkret_canonical::digest(suite, leaf_input))
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    if leaf_digest != proof.leaf_digest
-        || !arkret_state::verify_state_inclusion_proof(
-            &proof.leaf_digest,
-            proof.leaf_index,
-            proof.leaf_count,
-            &proof.audit_path,
-            state_root,
-            suite,
+        .map_err(|_| AppError::json_invalid("invalid bootstrap request"))?;
+    let digest = if matches!(request, RealmJoinBootstrapReadRequest::Initial(_)) {
+        Some(
+            RealmJoinBootstrapRequestBody::request_digest_for_canonical(
+                req.payload()
+                    .await
+                    .map_err(|e| AppError::json_invalid(e.to_string()))?,
+            )
+            .map_err(validation)?,
         )
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
-    {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "Realm join state proof does not recompute the signed state_root",
-        ));
-    }
-    let state = value.get("state").ok_or_else(|| {
-        crate::app_error!(FrontierUnavailable, "Realm join state leaf has no state")
-    })?;
-    if let Some(value) = state.get("value") {
-        return Ok(value.clone());
-    }
-    if let Some(heads) = state.get("heads") {
-        return arkret_state::causal_register_leaf_value(heads)
-            .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()));
-    }
-    Err(crate::app_error!(
-        FrontierUnavailable,
-        "Realm join state leaf has an unknown state shape",
-    ))
-}
-
-fn proof_cell(proof: &SemanticRefProof) -> Result<CellRef, AppError> {
-    let preimage = arkret_canonical::base64url_decode(proof.leaf_canonical_preimage_b64u.as_str())
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-    let value: serde_json::Value = serde_json::from_slice(&preimage)
-        .map_err(|_| crate::app_error!(FrontierUnavailable, "invalid Realm join neighbor leaf"))?;
-    let cell = value
-        .get("cell")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| crate::app_error!(FrontierUnavailable, "Realm join neighbor has no cell"))?;
-    CellRef::new(cell.to_owned())
-        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))
-}
-
-fn verified_cell_proof_value(
-    proof: &RealmJoinCellStateProof,
-    seals: &BTreeMap<arkret_wire::SealId, arkret_wire::Seal>,
-) -> Result<Option<serde_json::Value>, AppError> {
-    let seal = seals.get(&proof.seal_ref).ok_or_else(|| {
-        crate::app_error!(
-            FrontierUnavailable,
-            "Realm join cell proof names an unknown Seal"
-        )
-    })?;
-    match proof.presence {
-        RealmJoinCellPresence::Present => proof
-            .inclusion
-            .as_ref()
-            .ok_or_else(|| crate::app_error!(FrontierUnavailable, "missing inclusion proof"))
-            .and_then(|inclusion| state_leaf_value(inclusion, &seal.state_root, &proof.cell_id))
-            .map(Some),
-        RealmJoinCellPresence::Absent => {
-            let neighbors = proof.neighbors.as_ref().ok_or_else(|| {
-                crate::app_error!(FrontierUnavailable, "missing absence neighbors")
-            })?;
-            if neighbors.is_empty() {
-                let cells = BTreeMap::new();
-                let heads = arkret_state::CasHeadsByCell::new();
-                let root = arkret_state::compute_state_root(
-                    arkret_state::GovernanceView::new(&cells, &heads),
-                    seal.state_root.digest_suite().map_err(|error| {
-                        crate::app_error!(FrontierUnavailable, error.to_string())
-                    })?,
-                )
-                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
-                if root != seal.state_root {
-                    return Err(crate::app_error!(
-                        FrontierUnavailable,
-                        "empty Realm join absence proof does not match state_root",
-                    ));
-                }
-                return Ok(None);
-            }
-            let mut cells = Vec::with_capacity(neighbors.len());
-            for neighbor in neighbors {
-                let cell = proof_cell(neighbor)?;
-                state_leaf_value(neighbor, &seal.state_root, &cell)?;
-                cells.push((neighbor.leaf_index, neighbor.leaf_count, cell));
-            }
-            let absent = match cells.as_slice() {
-                [(index, count, cell)] if *index == 0 && *count == 1 => {
-                    &proof.cell_id < cell || &proof.cell_id > cell
-                }
-                [(index, _, cell)] if *index == 0 => &proof.cell_id < cell,
-                [(index, count, cell)] if index + 1 == *count => &proof.cell_id > cell,
-                [
-                    (left_index, left_count, left),
-                    (right_index, right_count, right),
-                ] => {
-                    left_count == right_count
-                        && right_index == &(left_index + 1)
-                        && left < &proof.cell_id
-                        && &proof.cell_id < right
-                }
-                _ => false,
-            };
-            if !absent {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "Realm join absence neighbors do not bracket the requested cell",
-                ));
-            }
-            Ok(None)
-        }
-    }
-}
-
-fn validate_cell_proof_values(
-    proofs: &[RealmJoinCellStateProof],
-    seals: &BTreeMap<arkret_wire::SealId, arkret_wire::Seal>,
-    expected: Option<&serde_json::Value>,
-) -> Result<(), AppError> {
-    let mut observed = Vec::new();
-    for proof in proofs {
-        if let Some(value) = verified_cell_proof_value(proof, seals)? {
-            observed.push(value);
-        }
-    }
-    match expected {
-        Some(expected) if observed.is_empty() || observed.iter().any(|value| value != expected) => {
-            Err(crate::app_error!(
-                FrontierUnavailable,
-                "Realm join state proof disagrees with verified reducer state",
-            ))
-        }
-        None if !observed.is_empty() => Err(crate::app_error!(
-            FrontierUnavailable,
-            "Realm join absence proof disagrees with verified reducer state",
-        )),
-        _ => Ok(()),
-    }
+    } else {
+        None
+    };
+    json_ok(pages::serve(state, &source_id, request, digest).await?)
 }
 
 async fn bootstrap_candidate_service_ids(
@@ -703,10 +200,79 @@ async fn bootstrap_candidate_service_ids(
     Ok(candidates)
 }
 
+static BOOTSTRAP_DOWNLOAD_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 async fn fetch_peer_bootstrap(
     state: &AppState,
     candidate: &arkret_wire::DidCoreId,
     request: &RealmJoinBootstrapRequestBody,
+) -> Result<RealmJoinBootstrapAssembly, AppError> {
+    let _work = BOOTSTRAP_DOWNLOAD_WORK
+        .try_acquire()
+        .map_err(|_| crate::app_error!(RateLimited, "bootstrap download already in flight"))?;
+    use arkret_models_collaboration::governance::realm_join_bootstrap::MAX_BOOTSTRAP_PAGES_PER_ATTEMPT;
+    let handle = format!(
+        "realm-join-download:{}",
+        arkret_canonical::canonical_sha256(&(candidate, request))
+            .map_err(|e| AppError::internal(e.to_string()))?
+    );
+    let mut assembly = state
+        .sync()
+        .realm_join_download(&handle)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    for _ in 0..MAX_BOOTSTRAP_PAGES_PER_ATTEMPT {
+        let next = match &assembly {
+            Some(current) => match &current.next_cursor {
+                Some(cursor) => {
+                    RealmJoinBootstrapReadRequest::Continue(RealmJoinBootstrapContinuation {
+                        cursor: cursor.clone(),
+                    })
+                }
+                None => {
+                    current
+                        .finish(crate::wire::now())
+                        .map_err(|e| AppError::internal(e.to_string()))?;
+                    return Ok(assembly.expect("complete assembly"));
+                }
+            },
+            None => RealmJoinBootstrapReadRequest::Initial(request.clone()),
+        };
+        let page = fetch_peer_bootstrap_page(state, candidate, &next).await?;
+        match &mut assembly {
+            Some(current) => current
+                .append(page, request)
+                .map_err(|e| AppError::internal(e.to_string()))?,
+            None => {
+                assembly = Some(
+                    RealmJoinBootstrapAssembly::new(page, request)
+                        .map_err(|e| AppError::internal(e.to_string()))?,
+                )
+            }
+        }
+        let current = assembly.as_ref().expect("received first page");
+        state
+            .sync()
+            .save_realm_join_download(&handle, current)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+    }
+    if let Some(current) = assembly.filter(|a| a.next_cursor.is_none()) {
+        current
+            .finish(crate::wire::now())
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        return Ok(current);
+    }
+    Err(crate::app_error!(
+        LimitExceeded,
+        "bootstrap download work budget reached; retry resumes retained progress"
+    ))
+}
+
+async fn fetch_peer_bootstrap_page(
+    state: &AppState,
+    candidate: &arkret_wire::DidCoreId,
+    request: &RealmJoinBootstrapReadRequest,
 ) -> Result<RealmJoinBootstrapOutcome, AppError> {
     use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
@@ -794,7 +360,7 @@ async fn fetch_peer_bootstrap(
     }
     let outcome = serde_json::from_slice::<RealmJoinBootstrapOutcome>(&bytes)
         .map_err(|_| crate::app_error!(FrontierUnavailable, "invalid Realm join bootstrap"))?;
-    outcome.validate_for_request(request).map_err(validation)?;
+    outcome.validate_structural().map_err(validation)?;
     Ok(outcome)
 }
 
@@ -1027,9 +593,12 @@ async fn verify_bootstrap_predecessors(
 async fn verify_peer_bootstrap(
     state: &AppState,
     request: &RealmJoinBootstrapRequestBody,
-    outcome: RealmJoinBootstrapOutcome,
+    outcome: RealmJoinBootstrapAssembly,
 ) -> Result<RemoteJoinContext, AppError> {
-    outcome.validate_for_request(request).map_err(validation)?;
+    outcome.finish(crate::wire::now()).map_err(validation)?;
+    outcome.validate_closure_coordinates().map_err(validation)?;
+    let records = &outcome.records;
+    let outcome = &outcome.first;
     if outcome.expires_at <= crate::wire::now() {
         return Err(crate::app_error!(
             FrontierUnavailable,
@@ -1039,31 +608,44 @@ async fn verify_peer_bootstrap(
 
     let mut seals = BTreeMap::new();
     let mut events = BTreeMap::new();
-    for bundle in &outcome.dependency_bundles {
-        for seal in &bundle.seals {
-            if seal.realm_id != request.realm_id {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "Realm join bootstrap Seal crosses the requested Realm",
-                ));
+    let mut dependencies = Vec::new();
+    let mut predecessors = Vec::new();
+    for record in records {
+        match record {
+            RealmJoinBootstrapRecord::Seal { seal } => {
+                insert_bootstrap_material(&mut seals, seal.id.to_string(), seal, "Realm join Seal")?
             }
-            insert_bootstrap_material(&mut seals, seal.id.to_string(), seal, "Realm join Seal")?;
-        }
-        for event in &bundle.control_moves {
-            if event.realm_id != request.realm_id || !event.kind.is_control_plane() {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "Realm join bootstrap carries an out-of-scope Control Event",
-                ));
-            }
-            insert_bootstrap_material(
+            RealmJoinBootstrapRecord::ControlMove { event } => insert_bootstrap_material(
                 &mut events,
                 event.event_id.to_string(),
                 event,
-                "Realm join Control Event",
-            )?;
+                "Realm join Control Move",
+            )?,
+            RealmJoinBootstrapRecord::GovernanceDependency { dependency } => {
+                dependencies.push(dependency.clone())
+            }
+            RealmJoinBootstrapRecord::ApplicantPredecessor { event } => {
+                predecessors.push(event.clone())
+            }
         }
     }
+    // Page traversal order is independent of the verifier's canonical selector order.
+    let mut dependencies = dependencies
+        .into_iter()
+        .map(|dependency| {
+            let key = dependency
+                .selector()
+                .canonical_sort_key()
+                .map_err(validation)?;
+            Ok((key, dependency))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    dependencies.sort_by(|left, right| left.0.cmp(&right.0));
+    let dependencies = dependencies
+        .into_iter()
+        .map(|(_, dependency)| dependency)
+        .collect::<Vec<_>>();
+    predecessors.sort_by(|a, b| a.event_id.cmp(&b.event_id));
     let seals = seals.into_values().collect::<Vec<_>>();
     let events = events.into_values().collect::<Vec<_>>();
     let verified = arkret::verify_mls_governance_closure(
@@ -1071,7 +653,7 @@ async fn verify_peer_bootstrap(
         &outcome.governance_facts.seal_basis,
         &seals,
         &events,
-        &[],
+        &dependencies,
         crate::routing::governance_history::agent_history_key_verifier(state.clone()),
     )
     .await
@@ -1154,159 +736,77 @@ async fn verify_peer_bootstrap(
             "Realm join bootstrap reports the wrong encryption profile",
         ));
     }
-    let verified_seals = verified
-        .checkpoint
-        .accepted_seals
-        .iter()
-        .cloned()
-        .map(|seal| (seal.id.clone(), seal))
-        .collect::<BTreeMap<_, _>>();
-    let transition = match (&request.intent, &outcome.precondition_evidence) {
-        (
-            RealmJoinIntent::InviteAccept { invite_id, .. },
-            RealmJoinPreconditionEvidence::InviteAccept(evidence),
-        ) => {
-            if evidence.live_target_proofs[0].cell_id != intent_cell
-                || evidence.invite_lifecycle_proofs[0].cell_id
-                    != *lifecycle_cell
-                        .as_ref()
-                        .expect("invite branch has lifecycle")
+    let transition = match &request.intent {
+        RealmJoinIntent::InviteAccept { invite_id, .. } => {
+            let invite_move = verified
+                .checkpoint
+                .accepted_events
+                .iter()
+                .find(|e| {
+                    e.kind == arkret_wire::EventKind::InviteCreate
+                        && arkret_wire::InviteId::from_event_id(&e.event_id) == *invite_id
+                })
+                .ok_or_else(|| {
+                    crate::app_error!(FrontierUnavailable, "verified invite create missing")
+                })?;
+            if values.get(&intent_cell)
+                != Some(&serde_json::Value::String(invite_move.event_id.to_string()))
             {
                 return Err(crate::app_error!(
                     FrontierUnavailable,
-                    "Realm join invite proof names another control cell",
+                    "directed invite is not live"
                 ));
             }
-            let expected_live = values.get(&intent_cell).ok_or_else(|| {
-                crate::app_error!(FrontierUnavailable, "directed invite is not live")
-            })?;
-            if expected_live
-                != &serde_json::Value::String(evidence.invite_move.event_id.to_string())
-                || arkret_wire::InviteId::from_event_id(&evidence.invite_move.event_id)
-                    != *invite_id
-                || evidence.invite_move.kind != arkret_wire::EventKind::InviteCreate
-                || evidence.invite_move.realm_id != request.realm_id
-                || !verified
-                    .checkpoint
-                    .accepted_events
-                    .contains(&evidence.invite_move)
-            {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "Realm join invite evidence is not the verified live directed invite",
-                ));
-            }
-            let invitee = evidence
-                .invite_move
+            let invitee = invite_move
                 .payload
                 .get("invitee_account_id")
                 .cloned()
-                .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok());
-            if invitee.as_ref() != Some(&request.applicant_account_id) {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "Realm join invite targets another account",
-                ));
-            }
-            let lifecycle_cell = lifecycle_cell
-                .as_ref()
-                .expect("invite branch has lifecycle");
-            let lifecycle = values.get(lifecycle_cell).ok_or_else(|| {
-                crate::app_error!(
-                    FrontierUnavailable,
-                    "directed invite lifecycle is unavailable"
-                )
-            })?;
-            if !lifecycle
-                .as_str()
-                .is_some_and(|value| matches!(value, "pending" | "claimed"))
+                .and_then(|v| serde_json::from_value::<arkret_wire::AccountId>(v).ok());
+            if invitee.as_ref() != Some(&request.applicant_account_id)
+                || !values
+                    .get(lifecycle_cell.as_ref().expect("invite lifecycle"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|s| matches!(s, "pending" | "claimed"))
             {
                 return Err(crate::app_error!(
                     FrontierUnavailable,
-                    "directed invite is no longer usable",
+                    "invalid directed invite target or lifecycle"
                 ));
             }
-            validate_cell_proof_values(
-                &evidence.live_target_proofs,
-                &verified_seals,
-                Some(expected_live),
-            )?;
-            validate_cell_proof_values(
-                &evidence.invite_lifecycle_proofs,
-                &verified_seals,
-                Some(lifecycle),
-            )?;
             invite_accept_core(invite_id.clone(), request.applicant_account_id.clone())?
         }
-        (
-            RealmJoinIntent::MemberJoin { gate_proofs },
-            RealmJoinPreconditionEvidence::MemberJoin(evidence),
-        ) => {
-            if evidence.member_state_proofs[0].cell_id != intent_cell {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "Realm join member proof names another account cell",
-                ));
-            }
-            let expected = values
+        RealmJoinIntent::MemberJoin { gate_proofs } => member_state_core_with_expected(
+            &request.realm_id,
+            ActorId::account(request.applicant_account_id.clone()),
+            MembershipPayloadState::Join,
+            gate_proofs.clone(),
+            values
                 .get(&intent_cell)
                 .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            validate_cell_proof_values(
-                &evidence.member_state_proofs,
-                &verified_seals,
-                values.get(&intent_cell),
-            )?;
-            member_state_core_with_expected(
-                &request.realm_id,
-                ActorId::account(request.applicant_account_id.clone()),
-                MembershipPayloadState::Join,
-                gate_proofs.clone(),
-                expected,
-            )?
-        }
-        (RealmJoinIntent::Knock {}, RealmJoinPreconditionEvidence::Knock(evidence)) => {
-            if evidence.member_state_proofs[0].cell_id != intent_cell {
-                return Err(crate::app_error!(
-                    FrontierUnavailable,
-                    "Realm join member proof names another account cell",
-                ));
-            }
-            let expected = values
+                .unwrap_or(serde_json::Value::Null),
+        )?,
+        RealmJoinIntent::Knock {} => member_state_core_with_expected(
+            &request.realm_id,
+            ActorId::account(request.applicant_account_id.clone()),
+            MembershipPayloadState::Knock,
+            vec![],
+            values
                 .get(&intent_cell)
                 .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            validate_cell_proof_values(
-                &evidence.member_state_proofs,
-                &verified_seals,
-                values.get(&intent_cell),
-            )?;
-            member_state_core_with_expected(
-                &request.realm_id,
-                ActorId::account(request.applicant_account_id.clone()),
-                MembershipPayloadState::Knock,
-                Vec::new(),
-                expected,
-            )?
-        }
-        _ => {
-            return Err(crate::app_error!(
-                FrontierUnavailable,
-                "Realm join evidence does not match the requested intent",
-            ));
-        }
+                .unwrap_or(serde_json::Value::Null),
+        )?,
     };
     let verified_predecessors = verify_bootstrap_predecessors(
         state,
         &request.realm_id,
         &request.applicant_account_id,
-        &outcome.applicant_predecessor_events,
+        &predecessors,
     )
     .await?;
     Ok(RemoteJoinContext {
         governance_facts: RealmJoinGovernanceFacts {
             join_rule: verified_rule,
-            seal_basis: outcome.governance_facts.seal_basis,
+            seal_basis: outcome.governance_facts.seal_basis.clone(),
             digest_algorithm: verified.checkpoint.live_digest_suite,
             encryption_profile: verified_encryption,
         },
@@ -1330,11 +830,18 @@ async fn remote_join_context(
     request.validate().map_err(validation)?;
     let candidates = bootstrap_candidate_service_ids(state, body, now).await?;
     for candidate in candidates {
-        let Ok(outcome) = fetch_peer_bootstrap(state, &candidate, &request).await else {
-            continue;
+        let outcome = match fetch_peer_bootstrap(state, &candidate, &request).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::debug!(%candidate, %error, "Realm join bootstrap fetch unavailable");
+                continue;
+            }
         };
-        if let Ok(context) = verify_peer_bootstrap(state, &request, outcome).await {
-            return Ok(context);
+        match verify_peer_bootstrap(state, &request, outcome).await {
+            Ok(context) => return Ok(context),
+            Err(error) => {
+                tracing::debug!(%candidate, %error, "Realm join bootstrap verification failed");
+            }
         }
     }
     Err(crate::app_error!(
@@ -1663,13 +1170,23 @@ async fn prepare(
                 .unwrap_or_else(|| observed_at + chrono::Duration::minutes(PREPARE_TTL_MINUTES)),
         }
     };
-    let accepted_actor_frontier = crate::routing::events::event_log::load_realm_actor_frontier(
+    let observed_actor_frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         body.realm_id.clone(),
         authenticated_actor.clone(),
         VerifiedActorPredecessors::from_verified(&context.verified_predecessors),
     )
     .await?;
+    // The Realm may exist only in this verified bootstrap context, not in local projections.
+    let accepted_actor_frontier =
+        arkret_models_collaboration::event_sync::RealmActorFrontierView::new(
+            observed_actor_frontier.realm_id,
+            observed_actor_frontier.actor_id,
+            observed_actor_frontier.next_actor_seq,
+            observed_actor_frontier.frontier_event_ids,
+            context.governance_facts.digest_algorithm,
+        )
+        .map_err(validation)?;
     let unsigned_event = RealmJoinUnsignedEvent::prepare(
         &body,
         &accepted_actor_frontier,
@@ -1792,43 +1309,6 @@ mod tests {
             member_state_cell(&first).unwrap(),
             member_state_cell(&second).unwrap()
         );
-    }
-
-    #[test]
-    fn absence_neighbors_enumerate_concrete_state_root_members() {
-        let present = CellRef::new("ak:cell:ak.component.test.v1:present".to_owned()).unwrap();
-        let cells = std::collections::BTreeMap::from([(
-            present.clone(),
-            arkret_state::lattice::CellState::Value(serde_json::json!("join")),
-        )]);
-        let cas_heads = arkret_state::CasHeadsByCell::new();
-        let members = state_root_member_cells(&cells, &cas_heads).unwrap();
-        assert_eq!(members, vec![present]);
-    }
-
-    #[test]
-    fn state_proof_is_bound_to_root_and_exact_cell() {
-        let cell = CellRef::new("ak:cell:ak.component.test.v1:alice".to_owned()).unwrap();
-        let other = CellRef::new("ak:cell:ak.component.test.v1:bob".to_owned()).unwrap();
-        let cells = BTreeMap::from([(
-            cell.clone(),
-            arkret_state::lattice::CellState::Value(serde_json::json!("join")),
-        )]);
-        let heads = arkret_state::CasHeadsByCell::new();
-        let view = arkret_state::GovernanceView::new(&cells, &heads);
-        let suite = arkret_canonical::DigestSuite::Sha256;
-        let root = arkret_state::compute_state_root(view, suite).unwrap();
-        let preimage = arkret_state::state_leaf_canonical_preimage(view, &cell).unwrap();
-        let inclusion = arkret_state::state_inclusion_proof(view, &cell, suite).unwrap();
-        let semantic = state_proof_to_semantic(root.clone(), preimage, inclusion).unwrap();
-
-        assert_eq!(
-            state_leaf_value(&semantic, &root, &cell).unwrap(),
-            serde_json::json!("join")
-        );
-        assert!(state_leaf_value(&semantic, &root, &other).is_err());
-        let wrong_root = arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-        assert!(state_leaf_value(&semantic, &wrong_root, &cell).is_err());
     }
 
     #[test]

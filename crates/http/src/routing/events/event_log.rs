@@ -56,6 +56,9 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::{operation_semantics as kinds, protocol_artifacts as artifacts};
+pub(in crate::routing) use validation::{
+    validate_join_gate_proof_signatures, validate_message_authoring_candidate,
+};
 
 use super::projection::{
     actor_erased_in_realm, retention_risk_audit_flag, retention_risk_reason,
@@ -73,7 +76,6 @@ use crate::routing::organizations;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::describe;
-pub(in crate::routing) use validation::validate_message_authoring_candidate;
 
 fn current_query_error(error: arkret_wire::WireError) -> AppError {
     let code = match error.error_code() {
@@ -188,7 +190,6 @@ use realm_index::{
 };
 
 mod submit;
-pub(in crate::routing) use submit::post_commit::cbs_proof_bundles_for_targets;
 
 /// Reuse the durable, closed Ack-less admission classification for external PCR signing.
 pub(crate) async fn validate_pcr_prepare_ackless_ingress(
