@@ -49,7 +49,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 arkret-bootstrap.workspace = true
 arkret-lattice-registry.workspace = true
-arkret-signatures.workspace = true
+arkret-signatures = { workspace = true, features = ["signer"] }
 ed25519-dalek.workspace = true
 arkret-mls = { workspace = true, features = ["test-utils"] }
 tokio-postgres = { workspace = true }
