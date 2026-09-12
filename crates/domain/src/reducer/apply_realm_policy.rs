@@ -1161,16 +1161,28 @@ impl ProjectionState {
                 reason: "capability_derived_cell_ref_invalid".to_owned(),
             };
         };
-        let mut items = match self.cells.get(&cell_id) {
-            Some(ResolvedCellState::Value(Value::Array(items))) => items.clone(),
-            _ => Vec::new(),
+        let projected = self.projected_cell_writes();
+        let Some(write) = projected
+            .iter()
+            .find(|write| write.cell_id == cell_id)
+            .and_then(ProjectedCellWrite::as_direct)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
         };
-        items.push(serde_json::json!({
-            "tag": arkret_schema::or_set_dot(operation.context.event_id.as_str(), 0),
-            "value": operation.payload.clone(),
-        }));
-        self.cells
-            .insert(cell_id, ResolvedCellState::Value(Value::Array(items)));
+        let model =
+            arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+        let state_write = arkret_state::state_model::StateWrite::new(
+            operation.context.event_id.clone(),
+            write.op.clone(),
+        );
+        let Ok(next) = model.apply(self.cells.get(&cell_id), &state_write) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        self.cells.insert(cell_id, next);
 
         self.capability_derived.insert(
             grant_id.clone(),

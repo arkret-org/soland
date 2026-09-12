@@ -12,8 +12,6 @@ use serde_json::Value;
 
 use super::{ProjectionState, RealmInheritancePolicyState};
 
-pub(crate) const CAPABILITY_GRANT_CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
-
 #[derive(Clone, Debug)]
 pub(crate) struct CapabilityGrantSnapshot {
     pub(crate) realm_id: Option<String>,
@@ -158,23 +156,6 @@ pub(crate) fn parse_rfc3339_utc(
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
-pub(crate) fn capability_grant_cells(
-    state: &ProjectionState,
-) -> impl Iterator<Item = (&CellRef, &Value)> {
-    state.cells.iter().filter_map(|(cell_ref, cell_state)| {
-        if !cell_ref.as_str().starts_with(CAPABILITY_GRANT_CELL_PREFIX) {
-            return None;
-        }
-        cell_state.settled_value().map(|value| (cell_ref, value))
-    })
-}
-
-pub(crate) fn grant_ids_match(value: &Value, id: &str) -> bool {
-    ["id", "grant_id"]
-        .into_iter()
-        .any(|field| value.get(field).and_then(Value::as_str) == Some(id))
-}
-
 pub(crate) fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapshot {
     let body = value
         .get("grant")
@@ -231,38 +212,29 @@ pub(crate) fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapsho
     }
 }
 
-pub(crate) fn grant_snapshot_from_cell_item(
-    requested_ref: &str,
-    item: &Value,
-) -> Option<CapabilityGrantSnapshot> {
-    let tag_matches = item.get("tag").and_then(Value::as_str) == Some(requested_ref);
-    if let Some(value) = item.get("value")
-        && (tag_matches || grant_ids_match(value, requested_ref))
-    {
-        return Some(grant_snapshot_from_value(value));
-    }
-    if tag_matches || grant_ids_match(item, requested_ref) {
-        return Some(grant_snapshot_from_value(item));
-    }
-    None
-}
-
 pub(crate) fn find_capability_grant(
     state: &ProjectionState,
     requested_ref: &str,
 ) -> Option<CapabilityGrantSnapshot> {
-    for (_cell_ref, value) in capability_grant_cells(state) {
-        if let Some(items) = value.as_array() {
-            for item in items {
-                if let Some(grant) = grant_snapshot_from_cell_item(requested_ref, item) {
-                    return Some(grant);
-                }
-            }
-        } else if let Some(grant) = grant_snapshot_from_cell_item(requested_ref, value) {
-            return Some(grant);
-        }
+    let cell_ref = CellRef::new(format!(
+        "ak:cell:{}:{requested_ref}",
+        arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+    ))
+    .ok()?;
+    let arkret_state::ResolvedCellState::Sequenced(current) = state.cells.get(&cell_ref)? else {
+        return None;
+    };
+    let [entry] = current.value.as_array()?.as_slice() else {
+        return None;
+    };
+    let mut snapshot = grant_snapshot_from_value(entry.get("value")?);
+    if snapshot.realm_id.is_none() {
+        snapshot.realm_id = state
+            .capability_grant_metadata
+            .get(requested_ref)
+            .map(|grant| grant.realm_id.clone());
     }
-    None
+    Some(snapshot)
 }
 
 /// AKP-0007 §8 — does the operation payload carry an authoritative
@@ -427,18 +399,5 @@ mod alias_tests {
             expiry_from_payload(&payload),
             Some("2026-09-02T00:00:00Z".parse().unwrap())
         );
-    }
-
-    #[test]
-    fn grant_lookup_ignores_non_grant_identifier_spellings() {
-        assert!(grant_ids_match(&json!({"id": "grant-1"}), "grant-1"));
-        assert!(grant_ids_match(&json!({"grant_id": "grant-1"}), "grant-1"));
-        for field in ["capability_id", "event_id", "operation_id"] {
-            assert!(!grant_ids_match(&json!({field: "grant-1"}), "grant-1"));
-        }
-        assert!(!grant_ids_match(
-            &json!({"grant": {"id": "grant-1"}}),
-            "grant-1"
-        ));
     }
 }
