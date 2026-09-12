@@ -1788,18 +1788,14 @@ fn seal_dependency_contract_seal(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::MultiSignature {
-            kind: arkret_wire::MultiSigKind::MultiSig,
-            signatures: vec![arkret_wire::SealSignature {
-                verification_method: arkret_wire::DidUrl::new(
-                    "did:web:seal-dependency-holder.example#notary-key".to_owned(),
-                )
+        notary_signature: arkret_wire::SealSignature {
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:seal-dependency-holder.example#notary-key".to_owned(),
+            )
+            .unwrap(),
+            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
-                payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
-                    .unwrap(),
-                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-            }],
-            view: 0,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
         },
         sealed_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         hlc: arkret_wire::Hlc::new("019f00000000-0000-00000002").unwrap(),
@@ -1810,7 +1806,6 @@ fn seal_dependency_contract_seal(
         command_results: vec![command_result],
         authorization_closures: Vec::new(),
         existence_anchors: Vec::new(),
-        transaction_records: Vec::new(),
     };
     seal.id = seal
         .derive_id(arkret_canonical::DigestSuite::Sha256)
@@ -2938,8 +2933,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
             jws: "e30..c2ln".to_owned(),
         },
     };
-    authority_ack.signature.payload_digest = authority_ack.ack_body_digest().unwrap();
-    let ack = authority_ack;
+    ack.signature.payload_digest = ack.ack_body_digest().unwrap();
     let envelope = serde_json::to_value(&event).unwrap();
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
@@ -3860,7 +3854,7 @@ mod control_move_ingress_negatives {
         // The durable ingress path validates the single authority Ack bounds
         // and its exact body digest; source signature authentication happens
         // before this persistence boundary.
-        let mut authority_ack = arkret_wire::ControlProposalAck {
+        let mut ack = arkret_wire::ControlProposalAck {
             kind: arkret_wire::ControlProposalAckKind::SignedAck,
             defer_count: 0,
             realm_id: realm_id.clone(),
