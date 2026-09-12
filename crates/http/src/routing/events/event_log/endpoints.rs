@@ -769,6 +769,15 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         .map(ToOwned::to_owned);
     let submit = match req.parse_json::<EventsSubmitRequestBody>().await {
         Ok(body) => body,
+        Err(salvo::http::ParseError::SerdeJson(error)) if error.is_data() => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "expected a registered self Event submission carrier",
+            );
+            return;
+        }
         Err(_) => {
             render_error(
                 res,

@@ -1457,7 +1457,7 @@ async fn self_events_reject_federation_wire_body() {
         body["detail"]
             .as_str()
             .unwrap_or_default()
-            .contains("/_arkret/peer/events"),
+            .contains("registered self Event submission carrier"),
         "{body:?}"
     );
 }
