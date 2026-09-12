@@ -799,7 +799,9 @@ async fn insert_pending_control_event(
             })?;
     if command_unit_event_digests.is_empty()
         || command_unit_event_digests.len() > arkret_wire::seal::MAX_SEAL_DELTA
-        || !command_unit_event_digests.contains(&digest)
+        || !command_unit_event_digests
+            .iter()
+            .any(|member| member.as_str() == digest)
         || command_unit_event_digests
             .iter()
             .collect::<std::collections::BTreeSet<_>>()
@@ -1255,8 +1257,14 @@ impl EventStore for PgEventStore {
         let acks = super::control_proposal_acks_by_digest(&records, control_proposal_acks, true)?;
         let command_unit_event_digests = records
             .iter()
-            .map(|record| record.canonical_digest.clone())
-            .collect::<Vec<_>>();
+            .map(|record| {
+                arkret_wire::Hash::new(record.canonical_digest.clone()).map_err(|error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "invalid registered command digest: {error}"
+                    ))
+                })
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -1366,8 +1374,14 @@ impl EventStore for PgEventStore {
         let acks = super::control_proposal_acks_by_digest(&records, control_proposal_acks, true)?;
         let command_unit_event_digests = records
             .iter()
-            .map(|record| record.canonical_digest.clone())
-            .collect::<Vec<_>>();
+            .map(|record| {
+                arkret_wire::Hash::new(record.canonical_digest.clone()).map_err(|error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "invalid registered command digest: {error}"
+                    ))
+                })
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -1535,8 +1549,14 @@ impl EventStore for PgEventStore {
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let command_unit_event_digests = records
             .iter()
-            .map(|record| record.canonical_digest.clone())
-            .collect::<Vec<_>>();
+            .map(|record| {
+                arkret_wire::Hash::new(record.canonical_digest.clone()).map_err(|error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "invalid registered command digest: {error}"
+                    ))
+                })
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;

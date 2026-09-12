@@ -574,12 +574,18 @@ fn command_unit_digests_by_event_id(
     let digests_by_event_id = events
         .iter()
         .map(|request| {
-            (
+            Ok((
                 request.event.event_id.clone(),
-                request.event.canonical_digest.clone(),
-            )
+                arkret_wire::Hash::new(request.event.canonical_digest.clone()).map_err(
+                    |error| {
+                        PersistenceError::SchemaViolation(format!(
+                            "invalid registered command digest: {error}"
+                        ))
+                    },
+                )?,
+            ))
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<PersistenceResult<std::collections::BTreeMap<_, _>>>()?;
     let ordered_event_ids = match cascade {
         Some(soland_storage::AgentMembershipCascadeCommit::AtomicSelfLeave {
             controller_transition_event_id,
@@ -619,7 +625,7 @@ fn command_unit_digests_by_event_id(
         let unit = if cascade.is_some() {
             registered_unit.clone()
         } else {
-            vec![request.event.canonical_digest.clone()]
+            vec![digests_by_event_id[&request.event.event_id].clone()]
         };
         result.insert(request.event.event_id.clone(), unit);
     }
