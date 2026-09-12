@@ -2000,7 +2000,7 @@ const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
 ///
 /// An authority reference is not a token: the verifier resolves the actor's
 /// whole effective capability set from the state at the referenced Seal, and
-/// soland does exactly that (`capability_refs.rs::data_event_state_at_seal_ref` →
+/// soland does exactly that (`capability_refs.rs::data_event_state_at_authority_refs` →
 /// `arkret_state::effective_state_at`, which joins the cell log filtered by the
 /// Seal's covered Control-Move digests). An empty Seal therefore authorizes
 /// nothing, and no per-test patch can fix that — the Realm has to have sealed a

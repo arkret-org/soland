@@ -516,9 +516,9 @@ async fn validate_current_data_event_admission(
     if used_grant_ids.is_empty() {
         return Ok(());
     }
-    let leaves = state
+    let head = state
         .projections()
-        .realm_seal_basis_leaves(realm)
+        .realm_seal_head(realm)
         .await
         .map_err(|error| {
             event_validation_error(
@@ -527,16 +527,16 @@ async fn validate_current_data_event_admission(
                 format!("current admission frontier is unavailable: {error}"),
             )
         })?;
-    if leaves.is_empty() {
+    let Some(head) = head else {
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
             "capability_denied",
             "current admission frontier is unavailable",
         ));
-    }
+    };
     let current_state = state
         .projections()
-        .effective_state_at(&leaves, realm)
+        .effective_state_at(std::slice::from_ref(&head), realm)
         .await
         .map_err(|error| {
             event_validation_error(
