@@ -957,7 +957,8 @@ async fn materialize_franking_seal_observation(
             else {
                 continue;
             };
-            observation = Some((seal, anchor.clone(), ancestry_events));
+            let anchor = anchor.clone();
+            observation = Some((seal, anchor, ancestry_events));
             break;
         }
         if observation.is_some() {
@@ -1583,48 +1584,30 @@ mod report_safety_tests {
     }
 
     #[test]
-    fn franking_inclusion_is_derived_from_the_frozen_manifest() {
-        let manifest = ['1', '2', '3']
-            .into_iter()
-            .map(|marker| Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap())
-            .collect::<BTreeSet<_>>();
-        let root =
-            arkret_state::event_digest_set_root(&manifest, arkret_canonical::DigestSuite::Sha256)
-                .unwrap();
-        let target = manifest.iter().nth(1).unwrap();
-        let inclusion = frozen_manifest_inclusion(&root, &manifest, target)
-            .unwrap()
-            .expect("manifest contains the franking proof Event");
-        assert!(
-            arkret_state::verify_event_digest_set_inclusion_proof(
-                &inclusion,
-                &root,
+    fn franking_existence_anchor_requires_retained_event_ancestry() {
+        let proof = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [1; 32]);
+        let anchor = arkret_wire::ExistenceAnchor {
+            authorization_event_id: EventId::from_digest(
                 arkret_canonical::DigestSuite::Sha256,
-            )
-            .unwrap()
-        );
-        let absent = Hash::new(format!("sha256:{}", "4".repeat(64))).unwrap();
+                [2; 32],
+            ),
+            generation_event_id: EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [3; 32],
+            ),
+            frontier: vec![proof.clone()],
+        };
         assert!(
-            frozen_manifest_inclusion(&root, &manifest, &absent)
+            existence_anchor_closure(&anchor, &proof, &std::collections::BTreeMap::new())
                 .unwrap()
                 .is_none()
         );
-    }
-
-    #[test]
-    fn franking_inclusion_fails_closed_when_the_frozen_manifest_does_not_match_the_seal_root() {
-        let original = [Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let root =
-            arkret_state::event_digest_set_root(&original, arkret_canonical::DigestSuite::Sha256)
-                .unwrap();
-        let drifted = [Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let error = frozen_manifest_inclusion(&root, &drifted, drifted.first().unwrap())
-            .expect_err("a changed manifest must not produce an inclusion proof");
-        assert_eq!(error.code, ErrorCode::InternalError);
-        assert!(error.message.contains("frozen leaf manifest"));
+        let invalid = arkret_wire::ExistenceAnchor {
+            frontier: vec![],
+            ..anchor
+        };
+        assert!(
+            existence_anchor_closure(&invalid, &proof, &std::collections::BTreeMap::new()).is_err()
+        );
     }
 }

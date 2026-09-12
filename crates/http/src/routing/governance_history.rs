@@ -570,21 +570,26 @@ pub(crate) async fn load_mls_public_blob(
     Ok(bytes)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.resolve", tags("governance"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.seals.read.resolve",
+    request_body = SelfSealResolveRequestBody,
+    tags("governance")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.resolve.v1"))]
 async fn resolve_self_seals(
     aa: AuthArgs,
-    body: JsonBody<SelfSealResolveRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SealResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let request = body.into_inner();
+    validate_seal_resolve_wire_request_size(req).await?;
+    let request = req
+        .parse_json::<SelfSealResolveRequestBody>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid self Seal resolve request"))?;
     let caller = exact_session_actor_id(state, &session).await?;
-    request
-        .validate()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    request.validate().map_err(seal_resolve_request_error)?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
         has_ordinary_governance_read_access(state, &request.realm_id, &caller).await?
     } else {
@@ -636,13 +641,18 @@ async fn resolve_self_seals(
     seal_outcome(seals, missing_seal_refs)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.resolve", tags("governance"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.seals.read.resolve",
+    request_body = PeerSealResolveRequestBody,
+    tags("governance")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.resolve.v1"))]
 async fn resolve_peer_seals(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SealResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_seal_resolve_wire_request_size(req).await?;
     validate_peer_request(state, req, true).await?;
     let source_id = source_id_from_request(req)?;
     let source_service_core_id = arkret_wire::DidCoreId::new(source_id.clone())
@@ -651,9 +661,7 @@ async fn resolve_peer_seals(
         .parse_json::<PeerSealResolveRequestBody>()
         .await
         .map_err(|_| AppError::json_invalid("invalid peer Seal resolve request"))?;
-    request
-        .validate()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    request.validate().map_err(seal_resolve_request_error)?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
         peer_realm_visibility(state, &source_id, request.realm_id.as_str()).await?
     } else {
@@ -705,6 +713,46 @@ async fn resolve_peer_seals(
     seal_outcome(seals, missing_seal_refs)
 }
 
+async fn validate_seal_resolve_wire_request_size(req: &mut Request) -> Result<(), AppError> {
+    let maximum = (64 * 1024).min(req.secure_max_size());
+    let payload = req
+        .payload_with_max_size(maximum)
+        .await
+        .map_err(|error| match error {
+            salvo::http::ParseError::PayloadTooLarge => crate::app_error!(
+                LimitExceeded,
+                "Seal resolve request exceeds the body byte ceiling",
+            ),
+            _ => AppError::json_invalid("unable to read the Seal resolve request body"),
+        })?;
+    // The body may have been cached by an earlier authentication handler.
+    if payload.len() > maximum {
+        return Err(crate::app_error!(
+            LimitExceeded,
+            "Seal resolve request exceeds the body byte ceiling",
+        ));
+    }
+    Ok(())
+}
+
+fn seal_resolve_request_error(error: arkret_wire::WireError) -> AppError {
+    if let arkret_wire::WireError::Protocol(message) = &error
+        && message.starts_with("limit_exceeded:")
+    {
+        return crate::app_error!(LimitExceeded, message.clone());
+    }
+    AppError::param_invalid(error.to_string())
+}
+
+fn seal_resolve_response_error(error: arkret_wire::WireError) -> AppError {
+    if let arkret_wire::WireError::Protocol(message) = &error
+        && message.starts_with("limit_exceeded:")
+    {
+        return crate::app_error!(LimitExceeded, message.clone());
+    }
+    AppError::internal(error.to_string())
+}
+
 fn seal_outcome(
     mut seals: Vec<arkret_wire::Seal>,
     missing_seal_refs: Vec<arkret_wire::SealId>,
@@ -716,7 +764,7 @@ fn seal_outcome(
     };
     outcome
         .validate_structural()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(seal_resolve_response_error)?;
     let encoded = arkret_canonical::canonical_json_bytes(&outcome)
         .map_err(|error| AppError::internal(format!("Seal resolve outcome: {error}")))?;
     if encoded.len() > 8 * 1024 * 1024 {
@@ -731,7 +779,7 @@ fn seal_outcome(
 async fn seal_conclusion_outcome(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
-    queries: &[arkret_models_collaboration::SealConclusionQuery],
+    queries: &[arkret_wire::SealConclusionQuery],
     retained_seals: &[arkret_wire::Seal],
 ) -> JsonResult<SealResolveOutcome> {
     let retained = retained_seals
@@ -747,26 +795,73 @@ async fn seal_conclusion_outcome(
         local_descriptor.verification_method.clone(),
     );
     let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+    let active_heads = state
+        .projections()
+        .realm_seal_leaves(realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("conclusion authority head: {error}")))?;
+    let authority = if let [head] = active_heads.as_slice() {
+        state
+            .projections()
+            .seal_by_id(head)
+            .await
+            .map_err(|error| AppError::internal(format!("conclusion authority: {error}")))?
+    } else {
+        None
+    };
     let mut conclusions = Vec::new();
     let mut missing_conclusion_queries = Vec::new();
     for query in queries {
+        let Some(authority) = authority.as_ref() else {
+            missing_conclusion_queries.push(query.clone());
+            continue;
+        };
         let Some(target) = retained.get(&query.target_seal_ref) else {
             missing_conclusion_queries.push(query.clone());
             continue;
         };
-        if &target.realm_id != realm_id
-            || query
-                .known_configuration_ref
-                .as_ref()
-                .is_some_and(|known| known != &target.configuration_ref)
+        // Retention authorizes the retained Seal's metadata, not arbitrary Cell
+        // values, ranges or unit effects. Those require an operation-derived
+        // exact disclosure grant, including for an unwritten Cell. The current
+        // retained-cut API does not supply such a grant.
+        if !retained.contains_key(&authority.id)
+            || !retained_conclusion_query_is_disclosable(query, |id| retained.contains_key(id))
         {
             missing_conclusion_queries.push(query.clone());
             continue;
         }
-        let Ok(configuration) = worker.notary_value_for_seal(state, target).await else {
+        if &target.realm_id != realm_id
+            || &authority.realm_id != realm_id
+            || query
+                .known_configuration_ref
+                .as_ref()
+                .is_some_and(|known| known != &authority.configuration_ref)
+        {
+            missing_conclusion_queries.push(query.clone());
+            continue;
+        }
+        let Ok(configuration) = worker.notary_value_for_seal(state, authority).await else {
             missing_conclusion_queries.push(query.clone());
             continue;
         };
+        let live = state
+            .projections()
+            .effective_state_at(std::slice::from_ref(&authority.id), realm_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("conclusion active configuration: {error}"))
+            })?;
+        let notary_cell = arkret_wire::CellRef::new(arkret_wire::REALM_NOTARY_CELL)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let active_configuration_matches = matches!(live.get(&notary_cell), Some(arkret_state::state_model::ResolvedCellState::Sequenced(value)) if value.revision_event_id == authority.configuration_ref);
+        if !active_configuration_matches
+            || !seal_has_ancestor(state, authority, &target.id)
+                .await
+                .unwrap_or(false)
+        {
+            missing_conclusion_queries.push(query.clone());
+            continue;
+        }
         if configuration.fault_tolerance != 0
             || configuration.signers.as_slice() != [local_descriptor.clone()]
         {
@@ -779,10 +874,10 @@ async fn seal_conclusion_outcome(
             missing_conclusion_queries.push(query.clone());
             continue;
         };
-        let statement = arkret_models_collaboration::SealConclusionStatement {
+        let statement = arkret_wire::SealConclusionStatement {
             realm_id: realm_id.clone(),
-            configuration_ref: target.configuration_ref.clone(),
-            authority_seal_ref: target.id.clone(),
+            configuration_ref: authority.configuration_ref.clone(),
+            authority_seal_ref: authority.id.clone(),
             target_seal_ref: target.id.clone(),
             results,
         };
@@ -796,20 +891,30 @@ async fn seal_conclusion_outcome(
             missing_conclusion_queries.push(query.clone());
             continue;
         }
+        if state
+            .projections()
+            .realm_seal_leaves(realm_id)
+            .await
+            .ok()
+            .as_deref()
+            != Some(active_heads.as_slice())
+        {
+            missing_conclusion_queries.push(query.clone());
+            continue;
+        }
         conclusions.push(certificate);
     }
-    let conclusion_set =
-        (!conclusions.is_empty()).then_some(arkret_models_collaboration::SealConclusionSet {
-            configuration_handoffs: Vec::new(),
-            conclusions,
-        });
+    let conclusion_set = (!conclusions.is_empty()).then_some(arkret_wire::SealConclusionSet {
+        configuration_handoffs: Vec::new(),
+        conclusions,
+    });
     let outcome = SealResolveOutcome::Conclusions {
         conclusion_set,
         missing_conclusion_queries,
     };
     outcome
         .validate_structural()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(seal_resolve_response_error)?;
     let encoded = arkret_canonical::canonical_json_bytes(&outcome)
         .map_err(|error| AppError::internal(format!("Seal conclusion outcome: {error}")))?;
     if encoded.len() > 8 * 1024 * 1024 {
@@ -821,69 +926,43 @@ async fn seal_conclusion_outcome(
     json_ok(outcome)
 }
 
+fn retained_conclusion_query_is_disclosable(
+    query: &arkret_wire::SealConclusionQuery,
+    mut is_retained: impl FnMut(&arkret_wire::SealId) -> bool,
+) -> bool {
+    use arkret_wire::SealConclusionSelector;
+    is_retained(&query.target_seal_ref)
+        && query.selectors.iter().all(|selector| match selector {
+            SealConclusionSelector::Command { .. } | SealConclusionSelector::Transaction { .. } => {
+                true
+            }
+            SealConclusionSelector::Ancestry { ancestor_seal_ref } => {
+                is_retained(ancestor_seal_ref)
+            }
+            SealConclusionSelector::Cell { .. }
+            | SealConclusionSelector::CellRange { .. }
+            | SealConclusionSelector::CommandEffect { .. } => false,
+        })
+}
+
 async fn derive_seal_conclusion_results(
     state: &AppState,
     target: &arkret_wire::Seal,
-    selectors: &[arkret_models_collaboration::SealConclusionSelector],
-) -> Result<Option<Vec<arkret_models_collaboration::SealConclusionResult>>, AppError> {
-    use arkret_models_collaboration::{
-        SealConclusionAncestryResult, SealConclusionAncestrySelector,
-        SealConclusionAncestrySelectorKind, SealConclusionCellRangeResult,
-        SealConclusionCellRangeSelector, SealConclusionCellRangeSelectorKind,
-        SealConclusionCellResult, SealConclusionCellSelector, SealConclusionCellSelectorKind,
-        SealConclusionCommandResult, SealConclusionCommandSelector,
-        SealConclusionCommandSelectorKind, SealConclusionResult, SealConclusionTransactionResult,
-        SealConclusionTransactionSelector, SealConclusionTransactionSelectorKind,
+    selectors: &[arkret_wire::SealConclusionSelector],
+) -> Result<Option<Vec<arkret_wire::SealConclusionOutcome>>, AppError> {
+    use arkret_wire::{
+        SealConclusionAncestryOutcome, SealConclusionAncestrySelector,
+        SealConclusionAncestrySelectorKind, SealConclusionCommandOutcome,
+        SealConclusionCommandSelector, SealConclusionCommandSelectorKind, SealConclusionOutcome,
+        SealConclusionTransactionOutcome, SealConclusionTransactionSelector,
+        SealConclusionTransactionSelectorKind,
     };
 
-    let frozen = state
-        .projections()
-        .effective_state_at(std::slice::from_ref(&target.id), &target.realm_id)
-        .await
-        .map_err(|error| AppError::internal(format!("conclusion target state: {error}")))?;
     let mut results = Vec::with_capacity(selectors.len());
     for selector in selectors {
         let result = match selector {
-            arkret_models_collaboration::SealConclusionSelector::Cell { cell_id } => {
-                if !is_security_cell(state, &target.realm_id, cell_id)? {
-                    return Ok(None);
-                }
-                SealConclusionResult::Cell(SealConclusionCellResult {
-                    selector: SealConclusionCellSelector {
-                        kind: SealConclusionCellSelectorKind::Cell,
-                        cell_id: cell_id.clone(),
-                    },
-                    state: conclusion_cell_state(frozen.get(cell_id))?,
-                })
-            }
-            arkret_models_collaboration::SealConclusionSelector::CellRange {
-                lower_cell_id,
-                upper_cell_id,
-            } => {
-                let mut cells = Vec::new();
-                for (cell_id, value) in frozen.range(lower_cell_id.clone()..upper_cell_id.clone()) {
-                    if !is_security_cell(state, &target.realm_id, cell_id)? {
-                        continue;
-                    }
-                    let Some(state) = conclusion_cell_state(Some(value))? else {
-                        continue;
-                    };
-                    cells.push(arkret_models_collaboration::SealConclusionRangeCell {
-                        cell_id: cell_id.clone(),
-                        state,
-                    });
-                }
-                SealConclusionResult::CellRange(SealConclusionCellRangeResult {
-                    selector: SealConclusionCellRangeSelector {
-                        kind: SealConclusionCellRangeSelectorKind::CellRange,
-                        lower_cell_id: lower_cell_id.clone(),
-                        upper_cell_id: upper_cell_id.clone(),
-                    },
-                    cells,
-                })
-            }
-            arkret_models_collaboration::SealConclusionSelector::Command { event_digest } => {
-                SealConclusionResult::Command(SealConclusionCommandResult {
+            arkret_wire::SealConclusionSelector::Command { event_digest } => {
+                SealConclusionOutcome::Command(SealConclusionCommandOutcome {
                     selector: SealConclusionCommandSelector {
                         kind: SealConclusionCommandSelectorKind::Command,
                         event_digest: event_digest.clone(),
@@ -891,15 +970,20 @@ async fn derive_seal_conclusion_results(
                     result: target
                         .command_results
                         .iter()
-                        .find(|result| &result.event_digest == event_digest)
+                        .find(|result| {
+                            &result.event_digest == event_digest
+                                || result.unit_event_digests.contains(event_digest)
+                        })
                         .cloned(),
                 })
             }
-            arkret_models_collaboration::SealConclusionSelector::CommandEffect { .. } => {
+            arkret_wire::SealConclusionSelector::Cell { .. }
+            | arkret_wire::SealConclusionSelector::CellRange { .. }
+            | arkret_wire::SealConclusionSelector::CommandEffect { .. } => {
                 return Ok(None);
             }
-            arkret_models_collaboration::SealConclusionSelector::Transaction { record_index } => {
-                SealConclusionResult::Transaction(SealConclusionTransactionResult {
+            arkret_wire::SealConclusionSelector::Transaction { record_index } => {
+                SealConclusionOutcome::Transaction(SealConclusionTransactionOutcome {
                     selector: SealConclusionTransactionSelector {
                         kind: SealConclusionTransactionSelectorKind::Transaction,
                         record_index: *record_index,
@@ -910,8 +994,8 @@ async fn derive_seal_conclusion_results(
                         .cloned(),
                 })
             }
-            arkret_models_collaboration::SealConclusionSelector::Ancestry { ancestor_seal_ref } => {
-                SealConclusionResult::Ancestry(SealConclusionAncestryResult {
+            arkret_wire::SealConclusionSelector::Ancestry { ancestor_seal_ref } => {
+                SealConclusionOutcome::Ancestry(SealConclusionAncestryOutcome {
                     selector: SealConclusionAncestrySelector {
                         kind: SealConclusionAncestrySelectorKind::Ancestry,
                         ancestor_seal_ref: ancestor_seal_ref.clone(),
@@ -923,38 +1007,6 @@ async fn derive_seal_conclusion_results(
         results.push(result);
     }
     Ok(Some(results))
-}
-
-fn is_security_cell(
-    state: &AppState,
-    realm_id: &arkret_wire::RealmId,
-    cell_id: &arkret_wire::CellRef,
-) -> Result<bool, AppError> {
-    let binding = state
-        .projections()
-        .resolve_cell(realm_id, cell_id)
-        .map_err(|error| AppError::internal(format!("conclusion cell registry: {error}")))?;
-    Ok(
-        binding.execution == arkret_wire::EventCellExecution::Security
-            && binding.state_model == arkret_state::state_model::StateModelKind::SequencedState,
-    )
-}
-
-fn conclusion_cell_state(
-    state: Option<&arkret_state::state_model::ResolvedCellState>,
-) -> Result<Option<arkret_models_collaboration::SealConclusionCellState>, AppError> {
-    match state {
-        None => Ok(None),
-        Some(arkret_state::state_model::ResolvedCellState::Sequenced(state)) => {
-            Ok(Some(arkret_models_collaboration::SealConclusionCellState {
-                revision_event_id: state.revision_event_id.clone(),
-                value: state.value.clone(),
-            }))
-        }
-        Some(_) => Err(AppError::internal(
-            "conclusion safety Cell is not sequenced_state",
-        )),
-    }
 }
 
 async fn seal_has_ancestor(
@@ -976,11 +1028,23 @@ async fn seal_has_ancestor(
             .await
             .map_err(|error| AppError::internal(format!("conclusion ancestry: {error}")))?
         else {
-            return Ok(false);
+            return Err(crate::app_error!(
+                DependencyMissing,
+                "conclusion ancestry material unavailable"
+            ));
         };
+        if seal.realm_id != target.realm_id {
+            return Err(crate::app_error!(
+                DependencyMissing,
+                "conclusion ancestry crosses Realm"
+            ));
+        }
         cursor = seal.predecessor_ref;
     }
-    Ok(false)
+    Err(crate::app_error!(
+        LimitExceeded,
+        "conclusion ancestry traversal exceeds its work budget"
+    ))
 }
 
 #[salvo::oapi::endpoint(
@@ -4722,6 +4786,64 @@ mod canonical_response_digest_tests {
     use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
     use arkret_wire::BlobRef;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn seal_resolve_bounds_raw_body_even_when_authentication_cached_it() {
+        use salvo::http::{ReqBody, Request};
+        let mut valid = Request::new();
+        *valid.body_mut() = ReqBody::from("{}".to_owned());
+        super::validate_seal_resolve_wire_request_size(&mut valid)
+            .await
+            .unwrap();
+        assert_eq!(valid.payload().await.unwrap().as_ref(), b"{}");
+
+        for cached in [false, true] {
+            let mut request = Request::new();
+            *request.body_mut() = ReqBody::from(format!("{{}}{}", " ".repeat(64 * 1024)));
+            if cached {
+                request.payload_with_max_size(128 * 1024).await.unwrap();
+            }
+            let error = super::validate_seal_resolve_wire_request_size(&mut request)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, arkret_wire::ErrorCode::LimitExceeded);
+        }
+    }
+
+    #[test]
+    fn retention_does_not_grant_cell_disclosure_or_hidden_ancestry() {
+        use arkret_wire::{CellRef, SealConclusionQuery, SealConclusionSelector, SealId};
+        let target = SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap();
+        let hidden = SealId::new(format!("ak:seal:sha256:{}", "2".repeat(64))).unwrap();
+        let cell = CellRef::new("ak:cell:ak.component.realm.join_rule.v1:null").unwrap();
+        let mut query = SealConclusionQuery {
+            target_seal_ref: target.clone(),
+            selectors: vec![SealConclusionSelector::Cell { cell_id: cell }],
+            known_configuration_ref: None,
+        };
+        assert!(!super::retained_conclusion_query_is_disclosable(
+            &query,
+            |_| true
+        ));
+        query.selectors = vec![SealConclusionSelector::Ancestry {
+            ancestor_seal_ref: hidden,
+        }];
+        assert!(!super::retained_conclusion_query_is_disclosable(
+            &query,
+            |id| id == &target
+        ));
+        query.selectors = vec![SealConclusionSelector::Ancestry {
+            ancestor_seal_ref: target.clone(),
+        }];
+        assert!(super::retained_conclusion_query_is_disclosable(
+            &query,
+            |id| id == &target
+        ));
+        assert!(!super::retained_conclusion_query_is_disclosable(
+            &query,
+            |_| false
+        ));
+    }
 
     use super::{
         history_response_source_record_digest, mls_group_state_material_schema_violation,

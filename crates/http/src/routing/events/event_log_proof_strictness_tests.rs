@@ -1386,7 +1386,19 @@ async fn insert_data_event_seal_with(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
+        configuration_ref: arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0; 32],
+        ),
+        command_results: Vec::new(),
+        authorization_closures: Vec::new(),
+        existence_anchors: Vec::new(),
+        transaction_records: Vec::new(),
+        notary_signature: arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            view: 0,
+            signatures: vec![data_event_dummy_signature()],
+        },
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
     };
@@ -1556,7 +1568,19 @@ async fn insert_data_event_revocation_successor(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
+        configuration_ref: arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0; 32],
+        ),
+        command_results: Vec::new(),
+        authorization_closures: Vec::new(),
+        existence_anchors: Vec::new(),
+        transaction_records: Vec::new(),
+        notary_signature: arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            view: 0,
+            signatures: vec![data_event_dummy_signature()],
+        },
         sealed_at,
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0001-aabbccdd".to_owned()).unwrap(),
     };

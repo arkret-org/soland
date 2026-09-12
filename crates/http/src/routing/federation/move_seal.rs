@@ -490,7 +490,6 @@ fn app_error_from_seal_reject(reject: SealReject) -> AppError {
         | SealReject::MissingSealBasis { .. }
         | SealReject::SealBasisOutsideClosure { .. }
         | SealReject::ControlEventSetRootMismatch { .. }
-        | SealReject::CompletenessRootMismatch { .. }
         | SealReject::CoveredSetMismatch
         | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
         SealReject::Store(_) => ErrorCode::InternalError,
@@ -1132,7 +1131,7 @@ async fn try_apply_device_generation_event_seal(
     {
         arkret_models_collaboration::events_payloads::device_identity::validate_device_reanchor_recovery_first_seal(
             &requirement.payload,
-            seal.predecessor_ref.as_slice(),
+            seal.predecessor_ref.as_ref(),
             &seal.delta,
             &requirement.reanchor_digest,
             &requirement.replacement_authorize_digest,
@@ -2221,19 +2220,26 @@ mod seal_delta_tests {
             let bytes = seal.canonical_bytes_for_id().unwrap();
             seal.id = Seal::id_from_canonical_bytes(&bytes, arkret_canonical::DigestSuite::Sha256)
                 .unwrap();
-            seal.notary_signature = NotarySig::Single(arkret_wire::SealSignature {
-                verification_method: method.clone(),
-                payload_digest: arkret_wire::Hash::new(
-                    arkret_canonical::canonical_digest_with_suite(&bytes, "sha256").unwrap(),
-                )
-                .unwrap(),
-                jws: soland_services::identity::sign_ed25519_frozen_notary_jws(
-                    &bytes,
-                    &method,
-                    &ed25519_dalek::SigningKey::from_bytes(&seed),
-                )
-                .unwrap(),
-            });
+            let bytes = seal
+                .commit_transcript_bytes(arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+            seal.notary_signature = arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                view: 0,
+                signatures: vec![arkret_wire::SealSignature {
+                    verification_method: method.clone(),
+                    payload_digest: arkret_wire::Hash::new(
+                        arkret_canonical::canonical_digest_with_suite(&bytes, "sha256").unwrap(),
+                    )
+                    .unwrap(),
+                    jws: soland_services::identity::sign_ed25519_frozen_notary_jws(
+                        &bytes,
+                        &method,
+                        &ed25519_dalek::SigningKey::from_bytes(&seed),
+                    )
+                    .unwrap(),
+                }],
+            };
         }
         sign(
             &mut candidate,
@@ -2437,14 +2443,26 @@ mod seal_delta_tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(arkret_wire::SealSignature {
-                verification_method: arkret_wire::DidUrl::new(
-                    "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
-                )
-                .unwrap(),
-                payload_digest: placeholder_digest,
-                jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
-            }),
+            configuration_ref: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0; 32],
+            ),
+            command_results: Vec::new(),
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
+            notary_signature: arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                view: 0,
+                signatures: vec![arkret_wire::SealSignature {
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
+                    )
+                    .unwrap(),
+                    payload_digest: placeholder_digest,
+                    jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
+                }],
+            },
             sealed_at: chrono::Utc::now(),
             hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         };
@@ -2452,17 +2470,24 @@ mod seal_delta_tests {
         seal.id =
             Seal::id_from_canonical_bytes(&canonical_bytes, arkret_canonical::DigestSuite::Sha256)
                 .unwrap();
-        seal.notary_signature = NotarySig::Single(arkret_wire::SealSignature {
-            verification_method: arkret_wire::DidUrl::new(
-                "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
-            )
-            .unwrap(),
-            payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
-                &canonical_bytes,
-            ))
-            .unwrap(),
-            jws: signer.sign_detached_jws(&canonical_bytes),
-        });
+        let canonical_bytes = seal
+            .commit_transcript_bytes(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        seal.notary_signature = arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            view: 0,
+            signatures: vec![arkret_wire::SealSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
+                )
+                .unwrap(),
+                payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
+                    &canonical_bytes,
+                ))
+                .unwrap(),
+                jws: signer.sign_detached_jws(&canonical_bytes),
+            }],
+        };
 
         verify_device_seal_signature(&seal, &public_key, arkret_canonical::DigestSuite::Sha256)
             .unwrap();

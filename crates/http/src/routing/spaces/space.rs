@@ -896,11 +896,24 @@ mod tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: arkret_wire::seal::NotarySig::Single(arkret_wire::SealSignature {
-                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
-                payload_digest: test_hash(0xff),
-                jws: "AAAA.BBBB.CCCC".to_owned(),
-            }),
+            configuration_ref: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0; 32],
+            ),
+            command_results: Vec::new(),
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
+            notary_signature: arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                view: 0,
+                signatures: vec![arkret_wire::SealSignature {
+                    verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1")
+                        .unwrap(),
+                    payload_digest: test_hash(0xff),
+                    jws: "AAAA.BBBB.CCCC".to_owned(),
+                }],
+            },
             sealed_at: chrono::Utc
                 .with_ymd_and_hms(2026, 8, 29, 0, 0, notary_seq as u32)
                 .unwrap(),

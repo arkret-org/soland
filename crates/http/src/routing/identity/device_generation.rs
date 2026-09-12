@@ -503,7 +503,7 @@ pub async fn accepted_device_generation_seal_leaves(
             .map(|seal| seal.predecessor_ref)
             .unwrap_or_default();
         let mut seen = BTreeSet::new();
-        while let Some(ancestor) = ancestors.pop() {
+        while let Some(ancestor) = ancestors.take() {
             if !seen.insert(ancestor.clone()) {
                 continue;
             }
@@ -517,7 +517,7 @@ pub async fn accepted_device_generation_seal_leaves(
                         ServiceError::internal(format!("Seal lookup unavailable: {error}"))
                     })?
             {
-                ancestors.extend(seal.predecessor_ref);
+                ancestors = seal.predecessor_ref;
             }
         }
     }

@@ -562,6 +562,7 @@ async fn prepare_pcr_seal(
         .collect::<Vec<_>>();
     availability_receipt_digests.sort();
     let outcome = SealPrepareOutcome {
+        view: 0,
         seal_body: worker
             .prepare_pcr_seal_body(
                 state,

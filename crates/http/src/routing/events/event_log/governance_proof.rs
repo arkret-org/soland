@@ -2176,7 +2176,7 @@ mod tests {
         ];
         let covered = selector_ops
             .iter()
-            .map(|issued| issued.op.event_id.clone())
+            .map(|issued| issued.op.event_id.event_digest())
             .collect::<BTreeSet<_>>();
         let ops_by_cell = BTreeMap::from([(selector_cell.clone(), selector_ops)]);
 
@@ -2222,7 +2222,7 @@ mod tests {
         ];
         let covered = accountability_ops
             .iter()
-            .map(|issued| issued.op.event_id.clone())
+            .map(|issued| issued.op.event_id.event_digest())
             .collect::<BTreeSet<_>>();
         let ops_by_cell = BTreeMap::from([(accountability_cell.clone(), accountability_ops)]);
 

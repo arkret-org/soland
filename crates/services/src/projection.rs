@@ -3555,11 +3555,8 @@ mod effective_checkpoint_tests {
                 .unwrap(),
             hlc: arkret_wire::Hlc::new(format!("019f00000000-{:04x}-aabbccdd", notary_seq))
                 .unwrap(),
-            configuration_ref: arkret_wire::EventId::new(format!(
-                "ak:event:A{}",
-                "a".repeat(42)
-            ))
-            .unwrap(),
+            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+                .unwrap(),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),

@@ -2855,10 +2855,7 @@ mod cas_write_guard_tests {
         arkret_state::state_model::ResolvedCellState::Bottom(arkret_wire::Bottom {
             kind: arkret_wire::BottomKind::Conflict,
             cell_ids: vec![cell.clone()],
-            move_ids: Vec::new(),
-            seal_view: None,
-            head_ids: Vec::new(),
-            details: None,
+            heads: Vec::new(),
             escalated_at: None,
         })
     }

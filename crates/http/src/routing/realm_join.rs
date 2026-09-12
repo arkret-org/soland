@@ -612,6 +612,12 @@ async fn verify_peer_bootstrap(
     let mut predecessors = Vec::new();
     for record in records {
         match record {
+            RealmJoinBootstrapRecord::SealConclusion { .. } => {
+                return Err(crate::app_error!(
+                    FrontierUnavailable,
+                    "quorum facts require an independently authenticated configuration"
+                ));
+            }
             RealmJoinBootstrapRecord::Seal { seal } => {
                 insert_bootstrap_material(&mut seals, seal.id.to_string(), seal, "Realm join Seal")?
             }

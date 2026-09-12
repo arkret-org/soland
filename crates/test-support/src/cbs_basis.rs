@@ -189,21 +189,6 @@ pub fn basis_seal_with_id(seal_id: &SealId) -> Option<Seal> {
         .map(|basis| basis.seal.clone())
 }
 
-/// Exact listed Control Event descriptors retained for a synthetic fixture
-/// basis. Unlike ordinary accepted Events these fixture descriptors have no
-/// durable Event envelope to resolve from the Control Event store.
-#[must_use]
-pub fn basis_listed_control_events_with_id(
-    seal_id: &SealId,
-) -> Option<Vec<arkret_state::ListedControlEvent>> {
-    REALM_BASES
-        .lock()
-        .expect("fixture basis cache")
-        .values()
-        .find(|basis| basis.seal.id == *seal_id)
-        .map(|basis| basis.listed_control_events.clone())
-}
-
 /// The notary signer of every fixture Realm hosted by `state`.
 ///
 /// A Control Move submitted to this service has its Control Proposal Ack minted

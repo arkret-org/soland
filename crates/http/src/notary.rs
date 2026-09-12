@@ -409,15 +409,6 @@ impl NotaryWorker {
         else {
             return Ok(None);
         };
-        let predecessor_ref = match leaves.as_slice() {
-            [] => None,
-            [predecessor] => Some(predecessor.clone()),
-            _ => {
-                return Err(NotaryError::Construction(
-                    "a Realm Seal frontier must contain at most one predecessor".to_owned(),
-                ));
-            }
-        };
         let digest = arkret_canonical::canonical_sha256(&notary_value_wire(&envelope))
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         Hash::new(digest)
@@ -753,6 +744,15 @@ impl NotaryWorker {
             digest_suites.seal_digest_suite,
             predecessor_refs.is_empty(),
         )?;
+        let predecessor_ref = match predecessor_refs.as_slice() {
+            [] => None,
+            [predecessor] => Some(predecessor.clone()),
+            _ => {
+                return Err(NotaryError::Construction(
+                    "a Realm Seal requires a unique predecessor".to_owned(),
+                ));
+            }
+        };
         let unsigned = arkret_wire::UnsignedSeal {
             realm_id: realm_id.clone(),
             predecessor_ref,
@@ -2116,7 +2116,7 @@ fn command_results_for_accepted(
     post_state: &BTreeMap<CellRef, ResolvedCellState>,
     digest_suite: arkret_canonical::DigestSuite,
     is_genesis: bool,
-) -> Result<Vec<arkret_wire::CommandResult>, NotaryError> {
+) -> Result<Vec<arkret_wire::SealCommandOutcome>, NotaryError> {
     let recovery_unit = accepted.len() == 2
         && accepted[0].event.kind == arkret_wire::EventKind::DeviceReanchor
         && accepted[1].event.kind == arkret_wire::EventKind::DeviceAuthorize;
@@ -2164,7 +2164,7 @@ fn command_results_for_accepted(
                     })
                 })
                 .collect::<Result<Vec<_>, NotaryError>>()?;
-            arkret_wire::CommandResult::committed(
+            arkret_wire::SealCommandOutcome::committed(
                 event_digest,
                 unit_event_digests,
                 effects,
@@ -2365,7 +2365,7 @@ pub(crate) fn validate_first_generation_event_seal(
     }
     let mut actual = leaves.to_vec();
     actual.sort();
-    let mut expected = requirement.predecessor_ref.clone();
+    let mut expected = requirement.predecessor_refs.clone();
     expected.sort();
     if actual != expected {
         return Err(NotaryError::Construction(
@@ -2495,7 +2495,7 @@ mod tests {
                         to: Some(json!(to)),
                         ..arkret_wire::LatticeOp::empty()
                     },
-                    saw.iter().copied().map(move_of).collect(),
+                    saw.iter().copied().map(move_of),
                 ),
             }
         }
@@ -2568,7 +2568,7 @@ mod tests {
     }
 
     fn test_signer_descriptor(did: &str, seed: u8) -> arkret_wire::NotarySignerDescriptor {
-        let did = Did::new(did.to_owned()).unwrap();
+        let did = arkret_wire::Did::new(did.to_owned()).unwrap();
         let actor_id = arkret_wire::project_did_to_core_id(&did).unwrap();
         let method = arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap();
         let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
@@ -2784,7 +2784,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(
             validate_first_generation_event_seal(
-                &requirement.predecessor_ref,
+                &requirement.predecessor_refs,
                 &BTreeSet::new(),
                 &missing,
                 &requirement,
@@ -2793,7 +2793,7 @@ mod tests {
         );
         assert!(
             validate_first_generation_event_seal(
-                &requirement.predecessor_ref,
+                &requirement.predecessor_refs,
                 &missing,
                 &target,
                 &requirement,
