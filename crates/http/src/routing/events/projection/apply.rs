@@ -17,8 +17,12 @@ pub async fn project_accepted_operations_from_device(
     source_device_id: &str,
     operations: &[Operation],
 ) {
-    project_accepted_operations_inner(state, origin, source_device_id, operations, None, None)
-        .await;
+    if let Err(error) =
+        project_accepted_operations_inner(state, origin, source_device_id, operations, None, None)
+            .await
+    {
+        tracing::error!(%error, "accepted operation projection failed");
+    }
 }
 
 /// Apply the domain/read-model effects of one canonical Event after its
@@ -37,7 +41,7 @@ pub async fn project_accepted_canonical_event_from_device(
     operation: &Operation,
     cell_writes: &[arkret_wire::cbs::ProjectedCellWrite],
 ) {
-    project_accepted_operations_inner(
+    if let Err(error) = project_accepted_operations_inner(
         state,
         origin,
         source_device_id,
@@ -45,7 +49,10 @@ pub async fn project_accepted_canonical_event_from_device(
         Some(cell_writes),
         None,
     )
-    .await;
+    .await
+    {
+        tracing::error!(%error, "accepted canonical projection failed");
+    }
 }
 
 /// The registry-derived cell writes for an accepted projected Event.
@@ -131,18 +138,21 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
     source_device_id: &str,
     operation: &Operation,
     effect: &ProjectionEffectView,
-) {
+) -> Result<(), String> {
     let ProjectionEffectView::Mls(effect) = effect else {
-        return;
+        return Ok(());
     };
 
     match effect {
         MlsProjectionEffect::KeyPackagePublished { keypackage_id } => {
-            let record = state.projections().mls_key_package_record(keypackage_id);
-            if let Some(record) = record
-                && let Err(error) = state.mls_key_packages().store_key_package(&record).await
-            {
-                tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
+            let record = state
+                .projections()
+                .mls_key_package_record(keypackage_id)
+                .ok_or_else(|| {
+                    format!("MLS KeyPackage effect has no projected row: {keypackage_id}")
+                })?;
+            if let Err(error) = state.mls_key_packages().store_key_package(&record).await {
+                return Err(format!("failed to mirror MLS KeyPackage publish: {error}"));
             }
         }
         MlsProjectionEffect::KeyPackageClaimed {
@@ -169,7 +179,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 })
                 .await
             {
-                tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");
+                return Err(format!("failed to mirror MLS KeyPackage claim: {error}"));
             }
         }
         MlsProjectionEffect::WelcomeEnqueued {
@@ -186,13 +196,15 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 intended_realm_id.as_deref(),
                 welcome_id,
             );
-            if let Some(record) = record {
+            let record = record
+                .ok_or_else(|| format!("MLS Welcome effect has no projected row: {welcome_id}"))?;
+            {
                 if let Err(error) = state
                     .mls_key_packages()
                     .enqueue_welcome(record.clone())
                     .await
                 {
-                    tracing::warn!(%error, welcome_id = %welcome_id, "failed to mirror MLS Welcome enqueue");
+                    return Err(format!("failed to mirror MLS Welcome enqueue: {error}"));
                 }
                 if record.recipient_device_id.is_some() {
                     project_mls_welcome_to_device(
@@ -203,7 +215,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                         &record,
                         welcome_id,
                     )
-                    .await;
+                    .await?;
                 }
             }
         }
@@ -223,14 +235,16 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             let Ok(effective_scope) =
                 serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
             else {
-                tracing::warn!(group_id = %group_id, "refusing to mirror MLS genesis with invalid effective_scope");
-                return;
+                return Err(
+                    "refusing to mirror MLS genesis with invalid effective_scope".to_owned(),
+                );
             };
             let Ok(binding) = serde_json::from_value::<
                 arkret_models_crypto::MlsGovernanceBindingPayload,
             >(binding_value) else {
-                tracing::warn!(group_id = %group_id, "refusing to mirror MLS genesis with invalid governance_binding");
-                return;
+                return Err(
+                    "refusing to mirror MLS genesis with invalid governance_binding".to_owned(),
+                );
             };
             if let Err(error) = state
                 .mls_commits()
@@ -245,7 +259,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 })
                 .await
             {
-                tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS genesis epoch");
+                return Err(format!("failed to mirror MLS genesis epoch: {error}"));
             }
             bind_circle_mls_group(
                 state,
@@ -253,7 +267,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 &serde_json::to_value(&effective_scope).unwrap_or(Value::Null),
                 false,
             )
-            .await;
+            .await?;
         }
         MlsProjectionEffect::CommitEpochAdvanced {
             group_id,
@@ -270,14 +284,14 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             let Ok(effective_scope) =
                 serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
             else {
-                tracing::warn!(group_id = %group_id, "refusing to mirror MLS commit with invalid effective_scope");
-                return;
+                return Err("refusing to mirror MLS commit with invalid effective_scope".to_owned());
             };
             let Ok(binding) = serde_json::from_value::<
                 arkret_models_crypto::MlsGovernanceBindingPayload,
             >(binding_value) else {
-                tracing::warn!(group_id = %group_id, "refusing to mirror MLS commit with invalid governance_binding");
-                return;
+                return Err(
+                    "refusing to mirror MLS commit with invalid governance_binding".to_owned(),
+                );
             };
             if let Err(error) = state
                 .mls_commits()
@@ -292,7 +306,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 })
                 .await
             {
-                tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS commit epoch");
+                return Err(format!("failed to mirror MLS commit epoch: {error}"));
             }
             bind_circle_mls_group(
                 state,
@@ -300,7 +314,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 &serde_json::to_value(&effective_scope).unwrap_or(Value::Null),
                 true,
             )
-            .await;
+            .await?;
         }
         MlsProjectionEffect::CommitFrontierContested {
             group_id,
@@ -310,8 +324,10 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             let Ok(effective_scope) =
                 serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
             else {
-                tracing::warn!(group_id = %group_id, "refusing to mark MLS frontier contested with invalid effective_scope");
-                return;
+                return Err(
+                    "refusing to mark MLS frontier contested with invalid effective_scope"
+                        .to_owned(),
+                );
             };
             // §2.5.2 — concurrent commits drove `covered_frontier_cell` to `⊥`.
             // Mirror the contested marker onto the durable epoch row so the
@@ -322,10 +338,11 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .mark_frontier_contested(&effective_scope, group_id, *epoch)
                 .await
             {
-                tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS contested frontier");
+                return Err(format!("failed to mirror MLS contested frontier: {error}"));
             }
         }
     }
+    Ok(())
 }
 
 async fn bind_circle_mls_group(
@@ -333,14 +350,14 @@ async fn bind_circle_mls_group(
     group_id: &str,
     effective_scope: &Value,
     clear_pending_removals: bool,
-) {
+) -> Result<(), String> {
     let cleared = state.projections().bind_circle_mls_group(
         group_id,
         effective_scope,
         clear_pending_removals,
     );
     if !clear_pending_removals || cleared.is_empty() {
-        return;
+        return Ok(());
     }
     let completed_at = chrono::Utc::now();
     let proposal_event_ids = cleared
@@ -358,13 +375,14 @@ async fn bind_circle_mls_group(
                 proposal_event_id,
                 "cleared MLS obligation was not a device-revocation cleanup task"
             ),
-            Err(error) => tracing::error!(
-                %error,
-                proposal_event_id,
-                "durable device-revocation MLS cleanup acknowledgement failed"
-            ),
+            Err(error) => {
+                return Err(format!(
+                    "acknowledge device-revocation MLS cleanup {proposal_event_id}: {error}"
+                ));
+            }
         }
     }
+    Ok(())
 }
 
 /// After the deterministic reducer mutates the in-memory
@@ -379,14 +397,14 @@ async fn bind_circle_mls_group(
 /// write; reducer-level pending replay applies them once the target is
 /// materialized, and the later create/snapshot write-through captures the
 /// converged projection.
-async fn write_through_projection(state: &AppState, operation: &Operation) {
+async fn write_through_projection(state: &AppState, operation: &Operation) -> Result<(), String> {
     use soland_services::projection::ProjectionWriteThroughRecord;
 
     let Some(snapshot) = state
         .projections()
         .projection_write_through_record(operation)
     else {
-        return;
+        return Ok(());
     };
     let result = match snapshot {
         ProjectionWriteThroughRecord::SpaceContainer(record) => {
@@ -414,18 +432,21 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 .await
         }
     };
-    if let Err(error) = result {
-        tracing::warn!(
-            %error,
-            operation_id = %operation.operation_id,
-            "projection write-through to persistence failed; in-memory state stays authoritative"
-        );
-    }
+    result.map_err(|error| {
+        format!(
+            "projection write-through {}: {error}",
+            operation.operation_id
+        )
+    })
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
-    project_accepted_operations_inner(state, origin, "", operations, None, None).await;
+    if let Err(error) =
+        project_accepted_operations_inner(state, origin, "", operations, None, None).await
+    {
+        tracing::error!(%error, "accepted test operation projection failed");
+    }
 }
 
 async fn project_accepted_operations_inner(
@@ -435,7 +456,7 @@ async fn project_accepted_operations_inner(
     operations: &[Operation],
     canonical_cell_writes: Option<&[arkret_wire::cbs::ProjectedCellWrite]>,
     applied_effect: Option<&ProjectionEffectView>,
-) {
+) -> Result<(), String> {
     debug_assert!(canonical_cell_writes.is_none() || operations.len() == 1);
     for operation in operations {
         tracing::debug!(
@@ -449,7 +470,10 @@ async fn project_accepted_operations_inner(
             project_federated_message(state, origin, operation).await;
             // AKP-0016 §9.4.5 — derive mention notifications with the agent
             // third-party mention gate.
-            crate::routing::events::notify::dispatch_message_notifications(state, operation).await;
+            if applied_effect.is_none() {
+                crate::routing::events::notify::dispatch_message_notifications(state, operation)
+                    .await;
+            }
         } else if kinds::operation_is_invite_create(operation) {
             project_invite_create_operation(state, operation).await;
         } else if kinds::operation_is_invite_third_party(operation) {
@@ -571,10 +595,10 @@ async fn project_accepted_operations_inner(
             }
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
             mirror_mls_effect_to_persistence(state, origin, source_device_id, operation, &effect)
-                .await;
+                .await?;
             // SOL-ORG-04 — persist an accepted `ak.realm.organization`
             // relationship statement projection durably.
-            mirror_realm_organization_effect_to_persistence(state, &effect).await;
+            mirror_realm_organization_effect_to_persistence(state, &effect).await?;
             // P1 — fold the projected capability grant cell back into the
             // SolandAuthzEngine read index. The cell is the source of truth;
             // the engine map is a read-side index maintained by projection
@@ -587,13 +611,17 @@ async fn project_accepted_operations_inner(
         // lock so any backend latency doesn't block other reducer paths.
         // Mirrors the canonical wire kinds the reducer dispatches into
         // `ProjectionState::{space_containers,strands,morphs}`.
-        write_through_projection(state, operation).await;
+        write_through_projection(state, operation).await?;
         crate::routing::identity::account::project_canonical_direct_binding(state, operation).await;
-        if kinds::canonical_kind(operation) == arkret_wire::EventKind::RelationCreate {
+        if applied_effect.is_none()
+            && kinds::canonical_kind(operation) == arkret_wire::EventKind::RelationCreate
+        {
             crate::routing::events::notify::dispatch_assignment_notifications(state, operation)
                 .await;
         }
-        if kinds::canonical_kind(operation) == arkret_wire::EventKind::StrandUpdate {
+        if applied_effect.is_none()
+            && kinds::canonical_kind(operation) == arkret_wire::EventKind::StrandUpdate
+        {
             crate::routing::events::notify::dispatch_schedule_notifications(state, operation).await;
         }
         // AKP-0016 — mirror agent_participation ceiling changes into the
@@ -603,17 +631,18 @@ async fn project_accepted_operations_inner(
             crate::routing::events::operations::agent_participation_ceiling_record(operation)
             && let Err(error) = state.agent_participations().store_ceiling(record).await
         {
-            tracing::warn!(%error, "failed to persist agent participation ceiling");
+            return Err(format!("store agent participation ceiling: {error}"));
         }
-        if canonical_cell_writes.is_none() {
+        if canonical_cell_writes.is_none() && applied_effect.is_none() {
             let projected = projection_event_from_operation(operation, Some(origin));
             // Operation-only lanes have no canonical Event acceptance
             // transaction, so they still own projection timeline persistence.
-            if let Err(error) = persist_and_publish_projection_event(state, projected).await {
-                tracing::warn!(%error, "failed to persist projection event before publish");
-            }
+            persist_and_publish_projection_event(state, projected)
+                .await
+                .map_err(|error| format!("store projection event before publish: {error}"))?;
         }
     }
+    Ok(())
 }
 
 async fn materialize_moderation_report(state: &AppState, operation: &Operation) {
@@ -700,7 +729,7 @@ pub(crate) async fn materialize_moderation_report_record(
 pub(crate) async fn mirror_realm_organization_effect_to_persistence(
     state: &AppState,
     effect: &ProjectionEffectView,
-) {
+) -> Result<(), String> {
     let ProjectionEffectView::RealmOrganizationProjected {
         realm_id,
         organization_id,
@@ -708,7 +737,7 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         ..
     } = effect
     else {
-        return;
+        return Ok(());
     };
 
     let key = (
@@ -720,9 +749,8 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         let proj = state.projections().snapshot();
         proj.realm_organization_statements.get(&key).cloned()
     };
-    let Some(row) = row else {
-        return;
-    };
+    let row =
+        row.ok_or_else(|| "confirmed RealmOrganization effect has no projected row".to_owned())?;
     let record = soland_services::events::RealmOrganizationStatementRecord {
         realm_id: row.realm_id,
         organization_id: row.organization_id,
@@ -741,19 +769,11 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         issuer_role: row.issuer_role,
         updated_at: row.updated_at,
     };
-    if let Err(error) = state
+    state
         .event_queries()
         .store_realm_organization_statement(&record)
         .await
-    {
-        tracing::warn!(
-            %error,
-            realm_id = %record.realm_id,
-            organization_id = %record.organization_id,
-            relationship = %record.relationship,
-            "failed to persist ak.realm.organization relationship statement"
-        );
-    }
+        .map_err(|error| format!("store RealmOrganization statement: {error}"))
 }
 
 async fn project_mls_welcome_to_device(
@@ -763,13 +783,12 @@ async fn project_mls_welcome_to_device(
     operation: &Operation,
     record: &MlsWelcomeState,
     welcome_id: &str,
-) {
+) -> Result<(), String> {
     let Some(recipient_device_id) = record.recipient_device_id.as_deref() else {
-        return;
+        return Ok(());
     };
     let Ok(welcome) = operation.typed_payload::<arkret_wire::event_spec::MlsWelcome>() else {
-        tracing::warn!(%welcome_id, operation_id = %operation.operation_id, "accepted MLS Welcome payload is not the typed wire shape");
-        return;
+        return Err("accepted MLS Welcome payload is not the typed wire shape".to_owned());
     };
     let sender_device_id = if source_device_id.trim().is_empty() {
         welcome
@@ -782,20 +801,15 @@ async fn project_mls_welcome_to_device(
     }
     .trim();
     if sender_device_id.is_empty() {
-        tracing::warn!(
-            %welcome_id,
-            operation_id = %operation.operation_id,
-            "cannot enqueue MLS Welcome device message without sender device id"
+        return Err(
+            "cannot enqueue MLS Welcome device message without sender device id".to_owned(),
         );
-        return;
     }
     let Some(sender_account_id) = operation.context.sender.as_account_id().cloned() else {
-        tracing::warn!(
-            %welcome_id,
-            operation_id = %operation.operation_id,
+        return Err(
             "cannot enqueue an ordinary MLS Welcome device message without an account sender"
+                .to_owned(),
         );
-        return;
     };
 
     let content = match serde_json::to_value(MlsWelcomeProjectedDeviceMessage {
@@ -811,8 +825,9 @@ async fn project_mls_welcome_to_device(
     }) {
         Ok(content) => content,
         Err(error) => {
-            tracing::warn!(%error, %welcome_id, "failed to serialize typed MLS Welcome device message");
-            return;
+            return Err(format!(
+                "serialize typed MLS Welcome device message: {error}"
+            ));
         }
     };
     let message = DeviceMessageState {
@@ -832,13 +847,9 @@ async fn project_mls_welcome_to_device(
         .append_device_message(None, message)
         .await
     {
-        tracing::warn!(
-            %error,
-            %welcome_id,
-            operation_id = %operation.operation_id,
-            "failed to enqueue MLS Welcome to-device message"
-        );
+        return Err(format!("enqueue MLS Welcome to-device message: {error}"));
     }
+    Ok(())
 }
 
 /// Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
@@ -1033,6 +1044,87 @@ pub(in crate::routing) fn refresh_authz_index_from_capability_grant_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn confirmed_mirror_test_operation(index: u8) -> Operation {
+        accepted_test_operation(
+            arkret_wire::OperationId::new(format!(
+                "ak:operation:0196419b-1000-7000-8000-0000000002{index:02}"
+            ))
+            .unwrap(),
+            arkret_wire::RealmId::new("ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p")
+                .unwrap(),
+            "ak:did_core:web:alice.example",
+            u64::from(index),
+            arkret_wire::EventKind::ContactRequested,
+            json!({
+                "peer": {"kind": "human", "principal_id": "ak:did_core:web:bob.example"},
+                "granted_to_peer_scopes": [],
+                "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64))
+            }),
+            chrono::Utc::now(),
+        )
+    }
+
+    #[tokio::test]
+    async fn confirmed_unit_mirror_failure_publishes_no_member_timeline() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let projected = vec![
+            (confirmed_mirror_test_operation(11), Vec::new()),
+            (confirmed_mirror_test_operation(12), Vec::new()),
+        ];
+        let effects = [
+            ProjectionEffectView::Ignored,
+            ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackagePublished {
+                keypackage_id: "missing-projected-key-package".to_owned(),
+            }),
+        ];
+        let error = publish_confirmed_command_unit(&state, &projected, &effects)
+            .await
+            .unwrap_err();
+        assert!(error.contains("MLS KeyPackage effect has no projected row"));
+        for (operation, _) in &projected {
+            assert!(
+                state
+                    .event_queries()
+                    .projected_event(operation.context.event_id.as_str())
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a later member's mirror failure must suppress the first member's timeline too"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmed_unit_mirror_phase_reuses_durable_timeline_identity() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let projected = vec![
+            (confirmed_mirror_test_operation(13), Vec::new()),
+            (confirmed_mirror_test_operation(14), Vec::new()),
+        ];
+        let effects = [ProjectionEffectView::Ignored, ProjectionEffectView::Ignored];
+        for _ in 0..2 {
+            publish_confirmed_command_unit(&state, &projected, &effects)
+                .await
+                .unwrap();
+        }
+        let rows = state
+            .event_queries()
+            .projected_events_for_realm(projected[0].0.realm_id.as_str())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(projected.iter().all(|(operation, _)| {
+            rows.iter()
+                .any(|row| row.event_id == operation.context.event_id.as_str())
+        }));
+    }
 
     #[tokio::test]
     async fn moderation_report_materialization_is_complete_and_idempotent() {
@@ -1442,16 +1534,63 @@ pub(crate) async fn publish_confirmed_seal_commands(
         let effects = state
             .projections()
             .apply_operations_with_effects_atomic(&staged, state.hlc())?;
-        for (((operation, _), event), effect) in projected.iter().zip(&events).zip(&effects) {
-            project_accepted_operations_inner(
-                state,
-                event.actor_id.signing_principal_id().as_str(),
-                "",
-                std::slice::from_ref(operation),
-                None,
-                Some(effect),
-            )
-            .await;
+        publish_confirmed_command_unit(state, &projected, &effects).await?;
+    }
+    Ok(())
+}
+
+/// This phase does not reapply reducers. A failed mirror prevents every timeline
+/// write for the unit, but the caller still owns reducer crash recovery.
+async fn publish_confirmed_command_unit(
+    state: &AppState,
+    projected: &[(Operation, Vec<arkret_wire::cbs::ProjectedCellWrite>)],
+    effects: &[ProjectionEffectView],
+) -> Result<(), String> {
+    if projected.len() != effects.len() {
+        return Err("confirmed unit has an incomplete effect list".to_owned());
+    }
+    for ((operation, _), effect) in projected.iter().zip(effects) {
+        project_accepted_operations_inner(
+            state,
+            operation.context.sender.signing_principal_id().as_str(),
+            "",
+            std::slice::from_ref(operation),
+            None,
+            Some(effect),
+        )
+        .await?;
+    }
+    // The durable timeline is downstream of every member's mirror work.
+    // Its existing event-id key suppresses duplicate publication on retry;
+    // it is not a checkpoint for replaying the in-memory reducer.
+    for (operation, _) in projected {
+        let origin = operation.context.sender.signing_principal_id();
+        let outcome = persist_and_publish_projection_event(
+            state,
+            projection_event_from_operation(operation, Some(origin.as_str())),
+        )
+        .await
+        .map_err(|error| format!("publish confirmed command timeline: {error}"))?;
+        if outcome == soland_services::events::ProjectedEventAppendResult::Inserted {
+            match kinds::canonical_kind(operation) {
+                arkret_wire::EventKind::MessageCreate => {
+                    crate::routing::events::notify::dispatch_message_notifications(state, operation)
+                        .await
+                }
+                arkret_wire::EventKind::RelationCreate => {
+                    crate::routing::events::notify::dispatch_assignment_notifications(
+                        state, operation,
+                    )
+                    .await
+                }
+                arkret_wire::EventKind::StrandUpdate => {
+                    crate::routing::events::notify::dispatch_schedule_notifications(
+                        state, operation,
+                    )
+                    .await
+                }
+                _ => {}
+            }
         }
     }
     Ok(())
