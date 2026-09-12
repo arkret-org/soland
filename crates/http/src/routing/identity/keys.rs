@@ -301,6 +301,10 @@ pub(crate) async fn attested_device_record(
             hpke_key: hpke_key.clone(),
             device_authorize_event_id: device_authorize_event_id.clone(),
             authorized_generation_ref,
+            authorization_window: arkret_models_crypto::DeviceAuthorizationWindow {
+                not_before: authorization.not_before,
+                expires_at: authorization.expires_at.flatten(),
+            },
             device_status: DeviceStatus::Active,
             attested_at,
             expires_at,

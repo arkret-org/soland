@@ -765,6 +765,10 @@ mod tests {
                 )
                 .unwrap(),
                 authorized_generation_ref: 7,
+                authorization_window: arkret_models_crypto::DeviceAuthorizationWindow {
+                    not_before: now - chrono::Duration::days(1),
+                    expires_at: None,
+                },
                 device_status: arkret_models_crypto::DeviceStatus::Active,
                 attested_at: now,
                 expires_at: now + chrono::Duration::minutes(5),

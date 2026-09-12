@@ -128,7 +128,7 @@ pub(super) fn service_declared_event_requirement_features(
         state.jobs().storage_mode(),
         state.config(),
     );
-    crate::routing::system::describe::apply_claim_level_partition(
+    crate::routing::system::describe::apply_conformance_evidence(
         &mut description,
         state.verified_profiles(),
     );

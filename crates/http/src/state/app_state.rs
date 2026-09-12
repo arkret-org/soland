@@ -216,8 +216,8 @@ pub struct AppState {
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
     /// whose `service_role == "station"` and additionally
-    /// cross-checked against the local `claimed_profiles[]` set inside
-    /// `describe.rs::apply_claim_level_partition`. Empty when the env var
+    /// cross-checked against the local `supported_profiles[]` set inside
+    /// `describe.rs::apply_conformance_evidence`. Empty when the env var
     /// is unset / file missing / file malformed — that's the dev-mode
     /// invariant in service-surface.md §3.0.
     verified_profiles: Arc<Vec<VerifiedProfileArtifactEntry>>,

@@ -557,9 +557,9 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
     assert_eq!(*max_channels, WS_MAX_CHANNELS);
     assert!(
         description
-            .claimed_profiles
+            .supported_profiles
             .iter()
-            .any(|claim| { claim.profile_id == arkret_wire::ProfileId::BINDING_WEBSOCKET_V1 })
+            .any(|profile| { profile == arkret_wire::ProfileId::BINDING_WEBSOCKET_V1 })
     );
 
     let introspection_task = tokio::spawn(run_introspection_mock(

@@ -39,10 +39,6 @@ pub(crate) async fn identity_describe(
         extension_profile_required: (),
     }];
     description.supported_features.clear();
-    description.claimed_profiles =
-        vec![arkret_models_discovery::ClaimedProfileEntry::self_claimed(
-            arkret_wire::ProfileId::IDENTITY_REGISTRY_V1,
-        )];
     description.verified_profiles.clear();
     description.interop_surfaces.clear();
     description.plaintext_visibility = arkret_models_discovery::PlaintextVisibility::none();

@@ -367,7 +367,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     );
     // Partition conformance claims while the response remains the SDK's
     // closed ServiceDescribe type.
-    apply_claim_level_partition(&mut description, state.verified_profiles());
+    apply_conformance_evidence(&mut description, state.verified_profiles());
 
     // Validate the Arkret v1 invariants. development_mode=true MUST
     // forbid non-empty verified_profiles; protocol_version MUST equal the
@@ -397,12 +397,8 @@ async fn build_server_description_resolved(
 ///   unset, but we additionally enforce the dev-mode rule below: even if an operator points
 ///   `SOLAND_VERIFIED_PROFILES_ARTIFACT` at a real file while running with `development_mode=true`,
 ///   the wire surface emits `[]`.
-/// - `claimed_profiles[].claim_kind` is always `self_claimed`; cotest verifier output (G4.T3) is
-///   the only path to `verified_profiles`.
-/// - Every loaded verified entry whose `profile_id` does NOT appear in `claimed_profiles[]` is
-///   dropped with a `warn!` line. The wire never advertises a profile we don't also self-claim —
-///   that would be a silent cross-binding lie.
-pub(crate) fn apply_claim_level_partition(
+/// - Verified evidence must refer to a profile in `supported_profiles`.
+pub(crate) fn apply_conformance_evidence(
     description: &mut arkret_models_discovery::ServiceDescribe,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileArtifactEntry],
 ) {
@@ -424,73 +420,8 @@ pub(crate) fn apply_claim_level_partition(
     description.supported_features.sort();
     description.supported_features.dedup();
 
-    // claimed_profiles: self-claimed only. Serialise via the SDK's
-    // typed `ClaimedProfileEntry` so the wire shape stays bound to
-    // `service-describe.schema.json` (a future field rename in the
-    // SDK becomes a soland build break, not a silent drift).
-    //
-    // Conformance profile catalogue per `conformance-profiles.md` §1 /
-    // §7 / §8: a Station claims the Event Store interop
-    // floor + Station + Station Events API in
-    // addition to the MIMI interop staging extension below.
-    let mut claimed_profiles = vec![
-        arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            arkret_wire::ProfileId::CORE_EVENT_STORE_V1,
-        ),
-        arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            arkret_wire::ProfileId::STATION_V1,
-        ),
-        arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            arkret_wire::ProfileId::STATION_EVENTS_API_V1,
-        ),
-        arkret_models_discovery::service_description::ClaimedProfileEntry {
-            notes: Some(
-                "Full MLS Governance Binding: receivers derive and validate the unique \
-                 security_frontier_digest from accepted key-access state and the RFC 9420 \
-                 leaf set. This is the cross-deployment E2EE \
-                 federation interop floor (crypto-media/encryption-and-audit.md §2.5 / \
-                 §295); a Station federating MLS-backed Realms MUST advertise \
-                 it, and it is mutually exclusive with ak.profile.e2ee_relaxed.v1 \
-                 (not claimed)."
-                    .to_owned(),
-            ),
-            ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
-            )
-        },
-        arkret_models_discovery::service_description::ClaimedProfileEntry {
-            notes: Some(
-                "MIMI provider facade first round (not a full v1 core conformance claim)"
-                    .to_owned(),
-            ),
-            ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                arkret_wire::ProfileId::MIMI_INTEROP_V1,
-            )
-        },
-    ];
-    // Dynamic transport profiles are only self-claimed when their production
-    // descriptor was actually admitted into this response. Keeping this in
-    // the claim partition also lets a loaded cotest verification for the
-    // binding survive the claimed-profile cross-check below.
-    if description
-        .supported_profiles
-        .iter()
-        .any(|profile| profile == ProfileId::BINDING_WEBSOCKET_V1)
-    {
-        claimed_profiles.push(
-            arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                ProfileId::BINDING_WEBSOCKET_V1,
-            ),
-        );
-    }
-    // Snapshot the claimed-profile id set BEFORE serialising (which moves
-    // the vec) — the verified_profiles cross-check below needs to know
-    // which profile ids the binary actually self-claims.
-    let claimed_id_set: std::collections::BTreeSet<String> = claimed_profiles
-        .iter()
-        .map(|c| c.profile_id.clone())
-        .collect();
-    description.claimed_profiles = claimed_profiles;
+    let supported_id_set: std::collections::BTreeSet<String> =
+        description.supported_profiles.iter().cloned().collect();
 
     // verified_profiles: populated by the G4.T3 cotest artifact loader.
     // `loaded_verified` is the deserialised + role-filtered slice from
@@ -499,7 +430,7 @@ pub(crate) fn apply_claim_level_partition(
     // forces `[]` per service-surface.md §3.0.
     //
     // Cross-check: every loaded entry's `profile_id` MUST also appear in
-    // the `claimed_profiles[]` built above. Entries that fail the
+    // the `supported_profiles[]` advertised above. Entries that fail the
     // cross-check are dropped with a warn — we never advertise a verified
     // profile we don't also self-claim.
     let verified_profiles: Vec<arkret_models_discovery::service_description::VerifiedProfileEntry> =
@@ -517,11 +448,11 @@ pub(crate) fn apply_claim_level_partition(
             loaded_verified
             .iter()
             .filter_map(|entry| {
-                if !claimed_id_set.contains(&entry.profile_id) {
+                if !supported_id_set.contains(&entry.profile_id) {
                     tracing::warn!(
                         target: "verified_profiles",
                         profile_id = %entry.profile_id,
-                        "dropping verified-profile entry: profile_id absent from claimed_profiles"
+                        "dropping verified-profile entry: profile_id absent from supported_profiles"
                     );
                     return None;
                 }
@@ -695,7 +626,7 @@ mod tests {
     use arkret_models_discovery::service_description::ServiceDescribe;
     use arkret_wire::{Did, ServiceKind, TrustDomainId};
 
-    use super::apply_claim_level_partition;
+    use super::apply_conformance_evidence;
 
     #[test]
     fn conformance_discovery_tokens_are_not_wire_features() {
@@ -715,7 +646,7 @@ mod tests {
         description
             .supported_profiles
             .push("ak.profile.chat_mvp.v1".to_owned());
-        apply_claim_level_partition(&mut description, &[]);
+        apply_conformance_evidence(&mut description, &[]);
         for feature in [
             "discussion_history_access",
             "supported_event_kinds",
@@ -745,19 +676,13 @@ mod tests {
                 extension_profile_required: (),
             }],
         );
-        apply_claim_level_partition(&mut description, &[]);
+        apply_conformance_evidence(&mut description, &[]);
 
         assert!(
             !description
                 .supported_profiles
                 .iter()
                 .any(|profile| { profile == arkret_wire::ProfileId::SOVEREIGN_ENCLAVE_V1 })
-        );
-        assert!(
-            !description
-                .claimed_profiles
-                .iter()
-                .any(|claim| { claim.profile_id == arkret_wire::ProfileId::SOVEREIGN_ENCLAVE_V1 })
         );
     }
 }

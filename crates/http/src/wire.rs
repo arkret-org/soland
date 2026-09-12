@@ -18,7 +18,7 @@ pub use arkret_models_crypto::{
 pub use arkret_models_discovery::ops::HardeningStatus;
 use arkret_models_discovery::{
     AccountAuthority, AuthGrantExchange, AuthGrantExchangeKind, AuthMetadata, AuthMethod,
-    AuthMethodKind, ClaimedProfileEntry, ServiceDescribe,
+    AuthMethodKind, ServiceDescribe,
 };
 pub use arkret_models_discovery::{
     RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceKind,
@@ -499,33 +499,10 @@ pub fn describe(
     // Implemented / claimed / verified profiles are partitioned per spec
     // service-surface.md §3.0; `verified_profiles` MUST be empty when
     // `development_mode=true`. The full T6.1 claim-level partition layer
-    // in routing::system::describe::apply_claim_level_partition still
+    // in routing::system::describe::apply_conformance_evidence still
     // overrides these typed fields before serialization — we keep typed
     // defaults here so out-of-tree typed consumers see the correct shape
     // and pass `ServiceDescribe::validate`.
-    // Round 4 — typed entries match `service-describe.schema.json`
-    // (`claimed_profiles[*]`, `interop_surfaces[*]`). The routing-layer
-    // `apply_claim_level_partition` populates these SDK-typed fields
-    // before the response is serialized so the JSON wire shape and the
-    // typed surface can never drift.
-    //
-    // Profile catalogue per `arkret-spec/spec/v1/zh/conformance/conformance-profiles.md`
-    // §1 / §7 / §8: a Station self-claims the Event Store
-    // interop floor AND the Station + Station Events
-    // API stable-catalog profiles in addition to whatever interop
-    // staging extensions it implements (MIMI here).
-    let claimed_profiles = vec![
-        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::CORE_EVENT_STORE_V1),
-        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::STATION_V1),
-        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::STATION_EVENTS_API_V1),
-        ClaimedProfileEntry {
-            notes: Some(
-                "MIMI provider facade first round (not a full v1 core conformance claim)"
-                    .to_owned(),
-            ),
-            ..ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::MIMI_INTEROP_V1)
-        },
-    ];
     let verified_profiles = Vec::new();
     let interop_surfaces = Vec::new();
     let service_id = arkret_wire::project_did_to_core_id(&service_resolution.did)
@@ -638,7 +615,6 @@ pub fn describe(
         ],
         plaintext_visibility,
         calendar_tzdb_versions: Vec::new(),
-        claimed_profiles,
         verified_profiles,
         interop_surfaces,
         invite_addressing: None,
@@ -656,7 +632,6 @@ pub fn describe(
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
         resource_kinds: Vec::new(),
         restricted_query_proof: None,
-        ingest_modes: Vec::new(),
         accept_policy_kind: None,
         accept_policy_ref: None,
         default_ttl_seconds: None,

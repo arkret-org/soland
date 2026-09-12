@@ -725,7 +725,7 @@ async fn events_describe(
         state.config(),
     );
     crate::routing::events::sync::websocket::advertise_websocket_binding(state, &mut description);
-    crate::routing::system::describe::apply_claim_level_partition(
+    crate::routing::system::describe::apply_conformance_evidence(
         &mut description,
         state.verified_profiles(),
     );

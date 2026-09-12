@@ -290,7 +290,7 @@ fn local_semantic_claims(state: &AppState) -> SemanticClaims {
         state.config(),
     );
     description.receive_policy_constraints = state.config().receive_policy_constraints.clone();
-    crate::routing::system::describe::apply_claim_level_partition(
+    crate::routing::system::describe::apply_conformance_evidence(
         &mut description,
         state.verified_profiles(),
     );
@@ -417,12 +417,6 @@ async fn fetch_peer_description(state: &AppState, source_id: &str) -> Option<Ser
 fn profile_ids_from_description(description: &ServiceDescribe) -> BTreeSet<String> {
     let mut profiles = BTreeSet::new();
     profiles.extend(description.supported_profiles.iter().cloned());
-    profiles.extend(
-        description
-            .claimed_profiles
-            .iter()
-            .map(|entry| entry.profile_id.clone()),
-    );
     profiles.extend(
         description
             .verified_profiles

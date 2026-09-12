@@ -442,20 +442,13 @@ async fn describe_separates_claim_levels_body() {
         "dev mode must not advertise any conformance_verified profile, got {verified:?}"
     );
 
-    let claimed = describe["claimed_profiles"]
-        .as_array()
-        .expect("claimed_profiles array present");
+    assert!(describe.get("claimed_profiles").is_none());
     assert!(
-        !claimed.is_empty(),
-        "soland self-claims at least one profile"
+        !describe["supported_profiles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
-    for entry in claimed {
-        assert_eq!(
-            entry["claim_kind"], "self_claimed",
-            "claimed_profiles entries MUST be self_claimed; verified entries belong in verified_profiles"
-        );
-        assert!(entry["profile_id"].is_string());
-    }
 
     let features = describe["supported_features"]
         .as_array()

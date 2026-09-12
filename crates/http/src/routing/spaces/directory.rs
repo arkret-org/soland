@@ -165,11 +165,6 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         plaintext_visibility: arkret_models_discovery::service_description::PlaintextVisibility::none(),
         privacy_derivation: None,
         receive_policy_constraints: None,
-        claimed_profiles: vec![
-            arkret_models_discovery::ClaimedProfileEntry::self_claimed(
-                arkret_wire::ProfileId::DIRECTORY_SERVICE_V1,
-            ),
-        ],
         verified_profiles: Vec::new(),
         interop_surfaces: Vec::new(),
         invite_addressing: None,
@@ -180,7 +175,6 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
         resource_kinds: DIRECTORY_RESOURCE_KINDS.to_vec(),
         restricted_query_proof: Some(false),
-        ingest_modes: vec![arkret_models_discovery::service_description::DirectoryIngestMode::Push],
         accept_policy_kind: Some(arkret_models_discovery::service_description::DirectoryAcceptPolicyKind::Open),
         accept_policy_ref: None,
         default_ttl_seconds: Some(86_400),
