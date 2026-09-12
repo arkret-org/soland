@@ -1,24 +1,15 @@
-//! Holder-private consent cell routes and Event admission.
+//! Holder-private consent routes and admission planning.
 //!
-//! `ak.component.consent.grant.v1` is an observe-remove OR-Set whose subject is
-//! the caller-minted `consent_id` (spec `zh/identity/consent-model.md` §3.1), so
-//! a cell is addressed by `(holder, cell_id)` and carries the `(peer,
-//! consent_scope)` intent its first accepted grant froze. Contact and Personal
-//! DM authority are separate and never consult this projection.
+//! The consent family is a security cell whose active tagged set is executed
+//! in confirmed Seal command order. `consent_id` is its subject; the holder and
+//! frozen peer/scope intent identify the local read mirror. Retained grant and
+//! revocation records are local audit material, not a second protocol OR-Set.
 //!
-//! `grant` and `revoke` take the holder-signed `ak.consent.grant` /
-//! `ak.consent.revoke` Control Move and submit those exact bytes through
-//! ordinary Event admission. The or_set dot is `ak:event:<event_id>:<write_index>`
-//! and the cell subject is the caller's `consent_id`, so the service chooses
-//! neither (§3.1, §3.2). A dot no Event produced would be an element in
-//! replicated state that nothing in the log explains, and revoke targets dots by
-//! value.
-//!
-//! Admission is the only writer. [`preflight_consent_admission`] resolves the
-//! whole cell mutation and its eager cache invalidation *before* the Event is
-//! accepted and hands them to the Event commit unit of work; a rejected Move
-//! leaves no accepted Event, no cell mutation and no invalidation behind
-//! (spec section 4.1.2 puts them inside one transaction boundary).
+//! Admission validates the holder-signed command and stages its intent. Pending
+//! and rejected commands publish no consent authority or quarantine invalidation.
+//! The exact committed decision replays the signed grant/revoke against the
+//! transaction's current mirror and cache. Runtime readers reload that durable
+//! result after the complete Seal transaction succeeds.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -157,7 +148,7 @@ pub(crate) async fn preflight_consent_admission(
 }
 
 /// Publish a committed consent Control Move's read-model and notification
-/// effects. The durable write already succeeded inside the Event transaction.
+/// effects. The durable write must already have succeeded inside the Seal transaction.
 pub(crate) async fn apply_committed_consent_admission(
     state: &AppState,
     admission: &ConsentAdmission,
@@ -565,14 +556,14 @@ fn projected_consent_remove_dots(
             return Err(ConsentRejection::new(
                 StatusCode::BAD_REQUEST,
                 "reducer_projection_failed",
-                "ak.consent.revoke must project direct or_set remove ops",
+                "ak.consent.revoke must project direct active-set remove ops",
             ));
         };
         if op.op_type != arkret_wire::cbs::LatticeOpType::Remove {
             return Err(ConsentRejection::new(
                 StatusCode::BAD_REQUEST,
                 "reducer_projection_failed",
-                "ak.consent.revoke must project only or_set remove ops",
+                "ak.consent.revoke must project only active-set remove ops",
             ));
         }
         let tag = op.tag.clone().ok_or_else(|| {
@@ -704,7 +695,7 @@ async fn revoke_consent_cell(
     let holder_account_id = authenticated_holder_account_id(state, &session.actor)?;
     let submission = body.into_inner().revoke_event;
     // The dots being removed come from the Event the holder signed, never from
-    // a server-side enumeration: an observe-remove OR-Set revoke is only
+    // a server-side enumeration: a confirmed active-set revoke is only
     // correct when the revoker named the dots it observed.
     let consent_id = caller_signed_consent_event_identity(
         &session.actor,
@@ -905,7 +896,7 @@ fn read_back_consent_cell(
 /// consent Control Move, and report the consent_id it names.
 ///
 /// The signature, envelope shape, the holder authority-root authorization and
-/// the whole OR-Set contract are ordinary Event admission's job. This covers
+/// the security-cell command contract are shared Event validation's job. This covers
 /// only the bindings between the authenticated session, the path holder and the
 /// Event that was submitted.
 fn caller_signed_consent_event_identity(

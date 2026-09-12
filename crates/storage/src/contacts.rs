@@ -8,7 +8,7 @@ use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
 /// Principal-private, non-canonical mirror of one fully verified inbound
 /// `ak.contact.requested` carrier. It never participates in Realm reduction,
 /// Seal construction, CBS frontiers, or state roots.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ContactVerifiedMirrorRecord {
     pub target_holder_principal_id: String,
     pub request_event_id: String,
@@ -100,7 +100,7 @@ pub fn validate_invite_policy_account(
 /// Durable backing for the holder-private consent-cell projection (spec
 /// `consent-model.md` sections 3 to 5), keyed by `(holder, cell_id)` because
 /// `consent_id` is the cell subject. Rows are only ever written inside the
-/// Event commit unit of work that accepts the grant/revoke Control Move, so
+/// exact committed Seal transaction for the grant/revoke command, so
 /// this store exposes reads alone; boot hydration replays it into the working
 /// projection. `grant_dots` / `revoked_dots` are persisted as JSONB so the
 /// `BTreeMap`/`BTreeSet` round-trip losslessly.

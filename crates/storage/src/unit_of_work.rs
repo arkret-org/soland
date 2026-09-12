@@ -41,9 +41,10 @@ pub fn admitted_cascade_agent_id(
     Ok(event.actor_id)
 }
 
-/// One Contact projection mutation committed with its canonical Event and
-/// federation intent. `expected_updated_at=None` is an insert-only slot;
-/// `Some` is a whole-row CAS against the revision read by admission.
+/// Admission-derived Contact planning input. The adapter stages a command
+/// intent and replays it at the exact committed Seal decision. Admission-time
+/// revisions are planning metadata; a confirmed command is never conditional
+/// on that stale mirror revision. The adapter recomputes any local CAS under lock.
 #[derive(Clone, Debug)]
 pub struct ContactProjectionCommit {
     pub record: ContactRecord,
@@ -68,9 +69,9 @@ pub struct ContactProjectionCommit {
 ///
 /// `consent-model.md` section 4.1.2 requires the downstream invalidation to
 /// land inside the same transaction boundary as the accepted revoke, and the
-/// or_set cell mutation is what the Event *means*, so the cell row, the
-/// invalidation and the canonical Event share one commit. Admission computes
-/// all of it before acceptance; a rejected Move writes none of it.
+/// security mirror and invalidation share the exact committed Seal transaction.
+/// Admission supplies planning input only; adapters replay the signed command
+/// against the transaction state. Pending and rejected commands publish nothing.
 #[derive(Clone, Debug)]
 pub struct ConsentProjectionCommit {
     pub cell: ConsentCellRecord,

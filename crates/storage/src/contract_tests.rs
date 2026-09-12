@@ -19,12 +19,11 @@ use arkret_wire::{
 use chrono::{Duration, Utc};
 
 use super::{
-    AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore,
-    AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
-    AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
-    AgentApprovalNonceCommit, AppletIdentityCommit, AppletRecordCommit, AppletStore,
-    CanonicalEventRecord, ConsentCellRecord, ConsentCellStore, ConsentGrantDot,
-    ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLocalpartStore, AccountPk,
+    AccountRecord, AccountStatusReplicaAppend, AccountStatusReplicaConflictKind,
+    AccountStatusReplicaStore, AccountStore, AgentApprovalNonceCommit, AppletIdentityCommit,
+    AppletRecordCommit, AppletStore, CanonicalEventRecord, ConsentCellRecord, ConsentCellStore,
+    ConsentGrantDot, ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
     ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
     DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
@@ -2700,9 +2699,10 @@ pub async fn assert_event_commit_unit_of_work_contract(
         Some(pairing_event_id.as_str())
     );
 
-    // Contact acceptance must expose its canonical Event, holder projection,
-    // and peer carrier together. Reading all three back only through durable
-    // stores models a process restart with no in-memory planning state.
+    // Contact admission persists the canonical Event and peer carrier while
+    // its holder projection remains invisible until an exact committed decision. Reading all three
+    // back only through durable stores models a process restart with no in-memory planning
+    // state.
     let contact_event = canonical_wire_event_record(
         arkret_wire::EventKind::ContactRequested.as_str(),
         &principal_id,
@@ -2715,10 +2715,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let contact_outbox_id = format!("contact-outbox:{namespace}:{event_uuid}");
     let contact_idempotency_key = format!("contact-commit:{namespace}:{event_uuid}");
     let contact_record = ContactRecord {
-        requester_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            DidCoreId::new(principal_id.clone()).unwrap(),
-            DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-        )),
+        requester_id: serde_json::from_str(&contact_event.actor_id).unwrap(),
         target_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             DidCoreId::new(format!("ak:did_core:web:contact-peer-{namespace}.example")).unwrap(),
             DidCoreId::new("ak:did_core:web:peer-principal.example").unwrap(),
@@ -2815,31 +2812,14 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .await
         .expect("Contact response-loss replay observes the committed unit");
     assert!(stores.events.contains(&contact_event_id).await.unwrap());
-    assert_eq!(
+    assert!(
         stores
             .contacts
             .get(&contact_record.requester_id, &contact_record.target_id)
             .await
             .unwrap()
-            .expect("Contact projection survives restart-equivalent read")
-            .request_event_ref
-            .as_ref()
-            .map(arkret_wire::EventId::as_str),
-        Some(contact_event_id.as_str())
-    );
-    let persisted_contact = stores
-        .contacts
-        .get(&contact_record.requester_id, &contact_record.target_id)
-        .await
-        .unwrap()
-        .expect("Contact projection retains request-slot CAS state");
-    assert_eq!(
-        persisted_contact.request_slot_states, contact_record.request_slot_states,
-        "request-slot predecessor and accepted local sequence survive the atomic Contact commit"
-    );
-    assert_eq!(
-        persisted_contact.pending_incoming_admitted, contact_record.pending_incoming_admitted,
-        "the directional pending-incoming admission decision survives restart-equivalent reads"
+            .is_none(),
+        "pending Contact has no visible business mirror"
     );
     assert!(
         stores
@@ -2911,9 +2891,12 @@ pub async fn assert_event_commit_unit_of_work_contract(
             )],
         })
         .await;
-    assert!(failed_contact_commit.is_err());
     assert!(
-        !stores
+        failed_contact_commit.is_ok(),
+        "admission stages a command; an old mirror CAS is not a terminal decision"
+    );
+    assert!(
+        stores
             .events
             .contains(&failed_contact_event_id)
             .await
@@ -2925,8 +2908,15 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .get(&failed_contact_outbox_id)
             .await
             .unwrap()
-            .is_none(),
-        "Contact CAS failure must roll back its peer carrier"
+            .is_some()
+    );
+    assert!(
+        stores
+            .contacts
+            .get(&contact_record.requester_id, &contact_record.target_id)
+            .await
+            .unwrap()
+            .is_none()
     );
 
     let rollback_uuid = uuid::Uuid::now_v7();
@@ -5559,9 +5549,8 @@ pub struct ConsentCommitContractStores<'a> {
     pub account_data: &'a dyn AccountDataStore,
 }
 
-/// Both adapters commit a consent Control Move, its or_set cell row and its
-/// eager holder-quarantine invalidation as one unit, and both refuse to rebind
-/// a `consent_id` to a different intent.
+/// Admission stages a consent command without publishing its security mirror.
+/// Adapter-specific Seal transaction tests cover committed and rejected effects.
 ///
 /// Spec `consent-model.md` sections 3.1 and 4.1.2: the cell subject is the
 /// `consent_id`, and the downstream invalidation belongs inside the accepted
@@ -5578,8 +5567,6 @@ pub async fn assert_consent_projection_commit_contract(
     // projection has to round-trip `(realm_id, principal_id)` as one key.
     let pairwise_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
     let peer = DidCoreId::new("ak:did_core:key:z6MkContractPairwisePeer".to_owned()).unwrap();
-    let other_peer =
-        DidCoreId::new("ak:did_core:key:z6MkContractPairwiseOther".to_owned()).unwrap();
     let cell_id = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-{:012x}",
         namespace.len()
@@ -5632,190 +5619,17 @@ pub async fn assert_consent_projection_commit_contract(
             },
         ))
         .await
-        .expect("consent grant commits with its cell");
-    assert_eq!(
+        .expect("consent grant is durably pending");
+    assert!(stores.events.get(&grant_event_id).await.unwrap().is_some());
+    assert!(
         stores
             .consent_cells
             .get(&holder_account_id, &cell_id)
             .await
-            .expect("read consent cell"),
-        Some(granted.clone()),
-        "the accepted grant's cell row is durable"
-    );
-
-    // A second consent_id-identical grant that names another peer is a rebind.
-    let rebind_event = canonical_wire_event_record(
-        arkret_wire::EventKind::ConsentGrant.as_str(),
-        holder.as_str(),
-        &realm_id,
-        1,
-        now,
-    );
-    let rebind_event_id = rebind_event.event_id.clone();
-    let rebind_ack = contract_control_proposal_ack(&rebind_event, now);
-    let mut rebound = granted.clone();
-    rebound.peer = arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
-        realm_id: pairwise_realm_id,
-        principal_id: other_peer,
-    };
-    let rejected = stores
-        .unit_of_work
-        .commit_event(consent_commit_request(
-            rebind_event,
-            rebind_ack,
-            ConsentProjectionCommit {
-                cell: rebound,
-                holder_quarantine: None,
-            },
-        ))
-        .await;
-    assert!(
-        matches!(rejected, Err(PersistenceError::Conflict(ref code)) if code == "consent_intent_rebind"),
-        "a consent_id binds one intent: {rejected:?}"
-    );
-    assert!(
-        stores
-            .events
-            .get(&rebind_event_id)
-            .await
-            .expect("read rebind event")
+            .unwrap()
             .is_none(),
-        "a refused consent projection leaves no accepted Event"
+        "pending consent has no visible authority mirror"
     );
-    assert_eq!(
-        stores
-            .consent_cells
-            .get(&holder_account_id, &cell_id)
-            .await
-            .expect("read consent cell"),
-        Some(granted.clone()),
-        "a refused rebind leaves the frozen intent untouched"
-    );
-
-    // A revoke commits its cell mutation and its quarantine CAS together.
-    let quarantine_key = "ak.account.holder_quarantine";
-    let seeded = AccountDataRecord {
-        actor: holder.to_string(),
-        account_data_key: quarantine_key.to_owned(),
-        revision: 1,
-        payload: serde_json::json!({"entries": [{"source_peer_principal_id": peer}]}),
-        tombstone: false,
-        updated_at: now,
-    };
-    assert!(
-        matches!(
-            stores
-                .account_data
-                .compare_and_set(&seeded, 0)
-                .await
-                .expect("seed quarantine cell"),
-            AccountDataCasResult::Applied(_)
-        ),
-        "quarantine cell seeds at revision 1"
-    );
-
-    let stale_event = canonical_wire_event_record(
-        arkret_wire::EventKind::ConsentRevoke.as_str(),
-        holder.as_str(),
-        &realm_id,
-        1,
-        now,
-    );
-    let stale_event_id = stale_event.event_id.clone();
-    let stale_ack = contract_control_proposal_ack(&stale_event, now);
-    let mut revoked = granted.clone();
-    revoked.revoked_dots.insert(dot.clone());
-    let stale_cas = AccountDataCasCommit {
-        record: AccountDataRecord {
-            revision: 8,
-            ..seeded.clone()
-        },
-        expected_revision: 7,
-        conflict_code: "cas_conflict".to_owned(),
-    };
-    let stale = stores
-        .unit_of_work
-        .commit_event(consent_commit_request(
-            stale_event,
-            stale_ack,
-            ConsentProjectionCommit {
-                cell: revoked.clone(),
-                holder_quarantine: Some(stale_cas),
-            },
-        ))
-        .await;
-    assert!(
-        matches!(stale, Err(PersistenceError::Conflict(ref code)) if code == "cas_conflict"),
-        "a stale invalidation CAS refuses the whole revoke: {stale:?}"
-    );
-    assert!(
-        stores
-            .events
-            .get(&stale_event_id)
-            .await
-            .expect("read stale revoke event")
-            .is_none(),
-        "a failed invalidation leaves no accepted revoke Event"
-    );
-    assert_eq!(
-        stores
-            .consent_cells
-            .get(&holder_account_id, &cell_id)
-            .await
-            .expect("read consent cell")
-            .expect("cell still exists")
-            .revoked_dots
-            .len(),
-        0,
-        "a failed invalidation leaves no partial cell mutation"
-    );
-
-    let revoke_event = canonical_wire_event_record(
-        arkret_wire::EventKind::ConsentRevoke.as_str(),
-        holder.as_str(),
-        &realm_id,
-        1,
-        now,
-    );
-    let revoke_ack = contract_control_proposal_ack(&revoke_event, now);
-    let applied_cas = AccountDataCasCommit {
-        record: AccountDataRecord {
-            revision: 2,
-            payload: serde_json::json!({"entries": []}),
-            ..seeded.clone()
-        },
-        expected_revision: 1,
-        conflict_code: "cas_conflict".to_owned(),
-    };
-    stores
-        .unit_of_work
-        .commit_event(consent_commit_request(
-            revoke_event,
-            revoke_ack,
-            ConsentProjectionCommit {
-                cell: revoked.clone(),
-                holder_quarantine: Some(applied_cas),
-            },
-        ))
-        .await
-        .expect("consent revoke commits with its invalidation");
-    assert_eq!(
-        stores
-            .consent_cells
-            .get(&holder_account_id, &cell_id)
-            .await
-            .expect("read consent cell"),
-        Some(revoked),
-        "the accepted revoke's removal is durable"
-    );
-    let quarantine = stores
-        .account_data
-        .get(holder.as_str(), quarantine_key)
-        .await
-        .expect("read quarantine cell")
-        .expect("quarantine cell exists");
-    assert_eq!(quarantine.revision, 2);
-    assert_eq!(quarantine.payload, serde_json::json!({"entries": []}));
 }
 
 fn consent_commit_request(

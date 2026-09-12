@@ -785,6 +785,8 @@ CREATE TABLE public.state_control_events (
     -- carries the same array; ordinary commands use a singleton array.
     command_unit_event_digests jsonb NOT NULL,
     proposal_decisions jsonb DEFAULT '[]'::jsonb NOT NULL,
+    -- Private admission-derived mirrors; invisible until the exact committed decision.
+    pending_domain_effects jsonb,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     is_pending boolean DEFAULT true NOT NULL,
     UNIQUE (event_digest, realm_id),

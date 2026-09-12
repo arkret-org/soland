@@ -37,7 +37,8 @@ impl ConsentGrantDot {
     }
 }
 
-/// One holder-private `ak.component.consent.grant.v1` or_set cell.
+/// Local audit/read mirror of the confirmed consent security cell.
+/// Retained revoked tags are audit history, not protocol tombstone state.
 ///
 /// `peer` and `consent_scope` are the intent frozen by the cell's first
 /// accepted grant; every later dot on the same `consent_id` MUST carry that
@@ -129,7 +130,7 @@ pub struct ContactRequestSlotState {
     pub head_digest: Hash,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ContactRecord {
     pub requester_id: ActorId,
     pub target_id: ActorId,

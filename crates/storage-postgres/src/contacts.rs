@@ -264,6 +264,17 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
     })
 }
 const CONTACT_COLUMNS: &str = "requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, pending_incoming_admitted, request_event_ref, request_slot_states, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_host_id, peer_service_resolution, created_at, updated_at";
+pub(super) async fn lock_contact(
+    conn: &mut diesel_async::AsyncPgConnection,
+    requester: &ActorId,
+    target: &ActorId,
+) -> PersistenceResult<Option<ContactRecord>> {
+    let row = sql_query(format!("SELECT {CONTACT_COLUMNS} FROM contacts WHERE (requester_id=$1 AND target_id=$2) OR (requester_id=$2 AND target_id=$1) FOR UPDATE"))
+        .bind::<Text, _>(requester.to_string()).bind::<Text, _>(target.to_string())
+        .get_result::<ContactRow>(conn).await.optional().map_err(PersistenceError::database)?;
+    row.map(contact_record_from_row).transpose()
+}
+
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn get(
@@ -713,7 +724,7 @@ mod invite_policy_tests {
 // mirrors `ConsentCellRecord`; `grant_dots` is persisted as a JSONB object
 // `{dot -> {dot, not_before, expires_at, granted_at}}` and `revoked_dots` as a
 // JSONB string array so the in-memory `BTreeMap`/`BTreeSet` round-trip
-// losslessly. Writes happen only inside the Event commit unit of work.
+// losslessly. Writes happen only inside the exact committed Seal transaction.
 pub struct PgConsentCellStore {
     pub pool: PgPool,
 }
@@ -767,6 +778,17 @@ impl ConsentCellRow {
 }
 const CONSENT_CELL_COLUMNS: &str =
     "cell_id, holder_account_id, peer, consent_scope, grant_dots, revoked_dots, updated_at";
+pub(super) async fn lock_consent_cell(
+    conn: &mut diesel_async::AsyncPgConnection,
+    holder: &arkret_wire::AccountId,
+    cell: &CellRef,
+) -> PersistenceResult<Option<ConsentCellRecord>> {
+    let row = sql_query(format!("SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells WHERE holder_account_id=$1 AND cell_id=$2 FOR UPDATE"))
+        .bind::<Jsonb, _>(serde_json::to_value(holder).map_err(|e| PersistenceError::Internal(e.to_string()))?)
+        .bind::<Text, _>(cell).get_result::<ConsentCellRow>(conn).await.optional().map_err(PersistenceError::database)?;
+    Ok(row.map(|row| row.into_pair().1))
+}
+
 #[async_trait]
 impl ConsentCellStore for PgConsentCellStore {
     async fn get(

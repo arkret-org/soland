@@ -1,3 +1,5 @@
+mod domain_effects;
+
 use arkret_identifiers::EventId;
 use async_trait::async_trait;
 use diesel::sql_types::{
@@ -5,6 +7,8 @@ use diesel::sql_types::{
 };
 use diesel::{OptionalExtension, sql_query};
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+pub(super) use domain_effects::settle_domain_effects;
+use domain_effects::stage_domain_effects;
 use soland_storage::{
     CanonicalEventRecord, EventBatchCommitRequest, EventCommitOutcome, EventCommitRequest,
     EventCommitUnitOfWork, PersistenceError, PersistenceResult, ids, validate_actor_scope_commit,
@@ -764,11 +768,11 @@ fn contact_event_ref(value: Option<&EventId>) -> PersistenceResult<Option<Vec<u8
         .transpose()
 }
 
-/// Commit one accepted consent Control Move's holder-private effects.
+/// Install one committed consent command's holder-private effects.
 ///
-/// The or_set cell row and the eager holder-quarantine invalidation
-/// (`consent-model.md` section 4.1.2) run inside the Event transaction, so a
-/// failure here rolls the canonical Event back with them. The intent guard
+/// The security cell mirror and the eager holder-quarantine invalidation
+/// (`consent-model.md` section 4.1.2) run inside the Seal transaction, so a
+/// failure here rolls the decision and effects back together. The intent guard
 /// repeats admission's `(holder, consent_id)` binding check inside the
 /// transaction: a concurrent grant cannot rebind the same consent_id between
 /// admission and commit.
@@ -1248,12 +1252,6 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             if request.control_proposal_ingress.is_none() {
                 crate::current_data::commit_sources(conn, &typed_event, request.event.digest_suite).await?;
             }
-            if let Some(contact_projection) = request.contact_projection {
-                commit_contact_projection(conn, contact_projection).await?;
-            }
-            if let Some(consent_projection) = request.consent_projection {
-                commit_consent_projection(conn, consent_projection).await?;
-            }
             let is_control_move = arkret_schema::classify_event_execution(&typed_event)
                 .map_err(|error| PersistenceError::SchemaViolation(format!("invalid Event execution: {error}")))?
                 == Some(arkret_wire::CbsEffectPlane::Control) || request.control_proposal_ingress.is_some();
@@ -1363,6 +1361,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         Ok(())
                     }
                 })?;
+                stage_domain_effects(conn, &typed_event, &event_digest, request.contact_projection, request.consent_projection).await?;
                 control_seal_schedule::upsert_for_control_event(
                     conn,
                     typed_event.realm_id.as_str(),
@@ -1401,6 +1400,8 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 }
             } else if request.control_proposal_ingress.is_some()
                 || request.device_revocation_transition.is_some()
+                || request.contact_projection.is_some()
+                || request.consent_projection.is_some()
             {
                 return Err(PersistenceError::Conflict(
                     "schema_violation: non-Control Event cannot carry Control Proposal authority"

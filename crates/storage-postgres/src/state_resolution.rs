@@ -603,6 +603,9 @@ async fn record_control_event_decision_in_transaction(
     .bind::<Bool, _>(overdue)
     .execute(conn)
     .await?;
+    crate::unit_of_work::settle_domain_effects(conn, &event, digest, outcome)
+        .await
+        .map_err(persistence_to_store)?;
     if outcome == CommandOutcome::Committed {
         let event_suite = event.event_id.digest_suite_code().digest_suite();
         crate::current_data::commit_sources(conn, &event, event_suite)

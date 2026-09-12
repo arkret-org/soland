@@ -1539,6 +1539,7 @@ diesel::table! {
         ingress_class -> Jsonb,
         command_unit_event_digests -> Jsonb,
         proposal_decisions -> Jsonb,
+        pending_domain_effects -> Nullable<Jsonb>,
         inserted_at -> Timestamptz,
         is_pending -> Bool,
     }
