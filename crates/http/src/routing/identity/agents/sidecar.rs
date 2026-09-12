@@ -484,7 +484,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
             }
         }
         arkret_wire::EventKind::MlsWelcome => {
-            if current_group.as_deref() != Some(payload_group_id) {
+            if current_group.as_deref() != Some(payload_group_id.as_str()) {
                 return Err("mls_sidecar_group_mismatch");
             }
             let projection = state.projections().snapshot();
@@ -509,7 +509,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
                 return Err("mls_sidecar_welcome_epoch_mismatch");
             }
         }
-        _ if current_group.as_deref() != Some(payload_group_id) => {
+        _ if current_group.as_deref() != Some(payload_group_id.as_str()) => {
             return Err("mls_sidecar_group_mismatch");
         }
         _ => {}

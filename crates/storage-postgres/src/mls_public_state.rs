@@ -114,14 +114,14 @@ pub(crate) async fn commit_genesis(
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
         )
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    if payload.effective_scope != event.scope_ref {
+    if payload.effective_scope() != &event.scope_ref {
         return Err(fail("MLS Genesis effective scope does not match its Event"));
     }
     if payload
         .effective_scope
         .canonical_mls_group_id()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
-        != payload.mls_group_id.as_str()
+        != payload.mls_group_id()
     {
         return Err(fail(
             "MLS Genesis group id is not derived from its effective scope",
@@ -163,7 +163,7 @@ pub(crate) async fn commit_genesis(
     let tracker = arkret_mls::MlsPublicGroupTracker::from_external(
         &input.group_info_bytes,
         &input.ratchet_tree_bytes,
-        payload.mls_group_id.as_str(),
+        payload.mls_group_id(),
         0,
         Some(&payload.governance_binding),
     )

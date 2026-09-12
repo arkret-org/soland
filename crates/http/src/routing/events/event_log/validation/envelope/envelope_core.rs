@@ -894,10 +894,7 @@ async fn validate_event_envelope_with_ingress(
                 arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload,
             >(payload.clone())
             .map_err(invalid_typed_mls_payload)?;
-            validate_canonical_mls_group_id(
-                payload.mls_group_id.as_str(),
-                &payload.effective_scope,
-            )?;
+            validate_canonical_mls_group_id(payload.mls_group_id(), payload.effective_scope())?;
         }
         arkret_wire::EventKind::MlsCommit => {
             let payload =
@@ -924,7 +921,7 @@ async fn validate_event_envelope_with_ingress(
             >(payload.clone())
             .map_err(invalid_typed_mls_payload)?;
             validate_canonical_mls_group_id(
-                payload.mls_group_id.as_str(),
+                payload.mls_group_id(),
                 payload.governance_binding.effective_scope(),
             )?;
         }

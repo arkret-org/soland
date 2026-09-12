@@ -1761,7 +1761,7 @@ async fn validate_welcome_peer_claim_ledger(
             })
         || request.target_principal_id().as_ref() != Some(recipient_actor_id)
         || request.intended_realm_id.as_str() != realm_id
-        || request.mls_group_id.as_str() != welcome.mls_group_id.as_str()
+        || request.mls_group_id.as_str() != welcome.mls_group_id()
         || request.expires_at != receipt.expires_at
         || receipt.expires_at <= now()
         || welcome.claim_envelope.intended_realm_id != request.intended_realm_id
@@ -3102,8 +3102,8 @@ async fn validate_recipient_durable_receipt(
         || welcome.claim_receipt.claim_request_id != receipt.claim_request_id
         || welcome.keypackage_ref != receipt.key_package_ref.as_str()
         || welcome.claim_id.as_str() != body.claim_id.as_str()
-        || welcome.mls_group_id.as_str() != receipt.mls_group_id.as_str()
-        || welcome.epoch != receipt.mls_epoch
+        || welcome.mls_group_id() != receipt.mls_group_id.as_str()
+        || welcome.epoch() != receipt.mls_epoch
         || receipt.welcome_digest.as_str() != welcome_digest
     {
         return Err(crate::app_error!(
@@ -3467,8 +3467,8 @@ async fn validate_direct_keypackage_consume(
     let claim_id = &body.claim_id;
     let key_package_id = body.recipient_durable_receipt.key_package_ref.as_str();
     if !welcome_recipient_matches_consumer(welcome, body)
-        || welcome.mls_group_id.as_str() != group_id.as_str()
-        || welcome.epoch != body.recipient_durable_receipt.mls_epoch
+        || welcome.mls_group_id() != group_id.as_str()
+        || welcome.epoch() != body.recipient_durable_receipt.mls_epoch
         || !welcome_claim_matches_consume(
             key_package_id,
             claim_id,
@@ -3577,7 +3577,7 @@ async fn validate_sidecar_keypackage_consume(
         .values()
         .any(|row| {
             row.group_id == group_id
-                && row.epoch == welcome.epoch
+                && row.epoch == welcome.epoch()
                 && row.effective_scope
                     == serde_json::json!({
                         "kind": "sidecar",
@@ -3585,8 +3585,8 @@ async fn validate_sidecar_keypackage_consume(
                         "sidecar_id": sidecar.sidecar_id,
                     })
         });
-    if welcome.mls_group_id.as_str() != group_id
-        || welcome.epoch != body.recipient_durable_receipt.mls_epoch
+    if welcome.mls_group_id() != group_id
+        || welcome.epoch() != body.recipient_durable_receipt.mls_epoch
         || body.recipient_durable_receipt.realm_id.as_str() != sidecar.realm_id.as_str()
         || !welcome_recipient_matches_consumer(welcome, body)
         || !welcome_claim_matches_consume(
@@ -3625,7 +3625,7 @@ async fn validate_sidecar_keypackage_consume(
             row.group_id == group_id
                 && projected_welcome_matches_consumer(row, body)
                 && row.key_package_id == key_package_id
-                && row.epoch == welcome.epoch
+                && row.epoch == welcome.epoch()
                 && row.commit_ref.as_deref() == Some(welcome.commit_ref.as_str())
                 && serde_json::from_value::<
                     arkret_models_crypto::mls_payloads::MlsGovernanceBindingPayload,

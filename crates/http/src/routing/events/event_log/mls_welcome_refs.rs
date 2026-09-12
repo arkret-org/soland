@@ -139,7 +139,6 @@ pub(super) async fn read(
             .map(EventId::new)
             .collect::<Result<_, _>>()
             .map_err(unavailable)?,
-        limited: page.next_cursor.is_some(),
         next_cursor: page.next_cursor,
     };
     outcome

@@ -22,7 +22,7 @@ mod space_container;
 mod stage_axis;
 mod strand_morph;
 
-pub(super) fn test_f0_notary(did: &str) -> arkret_wire::NotaryValue {
+pub(super) fn test_notary(did: &str) -> arkret_wire::NotaryValue {
     let did = arkret_identifiers::Did::new(did.to_owned()).unwrap();
     let descriptor = arkret_wire::NotarySignerDescriptor {
         actor_id: arkret_wire::ActorId::service(arkret_wire::project_did_to_core_id(&did).unwrap()),
@@ -32,13 +32,9 @@ pub(super) fn test_f0_notary(did: &str) -> arkret_wire::NotaryValue {
         // RFC 8032 test-vector public key; the matching private fixture is
         // intentionally not needed by pure reducer tests.
         frozen_public_key_b64u: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
-        frozen_public_key_digest: arkret_identifiers::Hash::new(
-            "sha256:21fe31dfa154a261626bf854046fd2271b7bed4b6abe45aa58877ef47f9721b9",
-        )
-        .unwrap(),
     };
     descriptor.validate().unwrap();
-    arkret_wire::NotaryValue::new(vec![descriptor], 0, 0).expect("test f=0 notary")
+    arkret_wire::NotaryValue::new(descriptor, 0).expect("test f=0 notary")
 }
 
 pub(super) fn account_actor(principal_id: &str) -> arkret_wire::ActorId {

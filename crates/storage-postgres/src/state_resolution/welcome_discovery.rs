@@ -53,7 +53,6 @@ mod tests {
         let binding = |epoch| {
             arkret_models_crypto::MlsGovernanceBindingPayload::realm(
                 realm.clone(),
-                group.clone(),
                 0,
                 epoch,
                 Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
@@ -65,7 +64,7 @@ mod tests {
             .unwrap()
         };
         let genesis_payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload = serde_json::from_value(serde_json::json!({
-            "mls_group_id":group,"effective_scope":scope,"epoch":0,"cipher_suite":"MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "cipher_suite":"MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
             "group_info_ref":format!("ak:blob:sha256:{}","a".repeat(64)),"ratchet_tree_ref":format!("ak:blob:sha256:{}","b".repeat(64)),
             "governance_binding":binding(0),"created_at":"2026-09-10T00:00:00.000Z"
         })).unwrap();
@@ -80,9 +79,10 @@ mod tests {
         let mut heads = Vec::new();
         for (sequence, bytes) in [(72, "YQ"), (73, "Yg")] {
             let payload: MlsCommitPayload = serde_json::from_value(serde_json::json!({
-                "mls_group_id":group,"base_epoch":0,"base_epoch_ref":genesis.event_id,"proposal_refs":[],"next_epoch":1,
+                "base_epoch_ref":genesis.event_id,"proposal_refs":[],
                 "commit_bytes_b64":bytes,"governance_binding":binding(1)
-            })).unwrap();
+            }))
+            .unwrap();
             let event = transition_event(
                 &mut conn,
                 &scope,
@@ -106,7 +106,10 @@ mod tests {
         let cells = |head: &MlsEpochHead| {
             BTreeMap::from([(
                 cell.clone(),
-                ResolvedCellState::Value(serde_json::to_value(head).unwrap()),
+                ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
+                    revision_event_id: head.transition_ref.clone(),
+                    value: serde_json::to_value(head).unwrap(),
+                }),
             )])
         };
         publish(&mut conn, realm.as_str(), &cells(&heads[0]))

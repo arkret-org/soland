@@ -26,7 +26,6 @@ fn genesis_with_group() -> (EventCommitRequest, arkret_mls::ArkretMlsGroup) {
     let group_id = arkret_canonical::base64url_encode(realm.as_str().as_bytes());
     let binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
         realm.clone(),
-        &group_id,
         0,
         0,
         format!("sha256:{}", "1".repeat(64)).parse().unwrap(),
@@ -63,8 +62,7 @@ fn genesis_with_group() -> (EventCommitRequest, arkret_mls::ArkretMlsGroup) {
     let event = arkret_wire::test_support::raw_event_for_actor_at(
         "ak.mls.genesis", ScopeRef::Realm{realm_id:realm.clone()}, actor.clone(), 1,
         "000000000001-0000-00000000".parse().unwrap(), json!({
-            "mls_group_id":group_id,"effective_scope":{"kind":"realm","realm_id":realm},
-            "epoch":0,"cipher_suite":arkret_mls::ARKRET_MLS_CIPHERSUITE_CANONICAL_ID,
+            "cipher_suite":arkret_mls::ARKRET_MLS_CIPHERSUITE_CANONICAL_ID,
             "group_info_ref":format!("ak:blob:{}",arkret_canonical::canonical::sha256_digest(&group_info_bytes)),
             "ratchet_tree_ref":format!("ak:blob:{}",arkret_canonical::canonical::sha256_digest(&ratchet_tree_bytes)),
             "governance_binding":binding,"created_at":"2026-09-10T00:00:00.000Z"
@@ -151,9 +149,10 @@ async fn exact_public_genesis_is_atomic_restorable_and_withdrawal_is_not_readabl
     persist(&pool, &request).await.unwrap();
     persist(&pool, &request).await.unwrap();
     let stored = read_genesis(&mut conn, &event_id).await.unwrap().unwrap();
-    let group_id = stored.source_event.payload["mls_group_id"]
-        .as_str()
-        .unwrap();
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::from_value(serde_json::to_value(&stored.source_event.payload).unwrap())
+            .unwrap();
+    let group_id = payload.mls_group_id();
     let restored =
         arkret_mls::MlsPublicGroupTracker::restore(&stored.public_state, group_id, 0).unwrap();
     assert_eq!(restored.leaves().unwrap().len(), 1);
@@ -265,7 +264,6 @@ fn next_binding(
         serde_json::from_value(template.event.envelope.clone()).unwrap();
     arkret_models_crypto::MlsGovernanceBindingPayload::realm(
         event.realm_id,
-        event.payload["mls_group_id"].as_str().unwrap(),
         previous,
         next,
         format!("sha256:{}", hash.to_string().repeat(64))
@@ -368,7 +366,6 @@ async fn durable_add_replacement_and_withdrawal_keep_exact_branch_sources() {
     .await;
     let first_proposal = refs[0].clone();
     let payload = arkret_models_crypto::MlsCommitPayload::new(
-        0,
         &genesis.event.event_id,
         refs,
         &added.commit,
@@ -394,7 +391,6 @@ async fn durable_add_replacement_and_withdrawal_keep_exact_branch_sources() {
     )
     .await;
     let payload = arkret_models_crypto::MlsCommitPayload::new(
-        1,
         &first.event.event_id,
         refs,
         &replaced.commit,
@@ -407,7 +403,6 @@ async fn durable_add_replacement_and_withdrawal_keep_exact_branch_sources() {
     let sibling_binding = next_binding(&genesis, 0, 1, '4');
     let commit = sibling.update_governance_binding(&sibling_binding).unwrap();
     let payload = arkret_models_crypto::MlsCommitPayload::new(
-        0,
         &genesis.event.event_id,
         vec![],
         &commit,

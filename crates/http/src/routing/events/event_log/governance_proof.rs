@@ -127,7 +127,6 @@ async fn materialize_self_governance_frontier(
     let governance_binding = match &request.effective_scope {
         GovernanceScope::Realm { realm_id } => MlsGovernanceBindingPayload::realm(
             realm_id.clone(),
-            request.mls_group_id.clone(),
             request.previous_epoch,
             request.next_epoch,
             digest,
@@ -142,7 +141,6 @@ async fn materialize_self_governance_frontier(
         } => MlsGovernanceBindingPayload::circle(
             realm_id.clone(),
             circle_id.clone(),
-            request.mls_group_id.clone(),
             request.previous_epoch,
             request.next_epoch,
             digest,
@@ -2100,7 +2098,6 @@ mod tests {
         assert!(group_genesis_binding(&accepted, &scope, &group, None, 1, 2).is_err());
         let binding = MlsGovernanceBindingPayload::realm(
             realm_id,
-            group.clone(),
             0,
             0,
             Hash::new("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -2177,7 +2174,7 @@ mod tests {
 
     #[test]
     fn authoritative_notary_lookup_uses_canonical_wire_singleton_cell() {
-        let notary = crate::test_f0_notary("did:web:notary.example", 41);
+        let notary = crate::test_notary("did:web:notary.example", 41);
         let mut joined = BTreeMap::new();
         joined.insert(
             CellRef::new("ak:cell:ak.component.notary.v1:null".to_owned()).unwrap(),
@@ -2282,7 +2279,7 @@ mod tests {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            crate::test_f0_notary("did:web:agent.example", 42),
+            crate::test_notary("did:web:agent.example", 42),
         )
         .unwrap();
         let payload =

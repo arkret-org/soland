@@ -440,9 +440,9 @@ async fn resolve_peer_mls_group_state_material(
         .ok_or_else(|| AppError::not_found("MLS group-state material not found"))?;
     let payload: MlsGenesisPayload = serde_json::from_value(payload)
         .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
-    if payload.effective_scope != request.effective_scope
-        || payload.mls_group_id != request.mls_group_id
-        || payload.epoch != request.epoch
+    if payload.effective_scope() != &request.effective_scope
+        || payload.mls_group_id() != request.mls_group_id.as_str()
+        || payload.epoch() != 0
         || payload.group_info_ref != request.group_info_ref
         || payload.ratchet_tree_ref != request.ratchet_tree_ref
     {

@@ -974,7 +974,8 @@ async fn verify_signal_mls_basis(
         .ok_or_else(|| signal_invalid("signal MLS genesis payload is unavailable"))?;
     if genesis.kind != arkret_wire::EventKind::MlsGenesis.as_str()
         || genesis.realm_id.as_deref() != Some(envelope.realm_id.as_str())
-        || crate::routing::mls::payload_fields::mls_group_id(payload) != Some(group_id.as_str())
+        || crate::routing::mls::payload_fields::mls_group_id(payload).as_deref()
+            != Some(group_id.as_str())
         || payload
             .get("cipher_suite")
             .and_then(serde_json::Value::as_str)

@@ -147,9 +147,7 @@ async fn validate_accepted_group_state(
         .get("payload")
         .cloned()
         .unwrap_or(Value::Null);
-    // `mls_genesis_payload` / `mls_commit_payload` both name the group
-    // `mls_group_id`; `group_id` is an `encrypted-envelope.schema.json` field
-    // and never appears on an MLS event payload.
+    // Derive the group from the sole accepted governance binding.
     let ref_group_id =
         crate::routing::mls::payload_fields::mls_group_id(&payload).unwrap_or_default();
     if ref_group_id != coordinates.group_id {
@@ -157,14 +155,20 @@ async fn validate_accepted_group_state(
             "group_state_ref group does not match envelope group_id",
         ));
     }
-    // The epoch the referenced state event established: genesis pins its own
-    // epoch (0 unless declared); a commit lands at `base_epoch + 1`.
+    // The referenced binding establishes epoch zero for Genesis and
+    // the next epoch of the accepted Commit.
     let ref_epoch = if is_genesis {
-        payload.get("epoch").and_then(Value::as_u64).unwrap_or(0)
+        payload
+            .get("governance_binding")
+            .and_then(|binding| binding.get("next_epoch"))
+            .and_then(Value::as_u64)
+            .filter(|epoch| *epoch == 0)
+            .ok_or_else(|| author_credential_invalid("genesis binding epoch is not zero"))?
     } else {
         let base = crate::routing::mls::payload_fields::commit_base_epoch(&payload)
             .ok_or_else(|| author_credential_invalid("commit ref missing base epoch"))?;
-        base.saturating_add(1)
+        base.checked_add(1)
+            .ok_or_else(|| author_credential_invalid("commit epoch overflows"))?
     };
     if ref_epoch != coordinates.epoch {
         return Err(author_credential_invalid(format!(
@@ -175,9 +179,7 @@ async fn validate_accepted_group_state(
     // Winning-frontier check: the group must have an accepted epoch row that
     // has advanced at least to the envelope epoch, and the envelope epoch must
     // not sit on a contested (`⊥`) frontier.
-    // Genesis pins the scope at the payload root; a commit carries it inside
-    // the required `governance_binding`. Both spellings are canonical for their
-    // own kind.
+    // All accepted transitions take their scope from the governance binding.
     let effective_scope = crate::routing::mls::payload_fields::group_state_effective_scope(
         &payload,
     )

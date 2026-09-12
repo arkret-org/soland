@@ -160,10 +160,10 @@ async fn materialize(
         query.mls_group_id.as_str(),
     )
     .map_err(unavailable)?;
-    let Some(ResolvedCellState::Value(value)) = accepted.get(&cell) else {
+    let Some(ResolvedCellState::Sequenced(value)) = accepted.get(&cell) else {
         return Err(unavailable("MLS epoch has no unique accepted value"));
     };
-    let current: MlsEpochHead = serde_json::from_value(value.clone()).map_err(unavailable)?;
+    let current: MlsEpochHead = serde_json::from_value(value.value.clone()).map_err(unavailable)?;
     current.validate().map_err(unavailable)?;
     let (target_ref, target_epoch, binding) = match event.kind {
         arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit => {
@@ -175,8 +175,8 @@ async fn materialize(
                 serde_json::from_value(serde_json::to_value(&event.payload).map_err(unavailable)?)
                     .map_err(unavailable)?;
             (
-                welcome.commit_ref,
-                welcome.epoch,
+                welcome.commit_ref.clone(),
+                welcome.epoch(),
                 welcome.governance_binding,
             )
         }
@@ -251,7 +251,7 @@ async fn materialize(
         .ok_or_else(|| unavailable("accepted MLS transition leaf input is unavailable"))?;
     let outcome = MlsAcceptedArtifactOutcome {
         query_digest: query.query_digest().map_err(unavailable)?,
-        transition_head,
+        transition_head: arkret_models_crypto::MlsAcceptedTransition::from(&transition_head),
         governance_binding: binding,
         mls_frontier_leaves: leaves,
     };

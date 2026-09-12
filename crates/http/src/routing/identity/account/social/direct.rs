@@ -371,8 +371,8 @@ pub(crate) async fn validate_direct_message_bootstrap(
             if receipt.claim_id == welcome.claim_id
                 && durable.welcome_ref.as_str() == event.event_id
                 && durable.realm_id == realm
-                && durable.mls_group_id.as_str() == welcome.mls_group_id.as_str()
-                && durable.mls_epoch == welcome.epoch
+                && durable.mls_group_id.as_str() == welcome.mls_group_id()
+                && durable.mls_epoch == welcome.epoch()
                 && durable.key_package_ref.as_str() == welcome.keypackage_ref.as_str()
                 && durable.recipient_principal_id().as_ref() == Some(peer.signing_principal_id())
             {
@@ -929,8 +929,8 @@ async fn validate_direct_binding_event_refs(
         let welcome: arkret_models_collaboration::events_payloads::MlsWelcomePayload =
             serde_json::from_value(projected.payload.clone()).map_err(|_| "welcome_payload")?;
         if welcome.commit_ref != payload.initial_exact_pair_group_state_ref
-            || welcome.epoch != commit.next_epoch()
-            || welcome.mls_group_id.as_str() != commit.mls_group_id()
+            || welcome.epoch() != commit.next_epoch()
+            || welcome.mls_group_id() != commit.mls_group_id()
             || welcome.recipient_principal_id.as_ref() != Some(peer.signing_principal_id())
         {
             continue;
@@ -952,8 +952,8 @@ async fn validate_direct_binding_event_refs(
             consumed |= receipt.claim_id == welcome.claim_id
                 && durable.welcome_ref.as_str() == projected.event_id
                 && durable.realm_id == payload.realm_id
-                && durable.mls_group_id.as_str() == welcome.mls_group_id.as_str()
-                && durable.mls_epoch == welcome.epoch
+                && durable.mls_group_id.as_str() == welcome.mls_group_id()
+                && durable.mls_epoch == welcome.epoch()
                 && durable.key_package_ref.as_str() == welcome.keypackage_ref.as_str()
                 && durable.recipient_principal_id().as_ref() == Some(peer.signing_principal_id());
         }

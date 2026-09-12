@@ -320,9 +320,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         Err(_) => return reject("mls_welcome_payload_invalid"),
     };
     let welcome_id = op.context.accepted_event_id.as_str();
-    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
-        return reject("mls_welcome_group_missing");
-    };
+    let group_id = validated_welcome.mls_group_id();
     let recipient_principal_id = payload
         .get("recipient_principal_id")
         .and_then(Value::as_str);
@@ -374,9 +372,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     let Some(key_package_id) = payload.get("keypackage_ref").and_then(Value::as_str) else {
         return reject("mls_welcome_key_package_id_missing");
     };
-    let Some(epoch) = payload.get("epoch").and_then(Value::as_u64) else {
-        return reject("mls_welcome_epoch_missing");
-    };
+    let epoch = validated_welcome.epoch();
     let commit_ref = payload
         .get("commit_ref")
         .and_then(Value::as_str)
@@ -500,10 +496,15 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
 
 pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
-    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
-        return reject("mls genesis payload is missing mls_group_id");
+    let validated = match serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::MlsGenesisPayload,
+    >(payload.clone())
+    {
+        Ok(payload) => payload,
+        Err(_) => return reject("mls_genesis_payload_invalid"),
     };
-    let epoch = payload.get("epoch").and_then(Value::as_u64).unwrap_or(0);
+    let group_id = validated.mls_group_id();
+    let epoch = validated.epoch();
     if epoch != 0 {
         return reject("mls_genesis_epoch_invalid");
     }
@@ -562,11 +563,8 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// closed object):
 /// ```json
 /// {
-///   "mls_group_id":     "mls-group-<uuid>",
-///   "base_epoch":       <u64>,
 ///   "base_epoch_ref":   "ak:event:<token>",
 ///   "proposal_refs":    ["ak:event:<token>"],
-///   "next_epoch":       <u64>,
 ///   "commit_bytes_b64": "<base64url(opaque MLS Commit)>",
 ///   "commit_message_ref":"ak:blob:<suite>:<hex>" // optional
 ///   "governance_binding": { … }
@@ -579,20 +577,20 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// closed payload schema has no slot for it to be restated in.
 ///
 /// The reducer accepts a commit IFF
-/// `payload.base_epoch == current_stored_epoch` (defaulting to
-/// `0` for a never-seen group). On success the stored epoch is set to
+/// `governance_binding.previous_epoch == current_stored_epoch`.
+/// A Genesis must already exist. On success the stored epoch is set to
 /// `base_epoch + 1`. Stale or out-of-order commits leave state
 /// untouched and emit `ProjectionEffect::Rejected { reason:
 /// "mls_epoch_skew" }`.
 pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
-    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
-        return reject("mls_commit_group_missing");
-    };
-    let expected_prev_epoch = match payload.get("base_epoch").and_then(Value::as_u64) {
-        Some(v) => v,
-        None => return reject("mls_commit_expected_prev_epoch_missing"),
-    };
+    let validated =
+        match serde_json::from_value::<arkret_models_crypto::MlsCommitPayload>(payload.clone()) {
+            Ok(payload) => payload,
+            Err(_) => return reject("mls_commit_payload_invalid"),
+        };
+    let group_id = validated.mls_group_id();
+    let expected_prev_epoch = validated.base_epoch();
     // The committing member is the signed Event author; the registered commit
     // payload is closed and carries no committer field.
     let committer_actor_id = op.context.sender.to_string();
@@ -776,7 +774,7 @@ fn proposal_effective_scope(
     base_epoch: u64,
 ) -> Result<Value, &'static str> {
     if let Some(binding) = payload.get("governance_binding") {
-        if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
+        if parsed_binding(binding)?.mls_group_id() != group_id {
             return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
         }
         if binding.get("previous_epoch").and_then(Value::as_u64) != Some(base_epoch) {
@@ -863,19 +861,7 @@ fn commit_references_matching_remove_proposal(
 }
 
 fn genesis_effective_scope(payload: &Value) -> Result<Value, &'static str> {
-    let scope = payload
-        .get("effective_scope")
-        .ok_or("mls_genesis_effective_scope_missing")?;
-    validate_effective_scope(scope)?;
-    let binding_scope = payload
-        .get("governance_binding")
-        .and_then(|binding| binding.get("effective_scope"))
-        .ok_or(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)?;
-    validate_effective_scope(binding_scope)?;
-    if scope != binding_scope {
-        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-    }
-    Ok(scope.clone())
+    commit_effective_scope(payload)
 }
 
 fn validate_genesis_governance_binding(
@@ -895,7 +881,7 @@ fn validate_genesis_governance_binding(
         return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     validate_binding_profiles(binding)?;
-    if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
+    if parsed_binding(binding)?.mls_group_id() != group_id {
         return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     if binding.get("previous_epoch").and_then(Value::as_u64) != Some(0) {
@@ -917,31 +903,19 @@ fn commit_effective_scope(payload: &Value) -> Result<Value, &'static str> {
     Ok(scope.clone())
 }
 
+fn parsed_binding(
+    binding: &Value,
+) -> Result<arkret_models_crypto::MlsGovernanceBindingPayload, &'static str> {
+    serde_json::from_value(binding.clone())
+        .map_err(|_| arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)
+}
+
 fn validate_binding_scope(binding: &Value, effective_scope: &Value) -> Result<(), &'static str> {
-    let Some(realm_id) = binding.get("realm_id").and_then(Value::as_str) else {
+    let parsed = parsed_binding(binding)?;
+    let scope: arkret_wire::ScopeRef = serde_json::from_value(effective_scope.clone())
+        .map_err(|_| arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)?;
+    if parsed.effective_scope() != &scope {
         return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-    };
-    let Some(scope) = effective_scope.as_object() else {
-        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-    };
-    if scope.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
-        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-    }
-    match scope.get("kind").and_then(Value::as_str) {
-        Some("realm") => {
-            if binding.get("circle_id").is_some() {
-                return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-            }
-        }
-        Some("circle") => {
-            let Some(circle_id) = scope.get("circle_id").and_then(Value::as_str) else {
-                return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-            };
-            if binding.get("circle_id").and_then(Value::as_str) != Some(circle_id) {
-                return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-            }
-        }
-        _ => return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH),
     }
     Ok(())
 }
@@ -1099,10 +1073,10 @@ fn validate_welcome_governance_binding(
         return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     validate_binding_profiles(binding)?;
-    if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
+    if parsed_binding(binding)?.mls_group_id() != group_id {
         return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
-    if binding.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
+    if parsed_binding(binding)?.realm_id().as_str() != realm_id {
         return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     validate_effective_scope(effective_scope)?;

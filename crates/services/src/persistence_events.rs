@@ -1112,7 +1112,7 @@ fn persistence_mls_welcome(
         intended_realm_id: welcome.intended_realm_id,
         welcome_bytes: welcome.welcome_bytes,
         key_package_id: welcome.key_package_id,
-        epoch: welcome.epoch,
+        epoch: welcome.epoch(),
         commit_ref: welcome.commit_ref,
         governance_binding: serde_json::to_value(welcome.governance_binding)
             .expect("typed MLS governance binding must serialize"),

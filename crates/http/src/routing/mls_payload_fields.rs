@@ -1,31 +1,13 @@
-//! Canonical field readers for the MLS event payloads.
-//!
-//! Every accessor here names exactly one field, taken from
-//! `spec/v1/artifacts/schemas/event-payload.schema.json`. All three MLS payload
-//! shapes are `additionalProperties:false`, so readers only name registered
-//! fields:
-//!
-//! | operation kind    | `$defs`                | group carrier  | binding carrier       |
-//! | ----------------- | ---------------------- | -------------- | --------------------- |
-//! | `ak.mls.genesis`  | `mls_genesis_payload`  | `mls_group_id` | `governance_binding`  |
-//! | `ak.mls.commit`   | `mls_commit_payload`   | `mls_group_id` | `governance_binding`  |
-//! | `ak.mls.welcome`  | `mls_welcome_payload`  | `mls_group_id` | `governance_binding`  |
-//!
-//! `group_id` is a canonical property name in `encrypted-envelope.schema.json`
-//! only; it is never an MLS event payload field. `mls_governance_binding` is
-//! not a field name anywhere in the spec — it appears solely as the profile id
-//! `ak.profile.mls_governance_binding.full.v1` and in reason codes such as
-//! `mls_governance_binding_stale`.
+//! Canonical MLS field readers. Scope and transition epochs come from the sole governance binding.
 
 use serde_json::Value;
 
-/// `mls_genesis_payload` / `mls_commit_payload` / `mls_welcome_payload` all
-/// require `mls_group_id`.
-pub(crate) fn mls_group_id(payload: &Value) -> Option<&str> {
-    payload
-        .get("mls_group_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
+pub(crate) fn mls_group_id(payload: &Value) -> Option<String> {
+    let scope = group_state_effective_scope(payload)?;
+    serde_json::from_value::<arkret_wire::ScopeRef>(scope)
+        .ok()?
+        .canonical_mls_group_id()
+        .ok()
 }
 
 /// The `mls_governance_binding` object all three MLS payloads require under
@@ -34,24 +16,12 @@ pub(crate) fn governance_binding(value: &Value) -> Option<&Value> {
     value.get("governance_binding")
 }
 
-/// `mls_commit_payload.base_epoch` — the epoch the commit builds on. The
-/// accepted commit therefore established `base_epoch + 1`.
 pub(crate) fn commit_base_epoch(payload: &Value) -> Option<u64> {
-    payload.get("base_epoch").and_then(Value::as_u64)
+    governance_binding(payload)?.get("previous_epoch")?.as_u64()
 }
 
-/// The scope an accepted genesis / commit event pins the group to.
-///
-/// `mls_genesis_payload` carries `effective_scope` at the payload root;
-/// `mls_commit_payload` has no root scope and carries it inside
-/// `governance_binding.effective_scope`. Both are canonical, so this is a
-/// per-kind union, not an alias chain.
 pub(crate) fn group_state_effective_scope(payload: &Value) -> Option<Value> {
-    payload.get("effective_scope").cloned().or_else(|| {
-        governance_binding(payload)
-            .and_then(|binding| binding.get("effective_scope"))
-            .cloned()
-    })
+    governance_binding(payload)?.get("effective_scope").cloned()
 }
 
 #[cfg(test)]
@@ -61,42 +31,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mls_group_id_reads_the_canonical_field() {
+    fn transition_fields_come_only_from_the_binding() {
+        let realm = "ak:realm:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+        let payload = json!({"governance_binding": {
+            "effective_scope": {"kind":"realm", "realm_id":realm}, "previous_epoch":7
+        }});
         assert_eq!(
-            mls_group_id(&json!({"mls_group_id": "mls-group-g1"})),
-            Some("mls-group-g1")
+            mls_group_id(&payload),
+            Some(arkret_canonical::base64url_encode(realm.as_bytes()))
         );
-    }
-
-    #[test]
-    fn governance_binding_reads_the_canonical_field() {
-        let canonical = json!({"governance_binding": {"mls_group_id": "mls-group-g1"}});
-        assert_eq!(
-            governance_binding(&canonical).and_then(|b| b.get("mls_group_id")),
-            Some(&json!("mls-group-g1"))
-        );
-    }
-
-    #[test]
-    fn commit_base_epoch_reads_the_canonical_field() {
-        assert_eq!(commit_base_epoch(&json!({"base_epoch": 7})), Some(7));
-    }
-
-    #[test]
-    fn group_state_effective_scope_covers_both_canonical_carriers() {
-        let genesis = json!({"effective_scope": {"kind": "realm", "realm_id": "ak:realm:r"}});
-        assert_eq!(
-            group_state_effective_scope(&genesis),
-            Some(json!({"kind": "realm", "realm_id": "ak:realm:r"}))
-        );
-        let commit = json!({
-            "governance_binding": {
-                "effective_scope": {"kind": "realm", "realm_id": "ak:realm:r"}
-            }
-        });
-        assert_eq!(
-            group_state_effective_scope(&commit),
-            Some(json!({"kind": "realm", "realm_id": "ak:realm:r"}))
-        );
+        assert_eq!(commit_base_epoch(&payload), Some(7));
+        assert!(mls_group_id(&json!({"mls_group_id":"legacy"})).is_none());
+        assert!(commit_base_epoch(&json!({"base_epoch":7})).is_none());
     }
 }
