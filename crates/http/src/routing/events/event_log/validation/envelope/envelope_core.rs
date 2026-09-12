@@ -222,7 +222,7 @@ pub(in crate::routing) async fn validate_message_authoring_candidate(
     validate_created_at_causal_lower_bound(state, object, &event.prev_refs)
         .await
         .map_err(render)?;
-    let cells = derived_data_event_cells(&value, object, suite).map_err(render)?;
+    let cells = derived_ordinary_event_cells(&value, object, suite).map_err(render)?;
     realm_authority_root::validate_realm_authority_root_authorization(
         state,
         object,
@@ -238,7 +238,7 @@ pub(in crate::routing) async fn validate_message_authoring_candidate(
         .authorization_ref
         .as_ref()
         .is_some_and(|r| r.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL);
-    validate_data_event_capability_refs(
+    validate_ordinary_event_capability_refs(
         state,
         event.actor_id.signing_principal_id().as_str(),
         state.service_id(),
@@ -971,7 +971,7 @@ async fn validate_event_envelope_with_ingress(
         realm_bootstrap_contexts,
     )
     .await?;
-    let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;
+    let ordinary_event_cells = derived_ordinary_event_cells(envelope, object, typed_digest_suite)?;
     // The MIMI facade is the sole closed service-authored message adapter. Its
     // exact current room-binding ref, provider attestation, attributed sender
     // membership and accepted MLS frontier are verified before this internal
@@ -982,14 +982,14 @@ async fn validate_event_envelope_with_ingress(
     if !internal_admission
         .is_some_and(|admission| admission.authorizes_mimi_facade_write(session, object))
     {
-        validate_data_event_capability_refs(
+        validate_ordinary_event_capability_refs(
             state,
             actor_id.as_str(),
             station_id.as_str(),
             realm_id.as_str(),
             &kind,
             object,
-            &data_event_cells,
+            &ordinary_event_cells,
             realm_authority_root_authorized,
         )
         .await?;
@@ -1503,14 +1503,14 @@ fn is_realm_bootstrap_unit_member(
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id)
 }
 
-/// Project the cells a DataEvent writes, for the capability gate.
+/// Project the cells an ordinary Event writes, for the capability gate.
 ///
 /// v1 has no producer `effects[]` (`event-and-patch.md` §2.2), so the set a
 /// capability has to cover is the receiver's own registry projection of `kind +
-/// payload`. Returns empty for anything that is not a DataEvent; a DataEvent
+/// payload`. Returns empty for anything that is not an ordinary Event; an ordinary Event
 /// whose contract will not evaluate fails closed here with the same reason code
 /// [`enforce_registered_cell_contract`] would raise for it later.
-fn derived_data_event_cells(
+fn derived_ordinary_event_cells(
     envelope: &Value,
     object: &serde_json::Map<String, Value>,
     digest_suite: arkret_canonical::DigestSuite,
@@ -1523,7 +1523,7 @@ fn derived_data_event_cells(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                format!("DataEvent is not a valid Event Envelope: {error}"),
+                format!("ordinary Event is not a valid Event Envelope: {error}"),
             )
         })?;
     let projected =

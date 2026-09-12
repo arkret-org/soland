@@ -1019,7 +1019,7 @@ CREATE TABLE public.governance_dependency_edges (
     FOREIGN KEY (realm_id, dependency_kind, object_digest)
         REFERENCES public.governance_dependency_objects(realm_id, dependency_kind, object_digest)
         ON DELETE RESTRICT,
-    -- Event edges retain their canonical source, including DataEvents.
+    -- Event edges retain their canonical source, including ordinary Events.
     -- Seal evidence may be staged before its candidate Seal is published.
     CONSTRAINT governance_dependency_edges_event_source_check CHECK ((event_digest IS NULL) = (event_pk IS NULL)),
     CONSTRAINT governance_dependency_edges_source_check CHECK (num_nonnulls(seal_id, event_digest) = 1),

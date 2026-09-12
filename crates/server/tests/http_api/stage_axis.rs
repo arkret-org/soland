@@ -41,7 +41,7 @@ fn strand_stage_set_is_the_single_writable_path_for_the_stage_axis() {
 async fn strand_stage_set_is_the_single_writable_path_for_the_stage_axis_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;

@@ -58,7 +58,7 @@ pub enum EventNotificationKind {
     Frontier {
         /// `apply_seal`'s `post_state_root` (canonical Merkle).
         state_root: String,
-        /// The Seal's id, useful for clients tracking Seal DAG.
+        /// The Seal's id, useful for clients tracking the Seal chain.
         seal_id: String,
     },
     /// Per-subscriber drift / corrupted-cursor signal. Clients SHOULD

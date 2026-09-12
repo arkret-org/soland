@@ -1,6 +1,6 @@
 use super::*;
 
-/// Verify a DataEvent's authorization against its signed authority references.
+/// Verify an ordinary Event's authorization against its signed authority references.
 ///
 /// `event-auth-state-resolution.md` §4.1(3) / §4.3(2): the verifier resolves
 /// every capability the `kind`, the scope and the receiver-derived targets need
@@ -19,7 +19,7 @@ use super::*;
 /// - `refs[]` entries with `role=authorized_by` — semantic, non-authoritative citations that MUST
 ///   still resolve and be valid at the signed authority basis, exactly as `arkret_state`'s
 ///   `verify_capability_refs` requires of a Control Move.
-pub(in crate::routing::events::event_log) async fn validate_data_event_capability_refs(
+pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capability_refs(
     state: &AppState,
     _actor_id: &str,
     _station_id: &str,
@@ -29,15 +29,15 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
     derived_cells: &[String],
     realm_authority_root_authorized: bool,
 ) -> Result<(), EventValidationError> {
-    let is_data_event = object.contains_key("auth_context");
-    if !is_data_event {
+    let is_ordinary_event = object.contains_key("auth_context");
+    if !is_ordinary_event {
         return Ok(());
     }
     if object.contains_key("seal_basis") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent must not carry seal_basis",
+            "ordinary Event must not carry seal_basis",
         ));
     }
     if object.contains_key("effects") {
@@ -51,7 +51,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent realm_id must be a valid ak:realm id",
+            "ordinary Event realm_id must be a valid ak:realm id",
         )
     })?;
     let auth_context = object
@@ -61,7 +61,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "DataEvent requires auth_context",
+                "ordinary Event requires auth_context",
             )
         })?;
     if auth_context.contains_key("capability_refs") {
@@ -78,7 +78,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "DataEvent auth_context requires authority_refs",
+                "ordinary Event auth_context requires authority_refs",
             )
         })?
         .iter()
@@ -89,7 +89,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                     event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "schema_violation",
-                        "DataEvent authority_refs entries must be Seal ids",
+                        "ordinary Event authority_refs entries must be Seal ids",
                     )
                 })
                 .and_then(|value| {
@@ -97,7 +97,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                         event_validation_error(
                             StatusCode::BAD_REQUEST,
                             "schema_violation",
-                            "DataEvent authority_refs entry is not a valid ak:seal id",
+                            "ordinary Event authority_refs entry is not a valid ak:seal id",
                         )
                     })
                 })
@@ -107,19 +107,20 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent derives no data-plane write from its registered reducer contract",
+            "ordinary Event derives no data-plane write from its registered reducer contract",
         ));
     }
-    let access = data_event_constraint_context(kind, object).ok_or_else(|| {
+    let access = ordinary_event_constraint_context(kind, object).ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent patch does not expose a canonical field/track authorization context",
+            "ordinary Event patch does not expose a canonical field/track authorization context",
         )
     })?;
 
-    let state_at_ref = data_event_state_at_authority_refs(state, &realm, &authority_refs).await?;
-    let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
+    let state_at_ref =
+        ordinary_event_state_at_authority_refs(state, &realm, &authority_refs).await?;
+    let historical_grants = ordinary_event_grants_from_state_at_ref(&state_at_ref);
     let mut auth_time: Option<chrono::DateTime<chrono::Utc>> = None;
     for authority_ref in &authority_refs {
         let sealed_at = state
@@ -130,14 +131,14 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                 event_validation_error(
                     StatusCode::FORBIDDEN,
                     "capability_denied",
-                    format!("DataEvent authority reference lookup failed: {error}"),
+                    format!("ordinary Event authority reference lookup failed: {error}"),
                 )
             })?
             .ok_or_else(|| {
                 event_validation_error(
                     StatusCode::FORBIDDEN,
                     "capability_denied",
-                    "DataEvent authority reference is not projected",
+                    "ordinary Event authority reference is not projected",
                 )
             })?
             .sealed_at;
@@ -147,7 +148,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent authority_refs must not be empty",
+            "ordinary Event authority_refs must not be empty",
         )
     })?;
     let historical_snapshot: Vec<crate::authz::Grant> =
@@ -165,7 +166,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                     event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "schema_violation",
-                        "applet-originated DataEvent requires a producer ActorId",
+                        "applet-originated ordinary Event requires a producer ActorId",
                     )
                 })?,
         )
@@ -202,7 +203,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
     );
     let mut used_grant_ids = std::collections::BTreeSet::new();
 
-    // Unlike an ordinary DataEvent, an Applet delegated write carries one
+    // Unlike an ordinary Event, an Applet delegated write carries one
     // mandatory, authoritative `authorization_ref`. It must itself be
     // effective in the Event's frozen Seal view and cover every
     // receiver-derived write; a different service grant in that view cannot
@@ -215,7 +216,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "authorization_ref_missing",
-                    "applet-originated DataEvent requires authorization_ref",
+                    "applet-originated ordinary Event requires authorization_ref",
                 )
             })?;
         let stored = historical_grants.get(authorization_ref).ok_or_else(|| {
@@ -254,13 +255,13 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             ));
         }
         if derived_cells.iter().any(|cell| {
-            !grant_covers_data_event_effect(state, stored, kind, realm_id, cell, &access)
+            !grant_covers_ordinary_event_effect(state, stored, kind, realm_id, cell, &access)
         }) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "authorization_ref_scope",
                 format!(
-                    "applet authorization_ref {authorization_ref} does not cover every derived DataEvent cell"
+                    "applet authorization_ref {authorization_ref} does not cover every derived ordinary Event cell"
                 ),
             ));
         }
@@ -273,55 +274,59 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
     // (`event-and-patch.md` §2.2 — unrecognized critical refs fail closed;
     // `arkret_state::verify_capability_refs` applies the same rule on the
     // control plane).
-    for reference in data_event_authorized_by_refs(object)? {
+    for reference in ordinary_event_authorized_by_refs(object)? {
         let grant_id = reference.as_str();
         if arkret_identifiers::GrantId::new(grant_id.to_owned()).is_err() {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent refs[role=authorized_by] {grant_id} is not a valid ak:grant id"),
+                format!(
+                    "ordinary Event refs[role=authorized_by] {grant_id} is not a valid ak:grant id"
+                ),
             ));
         }
         let stored = historical_grants.get(grant_id).ok_or_else(|| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent authorized_by grant {grant_id} is not projected at the authority basis"),
+                format!("ordinary Event authorized_by grant {grant_id} is not projected at the authority basis"),
             )
         })?;
         if crate::authz::grant_revoked_upstream(&historical_snapshot, grant_id, auth_time) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM,
-                format!("DataEvent authorized_by grant {grant_id} was revoked upstream"),
+                format!("ordinary Event authorized_by grant {grant_id} was revoked upstream"),
             ));
         }
         if stored.revoked {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent authorized_by grant {grant_id} is revoked"),
+                format!("ordinary Event authorized_by grant {grant_id} is revoked"),
             ));
         }
         if stored.subject_id != capability_subject || stored.realm_id != realm_id {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent authorized_by grant {grant_id} does not cover actor/realm"),
+                format!("ordinary Event authorized_by grant {grant_id} does not cover actor/realm"),
             ));
         }
         if crate::authz::grant_scope_valid(stored).is_err() {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent authorized_by grant {grant_id} has invalid scope"),
+                format!("ordinary Event authorized_by grant {grant_id} has invalid scope"),
             ));
         }
         if !effective_by_id.contains_key(grant_id) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent authorized_by grant {grant_id} is expired or delegation-broken"),
+                format!(
+                    "ordinary Event authorized_by grant {grant_id} is expired or delegation-broken"
+                ),
             ));
         }
         used_grant_ids.insert(grant_id.to_owned());
@@ -423,19 +428,19 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
         // review requirement from another matching grant.
         if derived_cells.iter().any(|cell| {
             effective_by_id.values().any(|grant| {
-                grant_matches_data_event_effect(state, grant, kind, realm_id, cell)
+                grant_matches_ordinary_event_effect(state, grant, kind, realm_id, cell)
                     && grant_has_matching_restrictive_constraint(grant, &access)
             })
         }) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                "a matching capability constraint restricts this DataEvent",
+                "a matching capability constraint restricts this ordinary Event",
             ));
         }
         for cell in derived_cells {
             let covering_grant = effective_by_id.values().find(|grant| {
-                grant_covers_data_event_effect(state, grant, kind, realm_id, cell, &access)
+                grant_covers_ordinary_event_effect(state, grant, kind, realm_id, cell, &access)
             });
             let Some(covering_grant) = covering_grant else {
                 return Err(event_validation_error(
@@ -449,7 +454,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             used_grant_ids.insert(covering_grant.grant_id.clone());
         }
     }
-    validate_current_data_event_admission(
+    validate_current_ordinary_event_admission(
         state,
         &realm,
         realm_id,
@@ -464,7 +469,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
 /// `refs[]` is optional; when present, it is a non-empty array of `SemanticRef`
 /// objects. A malformed entry is a schema violation rather than a silently
 /// skipped ref.
-fn data_event_authorized_by_refs(
+fn ordinary_event_authorized_by_refs(
     object: &serde_json::Map<String, Value>,
 ) -> Result<Vec<String>, EventValidationError> {
     let Some(refs) = object.get("refs") else {
@@ -506,7 +511,7 @@ fn data_event_authorized_by_refs(
 /// Re-check every capability actually used by this candidate against the
 /// receiver's current known control view. This is a live-admission fence: a
 /// later known revocation blocks new admissions without rewriting history.
-async fn validate_current_data_event_admission(
+async fn validate_current_ordinary_event_admission(
     state: &AppState,
     realm: &RealmId,
     realm_id: &str,
@@ -545,7 +550,7 @@ async fn validate_current_data_event_admission(
                 format!("current admission control view is unavailable: {error}"),
             )
         })?;
-    let current_grants = data_event_grants_from_state_at_ref(&current_state);
+    let current_grants = ordinary_event_grants_from_state_at_ref(&current_state);
     let effective = effective_historical_grants_for_subject(
         &current_grants,
         capability_subject,
@@ -565,7 +570,7 @@ async fn validate_current_data_event_admission(
     Ok(())
 }
 
-pub(super) async fn data_event_state_at_authority_refs(
+pub(super) async fn ordinary_event_state_at_authority_refs(
     state: &AppState,
     realm: &RealmId,
     authority_refs: &[arkret_identifiers::SealId],
@@ -580,7 +585,7 @@ pub(super) async fn data_event_state_at_authority_refs(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "DataEvent authority_refs must not be empty",
+            "ordinary Event authority_refs must not be empty",
         ));
     }
     for authority_ref in authority_refs {
@@ -592,21 +597,21 @@ pub(super) async fn data_event_state_at_authority_refs(
                 event_validation_error(
                     StatusCode::FORBIDDEN,
                     "capability_denied",
-                    format!("DataEvent authority reference lookup failed: {error}"),
+                    format!("ordinary Event authority reference lookup failed: {error}"),
                 )
             })?
             .ok_or_else(|| {
                 event_validation_error(
                     StatusCode::FORBIDDEN,
                     "capability_denied",
-                    "DataEvent authority reference is not projected",
+                    "ordinary Event authority reference is not projected",
                 )
             })?;
         if seal.realm_id != *realm {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                "DataEvent authority reference belongs to another Realm",
+                "ordinary Event authority reference belongs to another Realm",
             ));
         }
     }
@@ -619,14 +624,14 @@ pub(super) async fn data_event_state_at_authority_refs(
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent authority pre-state could not be resolved: {error}"),
+                format!("ordinary Event authority pre-state could not be resolved: {error}"),
             )
         })?;
 
     Ok(state_at_ref)
 }
 
-pub(super) fn data_event_grants_from_state_at_ref(
+pub(super) fn ordinary_event_grants_from_state_at_ref(
     state_at_ref: &std::collections::BTreeMap<
         arkret_identifiers::CellRef,
         arkret_state::state_model::ResolvedCellState,
@@ -671,19 +676,19 @@ pub(super) fn effective_historical_grants_for_subject(
         .collect()
 }
 
-pub(super) fn grant_covers_data_event_effect(
+pub(super) fn grant_covers_ordinary_event_effect(
     state: &AppState,
     grant: &crate::authz::Grant,
     action: &str,
     realm_id: &str,
     cell: &str,
-    access: &DataEventConstraintContext,
+    access: &OrdinaryEventConstraintContext,
 ) -> bool {
-    grant_matches_data_event_effect(state, grant, action, realm_id, cell)
-        && grant_constraints_cover_data_event(grant, action, access)
+    grant_matches_ordinary_event_effect(state, grant, action, realm_id, cell)
+        && grant_constraints_cover_ordinary_event(grant, action, access)
 }
 
-fn grant_matches_data_event_effect(
+fn grant_matches_ordinary_event_effect(
     state: &AppState,
     grant: &crate::authz::Grant,
     action: &str,
@@ -706,16 +711,16 @@ fn grant_matches_data_event_effect(
 /// A base Strand field has no track; only `tracks.<name>.*` contributes a
 /// track target.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct DataEventConstraintContext {
+pub(super) struct OrdinaryEventConstraintContext {
     write_fields: Vec<String>,
     strand_id: Option<String>,
     strand_tracks: Vec<String>,
 }
 
-fn data_event_constraint_context(
+fn ordinary_event_constraint_context(
     kind: &str,
     object: &serde_json::Map<String, Value>,
-) -> Option<DataEventConstraintContext> {
+) -> Option<OrdinaryEventConstraintContext> {
     let payload = object.get("payload")?.as_object()?;
     let mut write_fields = payload
         .get("patch")
@@ -752,7 +757,7 @@ fn data_event_constraint_context(
         return None;
     }
 
-    Some(DataEventConstraintContext {
+    Some(OrdinaryEventConstraintContext {
         write_fields,
         strand_id,
         strand_tracks,
@@ -764,10 +769,10 @@ fn action_requires_constraint(action: &str, required: &str) -> bool {
         .is_some_and(|descriptor| descriptor.required_constraints.contains(&required))
 }
 
-fn grant_constraints_cover_data_event(
+fn grant_constraints_cover_ordinary_event(
     grant: &crate::authz::Grant,
     action: &str,
-    access: &DataEventConstraintContext,
+    access: &OrdinaryEventConstraintContext,
 ) -> bool {
     use crate::authz::{GrantConstraint, GrantDecisionVerdict};
 
@@ -861,7 +866,7 @@ fn grant_constraints_cover_data_event(
 
 fn grant_has_matching_restrictive_constraint(
     grant: &crate::authz::Grant,
-    access: &DataEventConstraintContext,
+    access: &OrdinaryEventConstraintContext,
 ) -> bool {
     use crate::authz::{GrantConstraint, GrantDecisionVerdict};
 
@@ -911,7 +916,7 @@ fn field_access_restrictive_effect_matches(
     effect: crate::authz::GrantDecisionVerdict,
     allowed_write_fields: &[String],
     denied_write_fields: &[String],
-    access: &DataEventConstraintContext,
+    access: &OrdinaryEventConstraintContext,
 ) -> bool {
     use crate::authz::GrantDecisionVerdict;
 
@@ -936,7 +941,7 @@ fn scope_limitation_allows(
     denied_strand_ids: &[String],
     allowed_tracks: &[String],
     denied_tracks: &[String],
-    access: &DataEventConstraintContext,
+    access: &OrdinaryEventConstraintContext,
 ) -> bool {
     if let Some(strand_id) = access.strand_id.as_deref()
         && (denied_strand_ids.iter().any(|denied| denied == strand_id)
@@ -962,7 +967,7 @@ fn scope_limitation_restrictive_effect_matches(
     denied_strand_ids: &[String],
     allowed_tracks: &[String],
     denied_tracks: &[String],
-    access: &DataEventConstraintContext,
+    access: &OrdinaryEventConstraintContext,
 ) -> bool {
     use crate::authz::GrantDecisionVerdict;
 
@@ -1105,8 +1110,8 @@ mod constraint_tests {
         }
     }
 
-    fn access(field: &str) -> DataEventConstraintContext {
-        DataEventConstraintContext {
+    fn access(field: &str) -> OrdinaryEventConstraintContext {
+        OrdinaryEventConstraintContext {
             write_fields: vec![field.to_owned()],
             strand_id: Some(STRAND.to_owned()),
             strand_tracks: field
@@ -1125,7 +1130,7 @@ mod constraint_tests {
                 "patch": { "content": { "$op": "unset" } }
             }
         });
-        let description = data_event_constraint_context(
+        let description = ordinary_event_constraint_context(
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             description.as_object().unwrap(),
         )
@@ -1141,7 +1146,7 @@ mod constraint_tests {
                 }
             }
         });
-        let synthesis = data_event_constraint_context(
+        let synthesis = ordinary_event_constraint_context(
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             synthesis.as_object().unwrap(),
         )
@@ -1156,12 +1161,12 @@ mod constraint_tests {
     #[test]
     fn description_and_synthesis_write_grants_are_bidirectionally_isolated() {
         let description = grant(vec![field_access(&["content", "encrypted_content"])]);
-        assert!(grant_constraints_cover_data_event(
+        assert!(grant_constraints_cover_ordinary_event(
             &description,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &access("content"),
         ));
-        assert!(!grant_constraints_cover_data_event(
+        assert!(!grant_constraints_cover_ordinary_event(
             &description,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &access("tracks.synthesis.content"),
@@ -1171,12 +1176,12 @@ mod constraint_tests {
             "tracks.synthesis.content",
             "tracks.synthesis.encrypted_content",
         ])]);
-        assert!(grant_constraints_cover_data_event(
+        assert!(grant_constraints_cover_ordinary_event(
             &synthesis,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &access("tracks.synthesis.content"),
         ));
-        assert!(!grant_constraints_cover_data_event(
+        assert!(!grant_constraints_cover_ordinary_event(
             &synthesis,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &access("content"),
@@ -1197,17 +1202,17 @@ mod constraint_tests {
                 allowed_session_ids: Default::default(),
             },
         ]);
-        assert!(grant_constraints_cover_data_event(
+        assert!(grant_constraints_cover_ordinary_event(
             &grant,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &access("content"),
         ));
-        assert!(grant_constraints_cover_data_event(
+        assert!(grant_constraints_cover_ordinary_event(
             &grant,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &access("tracks.synthesis.content"),
         ));
-        assert!(!grant_constraints_cover_data_event(
+        assert!(!grant_constraints_cover_ordinary_event(
             &grant,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &access("tracks.discussion.metadata.topic"),
@@ -1227,7 +1232,7 @@ mod constraint_tests {
             condition: None,
         }]);
 
-        assert!(grant_constraints_cover_data_event(
+        assert!(grant_constraints_cover_ordinary_event(
             &allow,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &description_access,
@@ -1256,7 +1261,7 @@ mod constraint_tests {
             condition: Some(serde_json::json!({"field": "metadata.fields.review_status"})),
         }]);
 
-        assert!(!grant_constraints_cover_data_event(
+        assert!(!grant_constraints_cover_ordinary_event(
             &conditional_allow,
             arkret_wire::CapabilityActionId::STRAND_UPDATE,
             &description_access,

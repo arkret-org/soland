@@ -1,7 +1,7 @@
 //! Moderation user-facing endpoints.
 //!
 //! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report.v1`) — submit the
-//!   caller-authored signed report DataEvent through ordinary Event admission.
+//!   caller-authored signed report ordinary Event through ordinary Event admission.
 
 use std::collections::BTreeSet;
 
@@ -1581,5 +1581,4 @@ mod report_safety_tests {
             Some(arkret_wire::ReasonCode::PROOF_INVALID)
         );
     }
-
 }

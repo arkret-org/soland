@@ -2116,7 +2116,7 @@ async fn applet_message_event(
         ("external_id".to_owned(), json!(actor_id)),
     ]));
     let verification_method = package.webhook_auth.key_ref.clone();
-    // `ak.message.create` is a DataEvent. Formal Applet install grants are
+    // `ak.message.create` is an ordinary Event. Formal Applet install grants are
     // issued to the executing service, while actor_id remains the accountable
     // ghost, so the frozen CBS view must cover the exact install
     // authorization_ref for the executing service.

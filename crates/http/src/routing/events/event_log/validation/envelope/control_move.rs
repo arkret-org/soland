@@ -31,7 +31,7 @@ pub(super) fn validate_control_move_seal_basis(
     // This used to short-circuit on an empty producer `effects[]`, which v1
     // never carries — so every conformant Control Move skipped the seal_basis
     // requirement entirely. The gate is the registry's own reducer_input flag:
-    // a kind the reducer consumes must be a DataEvent or carry seal_basis
+    // a kind the reducer consumes must be an ordinary Event or carry seal_basis
     // (`event-auth-state-resolution.md` §5), and a kind it does not consume has
     // no basis obligation.
     let is_reducer_input = object

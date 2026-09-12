@@ -1177,7 +1177,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 commit_consent_projection(conn, consent_projection).await?;
             }
             // Control/Data routing is defined by the typed Event plane. A
-            // closed genesis anchor is a basis-free Control Move; a DataEvent
+            // closed genesis anchor is a basis-free Control Move; an ordinary Event
             // instead carries `auth_context` with its authority references.
             let is_control_move = typed_event.kind.is_control_plane();
             if is_control_move {

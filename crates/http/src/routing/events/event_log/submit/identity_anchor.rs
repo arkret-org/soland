@@ -1082,10 +1082,8 @@ async fn identical_historical_retry_with_wake(
                 )
             })?;
             if pending_index_needs_recovery {
-                let event = serde_json::from_value::<arkret_wire::Event>(
-                    record.envelope.clone(),
-                )
-                .map_err(|error| {
+                let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
+                    .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_error",

@@ -425,81 +425,65 @@ pub(super) async fn accepted_agent_key_authorization_snapshot(
     };
     let realm = arkret_wire::RealmId::new(agent.principal_control_realm_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let leaves = state
+    let head = state
         .projections()
-        .realm_seal_basis_leaves(&realm)
+        .realm_seal_head(&realm)
         .await
         .map_err(|error| AppError::internal(format!("Agent frontier unavailable: {error}")))?;
-    if leaves.is_empty() {
-        return Ok((BTreeSet::new(), arkret_wire::SealBasis { leaves }, None));
-    }
-    // Validate every accepted input view before the SDK joins the full antichain.
-    // Picking a numerically greatest leaf can hide a concurrent revocation.
-    for leaf in &leaves {
-        let frontier = state
-            .projections()
-            .seal_by_id(leaf)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Agent frontier Seal unavailable: {error}"))
-            })?
-            .ok_or_else(|| pairing_failed_precondition("Agent frontier Seal is missing"))?;
-        if frontier.realm_id != realm {
-            return Err(pairing_failed_precondition(
-                "Agent frontier belongs to another Realm",
-            ));
-        }
-        let effective = state
-            .projections()
-            .effective_state_at(std::slice::from_ref(leaf), &realm)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Agent authorization state unavailable: {error}"))
-            })?;
-        let suite = state
-            .projections()
-            .seal_digest_suites(&frontier)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Agent frontier suite unavailable: {error}"))
-            })?
-            .seal_digest_suite;
-        let root =
-            arkret_state::compute_state_root(arkret_state::GovernanceView::new(&effective), suite)
-                .map_err(|error| {
-                    AppError::internal(format!("Agent frontier root failed: {error}"))
-                })?;
-        if root != frontier.state_root {
-            return Err(pairing_failed_precondition(
-                "Agent authorization state does not match its accepted frontier root",
-            ));
-        }
-        let covered = state
-            .projections()
-            .predecessor_covered_events(Some(leaf))
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Agent frontier coverage unavailable: {error}"))
-            })?;
-        let coverage_root =
-            arkret_state::control_event_set_root(&covered, suite).map_err(|error| {
-                AppError::internal(format!("Agent frontier coverage invalid: {error}"))
-            })?;
-        if coverage_root != frontier.control_event_set_root {
-            return Err(pairing_failed_precondition(
-                "Agent frontier coverage root does not match",
-            ));
-        }
+    let Some(head) = head else {
+        return Ok((
+            BTreeSet::new(),
+            arkret_wire::SealBasis { leaves: Vec::new() },
+            None,
+        ));
+    };
+    let frontier = state
+        .projections()
+        .seal_by_id(&head)
+        .await
+        .map_err(|error| AppError::internal(format!("Agent frontier Seal unavailable: {error}")))?
+        .ok_or_else(|| pairing_failed_precondition("Agent frontier Seal is missing"))?;
+    if frontier.realm_id != realm {
+        return Err(pairing_failed_precondition(
+            "Agent frontier belongs to another Realm",
+        ));
     }
     let effective = state
         .projections()
-        .effective_state_at(&leaves, &realm)
+        .effective_state_at(std::slice::from_ref(&head), &realm)
         .await
         .map_err(|error| {
-            AppError::internal(format!(
-                "Agent joined authorization state unavailable: {error}"
-            ))
+            AppError::internal(format!("Agent authorization state unavailable: {error}"))
         })?;
+    let suite = state
+        .projections()
+        .seal_digest_suites(&frontier)
+        .await
+        .map_err(|error| AppError::internal(format!("Agent frontier suite unavailable: {error}")))?
+        .seal_digest_suite;
+    let root =
+        arkret_state::compute_state_root(arkret_state::GovernanceView::new(&effective), suite)
+            .map_err(|error| AppError::internal(format!("Agent frontier root failed: {error}")))?;
+    if root != frontier.state_root {
+        return Err(pairing_failed_precondition(
+            "Agent authorization state does not match its accepted frontier root",
+        ));
+    }
+    let covered = state
+        .projections()
+        .predecessor_covered_events(Some(&head))
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Agent frontier coverage unavailable: {error}"))
+        })?;
+    let coverage_root = arkret_state::control_event_set_root(&covered, suite)
+        .map_err(|error| AppError::internal(format!("Agent frontier coverage invalid: {error}")))?;
+    if coverage_root != frontier.control_event_set_root {
+        return Err(pairing_failed_precondition(
+            "Agent frontier coverage root does not match",
+        ));
+    }
+    let leaves = vec![head];
     let actor = pairing_account_actor(&agent.id, state.service_id())?;
     let status_cell = super::evidence::lifecycle_cell_ref(&actor)
         .map_err(|_| pairing_failed_precondition("Agent lifecycle cell identity is invalid"))?;

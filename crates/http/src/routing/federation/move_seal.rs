@@ -1082,16 +1082,16 @@ async fn try_apply_device_generation_event_seal(
     }
     let expected_notary_seq = if let Some(predecessor) = seal.predecessor_ref.as_ref() {
         let value = state
-                .projections()
-                .seal_by_id(predecessor)
-                .await
-                .map_err(|error| {
-                    crate::app_error!(
-                        InternalError,
-                        format!("Seal predecessor lookup failed: {error}"),
-                    )
-                })?
-                .ok_or_else(|| seal_admission_error("B-model Event Seal predecessor is missing"))?;
+            .projections()
+            .seal_by_id(predecessor)
+            .await
+            .map_err(|error| {
+                crate::app_error!(
+                    InternalError,
+                    format!("Seal predecessor lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| seal_admission_error("B-model Event Seal predecessor is missing"))?;
         value
             .notary_seq
             .checked_add(1)
@@ -2265,7 +2265,10 @@ mod seal_delta_tests {
                 "directory_governance_proof_signature_invalid"
             );
             assert!(projections.seal_by_id(&forged.id).await.unwrap().is_none());
-            assert_eq!(projections.realm_seal_basis_leaves(&realm).await.unwrap(), before);
+            assert_eq!(
+                projections.realm_seal_basis_leaves(&realm).await.unwrap(),
+                before
+            );
             assert_eq!(
                 projections
                     .effective_state_at(&before, &realm)

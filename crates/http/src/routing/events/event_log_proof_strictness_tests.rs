@@ -966,7 +966,7 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
     let valid = typed_event_envelope(
         "ak.member.state",
         json!({
-            "member_id": data_event_account("ak:did_core:web:bob.example"),
+            "member_id": ordinary_event_account("ak:did_core:web:bob.example"),
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "membership": "join",
             "reason": "invite_accept",
@@ -1330,50 +1330,53 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
     assert_eq!(err.code, "stale_did_document", "{}", err.message);
 }
 
-const DATA_EVENT_REALM: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
-const DATA_EVENT_ACTOR: &str = "ak:did_core:web:alice.example";
-const DATA_EVENT_STATION: &str = "ak:did_core:web:principal.example";
-const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+const ORDINARY_EVENT_REALM: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
+const ORDINARY_EVENT_ACTOR: &str = "ak:did_core:web:alice.example";
+const ORDINARY_EVENT_STATION: &str = "ak:did_core:web:principal.example";
+const ORDINARY_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 
-fn data_event_account(principal: &str) -> arkret_wire::ActorId {
+fn ordinary_event_account(principal: &str) -> arkret_wire::ActorId {
     arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(principal.to_owned()).unwrap(),
-        arkret_wire::DidCoreId::new(DATA_EVENT_STATION.to_owned()).unwrap(),
+        arkret_wire::DidCoreId::new(ORDINARY_EVENT_STATION.to_owned()).unwrap(),
     ))
 }
 /// The MLS group named by every E2EE fixture ciphertext.
-fn data_event_placeholder_seal_id() -> arkret_identifiers::SealId {
+fn ordinary_event_placeholder_seal_id() -> arkret_identifiers::SealId {
     arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap()
 }
 
-fn data_event_move_id(byte: u8) -> arkret_identifiers::Hash {
+fn ordinary_event_move_id(byte: u8) -> arkret_identifiers::Hash {
     arkret_identifiers::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
 }
 
-fn data_event_hash(byte: u8) -> arkret_identifiers::Hash {
+fn ordinary_event_hash(byte: u8) -> arkret_identifiers::Hash {
     arkret_identifiers::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
 }
 
-fn data_event_dummy_signature() -> arkret_wire::SealSignature {
+fn ordinary_event_dummy_signature() -> arkret_wire::SealSignature {
     arkret_wire::SealSignature {
         verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
-        payload_digest: data_event_hash(0xff),
+        payload_digest: ordinary_event_hash(0xff),
         jws: "AAAA.BBBB.CCCC".to_owned(),
     }
 }
 
-async fn insert_data_event_seal(state: &AppState, delta: Vec<arkret_identifiers::Hash>) -> String {
-    insert_data_event_seal_with(state, None, delta).await
+async fn insert_ordinary_event_seal(
+    state: &AppState,
+    delta: Vec<arkret_identifiers::Hash>,
+) -> String {
+    insert_ordinary_event_seal_with(state, None, delta).await
 }
 
-async fn insert_data_event_seal_with(
+async fn insert_ordinary_event_seal_with(
     state: &AppState,
     predecessor_ref: Option<arkret_identifiers::SealId>,
     delta: Vec<arkret_identifiers::Hash>,
 ) -> String {
     use chrono::TimeZone;
 
-    let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let realm = arkret_identifiers::RealmId::new(ORDINARY_EVENT_REALM.to_owned()).unwrap();
     let notary_seq = u64::from(predecessor_ref.is_some());
     let command_results = delta
         .iter()
@@ -1389,12 +1392,12 @@ async fn insert_data_event_seal_with(
         })
         .collect();
     let mut seal = arkret_wire::Seal {
-        id: data_event_placeholder_seal_id(),
+        id: ordinary_event_placeholder_seal_id(),
         realm_id: realm,
         predecessor_ref,
         delta,
-        control_event_set_root: data_event_hash(0x22),
-        state_root: data_event_hash(0x77),
+        control_event_set_root: ordinary_event_hash(0x22),
+        state_root: ordinary_event_hash(0x77),
         notary_seq,
         availability_receipt_digests: Vec::new(),
         covered_event_digests: Vec::new(),
@@ -1402,7 +1405,7 @@ async fn insert_data_event_seal_with(
         previous_digest_algorithm: None,
         notary_signature: arkret_wire::MultiSignature {
             kind: arkret_wire::MultiSigKind::MultiSig,
-            signatures: vec![data_event_dummy_signature()],
+            signatures: vec![ordinary_event_dummy_signature()],
             view: 0,
         },
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
@@ -1426,19 +1429,19 @@ async fn insert_data_event_seal_with(
     seal_id.as_str().to_owned()
 }
 
-fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz::Grant {
+fn ordinary_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz::Grant {
     crate::authz::Grant {
         grant_id: grant_id.to_owned(),
-        realm_id: DATA_EVENT_REALM.to_owned(),
+        realm_id: ORDINARY_EVENT_REALM.to_owned(),
         issuer_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:owner.example").unwrap(),
-            arkret_wire::DidCoreId::new(DATA_EVENT_STATION).unwrap(),
+            arkret_wire::DidCoreId::new(ORDINARY_EVENT_STATION).unwrap(),
         )),
         subject_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(DATA_EVENT_ACTOR).unwrap(),
-            arkret_wire::DidCoreId::new(DATA_EVENT_STATION).unwrap(),
+            arkret_wire::DidCoreId::new(ORDINARY_EVENT_ACTOR).unwrap(),
+            arkret_wire::DidCoreId::new(ORDINARY_EVENT_STATION).unwrap(),
         )),
-        resource: DATA_EVENT_STRAND.to_owned(),
+        resource: ORDINARY_EVENT_STRAND.to_owned(),
         actions: vec![action.to_owned()],
         constraints: Vec::new(),
         revoked,
@@ -1449,7 +1452,7 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
     }
 }
 
-fn historical_data_event_grant_value(
+fn historical_ordinary_event_grant_value(
     grant_id: &str,
     action: &str,
     subject: &str,
@@ -1460,18 +1463,18 @@ fn historical_data_event_grant_value(
     let mut value = json!({
         "grant_id": grant_id,
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
-        "realm_id": DATA_EVENT_REALM,
-        "issuer_id": data_event_account(issuer),
+        "realm_id": ORDINARY_EVENT_REALM,
+        "issuer_id": ordinary_event_account(issuer),
         "issuer_authority_refs": [{
             "kind": "realm_root",
-            "realm_id": DATA_EVENT_REALM,
+            "realm_id": ORDINARY_EVENT_REALM,
             "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
             "controller_epoch_at_issuance": 0,
             "authority_generation": 0
         }],
-        "subject": data_event_account(subject),
+        "subject": ordinary_event_account(subject),
         "actions": [action],
-        "resources": [DATA_EVENT_STRAND],
+        "resources": [ORDINARY_EVENT_STRAND],
         "issued_at": "2026-05-08T00:00:00.000Z"
     });
     if let Some(authority_grant_id) = authority_grant_id {
@@ -1487,38 +1490,38 @@ fn historical_data_event_grant_value(
     value
 }
 
-async fn insert_historical_data_event_grant(
+async fn insert_historical_ordinary_event_grant(
     state: &AppState,
     grant_id: &str,
     action: &str,
     revoked: bool,
 ) -> String {
-    insert_historical_data_event_grant_for_subject(
+    insert_historical_ordinary_event_grant_for_subject(
         state,
         grant_id,
         action,
-        data_event_account(DATA_EVENT_ACTOR),
+        ordinary_event_account(ORDINARY_EVENT_ACTOR),
         revoked,
     )
     .await
 }
 
-async fn insert_historical_data_event_grant_for_subject(
+async fn insert_historical_ordinary_event_grant_for_subject(
     state: &AppState,
     grant_id: &str,
     action: &str,
     subject: arkret_wire::ActorId,
     revoked: bool,
 ) -> String {
-    let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let move_id = data_event_move_id(0xab);
-    let seal_ref = insert_data_event_seal(state, vec![move_id.clone()]).await;
+    let realm = arkret_identifiers::RealmId::new(ORDINARY_EVENT_REALM.to_owned()).unwrap();
+    let move_id = ordinary_event_move_id(0xab);
+    let seal_ref = insert_ordinary_event_seal(state, vec![move_id.clone()]).await;
     let seal_id = arkret_identifiers::SealId::new(seal_ref.clone()).unwrap();
     let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
-    let mut value = historical_data_event_grant_value(
+    let mut value = historical_ordinary_event_grant_value(
         grant_id,
         action,
         subject.signing_principal_id().as_str(),
@@ -1554,7 +1557,7 @@ async fn insert_historical_data_event_grant_for_subject(
     seal_ref
 }
 
-async fn insert_data_event_revocation_successor(
+async fn insert_ordinary_event_revocation_successor(
     state: &AppState,
     predecessor_ref: &str,
     grant_id: &str,
@@ -1563,18 +1566,18 @@ async fn insert_data_event_revocation_successor(
 ) {
     use chrono::{Duration, TimeZone};
 
-    let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let realm = arkret_identifiers::RealmId::new(ORDINARY_EVENT_REALM.to_owned()).unwrap();
     let predecessor = arkret_identifiers::SealId::new(predecessor_ref.to_owned()).unwrap();
-    let move_id = data_event_move_id(0xae);
+    let move_id = ordinary_event_move_id(0xae);
     let sealed_at =
         chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap() + Duration::hours(after_hours);
     let mut successor = arkret_wire::Seal {
-        id: data_event_placeholder_seal_id(),
+        id: ordinary_event_placeholder_seal_id(),
         realm_id: realm.clone(),
         predecessor_ref: Some(predecessor),
         delta: vec![move_id.clone()],
-        control_event_set_root: data_event_hash(0x23),
-        state_root: data_event_hash(0x78),
+        control_event_set_root: ordinary_event_hash(0x23),
+        state_root: ordinary_event_hash(0x78),
         notary_seq: 2,
         availability_receipt_digests: Vec::new(),
         covered_event_digests: Vec::new(),
@@ -1582,7 +1585,7 @@ async fn insert_data_event_revocation_successor(
         previous_digest_algorithm: None,
         notary_signature: arkret_wire::MultiSignature {
             kind: arkret_wire::MultiSigKind::MultiSig,
-            signatures: vec![data_event_dummy_signature()],
+            signatures: vec![ordinary_event_dummy_signature()],
             view: 0,
         },
         sealed_at,
@@ -1618,10 +1621,10 @@ async fn insert_data_event_revocation_successor(
     let op = arkret_wire::LatticeOp {
         op_type: arkret_wire::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-000000000998".to_owned()),
-        value: Some(historical_data_event_grant_value(
+        value: Some(historical_ordinary_event_grant_value(
             grant_id,
             action,
-            DATA_EVENT_ACTOR,
+            ORDINARY_EVENT_ACTOR,
             "ak:did_core:web:owner.example",
             true,
             None,
@@ -1645,17 +1648,18 @@ async fn insert_data_event_revocation_successor(
         .unwrap();
 }
 
-async fn insert_historical_data_event_child_grant_with_revoked_authority(
+async fn insert_historical_ordinary_event_child_grant_with_revoked_authority(
     state: &AppState,
     authority_grant_id: &str,
     child_grant_id: &str,
     action: &str,
 ) -> String {
-    let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let parent_move_id = data_event_move_id(0xac);
-    let child_move_id = data_event_move_id(0xad);
+    let realm = arkret_identifiers::RealmId::new(ORDINARY_EVENT_REALM.to_owned()).unwrap();
+    let parent_move_id = ordinary_event_move_id(0xac);
+    let child_move_id = ordinary_event_move_id(0xad);
     let seal_ref =
-        insert_data_event_seal(state, vec![parent_move_id.clone(), child_move_id.clone()]).await;
+        insert_ordinary_event_seal(state, vec![parent_move_id.clone(), child_move_id.clone()])
+            .await;
     let seal_id = arkret_identifiers::SealId::new(seal_ref.clone()).unwrap();
     let parent_cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{authority_grant_id}"
@@ -1665,7 +1669,7 @@ async fn insert_historical_data_event_child_grant_with_revoked_authority(
         "ak:cell:ak.component.capability.grant.v1:{child_grant_id}"
     ))
     .unwrap();
-    let parent_value = historical_data_event_grant_value(
+    let parent_value = historical_ordinary_event_grant_value(
         authority_grant_id,
         action,
         "ak:did_core:web:authority.example",
@@ -1673,10 +1677,10 @@ async fn insert_historical_data_event_child_grant_with_revoked_authority(
         true,
         None,
     );
-    let child_value = historical_data_event_grant_value(
+    let child_value = historical_ordinary_event_grant_value(
         child_grant_id,
         action,
-        DATA_EVENT_ACTOR,
+        ORDINARY_EVENT_ACTOR,
         "ak:did_core:web:authority.example",
         false,
         Some(authority_grant_id),
@@ -1731,21 +1735,21 @@ async fn insert_historical_data_event_child_grant_with_revoked_authority(
 /// v1 carries no producer `effects[]`; the receiver derives the write set from
 /// `kind + payload` and hands it to the capability gate, so the fixture states
 /// the derived set directly instead of putting one on the wire.
-fn data_event_derived_cells() -> Vec<String> {
+fn ordinary_event_derived_cells() -> Vec<String> {
     vec![format!(
-        "ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"
+        "ak:cell:ak.component.strand.discussion.timeline.v1:{ORDINARY_EVENT_STRAND}"
     )]
 }
 
-/// A DataEvent citing `grants` through `refs[role=authorized_by]`, which is
+/// A ordinary Event citing `grants` through `refs[role=authorized_by]`, which is
 /// where v1 puts a capability citation — `auth_context` is closed over
 /// `{key_id, key_epoch, credential_epoch, authority_refs}`.
-fn data_event_object_with_refs(
+fn ordinary_event_object_with_refs(
     authority_ref: &str,
     grants: Vec<String>,
 ) -> serde_json::Map<String, Value> {
     json!({
-        "actor_id": data_event_account(DATA_EVENT_ACTOR),
+        "actor_id": ordinary_event_account(ORDINARY_EVENT_ACTOR),
         "created_at": "2026-05-08T00:02:00.000Z",
         "refs": grants
             .into_iter()
@@ -1756,13 +1760,13 @@ fn data_event_object_with_refs(
             "key_epoch": 1,
             "authority_refs": [authority_ref]
         },
-        // A DataEvent carries a payload, and `data_event_constraint_context`
+        // A ordinary Event carries a payload, and `ordinary_event_constraint_context`
         // resolves the field/track authorization context from it. A
-        // payload-less fixture is not a DataEvent any receiver would see, and
+        // payload-less fixture is not an ordinary Event any receiver would see, and
         // it fails before reaching the capability resolution these tests are
         // about.
         "payload": {
-            "strand_id": DATA_EVENT_STRAND,
+            "strand_id": ORDINARY_EVENT_STRAND,
             "track_name": arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
         }
     })
@@ -1772,22 +1776,22 @@ fn data_event_object_with_refs(
 }
 
 #[tokio::test]
-async fn data_event_capability_ref_must_resolve() {
+async fn ordinary_event_capability_ref_must_resolve() {
     let state = make_state(true);
-    let seal_ref = insert_data_event_seal(&state, Vec::new()).await;
-    let object = data_event_object_with_refs(
+    let seal_ref = insert_ordinary_event_seal(&state, Vec::new()).await;
+    let object = ordinary_event_object_with_refs(
         &seal_ref,
         vec!["ak:grant:ATPdRBJ7VjotWM8xezzjJYCICc6wTKShqh-oWNC3EGqO".to_owned()],
     );
 
-    let err = validate_data_event_capability_refs(
+    let err = validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -1800,45 +1804,49 @@ async fn data_event_capability_ref_must_resolve() {
 /// Coverage is judged against the cells the *receiver* derived, over the whole
 /// effective set the `seal_ref` basis yields for the actor.
 #[tokio::test]
-async fn data_event_capability_must_cover_derived_cell() {
+async fn ordinary_event_capability_must_cover_derived_cell() {
     let state = make_state(true);
     let grant_id = "ak:grant:AZjl4ii7409qEbi9w_hFgL2BOAn9txOvjwAf79MHg_i6";
     let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
-    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+        insert_historical_ordinary_event_grant(&state, grant_id, "ak.message.create", false).await;
+    let object = ordinary_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    validate_data_event_capability_refs(
+    validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
-    .expect("matching grant must cover the derived DataEvent cell");
+    .expect("matching grant must cover the derived ordinary Event cell");
 
     let wrong_state = make_state(true);
     let wrong_grant_id = "ak:grant:ARgPcY94c3tMPJStrGtcGWGqWQXLGc-0YDI6darot7h0";
-    let wrong_seal_ref =
-        insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ak.reaction.add", false)
-            .await;
-    let wrong_action_object =
-        data_event_object_with_refs(&wrong_seal_ref, vec![wrong_grant_id.to_owned()]);
-    let err = validate_data_event_capability_refs(
+    let wrong_seal_ref = insert_historical_ordinary_event_grant(
         &wrong_state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        wrong_grant_id,
+        "ak.reaction.add",
+        false,
+    )
+    .await;
+    let wrong_action_object =
+        ordinary_event_object_with_refs(&wrong_seal_ref, vec![wrong_grant_id.to_owned()]);
+    let err = validate_ordinary_event_capability_refs(
+        &wrong_state,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &wrong_action_object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
-    .expect_err("wrong action must not cover the derived DataEvent cell");
+    .expect_err("wrong action must not cover the derived ordinary Event cell");
     assert_eq!(err.code, "capability_denied");
     assert!(err.message.contains("covers action"));
 }
@@ -1849,22 +1857,22 @@ async fn data_event_capability_must_cover_derived_cell() {
 /// the capability gate used to *require*, so they are asserted refused rather
 /// than merely unread.
 #[tokio::test]
-async fn data_event_rejects_producer_selected_capability_fields() {
+async fn ordinary_event_rejects_producer_selected_capability_fields() {
     let state = make_state(true);
     let grant_id = "ak:grant:AX37wLeLONzd_JNkw6LJ99yJoWyfGkOl1VRG-QZRvfHs";
     let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
+        insert_historical_ordinary_event_grant(&state, grant_id, "ak.message.create", false).await;
 
-    let mut with_capability_refs = data_event_object_with_refs(&seal_ref, vec![]);
+    let mut with_capability_refs = ordinary_event_object_with_refs(&seal_ref, vec![]);
     with_capability_refs["auth_context"]["capability_refs"] = json!([grant_id]);
-    let err = validate_data_event_capability_refs(
+    let err = validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &with_capability_refs,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -1872,22 +1880,22 @@ async fn data_event_rejects_producer_selected_capability_fields() {
     assert_eq!(err.code, "schema_violation");
     assert!(err.message.contains("auth_context is closed over"));
 
-    let mut with_effects = data_event_object_with_refs(&seal_ref, vec![]);
+    let mut with_effects = ordinary_event_object_with_refs(&seal_ref, vec![]);
     with_effects.insert(
         "effects".to_owned(),
         json!([{
-            "cell_id": format!("ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
+            "cell_id": format!("ak:cell:ak.component.strand.discussion.timeline.v1:{ORDINARY_EVENT_STRAND}"),
             "op": {"kind": "append"}
         }]),
     );
-    let err = validate_data_event_capability_refs(
+    let err = validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &with_effects,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -1896,37 +1904,37 @@ async fn data_event_rejects_producer_selected_capability_fields() {
     assert!(err.message.contains("not a v1 Event Envelope field"));
 }
 
-/// A conformant DataEvent cites nothing: `refs[role=authorized_by]` is
+/// A conformant ordinary Event cites nothing: `refs[role=authorized_by]` is
 /// optional, and the effective capability set comes from the governance basis
 /// at `seal_ref` alone.
 #[tokio::test]
-async fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
+async fn ordinary_event_without_authorized_by_refs_uses_the_derived_capability_set() {
     let state = make_state(true);
     let grant_id = "ak:grant:AawcynxQ2o8vL1cUX0ihdXGNoRO0G_nEj-ZtG2fA6Tq-";
     let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
-    let object = data_event_object_with_refs(&seal_ref, vec![]);
+        insert_historical_ordinary_event_grant(&state, grant_id, "ak.message.create", false).await;
+    let object = ordinary_event_object_with_refs(&seal_ref, vec![]);
 
-    validate_data_event_capability_refs(
+    validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
-    .expect("a DataEvent citing no grant is authorized by its authority basis");
+    .expect("an ordinary Event citing no grant is authorized by its authority basis");
 }
 
 #[tokio::test]
-async fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
+async fn applet_ordinary_event_uses_exact_executed_by_grant_at_seal_ref() {
     const APPLET_SERVICE: &str = "ak:did_core:web:bridge.example";
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
-    let seal_ref = insert_historical_data_event_grant_for_subject(
+    let seal_ref = insert_historical_ordinary_event_grant_for_subject(
         &state,
         grant_id,
         "ak.message.create",
@@ -1936,7 +1944,7 @@ async fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         false,
     )
     .await;
-    let mut object = data_event_object_with_refs(&seal_ref, vec![]);
+    let mut object = ordinary_event_object_with_refs(&seal_ref, vec![]);
     object.insert(
         "applet_id".to_owned(),
         json!("ak:applet:01904100-0000-7000-8000-000000000001"),
@@ -1949,30 +1957,30 @@ async fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     );
     object.insert("authorization_ref".to_owned(), json!(grant_id));
 
-    validate_data_event_capability_refs(
+    validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
-    .expect("Applet DataEvent must use its executor's exact install grant");
+    .expect("Applet ordinary Event must use its executor's exact install grant");
 
     let mut self_action = object.clone();
     let producer = self_action.remove("executed_by").unwrap();
     self_action.insert("actor_id".to_owned(), producer);
-    validate_data_event_capability_refs(
+    validate_ordinary_event_capability_refs(
         &state,
         APPLET_SERVICE,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &self_action,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -1982,14 +1990,14 @@ async fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         "authorization_ref".to_owned(),
         json!("ak:grant:AXt8OgxCpSbRBVYm7b5yaEOTqGwqu3EiAxcRhN7K2raF"),
     );
-    let err = validate_data_event_capability_refs(
+    let err = validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -1999,21 +2007,21 @@ async fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
 }
 
 #[tokio::test]
-async fn data_event_capability_ref_must_not_be_revoked() {
+async fn ordinary_event_capability_ref_must_not_be_revoked() {
     let state = make_state(true);
     let grant_id = "ak:grant:AcQ0lLs0sdXJIIFx89z5MPiZcW4lJ931DNuCAR0tR-W3";
     let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", true).await;
-    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+        insert_historical_ordinary_event_grant(&state, grant_id, "ak.message.create", true).await;
+    let object = ordinary_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    let err = validate_data_event_capability_refs(
+    let err = validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -2024,27 +2032,27 @@ async fn data_event_capability_ref_must_not_be_revoked() {
 }
 
 #[tokio::test]
-async fn data_event_capability_ref_reports_upstream_revoked_authority() {
+async fn ordinary_event_capability_ref_reports_upstream_revoked_authority() {
     let state = make_state(true);
     let authority_grant_id = "ak:grant:AXtQr1bQ29BYsE_HxdhYVb02wrOy3mDAcmK4juGSwpGE";
     let child_grant_id = "ak:grant:AUClLzOaZSu1iuMPWhnnXcjeH3Kdt15z74i8jhKEonWr";
-    let seal_ref = insert_historical_data_event_child_grant_with_revoked_authority(
+    let seal_ref = insert_historical_ordinary_event_child_grant_with_revoked_authority(
         &state,
         authority_grant_id,
         child_grant_id,
         "ak.message.create",
     )
     .await;
-    let object = data_event_object_with_refs(&seal_ref, vec![child_grant_id.to_owned()]);
+    let object = ordinary_event_object_with_refs(&seal_ref, vec![child_grant_id.to_owned()]);
 
-    let err = validate_data_event_capability_refs(
+    let err = validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -2055,48 +2063,50 @@ async fn data_event_capability_ref_reports_upstream_revoked_authority() {
 }
 
 #[tokio::test]
-async fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
+async fn ordinary_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let state = make_state(true);
     let grant_id = "ak:grant:AbNxEyHm2i7kxIWT8d3aeJ0c7n5ujCnlTYJy9aAxH1Fn";
     let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
+        insert_historical_ordinary_event_grant(&state, grant_id, "ak.message.create", false).await;
     state
         .authorization()
-        .upsert_projected_grant(data_event_grant(grant_id, "ak.message.create", true));
-    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+        .upsert_projected_grant(ordinary_event_grant(grant_id, "ak.message.create", true));
+    let object = ordinary_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    validate_data_event_capability_refs(
+    validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
-    .expect("DataEvent authz must evaluate its referenced pre-state, not the live authz index");
+    .expect(
+        "ordinary Event authz must evaluate its referenced pre-state, not the live authz index",
+    );
 }
 
 #[tokio::test]
-async fn current_revocation_blocks_a_new_data_event_admission() {
+async fn current_revocation_blocks_a_new_ordinary_event_admission() {
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
     let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 1)
+        insert_historical_ordinary_event_grant(&state, grant_id, "ak.message.create", false).await;
+    insert_ordinary_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 1)
         .await;
-    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+    let object = ordinary_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    let err = validate_data_event_capability_refs(
+    let err = validate_ordinary_event_capability_refs(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await
@@ -2109,19 +2119,25 @@ async fn current_revocation_blocks_admission_regardless_of_seal_distance() {
     let state = make_state(true);
     let grant_id = "ak:grant:Adtfh7VczxqGjGKRiDCJlBwIw-G-GAX-uATlzwwXLQcQ";
     let seal_ref =
-        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 24)
-        .await;
-    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
-
-    let err = validate_data_event_capability_refs(
+        insert_historical_ordinary_event_grant(&state, grant_id, "ak.message.create", false).await;
+    insert_ordinary_event_revocation_successor(
         &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
-        DATA_EVENT_REALM,
+        &seal_ref,
+        grant_id,
+        "ak.message.create",
+        24,
+    )
+    .await;
+    let object = ordinary_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    let err = validate_ordinary_event_capability_refs(
+        &state,
+        ORDINARY_EVENT_ACTOR,
+        ORDINARY_EVENT_STATION,
+        ORDINARY_EVENT_REALM,
         "ak.message.create",
         &object,
-        &data_event_derived_cells(),
+        &ordinary_event_derived_cells(),
         false,
     )
     .await

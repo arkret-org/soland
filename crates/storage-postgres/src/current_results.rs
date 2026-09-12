@@ -1,4 +1,4 @@
-//! Versioned current-result publication shared by accepted DataEvents and
+//! Versioned current-result publication shared by accepted ordinary Events and
 //! sealed governance. Callers own the accepted transaction and revision cut.
 
 pub(crate) mod read;

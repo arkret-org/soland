@@ -15,7 +15,7 @@ fn projection_space_containers_endpoint_reports_lifecycle_state() {
 async fn projection_space_containers_endpoint_reports_lifecycle_state_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -256,7 +256,7 @@ fn projection_strands_endpoint_reports_lifecycle_state() {
 async fn projection_strands_endpoint_reports_lifecycle_state_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -335,7 +335,7 @@ fn projection_morphs_endpoint_reports_lifecycle_state() {
 async fn projection_morphs_endpoint_reports_lifecycle_state_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -602,7 +602,7 @@ fn projection_document_endpoint_reports_body_versions_relations_and_range_commen
 async fn projection_document_endpoint_reports_body_versions_relations_and_range_comments_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -833,7 +833,7 @@ fn projection_document_relations_return_lazy_and_locked_stubs() {
 async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -1044,7 +1044,7 @@ fn projection_endpoints_hide_terminal_state_by_default() {
 async fn projection_endpoints_hide_terminal_state_by_default_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -1224,7 +1224,7 @@ fn projection_persistence_write_through_mirrors_lifecycle_events() {
 async fn projection_persistence_write_through_mirrors_lifecycle_events_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;

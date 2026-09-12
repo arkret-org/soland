@@ -711,7 +711,7 @@ pub(crate) async fn event_visible_to_session(
             // current member must be able to resolve every accepted Control
             // Move named by the Realm Seal closure so a new member can perform
             // the T1/T3 replay required by encryption-and-audit.md §2.5.4.
-            // `since_join` continues to crop DataEvents below.
+            // `since_join` continues to crop ordinary Events below.
             let realm_visible = if is_governance_replay_input(record)
                 || is_validated_realm_bootstrap_member(state, record).await
             {
@@ -926,7 +926,7 @@ mod refs_limit_tests {
     }
 
     #[test]
-    fn governance_replay_visibility_does_not_classify_data_events_as_control_moves() {
+    fn governance_replay_visibility_does_not_classify_ordinary_events_as_control_moves() {
         let message = visibility_record(
             arkret_wire::event_kind_str::MESSAGE_CREATE,
             json!({"auth_context": {}}),

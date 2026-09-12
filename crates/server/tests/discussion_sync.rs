@@ -15,9 +15,9 @@ use soland_http::state::{AppState, RealmDirectoryEntry};
 use soland_storage::{RealmInviteRecord, RealmMetaRecord};
 use soland_test_support::AppStateTestExt as _;
 
-/// The data-plane actions this suite's DataEvents exercise.
+/// The data-plane actions this suite's ordinary Events exercise.
 ///
-/// `capability_refs.rs::validate_data_event_capability_refs` decides coverage
+/// `capability_refs.rs::validate_ordinary_event_capability_refs` decides coverage
 /// per receiver-derived cell over the effective grants referenced by
 /// `auth_context.authority_refs`, so the fixture basis has to name every
 /// data-plane kind this suite submits and nothing beyond it. None of them are
@@ -785,8 +785,8 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     // `seed_realm` writes the Realm straight into `AppState` instead of
     // bootstrapping it through `ak.realm.create`, so the Realm owns no sealed
     // governance state of its own. Every reducer-input Event still has to be a
-    // DataEvent or a Control Move (`event-auth-state-resolution.md` §5), and a
-    // DataEvent's `auth_context.authority_refs` have to resolve to governance
+    // ordinary Event or a Control Move (`event-auth-state-resolution.md` §5), and a
+    // ordinary Event's `auth_context.authority_refs` have to resolve to governance
     // state that authorizes the receiver-derived writes, so the genesis unit
     // is sealed here per author before the envelope names it.
     let fixture_basis =

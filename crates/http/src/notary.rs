@@ -931,9 +931,7 @@ impl NotaryWorker {
         let mut ordinary_batch = arkret_wire::control_seal_batch::ControlSealBatch::default();
         for (digest, event) in ordered {
             let move_digest_suite =
-                if predecessor_ref.is_none()
-                    && event.kind == arkret_wire::EventKind::RealmCreate
-                {
+                if predecessor_ref.is_none() && event.kind == arkret_wire::EventKind::RealmCreate {
                     arkret_canonical::DigestSuite::Sha256
                 } else {
                     event_digest_suite
@@ -1153,7 +1151,9 @@ impl NotaryWorker {
             .projections()
             .seal_by_id(&request.predecessor_ref)
             .await?
-            .ok_or_else(|| NotaryError::Construction("PCR predecessor is unavailable".to_owned()))?;
+            .ok_or_else(|| {
+                NotaryError::Construction("PCR predecessor is unavailable".to_owned())
+            })?;
         if predecessor.sealed_at > sealed_at {
             return Err(NotaryError::Construction(
                 "PCR preparation time precedes its predecessor".to_owned(),
@@ -1507,7 +1507,9 @@ impl NotaryWorker {
         let resolved = state
             .projections()
             .effective_state_at(
-                predecessor_ref.map(std::slice::from_ref).unwrap_or_default(),
+                predecessor_ref
+                    .map(std::slice::from_ref)
+                    .unwrap_or_default(),
                 realm_id,
             )
             .await
@@ -2363,8 +2365,7 @@ pub(crate) fn validate_first_generation_event_seal(
     }
     if predecessor_ref != requirement.predecessor_ref.as_ref() {
         return Err(NotaryError::Construction(
-            "first new-generation Seal predecessor differs from the pre-fence head"
-                .to_owned(),
+            "first new-generation Seal predecessor differs from the pre-fence head".to_owned(),
         ));
     }
     if !required.is_subset(target) {
@@ -2753,7 +2754,7 @@ mod tests {
                 &target,
                 &full_basis,
             )
-                .unwrap()
+            .unwrap()
         );
     }
 

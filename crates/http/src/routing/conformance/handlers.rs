@@ -397,7 +397,7 @@ pub async fn realm_basis(
 
     // A synthetic conformance basis is valid only for an isolated fixture
     // Realm. Extending a canonically created Realm would put synthetic
-    // digests (which have no Control Event) into its Seal DAG; the next real
+    // digests (which have no Control Event) into its Seal chain; the next real
     // control-seal pass could then never reconstruct the committed command closure.
     let accepted = state
         .event_queries()

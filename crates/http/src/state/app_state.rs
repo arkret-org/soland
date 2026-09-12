@@ -453,8 +453,8 @@ mod test_construction {
     use std::ops::Range;
     use std::path::Path;
 
-    use async_trait::async_trait;
     use arkret_identifiers::SealId;
+    use async_trait::async_trait;
     use bytes::Bytes;
     use futures_util::stream::{self, BoxStream, StreamExt};
     use parking_lot::Mutex;

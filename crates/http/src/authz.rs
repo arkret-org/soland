@@ -710,7 +710,7 @@ fn evaluate_constraint(
         }
         GrantConstraint::FieldAccess { .. } => {
             // These constraints require operation-derived dotted paths and
-            // track targets. DataEvent admission evaluates them against the
+            // track targets. ordinary Event admission evaluates them against the
             // signed payload in `capability_refs`; this resource-only helper
             // has no safe context from which to do so.
             None

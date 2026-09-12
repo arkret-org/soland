@@ -847,11 +847,11 @@ async fn derive_seal_conclusion_results(
         SealConclusionAncestrySelectorKind, SealConclusionCellRangeResult,
         SealConclusionCellRangeSelector, SealConclusionCellRangeSelectorKind,
         SealConclusionCellResult, SealConclusionCellSelector, SealConclusionCellSelectorKind,
-        SealConclusionCommandResult, SealConclusionCommandSelector,
-        SealConclusionCommandSelectorKind, SealConclusionResult, SealConclusionTransactionResult,
-        SealConclusionTransactionSelector, SealConclusionTransactionSelectorKind,
         SealConclusionCommandEffectResult, SealConclusionCommandEffectSelector,
-        SealConclusionCommandEffectSelectorKind,
+        SealConclusionCommandEffectSelectorKind, SealConclusionCommandResult,
+        SealConclusionCommandSelector, SealConclusionCommandSelectorKind, SealConclusionResult,
+        SealConclusionTransactionResult, SealConclusionTransactionSelector,
+        SealConclusionTransactionSelectorKind,
     };
 
     let frozen = state
@@ -920,14 +920,9 @@ async fn derive_seal_conclusion_results(
                 if !is_security_cell(state, &target.realm_id, cell_id)? {
                     return Ok(None);
                 }
-                let Some(command_state) = exact_command_effect_state(
-                    state,
-                    target,
-                    &frozen,
-                    event_digest,
-                    cell_id,
-                )
-                .await?
+                let Some(command_state) =
+                    exact_command_effect_state(state, target, &frozen, event_digest, cell_id)
+                        .await?
                 else {
                     return Ok(None);
                 };
@@ -976,10 +971,7 @@ async fn exact_command_effect_state(
     >,
     event_digest: &arkret_wire::Hash,
     requested_cell_id: &arkret_wire::CellRef,
-) -> Result<
-    Option<Option<arkret_models_collaboration::SealConclusionCellState>>,
-    AppError,
-> {
+) -> Result<Option<Option<arkret_models_collaboration::SealConclusionCellState>>, AppError> {
     let Some(stored) = target
         .command_results
         .iter()
@@ -1005,57 +997,75 @@ async fn exact_command_effect_state(
             .project_accepted_cell_writes_with_digest_suite(&event, digest_suite)
             .map_err(|error| AppError::internal(format!("command effect projection: {error}")))?;
         for effect in effects {
-            if !is_security_cell(state, &target.realm_id, &effect.cell_id)? {
-                return Ok(None);
-            }
             revisions.insert(effect.cell_id, event.event_id.clone());
         }
     }
 
-    let effects = revisions
-        .iter()
-        .map(|(cell_id, revision_event_id)| {
-            let Some(arkret_state::state_model::ResolvedCellState::Sequenced(value)) =
-                frozen.get(cell_id)
-            else {
-                return Err(AppError::internal(format!(
-                    "command effect Cell {cell_id} has no sequenced target state"
-                )));
-            };
-            Ok(arkret_wire::CommandResultEffect {
-                cell_id: cell_id.clone(),
-                state: arkret_wire::CommandResultCellState {
-                    revision_event_id: revision_event_id.clone(),
-                    value: value.value.clone(),
-                },
-            })
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
     let seal_digest_suite = target
         .id
         .digest_suite()
         .map_err(|error| AppError::internal(format!("target Seal digest: {error}")))?;
-    let reconstructed = arkret_wire::CommandResult::committed(
-        stored.event_digest.clone(),
-        stored.unit_event_digests.clone(),
-        effects,
+    let reconstructed = reconstruct_committed_command_result(
+        stored,
+        &revisions,
+        frozen,
         seal_digest_suite,
-    )
-    .map_err(|error| AppError::internal(format!("reconstruct command result: {error}")))?;
+    )?;
     if reconstructed != *stored {
         return Ok(None);
     }
-    Ok(Some(revisions.get(requested_cell_id).and_then(|revision_event_id| {
-        let arkret_state::state_model::ResolvedCellState::Sequenced(value) =
-            frozen.get(requested_cell_id)?
-        else {
-            return None;
-        };
-        Some(arkret_models_collaboration::SealConclusionCellState {
-            revision_event_id: revision_event_id.clone(),
-            value: value.value.clone(),
+    Ok(Some(revisions.get(requested_cell_id).and_then(
+        |revision_event_id| {
+            let arkret_state::state_model::ResolvedCellState::Sequenced(value) =
+                frozen.get(requested_cell_id)?
+            else {
+                return None;
+            };
+            Some(arkret_models_collaboration::SealConclusionCellState {
+                revision_event_id: revision_event_id.clone(),
+                value: value.value.clone(),
+            })
+        },
+    )))
+}
+
+fn reconstruct_committed_command_result(
+    stored: &arkret_wire::CommandResult,
+    revisions: &std::collections::BTreeMap<arkret_wire::CellRef, arkret_wire::EventId>,
+    frozen: &std::collections::BTreeMap<
+        arkret_wire::CellRef,
+        arkret_state::state_model::ResolvedCellState,
+    >,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<arkret_wire::CommandResult, AppError> {
+    let effects = revisions
+        .iter()
+        .map(|(cell_id, revision_event_id)| {
+            let value = frozen
+                .get(cell_id)
+                .and_then(arkret_state::state_model::ResolvedCellState::settled_value)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::internal(format!(
+                        "command effect Cell {cell_id} has no settled target state"
+                    ))
+                })?;
+            Ok(arkret_wire::CommandResultEffect {
+                cell_id: cell_id.clone(),
+                state: arkret_wire::CommandResultCellState {
+                    revision_event_id: revision_event_id.clone(),
+                    value,
+                },
+            })
         })
-    })))
+        .collect::<Result<Vec<_>, AppError>>()?;
+    arkret_wire::CommandResult::committed(
+        stored.event_digest.clone(),
+        stored.unit_event_digests.clone(),
+        effects,
+        digest_suite,
+    )
+    .map_err(|error| AppError::internal(format!("reconstruct command result: {error}")))
 }
 
 fn is_security_cell(
@@ -4858,8 +4868,75 @@ mod canonical_response_digest_tests {
 
     use super::{
         history_response_source_record_digest, mls_group_state_material_schema_violation,
-        validate_mls_material_bytes, validate_mls_material_ref_suite,
+        reconstruct_committed_command_result, validate_mls_material_bytes,
+        validate_mls_material_ref_suite,
     };
+
+    #[test]
+    fn command_effect_reconstruction_includes_mixed_genesis_unit_state() {
+        let digest_suite = arkret_canonical::DigestSuite::Sha256;
+        let command_digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32)))
+            .expect("command digest");
+        let revision_event_id =
+            arkret_wire::EventId::from_event_digest(&command_digest).expect("revision Event id");
+        let realm = "ak:realm:Aas_EcgKHABrLEjI4EJvOxHIXQVfHYZ_oP4Q_u3xuXRF";
+        let security_cell = arkret_wire::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
+            .expect("security Cell");
+        let ordinary_cell = arkret_wire::CellRef::new(format!(
+            "ak:cell:ak.component.space.title.v1:{realm}"
+        ))
+        .expect("ordinary Cell");
+        let mut revisions = std::collections::BTreeMap::new();
+        revisions.insert(security_cell.clone(), revision_event_id.clone());
+        revisions.insert(ordinary_cell.clone(), revision_event_id.clone());
+        let mut frozen = std::collections::BTreeMap::new();
+        frozen.insert(
+            security_cell.clone(),
+            arkret_state::state_model::ResolvedCellState::Sequenced(
+                arkret_state::state_model::SequencedStateValue {
+                    revision_event_id: revision_event_id.clone(),
+                    value: json!({"fault_tolerance": 0}),
+                },
+            ),
+        );
+        frozen.insert(
+            ordinary_cell.clone(),
+            arkret_state::state_model::ResolvedCellState::Value(json!("bootstrap title")),
+        );
+        let effects = revisions
+            .iter()
+            .map(|(cell_id, revision_event_id)| arkret_wire::CommandResultEffect {
+                cell_id: cell_id.clone(),
+                state: arkret_wire::CommandResultCellState {
+                    revision_event_id: revision_event_id.clone(),
+                    value: frozen
+                        .get(cell_id)
+                        .and_then(arkret_state::state_model::ResolvedCellState::settled_value)
+                        .cloned()
+                        .expect("settled genesis state"),
+                },
+            })
+            .collect();
+        let stored = arkret_wire::CommandResult::committed(
+            command_digest.clone(),
+            vec![command_digest],
+            effects,
+            digest_suite,
+        )
+        .expect("stored command result");
+
+        let reconstructed =
+            reconstruct_committed_command_result(&stored, &revisions, &frozen, digest_suite)
+                .expect("reconstructed command result");
+
+        assert_eq!(reconstructed, stored);
+        assert_eq!(
+            frozen
+                .get(&ordinary_cell)
+                .and_then(arkret_state::state_model::ResolvedCellState::settled_value),
+            Some(&json!("bootstrap title"))
+        );
+    }
 
     #[test]
     fn cached_response_digest_is_the_authoritative_wire_digest() {

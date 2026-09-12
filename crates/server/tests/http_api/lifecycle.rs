@@ -27,7 +27,7 @@ fn space_container_lifecycle_state_machine_returns_409_for_illegal_transitions()
 async fn space_container_lifecycle_state_machine_returns_409_for_illegal_transitions_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -204,7 +204,7 @@ fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transitions() {
 async fn strand_morph_lifecycle_state_machine_returns_409_for_illegal_transitions_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -434,7 +434,7 @@ fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist() {
 async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -615,7 +615,7 @@ fn strand_metadata_fields_status_has_no_private_transition_transition() {
 async fn strand_metadata_fields_status_has_no_private_transition_transition_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -798,7 +798,7 @@ fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repea
 async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
@@ -967,7 +967,7 @@ fn strand_tracks_update_rejected_when_parent_strand_archived() {
 async fn strand_tracks_update_rejected_when_parent_strand_archived_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // Every fixture ordinary Event below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;

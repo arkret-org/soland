@@ -7,8 +7,7 @@
 //!   diagnostic.
 //! - `GET  /_soland/admin/bottom` — global cross-Realm list.
 //! - `GET  /_soland/admin/realms/{realm_id}/seal-chain` — confirmed head + covered events +
-//!   state_root
-//!   snapshot.
+//!   state_root snapshot.
 //!
 //! Principal/notary-key authoring is intentionally absent. Signed recovery moves, notary
 //! reconfiguration and compaction Seals must arrive through their protocol

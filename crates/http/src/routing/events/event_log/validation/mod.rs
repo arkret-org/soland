@@ -12,9 +12,9 @@ pub(in crate::routing::events::event_log) use envelope::validate_pairwise_sessio
 pub(crate) use envelope::{canonical_json_hash, validate_event_envelope_with_context};
 #[cfg(test)]
 pub(super) use envelope::{
-    event_requirements_schema_id, validate_data_event_capability_refs,
-    validate_event_critical_features, validate_event_proofs, validate_event_schema_and_payload,
-    validate_event_time_fields, validate_member_identity_proof,
+    event_requirements_schema_id, validate_event_critical_features, validate_event_proofs,
+    validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
+    validate_ordinary_event_capability_refs,
 };
 pub(in crate::routing) use envelope::{
     validate_join_gate_proof_signatures, validate_message_authoring_candidate,

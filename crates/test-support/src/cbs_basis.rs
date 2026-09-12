@@ -322,7 +322,7 @@ pub fn fixture_principal_control_realm_create_for_server(
 
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
-/// Every DataEvent authority ref MUST resolve to a verified security Seal of the
+/// Every ordinary Event authority ref MUST resolve to a verified security Seal of the
 /// same Realm **and** the governance
 /// state that Seal covers MUST authorize the Event's derived writes, so both
 /// the Seal object and its sealed cell effects have to exist before the Event

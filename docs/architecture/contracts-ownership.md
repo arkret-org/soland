@@ -40,7 +40,7 @@
 | `admin::seal` | `BottomRepairStrategy` | local contract | Soland | 只描述部署本地恢复前置检查；未命中 spec wire 类型 |
 | `admin::seal` | `BottomRepairRequestBody` | local contract | Soland | 只描述部署本地恢复前置检查；未命中 spec wire 类型 |
 | `admin::seal` | `SealLeaf` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `SealDagSnapshot` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
+| `admin::seal` | `SealChainSnapshot` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `SealPruneRequestBody` | local contract | Soland | 部署本地历史存储 GC；未命中 spec wire 类型 |
 | `admin::seal` | `SealPruneOutcome` | local contract | Soland | 部署本地历史存储 GC；未命中 spec wire 类型 |
 | `admin::seal` | `SealPruneDiagnostics` | local contract | Soland | 部署本地历史存储 GC；未命中 spec wire 类型 |

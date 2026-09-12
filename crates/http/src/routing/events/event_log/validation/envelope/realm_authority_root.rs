@@ -175,7 +175,7 @@ async fn accepted_seal_root(
 
 /// Safety references the Event pins its authorization pre-state to.
 ///
-/// A DataEvent names accepted decisions in `auth_context.authority_refs`; a
+/// A ordinary Event names accepted decisions in `auth_context.authority_refs`; a
 /// Control Move names its predecessor in `seal_basis.leaves`. An Event with neither carries no
 /// accepted-Seal proof at all and cannot speak for the authority root.
 fn governance_basis_leaves(

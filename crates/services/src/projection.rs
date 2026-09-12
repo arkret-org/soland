@@ -1047,7 +1047,9 @@ impl ProjectionService {
             }
         }
         arkret_state::covered_events_for_seal_basis(
-            predecessor_ref.map(std::slice::from_ref).unwrap_or_default(),
+            predecessor_ref
+                .map(std::slice::from_ref)
+                .unwrap_or_default(),
             self.seal_store(),
         )
         .await
