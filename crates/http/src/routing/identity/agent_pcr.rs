@@ -484,22 +484,6 @@ pub(crate) async fn agent_event_seal_head(
         return Ok(None);
     }
 
-    // This API returns one signed frontier for portable evidence. It cannot
-    // represent a joined antichain, and choosing one leaf could omit a revoke.
-    let leaves = state
-        .projections()
-        .realm_seal_basis_leaves(&realm_id)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("Agent PCR frontier lookup failed: {error}"))
-        })?;
-    if leaves.len() > 1 {
-        return Err(failed_precondition(
-            "Agent PCR portable evidence requires a resolved accepted frontier",
-            "agent_frontier_unresolved",
-        ));
-    }
-
     // A Agent PCR is notarized by its accepted Agent key authority or
     // by the accountable controller authorized by the accepted PCR history.
     // The service must never mint a substitute Seal with its own key merely

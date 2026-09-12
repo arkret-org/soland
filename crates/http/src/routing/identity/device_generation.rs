@@ -451,20 +451,14 @@ pub async fn accepted_device_generation_seal_head(
     realm_id: &RealmId,
 ) -> Result<Option<SealId>, ServiceError> {
     let quarantined = quarantined_generation_event_digests(state, principal_id).await?;
-    let raw_heads = state
+    let mut head = state
         .projections()
-        .realm_seal_basis_leaves(realm_id)
+        .realm_seal_head(realm_id)
         .await
         .map_err(|error| ServiceError::internal(format!("Seal frontier unavailable: {error}")))?;
-    let mut head = match raw_heads.as_slice() {
-        [] => return Ok(None),
-        [head] => Some(head.clone()),
-        _ => {
-            return Err(ServiceError::internal(
-                "Realm has multiple accepted Seal heads",
-            ));
-        }
-    };
+    if head.is_none() {
+        return Ok(None);
+    }
     if quarantined.is_empty() {
         return Ok(head);
     }
@@ -484,11 +478,10 @@ pub async fn accepted_device_generation_seal_head(
         }
         let coverage = state
             .projections()
-            .seal_leaf_union_proof(std::slice::from_ref(&seal_id))
+            .predecessor_covered_events(Some(&seal_id))
             .await
             .map_err(|error| ServiceError::internal(format!("Seal coverage unavailable: {error}")))?
             .into_iter()
-            .flat_map(|proof| proof.covered_event_digests)
             .collect::<BTreeSet<_>>();
         if coverage.is_disjoint(&quarantined) {
             return Ok(Some(seal_id));

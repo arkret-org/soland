@@ -44,7 +44,7 @@ pub(crate) async fn realm_seal_frontier_observation_coordinate(
     )
 }
 
-/// Materialize the serving service's durable current accepted Seal antichain
+/// Materialize the serving service's durable current accepted Seal head
 /// for an already-authorized caller. Visibility checks stay at the self/peer
 /// transport boundary.
 pub(crate) async fn load_realm_seal_frontier(
@@ -52,20 +52,19 @@ pub(crate) async fn load_realm_seal_frontier(
     realm_id: &RealmId,
 ) -> Result<arkret_models_collaboration::event_sync::RealmSealFrontierView, AppError> {
     // The durable accepted Seal store is written by the admission/commit path.
-    // Discovery reuses that result; it does not replay all canonical Events or
-    // collapse an open-set antichain to an arbitrarily selected single head.
-    let leaves = state
+    // Discovery reuses that result; it does not replay all canonical Events.
+    let head = state
         .projections()
-        .realm_seal_basis_leaves(realm_id)
+        .realm_seal_head(realm_id)
         .await
         .map_err(|error| AppError::internal(format!("accepted frontier unavailable: {error}")))?;
-    if leaves.is_empty() {
+    let Some(head) = head else {
         return Err(crate::app_error!(
             FrontierUnavailable,
             "Realm has no accepted Seal"
         ));
-    }
-    let seal_basis = arkret_wire::SealBasis { leaves };
+    };
+    let seal_basis = arkret_wire::SealBasis { leaves: vec![head] };
     seal_basis
         .validate_protocol_bounds()
         .map_err(|error| AppError::internal(format!("invalid accepted frontier: {error}")))?;
