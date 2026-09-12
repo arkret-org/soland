@@ -420,13 +420,41 @@ async fn accept_external_outcome(
             provider_id: outcome.service_id().clone(),
         });
     }
-    let stored =
+    let mut stored =
         stored_external_identity_from_outcome(provider, registration_key, material, outcome)?;
+    if let Some(prior) = prior {
+        retain_prior_signing_key_refs(&prior.identity, &mut stored.identity)?;
+        validate_external_stored_identity(&stored, provider, material)?;
+    }
     validate_external_account_authority_authorization(config, &stored, account_authority_key)?;
     persist_stored_identity(persistence, stored.clone()).await?;
     Ok(DidCoreIdentityState::Ready {
         identity: stored.identity,
     })
+}
+
+fn retain_prior_signing_key_refs(
+    prior: &LocalDidCoreIdentity,
+    next: &mut LocalDidCoreIdentity,
+) -> anyhow::Result<()> {
+    prior.validate()?;
+    next.validate()?;
+    if prior.did != next.did
+        || prior.service_id != next.service_id
+        || prior.registration_key != next.registration_key
+        || prior.provider != next.provider
+    {
+        anyhow::bail!(
+            "service identity refresh cannot transfer retained signing keys across a different complete identity or Provider binding"
+        );
+    }
+    for reference in &prior.signing_key_refs {
+        if !next.signing_key_refs.contains(reference) {
+            next.signing_key_refs.push(reference.clone());
+        }
+    }
+    next.validate()?;
+    Ok(())
 }
 
 fn external_provider(config: &AppConfig) -> anyhow::Result<DidCoreIdentityProviderRef> {
@@ -2696,6 +2724,32 @@ mod tests {
             .expect("identity lookup")
             .expect("stored identity");
         assert_eq!(stored.identity.did.method(), "webvh");
+        let historical_ref = DidCoreIdentityKeyRef::new("contact-retained-historical-key").unwrap();
+        key_store
+            .store(historical_ref.as_str(), &[91_u8; 32])
+            .unwrap();
+        let mut prior = stored.identity.clone();
+        prior.signing_key_refs.push(historical_ref.clone());
+        let mut refreshed = stored.identity.clone();
+        retain_prior_signing_key_refs(&prior, &mut refreshed).unwrap();
+        assert!(refreshed.signing_key_refs.contains(&historical_ref));
+        assert_eq!(
+            refreshed.active_signing_key_ref,
+            stored.identity.active_signing_key_ref
+        );
+        assert_eq!(refreshed.control_key_ref, stored.identity.control_key_ref);
+        let retained = refreshed.signing_key_refs.clone();
+        retain_prior_signing_key_refs(&prior, &mut refreshed).unwrap();
+        assert_eq!(refreshed.signing_key_refs, retained);
+        let mut other_provider = refreshed.clone();
+        other_provider.provider = Some(DidCoreIdentityProviderRef {
+            name: "other-provider".into(),
+            endpoint: CanonicalServiceUrl::canonicalize("https://other-provider.example/").unwrap(),
+        });
+        assert!(retain_prior_signing_key_refs(&prior, &mut other_provider).is_err());
+        let mut relocated = refreshed.clone();
+        relocated.did = arkret_wire::Did::new(format!("{}:different-location", prior.did)).unwrap();
+        assert!(retain_prior_signing_key_refs(&prior, &mut relocated).is_err());
         assert_ne!(
             stored.identity.did.as_str(),
             stored.identity.service_id.as_str(),

@@ -387,10 +387,33 @@ async fn receipt_key_at_acceptance(
                 format!("Contact historical assertion state unavailable: {error}")
             )
         })?;
+    let methods = receipt_assertion_methods(history.document)?;
+    let current = state.notary_signing_key();
+    if let Some((method, _)) = methods
+        .iter()
+        .find(|(_, public)| public == current.verifying_key().as_bytes())
+    {
+        return Ok((method.clone(), current.as_ref().clone()));
+    }
+    let identity = state
+        .stored_service_identity()
+        .await
+        .map_err(AppError::internal)?;
+    let config = state.config().clone();
+    tokio::task::spawn_blocking(move || {
+        load_retained_receipt_key(&methods, &config, &identity.identity.signing_key_refs)
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?
+    .map_err(|error| crate::app_error!(TemporarilyUnavailable, error))
+}
+
+fn receipt_assertion_methods(
+    document: serde_json::Value,
+) -> Result<Vec<(DidUrl, [u8; 32])>, AppError> {
     let document: arkret_models_identity::service_identity::ServiceDidDocument =
-        serde_json::from_value(history.document)
-            .map_err(|error| AppError::internal(error.to_string()))?;
-    let methods = document
+        serde_json::from_value(document).map_err(|error| AppError::internal(error.to_string()))?;
+    document
         .verification_method
         .iter()
         .filter(|method| document.assertion_method.contains(&method.id))
@@ -402,53 +425,46 @@ async fn receipt_key_at_acceptance(
                     .map_err(|error| AppError::internal(error.to_string()))?,
             ))
         })
-        .collect::<Result<Vec<_>, AppError>>()?;
-    let current = state.notary_signing_key();
-    let selected = if let Some((method, _)) = methods
-        .iter()
-        .find(|(_, public)| public == current.verifying_key().as_bytes())
-    {
-        (method.clone(), current.as_ref().clone())
-    } else {
-        let identity = state
-            .stored_service_identity()
-            .await
-            .map_err(AppError::internal)?;
-        let config = state.config().clone();
-        tokio::task::spawn_blocking(move || {
-            let store = config
-                .key_store
-                .open(crate::config::SERVICE_IDENTITY_KEYSTORE_APP)
-                .map_err(|error| error.to_string())?;
-            for reference in identity.identity.signing_key_refs {
-                let seed = if reference.as_str() == crate::config::CONFIGURED_SIGNING_KEY_REF {
-                    config.notary_signing_key_seed.map(|seed| seed.to_vec())
-                } else {
-                    store
-                        .as_ref()
-                        .and_then(|store| store.load(reference.as_str()).ok())
-                        .map(|bytes| bytes.to_vec())
-                };
-                let Some(seed) = seed else {
-                    continue;
-                };
-                let seed = zeroize::Zeroizing::new(seed);
-                let Ok(seed): Result<&[u8; 32], _> = seed.as_slice().try_into() else {
-                    continue;
-                };
-                let key = ed25519_dalek::SigningKey::from_bytes(seed);
-                if let Some((method, _)) = methods
-                    .iter()
-                    .find(|(_, public)| public == key.verifying_key().as_bytes())
-                {
-                    return Ok((method.clone(), key));
-                }
-            }
-            Err("Contact historical assertion private key is unavailable".to_owned())
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .map_err(|error| crate::app_error!(TemporarilyUnavailable, error))?
-    };
-    Ok(selected)
+        .collect()
 }
+
+// The only production caller supplies methods selected from the authenticated
+// historical DID state. Loading a secret does not grant that key authority.
+fn load_retained_receipt_key(
+    methods: &[(DidUrl, [u8; 32])],
+    config: &crate::config::AppConfig,
+    references: &[arkret_identity::service_identity::DidCoreIdentityKeyRef],
+) -> Result<(DidUrl, ed25519_dalek::SigningKey), String> {
+    let store = config
+        .key_store
+        .open(crate::config::SERVICE_IDENTITY_KEYSTORE_APP)
+        .map_err(|error| error.to_string())?;
+    for reference in references {
+        let seed = if reference.as_str() == crate::config::CONFIGURED_SIGNING_KEY_REF {
+            config.notary_signing_key_seed.map(|seed| seed.to_vec())
+        } else {
+            store
+                .as_ref()
+                .and_then(|store| store.load(reference.as_str()).ok())
+                .map(|bytes| bytes.to_vec())
+        };
+        let Some(seed) = seed else {
+            continue;
+        };
+        let seed = zeroize::Zeroizing::new(seed);
+        let Ok(seed): Result<&[u8; 32], _> = seed.as_slice().try_into() else {
+            continue;
+        };
+        let key = ed25519_dalek::SigningKey::from_bytes(seed);
+        if let Some((method, _)) = methods
+            .iter()
+            .find(|(_, public)| public == key.verifying_key().as_bytes())
+        {
+            return Ok((method.clone(), key));
+        }
+    }
+    Err("Contact historical assertion private key is unavailable".into())
+}
+
+#[cfg(test)]
+mod tests;
