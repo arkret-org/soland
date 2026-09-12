@@ -1881,6 +1881,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
             slug: "unallocated-agent".to_owned(),
             requested_scope,
             provision_event: Box::new(arkret_wire::EventInitialSubmission {
+                publication_event: None,
                 mls_frontier_leaves: None,
                 event: provision_event,
                 authorization_lease: None,

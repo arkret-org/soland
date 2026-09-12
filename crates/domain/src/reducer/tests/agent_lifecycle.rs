@@ -33,7 +33,7 @@ fn action_approve(request_id: &str) -> Operation {
             "agent_id": AGENT,
             "proposed_action": "ak.message.create",
             "target": { "kind": "realm", "realm_id": REALM },
-            "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "approved_event_id": "ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5",
             "approval_nonce": "nonce-01904100",
             "approved_at": "2026-06-19T00:00:10.000Z",
             "expires_at": "2026-06-19T00:10:10.000Z"

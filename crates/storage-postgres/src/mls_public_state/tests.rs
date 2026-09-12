@@ -69,6 +69,7 @@ fn genesis_with_group() -> (EventCommitRequest, arkret_mls::ArkretMlsGroup) {
         }),timestamp,
     ).unwrap();
     let request = EventCommitRequest {
+        publication_event: None,
         mls_public_producer: None,
         mls_public_genesis: Some(soland_storage::MlsPublicGenesisInput {
             group_info_bytes,

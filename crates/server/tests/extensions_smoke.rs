@@ -3330,6 +3330,7 @@ async fn signed_revoke_events(
         let event = event.into_event();
         previous_event_id = event.event_id.clone();
         submissions.push(arkret_wire::EventInitialSubmission {
+            publication_event: None,
             mls_frontier_leaves: None,
             event,
             authorization_lease: None,
@@ -3377,6 +3378,7 @@ async fn signed_revoke_events(
         let event = event.into_event();
         previous_event_id = event.event_id.clone();
         membership_submissions.push(arkret_wire::EventInitialSubmission {
+            publication_event: None,
             mls_frontier_leaves: None,
             event,
             authorization_lease: None,

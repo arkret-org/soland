@@ -153,6 +153,7 @@ async fn validate_and_prepare(
         Some(parsed.actor_id.as_str()),
     );
     let command = soland_services::events::CommitAcceptedEventCommand {
+        publication_event: None,
         mls_public_producer: None,
         mls_public_genesis: None,
         mls_frontier_leaves: None,
@@ -274,7 +275,6 @@ pub(crate) async fn submit_sidecar_ensure_batch(
         .events()
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: prepared.iter().map(|event| event.command.clone()).collect(),
-            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,

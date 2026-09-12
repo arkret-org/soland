@@ -184,11 +184,6 @@ pub struct ErasureReceiptView {
 }
 
 #[derive(Clone, Debug)]
-pub struct AgentActionApprovalValidation {
-    pub expires_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
 pub enum MlsProjectionEffect {
     KeyPackagePublished {
         keypackage_id: String,
@@ -2053,50 +2048,83 @@ impl ProjectionService {
             })
     }
 
-    pub fn validate_agent_action_approval(
+    pub async fn validate_agent_action_approval(
         &self,
         operation: &Operation,
         agent_id: &str,
         request_id: &str,
         approval_nonce: &str,
         action: &str,
-        now: DateTime<Utc>,
-    ) -> Result<AgentActionApprovalValidation, &'static str> {
-        let state = self.state.lock();
-        let request = state
-            .agent_action_requests
-            .get(request_id)
-            .ok_or("agent_act_on_behalf_approval_request_missing")?;
-        if request.status != soland_domain::reducer::AgentActionRequestStatus::Approved {
-            return Err("agent_act_on_behalf_approval_request_not_approved");
+        _now: DateTime<Utc>,
+    ) -> Result<(), &'static str> {
+        let head = self
+            .realm_seal_head(&operation.realm_id)
+            .await
+            .map_err(|_| "dependency_missing")?
+            .ok_or("dependency_missing")?;
+        let confirmed = self
+            .effective_state_at(&[head], &operation.realm_id)
+            .await
+            .map_err(|_| "dependency_missing")?;
+        let commands = self
+            .confirmed_command_events(&operation.realm_id)
+            .await
+            .map_err(|_| "dependency_missing")?;
+        for command in commands
+            .into_iter()
+            .filter(|command| command.kind == arkret_wire::EventKind::AgentActionApprove)
+        {
+            let approval: arkret_models_collaboration::events_payloads::AgentActionApprovePayload =
+                serde_json::from_value(
+                    serde_json::to_value(&command.payload).map_err(|_| "dependency_missing")?,
+                )
+                .map_err(|_| "dependency_missing")?;
+            if approval.approval_nonce != approval_nonce
+                || approval.approved_event_id != operation.context.event_id
+            {
+                continue;
+            }
+            if approval.agent_id.as_str() != agent_id
+                || approval
+                    .request_id
+                    .as_deref()
+                    .is_some_and(|id| id != request_id)
+            {
+                return Err("agent_act_on_behalf_approval_agent_mismatch");
+            }
+            if command.executed_by.is_some() || command.actor_id.as_account_id().is_none() {
+                return Err("agent_act_on_behalf_approval_target_mismatch");
+            }
+            if approval.proposed_action != action {
+                return Err("agent_act_on_behalf_approval_action_mismatch");
+            }
+            if !agent_action_target_matches(
+                &serde_json::to_value(&approval.target).map_err(|_| "dependency_missing")?,
+                operation,
+            ) {
+                return Err("agent_act_on_behalf_approval_target_mismatch");
+            }
+            let subject = arkret_wire::composite_subject(&[
+                command.actor_id.to_string(),
+                approval_nonce.to_owned(),
+            ])
+            .map_err(|_| "dependency_missing")?;
+            let cell = CellRef::new(format!(
+                "ak:cell:{}:{subject}",
+                arkret_wire::CellFamilyId::AGENT_APPROVAL_CONSUMPTION_V1
+            ))
+            .map_err(|_| "dependency_missing")?;
+            let Some(ResolvedCellState::Sequenced(consumption)) = confirmed.get(&cell) else {
+                return Err("dependency_missing");
+            };
+            if consumption.revision_event_id != command.event_id
+                || consumption.value.as_str() != Some(operation.context.event_id.as_str())
+            {
+                return Err("agent_act_on_behalf_approval_event_mismatch");
+            }
+            return Ok(());
         }
-        if request.agent_id != agent_id {
-            return Err("agent_act_on_behalf_approval_agent_mismatch");
-        }
-        let approval = request
-            .approval
-            .as_ref()
-            .ok_or("agent_act_on_behalf_approval_missing")?;
-        if approval.approval_nonce != approval_nonce {
-            return Err("agent_act_on_behalf_approval_nonce_mismatch");
-        }
-        if approval.expires_at <= now {
-            return Err("agent_act_on_behalf_approval_expired");
-        }
-        if approval.proposed_action != action {
-            return Err("agent_act_on_behalf_approval_action_mismatch");
-        }
-        if !agent_action_target_matches(&approval.target, operation) {
-            return Err("agent_act_on_behalf_approval_target_mismatch");
-        }
-        let payload_digest = arkret_canonical::canonical_sha256(&operation.payload)
-            .map_err(|_| "agent_act_on_behalf_approval_payload_digest_invalid")?;
-        if approval.approved_payload_digest != payload_digest {
-            return Err("agent_act_on_behalf_approval_payload_digest_mismatch");
-        }
-        Ok(AgentActionApprovalValidation {
-            expires_at: approval.expires_at,
-        })
+        Err("dependency_missing")
     }
 
     pub fn stage_realm_bootstrap(
@@ -3245,13 +3273,6 @@ fn actor_participates_in_mls_scope(
 }
 
 fn agent_action_target_matches(target: &Value, operation: &Operation) -> bool {
-    if target
-        .get("operation_id")
-        .and_then(Value::as_str)
-        .is_some_and(|operation_id| operation_id == operation.operation_id.as_str())
-    {
-        return true;
-    }
     match target.get("kind").and_then(Value::as_str) {
         Some("realm") => target
             .get("realm_id")

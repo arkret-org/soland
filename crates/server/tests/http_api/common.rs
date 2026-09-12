@@ -260,6 +260,7 @@ pub(crate) async fn prepare_self_principal_pcr_initial_submissions(
         .zip(authorization_leases)
         .map(|(event, authorization_lease)| {
             let submission = arkret_wire::EventInitialSubmission {
+                publication_event: None,
                 mls_frontier_leaves: None,
                 event,
                 authorization_lease: Some(authorization_lease),

@@ -87,6 +87,7 @@ fn persistence_event_commit_request(
     command: crate::events::CommitAcceptedEventCommand,
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
+        publication_event: command.publication_event,
         mls_public_producer: command.mls_public_producer,
         mls_public_genesis: command.mls_public_genesis,
         mls_frontier_leaves: command.mls_frontier_leaves,
@@ -1235,7 +1236,6 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                     .into_iter()
                     .map(persistence_event_commit_request)
                     .collect(),
-                agent_approval_nonce: command.agent_approval_nonce,
                 franking_replay_nonce: command.franking_replay_nonce,
                 applet_record: command.applet_record,
                 applet_authoring_preview: command.applet_authoring_preview,

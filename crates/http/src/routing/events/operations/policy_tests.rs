@@ -1423,7 +1423,6 @@ fn insert_approved_agent_action(
     agent_id: &str,
     approval_nonce: &str,
 ) {
-    let payload_digest = arkret_canonical::canonical_sha256(&message.payload).unwrap();
     state.test_projection().lock().agent_action_requests.insert(
         request_id.to_owned(),
         soland_domain::reducer::AgentActionRequestProjection {
@@ -1449,7 +1448,7 @@ fn insert_approved_agent_action(
                     "kind": "realm",
                     "realm_id": message.realm_id.as_str(),
                 }),
-                approved_payload_digest: payload_digest,
+                approved_event_id: message.context.event_id.clone(),
                 approval_nonce: approval_nonce.to_owned(),
                 expires_at: message.created_at + chrono::Duration::minutes(10),
             }),
@@ -1963,7 +1962,7 @@ async fn signed_agent_provenance_unknown_action_fails_closed_before_context() {
 }
 
 #[tokio::test]
-async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval() {
+async fn act_on_behalf_private_approval_cannot_replace_exact_consumption() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AXlr1KB1QbTZsNhXulSUBNz9IMWJGKWMVdYyTD28xF4T".to_owned(),
@@ -1997,9 +1996,21 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
     );
     insert_approved_agent_action(&state, &operation, "request-7c4", agent, "nonce-7c4");
 
-    validate_agent_reply_participation(&state, &[operation])
-        .await
-        .expect("valid agent_context must allow non-message act-on-behalf writes");
+    assert_eq!(
+        validate_agent_reply_participation(&state, std::slice::from_ref(&operation))
+            .await
+            .unwrap_err(),
+        "dependency_missing"
+    );
+    let mut substituted = operation;
+    substituted.context.event_id =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [99; 32]);
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[substituted])
+            .await
+            .unwrap_err(),
+        "dependency_missing"
+    );
 }
 
 #[tokio::test]
@@ -2501,9 +2512,12 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     );
     insert_approved_agent_action(&state, &message, "request-703", agent, "nonce-703");
 
-    validate_agent_reply_participation(&state, &[message])
-        .await
-        .expect("effective act-on-behalf grant should pass");
+    assert_eq!(
+        validate_agent_reply_participation(&state, &[message])
+            .await
+            .unwrap_err(),
+        "dependency_missing"
+    );
 }
 
 #[tokio::test]
@@ -2536,44 +2550,8 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
         validate_agent_reply_participation(&state, &[message])
             .await
             .unwrap_err(),
-        "agent_act_on_behalf_approval_request_missing"
+        "dependency_missing"
     );
-}
-
-#[tokio::test]
-async fn act_on_behalf_validation_defers_nonce_consumption_until_commit() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AXaV71ycRWgQPn3H4tFrOYekLOPFiR6LNl9sGqWBs1T2".to_owned(),
-    )
-    .unwrap();
-    let agent = AGENT_CORE_ID;
-    register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = install_projected_grant(
-        state.authorization(),
-        realm_id.to_string(),
-        "ak:did_core:web:alice.example".to_owned(),
-        agent.to_owned(),
-        realm_id.to_string(),
-        vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
-        Vec::new(),
-    );
-    let message = act_on_behalf_message(
-        realm_id,
-        "000000000705",
-        agent,
-        Some(grant.grant_id.as_str()),
-        Some(("request-705", "nonce-705")),
-    );
-    insert_approved_agent_action(&state, &message, "request-705", agent, "nonce-705");
-
-    let first = validate_agent_reply_participation(&state, std::slice::from_ref(&message))
-        .await
-        .expect("first approval nonce use should pass");
-    let second = validate_agent_reply_participation(&state, &[message])
-        .await
-        .expect("validation must not consume before the Event transaction");
-    assert_eq!(first, second);
 }
 
 #[tokio::test]

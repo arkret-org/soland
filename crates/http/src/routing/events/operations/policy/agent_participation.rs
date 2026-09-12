@@ -359,12 +359,11 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
     Ok(authorization_ref.to_owned())
 }
 
-pub(super) fn validate_agent_act_on_behalf_approval(
+pub(super) async fn validate_agent_act_on_behalf_approval(
     state: &AppState,
     operation: &Operation,
     agent_id: &str,
-    authorization_ref: &str,
-) -> Result<ValidatedAgentApprovalNonce, &'static str> {
+) -> Result<(), &'static str> {
     let request_id = operation
         .payload
         .get("request_id")
@@ -379,30 +378,17 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         .ok_or("agent_act_on_behalf_approval_nonce_missing")?;
     let action = agent_participation_action(operation)
         .ok_or("agent_act_on_behalf_approval_action_unsupported")?;
-    let approval = state.projections().validate_agent_action_approval(
-        operation,
-        agent_id,
-        request_id,
-        approval_nonce,
-        action.as_str(),
-        chrono::Utc::now(),
-    )?;
-    Ok(ValidatedAgentApprovalNonce {
-        agent_id: agent_id.to_owned(),
-        authorization_ref: authorization_ref.to_owned(),
-        request_id: request_id.to_owned(),
-        approval_nonce: approval_nonce.to_owned(),
-        expires_at: approval.expires_at,
-    })
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ValidatedAgentApprovalNonce {
-    pub agent_id: String,
-    pub authorization_ref: String,
-    pub request_id: String,
-    pub approval_nonce: String,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    state
+        .projections()
+        .validate_agent_action_approval(
+            operation,
+            agent_id,
+            request_id,
+            approval_nonce,
+            action.as_str(),
+            chrono::Utc::now(),
+        )
+        .await
 }
 
 pub(super) fn operation_agent_context(operation: &Operation) -> Option<&Value> {
@@ -680,8 +666,7 @@ pub(super) fn validate_agent_context(
 pub async fn validate_agent_reply_participation(
     state: &AppState,
     operations: &[Operation],
-) -> Result<Vec<ValidatedAgentApprovalNonce>, &'static str> {
-    let mut approvals = Vec::new();
+) -> Result<(), &'static str> {
     for operation in operations {
         let Some((agent_id, mode)) = operation_agent_write_context(state, operation).await? else {
             continue;
@@ -724,14 +709,9 @@ pub async fn validate_agent_reply_participation(
         if !ap_effective_for_mode(mode, resolved.effective) {
             return Err(mode.rejection_reason());
         }
-        if let Some(authorization_ref) = authorization_ref {
-            approvals.push(validate_agent_act_on_behalf_approval(
-                state,
-                operation,
-                &agent_id,
-                &authorization_ref,
-            )?);
+        if authorization_ref.is_some() {
+            validate_agent_act_on_behalf_approval(state, operation, &agent_id).await?;
         }
     }
-    Ok(approvals)
+    Ok(())
 }

@@ -327,14 +327,14 @@ impl ProjectionState {
                         reason: "agent_action_approval_missing_target".to_owned(),
                     };
                 };
-                let Some(approved_payload_digest) = operation
+                let Some(approved_event_id) = operation
                     .payload
-                    .get("approved_payload_digest")
+                    .get("approved_event_id")
                     .and_then(|v| v.as_str())
-                    .map(ToOwned::to_owned)
+                    .and_then(|value| arkret_wire::EventId::new(value).ok())
                 else {
                     return ProjectionEffect::Rejected {
-                        reason: "agent_action_approval_missing_payload_digest".to_owned(),
+                        reason: "agent_action_approval_missing_event_id".to_owned(),
                     };
                 };
                 let Some(approval_nonce) = operation
@@ -365,7 +365,7 @@ impl ProjectionState {
                     approval_id,
                     proposed_action,
                     target,
-                    approved_payload_digest,
+                    approved_event_id,
                     approval_nonce,
                     expires_at,
                 })

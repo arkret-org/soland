@@ -827,7 +827,7 @@ pub struct AgentActionApprovalProjection {
     pub approval_id: String,
     pub proposed_action: String,
     pub target: serde_json::Value,
-    pub approved_payload_digest: String,
+    pub approved_event_id: arkret_wire::EventId,
     pub approval_nonce: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }

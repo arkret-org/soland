@@ -2590,6 +2590,7 @@ mod tests {
             }];
 
             arkret_wire::EventFederationSubmission {
+                publication_event: None,
                 mls_frontier_leaves: None,
                 event,
                 authorization_lease: Some(lease),

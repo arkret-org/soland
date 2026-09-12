@@ -357,18 +357,6 @@ CREATE INDEX agent_membership_cleanup_incomplete_idx
     ON public.agent_membership_cleanup_intents (cleanup_due_at, cleanup_intent_digest)
     WHERE completed_at IS NULL;
 
-CREATE TABLE public.agent_approval_nonces (
-    agent_id text NOT NULL,
-    authorization_ref text NOT NULL,
-    request_id text NOT NULL,
-    approval_nonce text NOT NULL,
-    event_id text NOT NULL UNIQUE,
-    expires_at timestamp with time zone NOT NULL,
-    consumed_at timestamp with time zone NOT NULL,
-    CONSTRAINT agent_approval_nonces_pkey
-        PRIMARY KEY (agent_id, authorization_ref, request_id, approval_nonce)
-);
-
 CREATE TABLE public.applet_managed_identities (
     applet_id text NOT NULL,
     target_station_id text NOT NULL,

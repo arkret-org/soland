@@ -7,7 +7,6 @@ pub(super) struct AcceptedEventCommit<'a> {
     pub(super) envelope_for_bootstrap: &'a Value,
     pub(super) accepted_canonical_bytes: &'a [u8],
     pub(super) command: soland_services::events::CommitAcceptedEventCommand,
-    pub(super) agent_approval_nonce: Option<soland_storage::AgentApprovalNonceCommit>,
     pub(super) ingress_receipt: Option<&'a arkret_wire::offline_publication::IngressReceipt>,
     pub(super) control_event_for_proposal: bool,
     pub(super) self_principal_pcr_device_authorized: bool,
@@ -28,7 +27,6 @@ pub(super) async fn commit_accepted_event_stage(
         envelope_for_bootstrap,
         accepted_canonical_bytes,
         command,
-        agent_approval_nonce,
         ingress_receipt,
         control_event_for_proposal,
         self_principal_pcr_device_authorized,
@@ -62,19 +60,17 @@ pub(super) async fn commit_accepted_event_stage(
             .events()
             .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
                 events: vec![command, proof_command],
-                agent_approval_nonce,
                 franking_replay_nonce,
                 applet_record: None,
                 applet_authoring_preview: None,
                 agent_membership_cascade: None,
             })
             .await
-    } else if franking_replay_nonce.is_some() || agent_approval_nonce.is_some() {
+    } else if franking_replay_nonce.is_some() {
         state
             .events()
             .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
                 events: vec![command],
-                agent_approval_nonce,
                 franking_replay_nonce,
                 applet_record: None,
                 applet_authoring_preview: None,

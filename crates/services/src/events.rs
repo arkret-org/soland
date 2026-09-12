@@ -761,6 +761,7 @@ use crate::federation::FederationDeliveryRecord;
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
+    pub publication_event: Option<arkret_wire::Event>,
     pub mls_public_producer: Option<soland_storage::MlsPublicHandshakeProducer>,
     pub mls_public_genesis: Option<soland_storage::MlsPublicGenesisInput>,
     pub mls_frontier_leaves: Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>,
@@ -816,7 +817,6 @@ pub use soland_storage::{
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
-    pub agent_approval_nonce: Option<soland_storage::AgentApprovalNonceCommit>,
     pub franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
     pub applet_record: Option<CommitAppletRecord>,
     pub applet_authoring_preview: Option<CommitAppletAuthoringPreview>,
@@ -2441,6 +2441,7 @@ mod tests {
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
+                publication_event: None,
                 mls_public_producer: None,
                 mls_public_genesis: None,
                 mls_frontier_leaves: None,

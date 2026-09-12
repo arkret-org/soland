@@ -934,6 +934,7 @@ async fn identity_anchor_fanout_records(
                 publication_evidence,
                 None,
                 None,
+                None,
             )
             .await
             .map_err(|error| {

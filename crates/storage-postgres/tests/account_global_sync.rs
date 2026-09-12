@@ -406,6 +406,7 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
             received_at: now,
         };
         soland_storage::EventCommitRequest {
+            publication_event: None,
             mls_public_producer: None,
             mls_public_genesis: None,
             mls_frontier_leaves: None,

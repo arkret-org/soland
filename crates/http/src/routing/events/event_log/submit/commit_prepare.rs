@@ -3,6 +3,7 @@ use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIng
 use super::*;
 
 pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
+    pub(super) publication_event: Option<&'a Event>,
     pub(super) mls_frontier_leaves:
         Option<&'a [arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
     pub(super) state: &'a AppState,
@@ -16,7 +17,6 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
     pub(super) device_revoke_target_device_id: Option<&'a str>,
     pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
     pub(super) local_device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
-    pub(super) validated_agent_approval: Option<ValidatedAgentApproval>,
     pub(super) membership_compensation_evidence:
         Option<&'a arkret_wire::MembershipCompensationSubmissionEvidence>,
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
@@ -28,7 +28,6 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
 
 pub(super) struct PreparedAcceptedEventCommand {
     pub(super) command: soland_services::events::CommitAcceptedEventCommand,
-    pub(super) agent_approval_nonce: Option<soland_storage::AgentApprovalNonceCommit>,
 }
 
 /// Freeze every atomic sidecar into the canonical Event commit command.
@@ -39,6 +38,7 @@ pub(super) async fn prepare_accepted_event_command(
     preparation: AcceptedEventCommandPreparation<'_, '_>,
 ) -> Result<PreparedAcceptedEventCommand, SubmitOneError> {
     let AcceptedEventCommandPreparation {
+        publication_event,
         state,
         parsed,
         actor_key,
@@ -50,7 +50,6 @@ pub(super) async fn prepare_accepted_event_command(
         device_revoke_target_device_id,
         control_proposal_ack,
         local_device_revocation_gate,
-        validated_agent_approval,
         mls_frontier_leaves,
         membership_compensation_evidence,
         internal_admission,
@@ -99,16 +98,6 @@ pub(super) async fn prepare_accepted_event_command(
         } else {
             None
         };
-    let agent_approval_nonce =
-        validated_agent_approval.map(|approval| soland_storage::AgentApprovalNonceCommit {
-            agent_id: approval.agent_id,
-            authorization_ref: approval.authorization_ref,
-            request_id: approval.request_id,
-            approval_nonce: approval.approval_nonce,
-            event_id: parsed.event_id.to_string(),
-            expires_at: approval.expires_at,
-            consumed_at: received_at,
-        });
     let membership_compensation_evidence = membership_compensation_evidence
         .map(|evidence| -> Result<_, SubmitOneError> {
             let canonical_bytes =
@@ -193,6 +182,7 @@ pub(super) async fn prepare_accepted_event_command(
             None
         };
     let command = soland_services::events::CommitAcceptedEventCommand {
+        publication_event: publication_event.cloned(),
         mls_public_producer,
         mls_public_genesis,
         mls_frontier_leaves: mls_frontier_leaves.map(<[_]>::to_vec),
@@ -249,8 +239,5 @@ pub(super) async fn prepare_accepted_event_command(
             }),
         deliveries,
     };
-    Ok(PreparedAcceptedEventCommand {
-        command,
-        agent_approval_nonce,
-    })
+    Ok(PreparedAcceptedEventCommand { command })
 }

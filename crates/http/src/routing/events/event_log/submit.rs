@@ -1355,6 +1355,7 @@ async fn submit_initial_event_batch_outcome_inner(
     let event_refs = typed_events.iter().collect::<Vec<_>>();
     let digest_suites = trusted_federated_event_digest_suites(state, &event_refs)
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error))?;
+    let mut publication_events = Vec::with_capacity(submissions.len());
     for (submission, digest_suite) in submissions.into_iter().zip(digest_suites.iter().copied()) {
         validate_initial_submission_in_context(&submission, submit_context, digest_suite)?;
         validate_membership_compensation_semantics(
@@ -1367,6 +1368,7 @@ async fn submit_initial_event_batch_outcome_inner(
                 .await?;
         }
         let arkret_wire::EventInitialSubmission {
+            publication_event,
             mls_frontier_leaves,
             event: _,
             authorization_lease,
@@ -1374,6 +1376,7 @@ async fn submit_initial_event_batch_outcome_inner(
             control_proposal_ack,
             membership_compensation_evidence,
         } = submission;
+        publication_events.push(publication_event);
         frontier_inputs.push(mls_frontier_leaves);
         leases.push(authorization_lease);
         control_proposal_acks.push(control_proposal_ack);
@@ -1414,6 +1417,7 @@ async fn submit_initial_event_batch_outcome_inner(
         Some(&control_proposal_acks),
         Some(&compensation_evidence),
         &frontier_inputs,
+        &publication_events,
     )
     .await
 }
@@ -1841,8 +1845,9 @@ async fn submit_event_batch_outcome_with_leases(
         &[Option<arkret_wire::MembershipCompensationSubmissionEvidence>],
     >,
     mls_frontier_inputs: &[Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>],
+    publication_events: &[Option<Event>],
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
-    if mls_frontier_inputs.len() != envelopes.len() {
+    if mls_frontier_inputs.len() != envelopes.len() || publication_events.len() != envelopes.len() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -1975,6 +1980,7 @@ async fn submit_event_batch_outcome_with_leases(
                     .and_then(|acks| acks.get(index))
                     .and_then(Option::as_ref),
                 mls_frontier_leaves: mls_frontier_inputs.get(index).and_then(Option::as_deref),
+                publication_event: publication_events.get(index).and_then(Option::as_ref),
                 membership_compensation_evidence: membership_compensation_evidence
                     .and_then(|evidence| evidence.get(index))
                     .and_then(Option::as_ref),
@@ -3442,6 +3448,10 @@ pub(crate) async fn submit_federation_events(
                             .as_ref()
                     }),
                 federation_source_id: Some(&source_id),
+                publication_event: submissions
+                    .iter()
+                    .find(|submission| submission.event.event_id.as_str() == id)
+                    .and_then(|submission| submission.publication_event.as_ref()),
                 membership_compensation_evidence: submissions
                     .iter()
                     .find(|submission| submission.event.event_id.as_str() == id)

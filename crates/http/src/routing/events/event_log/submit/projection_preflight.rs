@@ -16,15 +16,6 @@ pub(super) struct ProjectionPreflightContext<'a> {
 
 pub(super) struct ProjectionPreflightOutcome {
     pub(super) consent_admission: Option<crate::routing::identity::consent::ConsentAdmission>,
-    pub(super) validated_agent_approval: Option<ValidatedAgentApproval>,
-}
-
-pub(super) struct ValidatedAgentApproval {
-    pub(super) agent_id: String,
-    pub(super) authorization_ref: String,
-    pub(super) request_id: String,
-    pub(super) approval_nonce: String,
-    pub(super) expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Run all reducer- and policy-facing projection checks before constructing
@@ -48,7 +39,6 @@ pub(super) async fn apply_projection_preflight(
         has_internal_plaintext_service_binding,
     } = context;
     let mut consent_admission = None;
-    let mut validated_agent_approval = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::semantic_schema_violation(message));
@@ -148,23 +138,7 @@ pub(super) async fn apply_projection_preflight(
             )
             .await
             {
-                Ok(mut approvals) => {
-                    validated_agent_approval =
-                        approvals.pop().map(|approval| ValidatedAgentApproval {
-                            agent_id: approval.agent_id,
-                            authorization_ref: approval.authorization_ref,
-                            request_id: approval.request_id,
-                            approval_nonce: approval.approval_nonce,
-                            expires_at: approval.expires_at,
-                        });
-                    if !approvals.is_empty() {
-                        return Err(SubmitOneError::new(
-                            StatusCode::BAD_REQUEST,
-                            "schema_violation",
-                            "one Event operation cannot consume multiple agent approvals",
-                        ));
-                    }
-                }
+                Ok(()) => {}
                 Err(reason) => {
                     return Err(SubmitOneError::new(
                         StatusCode::PRECONDITION_FAILED,
@@ -571,8 +545,5 @@ pub(super) async fn apply_projection_preflight(
             ));
         }
     }
-    Ok(ProjectionPreflightOutcome {
-        consent_admission,
-        validated_agent_approval,
-    })
+    Ok(ProjectionPreflightOutcome { consent_admission })
 }

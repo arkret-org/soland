@@ -1373,6 +1373,7 @@ async fn commit(
         state,
         session,
         arkret_wire::EventInitialSubmission {
+            publication_event: None,
             mls_frontier_leaves: None,
             event: body.signed_event.clone(),
             authorization_lease: None,

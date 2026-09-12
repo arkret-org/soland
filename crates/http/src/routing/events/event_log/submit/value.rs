@@ -20,6 +20,7 @@ pub(super) struct PreparedAgentMembershipEvent {
 /// admission context; it travels inside [`SubmitMode::Commit`] so a
 /// prepare-only admission cannot silently carry commit effects.
 pub(super) struct SubmitEventContext<'a> {
+    pub(super) publication_event: Option<&'a Event>,
     pub(super) mls_frontier_leaves:
         Option<&'a [arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
     pub(super) realm_bootstrap_contexts: &'a [RealmBootstrapBatchContext],
@@ -44,6 +45,7 @@ impl SubmitEventContext<'_> {
     /// admission substitution, no publication evidence.
     pub(super) fn empty() -> Self {
         Self {
+            publication_event: None,
             mls_frontier_leaves: None,
             realm_bootstrap_contexts: &[],
             batch_operations: &[],
@@ -606,6 +608,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
             .await?;
     }
     let arkret_wire::EventInitialSubmission {
+        publication_event,
         mls_frontier_leaves,
         event,
         authorization_lease,
@@ -654,6 +657,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
             authorization_lease: authorization_lease.as_ref(),
             control_proposal_ack: control_proposal_ack.as_ref(),
             mls_frontier_leaves: mls_frontier_leaves.as_deref(),
+            publication_event: publication_event.as_ref(),
             membership_compensation_evidence: membership_compensation_evidence.as_ref(),
             ..SubmitEventContext::empty()
         },
@@ -756,6 +760,7 @@ pub(super) async fn prepare_agent_membership_initial_event(
             .await?;
     }
     let arkret_wire::EventInitialSubmission {
+        publication_event,
         mls_frontier_leaves: _,
         event,
         authorization_lease,
@@ -782,6 +787,7 @@ pub(super) async fn prepare_agent_membership_initial_event(
         session,
         envelope,
         SubmitEventContext {
+            publication_event: publication_event.as_ref(),
             internal_admission: Some(&admission),
             authorization_lease: authorization_lease.as_ref(),
             control_proposal_ack: control_proposal_ack.as_ref(),
@@ -1981,6 +1987,18 @@ pub(super) async fn submit_event_value_with_context(
             format!("validated Event envelope does not decode: {error}"),
         )
     })?;
+    arkret_wire::event_submission::validate_approval_publication_event(
+        &submitted_event,
+        context.publication_event,
+        parsed.digest_suite,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            error.to_string(),
+        )
+    })?;
     validate_producer_submission_shape(state, session, &submitted_event)?;
     // Ordinary Events never declare a reducer profile. The receiver resolves
     // it from the Realm's authoritative singleton. The current registry has
@@ -2252,10 +2270,7 @@ pub(super) async fn submit_event_value_with_context(
         has_projection = projection_operation.is_some(),
         "submit_event"
     );
-    let ProjectionPreflightOutcome {
-        consent_admission,
-        validated_agent_approval,
-    } = apply_projection_preflight(
+    let ProjectionPreflightOutcome { consent_admission } = apply_projection_preflight(
         state,
         ProjectionPreflightContext {
             session,
@@ -2341,6 +2356,7 @@ pub(super) async fn submit_event_value_with_context(
             &[],
             context.membership_compensation_evidence,
             context.mls_frontier_leaves,
+            context.publication_event,
         )
         .await
         .map_err(|error| {
@@ -2430,31 +2446,29 @@ pub(super) async fn submit_event_value_with_context(
             .push(ack.clone());
     }
     apply_delivery_summary_from_intents(&mut accepted_response, &outbox);
-    let PreparedAcceptedEventCommand {
-        command,
-        agent_approval_nonce,
-    } = prepare_accepted_event_command(AcceptedEventCommandPreparation {
-        state,
-        parsed: &parsed,
-        actor_key: &actor_key,
-        envelope,
-        accepted_canonical_bytes: &accepted_canonical_bytes,
-        governance_dependency,
-        projected_event: projected_event.as_ref(),
-        deliveries: outbox,
-        device_revoke_target_device_id: device_revoke_target_device_id.as_deref(),
-        control_proposal_ack: control_proposal_ack.as_ref(),
-        local_device_revocation_gate,
-        validated_agent_approval,
-        mls_frontier_leaves: context.mls_frontier_leaves,
-        membership_compensation_evidence: context.membership_compensation_evidence,
-        internal_admission: context.internal_admission,
-        consent_admission: consent_admission.as_ref(),
-        ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
-        commit_options: commit_options.as_ref(),
-        received_at,
-    })
-    .await?;
+    let PreparedAcceptedEventCommand { command } =
+        prepare_accepted_event_command(AcceptedEventCommandPreparation {
+            publication_event: context.publication_event,
+            state,
+            parsed: &parsed,
+            actor_key: &actor_key,
+            envelope,
+            accepted_canonical_bytes: &accepted_canonical_bytes,
+            governance_dependency,
+            projected_event: projected_event.as_ref(),
+            deliveries: outbox,
+            device_revoke_target_device_id: device_revoke_target_device_id.as_deref(),
+            control_proposal_ack: control_proposal_ack.as_ref(),
+            local_device_revocation_gate,
+            mls_frontier_leaves: context.mls_frontier_leaves,
+            membership_compensation_evidence: context.membership_compensation_evidence,
+            internal_admission: context.internal_admission,
+            consent_admission: consent_admission.as_ref(),
+            ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
+            commit_options: commit_options.as_ref(),
+            received_at,
+        })
+        .await?;
     if let Some(slot) = deferred_agent_membership {
         if parsed.kind != arkret_wire::EventKind::MemberState.as_str()
             || command.device_revocation_transition.is_some()
@@ -2522,7 +2536,6 @@ pub(super) async fn submit_event_value_with_context(
             envelope_for_bootstrap: &envelope_for_bootstrap,
             accepted_canonical_bytes: &accepted_canonical_bytes,
             command,
-            agent_approval_nonce,
             ingress_receipt: ingress_receipt.as_ref(),
             control_event_for_proposal: control_event_for_proposal.is_some(),
             self_principal_pcr_device_authorized,

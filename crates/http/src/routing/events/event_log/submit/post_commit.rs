@@ -545,6 +545,7 @@ async fn federation_submissions(
         &arkret_wire::EventId,
         &[arkret_wire::mls_transition::MlsSecurityFrontierLeaf],
     )>,
+    pending_publication_event: Option<(&arkret_wire::EventId, &Event)>,
 ) -> Result<Vec<arkret_wire::EventFederationSubmission>, String> {
     let digest_suites = accepted_event_digest_suites(events)?;
     let mut digests = Vec::with_capacity(events.len());
@@ -653,7 +654,28 @@ async fn federation_submissions(
         } else {
             None
         };
+        let publication_event = match pending_publication_event {
+            Some((approval_id, publication)) if *approval_id == event.event_id => {
+                Some(publication.clone())
+            }
+            _ => state
+                .persistence()
+                .events()
+                .publication_event_for_approval(&event.event_id)
+                .await
+                .map_err(|error| error.to_string())?,
+        };
+        arkret_wire::event_submission::validate_approval_publication_event(
+            event,
+            publication_event.as_ref(),
+            arkret_wire::Hash::new(digest.clone())
+                .map_err(|error| error.to_string())?
+                .digest_suite()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
         submissions.push(arkret_wire::EventFederationSubmission {
+            publication_event,
             mls_frontier_leaves: match pending_mls_input {
                 Some((event_id, leaves)) if *event_id == event.event_id => Some(leaves.to_vec()),
                 _ => state
@@ -762,7 +784,8 @@ pub(super) async fn peer_event_batch_fanout_records(
             })?;
     // The Realm genesis path stores its ingress receipts before it gets here
     // (`mint_and_store_ingress_receipt`), so the store is the only source.
-    let submissions = federation_submissions(state, &events, None, &[], &[], None, None).await?;
+    let submissions =
+        federation_submissions(state, &events, None, &[], &[], None, None, None).await?;
     let digest_suites = accepted_event_digest_suites(&events)?;
     let binding_payload = json!({
         "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_V1_SERVICE_BINDING_V1,
@@ -896,6 +919,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         &[],
         None,
         None,
+        None,
     )
     .await?;
     let submissions: [arkret_wire::EventFederationSubmission; 4] = submissions
@@ -982,6 +1006,7 @@ pub(super) async fn peer_event_fanout_records(
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
     mls_frontier_leaves: Option<&[arkret_wire::mls_transition::MlsSecurityFrontierLeaf]>,
+    publication_event: Option<&Event>,
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     let mut peers = dynamic_peer_event_targets(state, parsed).await?;
     // A standalone member join is evaluated before its projection becomes
@@ -1091,6 +1116,7 @@ pub(super) async fn peer_event_fanout_records(
             pending_evidence,
             membership_compensation_evidence,
             mls_frontier_leaves.map(|leaves| (&event.event_id, leaves)),
+            publication_event.map(|publication| (&event.event_id, publication)),
         )
         .await?;
         let digest_suites = accepted_event_digest_suites(&peer_events)?;
@@ -1340,7 +1366,8 @@ async fn realm_bootstrap_fanout_record(
     let idempotency_key = format!("ak:outbox:realm-bootstrap:{}", sha256_hex(&hasher_input));
     // This prerequisite is a *stored* Realm genesis unit, so its evidence is
     // already durable — nothing pending to fold in.
-    let submissions = federation_submissions(state, &events, None, &[], &[], None, None).await?;
+    let submissions =
+        federation_submissions(state, &events, None, &[], &[], None, None, None).await?;
     let digest_suites = accepted_event_digest_suites(&events)?;
     let body = EventsSubmitFederationBatchRequestBody {
         service_binding_ref,

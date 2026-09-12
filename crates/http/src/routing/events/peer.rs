@@ -136,7 +136,22 @@ async fn retained_federation_submission(
         mls_frontier_leaves.as_deref(),
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
+    let publication_event = state
+        .persistence()
+        .events()
+        .publication_event_for_approval(&event.event_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    arkret_wire::event_submission::validate_approval_publication_event(
+        &event,
+        publication_event.as_ref(),
+        event_digest
+            .digest_suite()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(arkret_wire::EventFederationSubmission {
+        publication_event,
         mls_frontier_leaves,
         event,
         authorization_lease: publication
