@@ -105,31 +105,75 @@ pub async fn seal_accepted_capability_grant(
         issuer_id: event.actor_id.clone(),
         op: arkret_state::state_model::StateWrite::new(move_id.clone(), projected_op),
     };
-    let state_root = state_root_for(state, &realm, &predecessors, &expected_cell, &op).await;
+    let (state_root, effect_state) =
+        state_root_for(state, &realm, &predecessors, &expected_cell, &op).await;
 
     let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
         state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
-    let (control_event_set_root, completeness_root) = crate::test_seal_roots(
+    let control_event_set_root = crate::test_control_event_set_root(
         state,
         &predecessors,
         &[(event.clone(), record.digest_suite)],
         arkret_canonical::DigestSuite::Sha256,
     )
     .await
-    .expect("fixture accepted grant Seal roots");
-    let seal = Seal::sign_single_with_roots(
-        realm.clone(),
-        predecessors,
-        vec![move_id.clone()],
-        control_event_set_root,
-        completeness_root,
-        state_root,
-        fixture_hlc_after(event.created_at, &format!("{grant_id}:accepted-seal")),
+    .expect("fixture accepted grant Seal control root");
+    let [predecessor_ref] = predecessors.as_slice() else {
+        panic!("fixture grant requires one predecessor Seal");
+    };
+    let predecessor = state
+        .projections()
+        .seal_by_id(predecessor_ref)
+        .await
+        .expect("fixture predecessor Seal lookup")
+        .expect("fixture predecessor Seal");
+    let effect_value = effect_state
+        .settled_value()
+        .cloned()
+        .expect("fixture grant effect has a complete value");
+    let command_results = vec![
+        arkret_wire::CommandResult::committed(
+            move_id.clone(),
+            vec![move_id.clone()],
+            vec![arkret_wire::CommandResultEffect {
+                cell_id: expected_cell.clone(),
+                state: arkret_wire::CommandResultCellState {
+                    revision_event_id: event.event_id.clone(),
+                    value: effect_value,
+                },
+            }],
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("fixture grant command result"),
+    ];
+    let seal = Seal::sign_with_signers(
+        arkret_wire::UnsignedSeal {
+            realm_id: realm.clone(),
+            predecessor_ref: Some(predecessor_ref.clone()),
+            delta: vec![move_id.clone()],
+            control_event_set_root,
+            state_root,
+            notary_seq: predecessor.notary_seq + 1,
+            availability_receipt_digests: Vec::new(),
+            covered_event_digests: Vec::new(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            sealed_at: arkret_canonical::normalize_timestamp_canonical(
+                event.created_at + chrono::Duration::milliseconds(1),
+            ),
+            hlc: fixture_hlc_after(event.created_at, &format!("{grant_id}:accepted-seal")),
+            configuration_ref: predecessor.configuration_ref,
+            command_results,
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
+        },
+        0,
         arkret_canonical::DigestSuite::Sha256,
-        &signer,
+        &[&signer],
     )
     .expect("fixture accepted grant Seal");
 
@@ -160,7 +204,7 @@ async fn state_root_for(
     predecessors: &[SealId],
     cell: &CellRef,
     op: &IssuedOp,
-) -> Hash {
+) -> (Hash, ResolvedCellState) {
     let registry = ProjectionService::sdk_cell_registry();
     let binding = registry
         .resolve(realm, cell)
@@ -173,17 +217,16 @@ async fn state_root_for(
             .await
             .expect("fixture predecessor Seal state is valid")
     };
-    insert_new_grant_cell(
-        &mut post_state,
-        cell.clone(),
+    let effect_state =
         arkret_state::join_cell(binding.model.as_ref(), cell, std::slice::from_ref(op))
-            .expect("fixture capability cell resolves"),
-    );
-    compute_state_root(
+            .expect("fixture capability cell resolves");
+    insert_new_grant_cell(&mut post_state, cell.clone(), effect_state.clone());
+    let root = compute_state_root(
         arkret_state::GovernanceView::new(&post_state),
         arkret_canonical::DigestSuite::Sha256,
     )
-    .expect("fixture grant post-state root")
+    .expect("fixture grant post-state root");
+    (root, effect_state)
 }
 
 fn insert_new_grant_cell(

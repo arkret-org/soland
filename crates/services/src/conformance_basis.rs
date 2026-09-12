@@ -466,13 +466,15 @@ pub fn build_realm_basis(
         &genesis_move
     })
     .map_err(|error| error.to_string())?;
-    let command_results = vec![arkret_wire::CommandResult::committed(
-        delta[0].clone(),
-        delta.clone(),
-        Vec::new(),
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .map_err(|error| error.to_string())?];
+    let command_results = vec![
+        arkret_wire::CommandResult::committed(
+            delta[0].clone(),
+            delta.clone(),
+            Vec::new(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .map_err(|error| error.to_string())?,
+    ];
     let seal = Seal::sign_with_signers(
         arkret_wire::UnsignedSeal {
             realm_id: realm.clone(),

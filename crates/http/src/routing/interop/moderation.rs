@@ -938,7 +938,9 @@ async fn materialize_franking_seal_observation(
         .event_queries()
         .canonical_events()
         .await
-        .map_err(|error| AppError::internal(format!("franking Event closure lookup failed: {error}")))?;
+        .map_err(|error| {
+            AppError::internal(format!("franking Event closure lookup failed: {error}"))
+        })?;
     let mut events = std::collections::BTreeMap::new();
     for record in records {
         if record.realm_id.as_deref() != Some(realm_id.as_str()) {
@@ -950,11 +952,9 @@ async fn materialize_franking_seal_observation(
     let mut observation = None;
     for seal in seals {
         for anchor in &seal.existence_anchors {
-            let Some(ancestry_events) = existence_anchor_closure(
-                anchor,
-                &proof_event.event_id,
-                &events,
-            )? else {
+            let Some(ancestry_events) =
+                existence_anchor_closure(anchor, &proof_event.event_id, &events)?
+            else {
                 continue;
             };
             observation = Some((seal, anchor.clone(), ancestry_events));
@@ -996,9 +996,9 @@ fn existence_anchor_closure(
     proof_event_id: &EventId,
     events: &std::collections::BTreeMap<EventId, arkret_wire::Event>,
 ) -> Result<Option<Vec<arkret_wire::Event>>, AppError> {
-    anchor
-        .validate_structural()
-        .map_err(|error| AppError::internal(format!("invalid retained existence anchor: {error}")))?;
+    anchor.validate_structural().map_err(|error| {
+        AppError::internal(format!("invalid retained existence anchor: {error}"))
+    })?;
     let mut pending = anchor.frontier.clone();
     let mut visited = BTreeSet::new();
     let mut contains_proof = false;

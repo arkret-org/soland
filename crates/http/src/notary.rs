@@ -1537,8 +1537,7 @@ impl NotaryWorker {
                 if binding.execution != arkret_wire::EventCellExecution::Security {
                     continue;
                 }
-                if binding.state_model
-                    != arkret_state::state_model::StateModelKind::SequencedState
+                if binding.state_model != arkret_state::state_model::StateModelKind::SequencedState
                 {
                     return Err(NotaryError::Construction(format!(
                         "Control Move targets non-sequenced security cell {}",
@@ -1619,8 +1618,7 @@ impl NotaryWorker {
                 .resolve_cell(realm_id, &cell)
                 .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
             if binding.execution == arkret_wire::EventCellExecution::Security
-                && binding.state_model
-                    != arkret_state::state_model::StateModelKind::SequencedState
+                && binding.state_model != arkret_state::state_model::StateModelKind::SequencedState
             {
                 return Err(NotaryError::Construction(format!(
                     "security cell {cell} is not sequenced_state"
@@ -1905,7 +1903,6 @@ impl NotaryWorker {
             max_seq.saturating_add(1)
         })
     }
-
 }
 
 fn availability_policy_from_predecessor(
@@ -2101,8 +2098,8 @@ fn notary_configuration_ref(
     state: &BTreeMap<CellRef, ResolvedCellState>,
     realm_id: &RealmId,
 ) -> Result<arkret_wire::EventId, NotaryError> {
-    let cell = notary_cell_ref(realm_id)
-        .map_err(|error| NotaryError::Construction(error.to_string()))?;
+    let cell =
+        notary_cell_ref(realm_id).map_err(|error| NotaryError::Construction(error.to_string()))?;
     match state.get(&cell) {
         Some(ResolvedCellState::Sequenced(value)) => Ok(value.revision_event_id.clone()),
         Some(_) => Err(NotaryError::Construction(
@@ -2173,9 +2170,7 @@ fn command_results_for_accepted(
                 effects,
                 digest_suite,
             )
-            .map_err(|error| {
-                NotaryError::Construction(format!("derive command result: {error}"))
-            })
+            .map_err(|error| NotaryError::Construction(format!("derive command result: {error}")))
         })
         .collect()
 }

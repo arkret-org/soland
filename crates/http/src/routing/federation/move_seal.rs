@@ -2003,42 +2003,9 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                 format!("resolve Seal notary authority: {error}"),
             )
         })?;
-    let canonical_bytes = seal.commit_transcript_bytes(digest_suite).map_err(|error| {
-        crate::app_error!(
-            SchemaViolation,
-            format!("derive Seal signature transcript: {error}"),
-        )
-    })?;
-    let signatures = seal.notary_signature.signatures.as_slice();
-    let methods = signatures
-        .iter()
-        .map(|signature| signature.verification_method.clone())
-        .collect::<BTreeSet<_>>();
-    if !notary.proposal_quorum_met(&methods) {
-        return Err(crate::app_error!(
-            DirectoryGovernanceProofSignatureInvalid,
-            "Seal signatures do not satisfy the frozen notary quorum".to_owned(),
-        ));
-    }
-    for signature in signatures {
-        let descriptor = notary
-            .signer_descriptor(&signature.verification_method)
-            .ok_or_else(|| {
-                crate::app_error!(
-                    DirectoryGovernanceProofSignatureInvalid,
-                    "Seal signature method is absent from the frozen notary value".to_owned(),
-                )
-            })?;
-        arkret_signatures::verify_frozen_notary_signature(
-            signature,
-            descriptor,
-            &canonical_bytes,
-            digest_suite,
-        )
-        .map_err(|error| {
-            crate::app_error!(DirectoryGovernanceProofSignatureInvalid, error.to_string(),)
-        })?;
-    }
+    arkret_signatures::verify_seal_quorum_signatures(seal, &notary, digest_suite).map_err(
+        |error| crate::app_error!(DirectoryGovernanceProofSignatureInvalid, error.to_string()),
+    )?;
     Ok(())
 }
 

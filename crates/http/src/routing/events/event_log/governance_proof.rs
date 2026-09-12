@@ -443,40 +443,12 @@ async fn apply_authoritative_event_seal_path(
             ));
         }
 
-        let canonical_bytes = seal
-            .commit_transcript_bytes(digest_suites.seal_digest_suite)
-            .map_err(proof_state_error)?;
-        let signatures = seal.notary_signature.signatures.as_slice();
-        if signatures.is_empty() {
-            return Err(proof_state_error(
-                "authoritative Event Seal has no signatures",
-            ));
-        }
-        let signature_methods = signatures
-            .iter()
-            .map(|signature| signature.verification_method.clone())
-            .collect::<BTreeSet<_>>();
-        if !authoritative_notary.proposal_quorum_met(&signature_methods) {
-            return Err(proof_state_error(
-                "Event Seal signatures do not satisfy the frozen notary quorum",
-            ));
-        }
-        for signature in signatures {
-            let descriptor = authoritative_notary
-                .signer_descriptor(&signature.verification_method)
-                .ok_or_else(|| {
-                    proof_state_error(
-                        "Event Seal signature method is absent from the frozen notary authority",
-                    )
-                })?;
-            arkret_signatures::verify_frozen_notary_signature(
-                signature,
-                descriptor,
-                &canonical_bytes,
-                digest_suites.seal_digest_suite,
-            )
-            .map_err(proof_state_error)?;
-        }
+        arkret_signatures::verify_seal_quorum_signatures(
+            seal,
+            &authoritative_notary,
+            digest_suites.seal_digest_suite,
+        )
+        .map_err(proof_state_error)?;
 
         let delta = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
         let new_ops = event_ops
