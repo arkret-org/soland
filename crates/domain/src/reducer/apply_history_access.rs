@@ -1,7 +1,7 @@
 use super::*;
 
 const REALM_HISTORY_ACCESS_CELL: &str = "ak:cell:ak.component.realm.history_access.v1:null";
-const CIRCLE_HISTORY_ACCESS_FAMILY: &str = "ak.component.circle.history_access.v1";
+const CIRCLE_HISTORY_ACCESS_FAMILY: &str = arkret_wire::CellFamilyId::CIRCLE_HISTORY_ACCESS_V1;
 
 fn valid_history_access(value: &str) -> bool {
     matches!(value, "since_join" | "all_history_for_current_members")

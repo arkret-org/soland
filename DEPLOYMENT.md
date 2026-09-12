@@ -193,9 +193,10 @@ and rollout-only switches that should be managed deliberately.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SOLAND_ADMIN_PRINCIPAL_DIDS` | empty | Comma-separated principal DID allowlist for production admin APIs. An empty value closes the admin API outside development mode; browser sessions additionally require `SOLAND_SESSION_GRANT_INTROSPECTION_URL`. |
+| `SOLAND_ADMIN_PRINCIPAL_IDS` | empty | Comma-separated typed principal ID allowlist (`ak:did_core:…`) for production admin APIs. An empty value closes the admin API outside development mode; browser sessions additionally require `SOLAND_SESSION_GRANT_INTROSPECTION_URL`. |
 | `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
 | `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
+| `SOLAND_APPLET_TRANSACTION_INFLIGHT_CAPACITY` | `64` | Maximum concurrent applet transactions retained in memory. |
 | `SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS` | deadpool default | Positive database-pool acquisition timeout; unset means no explicit wait timeout. |
 | `SOLAND_DB_POOL_MAX_SIZE` | CPU count × 4 | Positive database-pool size override. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
@@ -205,6 +206,7 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN` | derived trust domain | Expected trust domain for the external webvh provider probe. |
 | `SOLAND_FEDERATION_DENYLIST` | empty | Comma-separated federation host/service denylist. |
 | `SOLAND_FEDERATION_FANOUT_TOPOLOGY` | `mesh` | Federation fanout topology (`mesh` or `hub`). |
+| `SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS` | `0` | Optional frontier synchronization interval, at most `3600` seconds; `0` disables periodic polling. |
 | `SOLAND_FEDERATION_PEER_DENYLIST` | empty | Additional comma-separated peer denylist. |
 | `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
 | `SOLAND_ICE_STUN_URLS` | `stun:stun.l.google.com:19302` | Comma-separated STUN URLs advertised in signed ICE configs. |

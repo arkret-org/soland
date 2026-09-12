@@ -233,12 +233,12 @@ mod roster_tests {
         let (scope, family) = if circle {
             (
                 json!({"kind":"circle","realm_id":realm,"circle_id":arkret_wire::CircleId::from_event_id(&arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256,[2;32]))}),
-                "ak.component.circle.member.v1",
+                arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1,
             )
         } else {
             (
                 json!({"kind":"realm","realm_id":realm}),
-                "ak.component.member.state.v1",
+                arkret_wire::CellFamilyId::MEMBER_STATE_V1,
             )
         };
         CurrentResultEntry::try_from_json(json!({"selector":{"scope_ref":scope,"cell_id":format!("ak:cell:{family}:{subject}")},"target":{"kind":"member","actor_id":actor},"revision":1,"result":{"status":"value","value":state}})).unwrap()
