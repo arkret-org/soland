@@ -7,13 +7,13 @@ fn event_submit_rejects_bare_and_malformed_carriers() {
         json!({"event": {}, "unregistered_sidecar": {}}),
         json!({"events": [], "unregistered_sidecar": {}}),
     ] {
-        assert!(serde_json::from_value::<SolandEventsSubmitRequestBody>(body).is_err());
+        assert!(serde_json::from_value::<EventsSubmitRequestBody>(body).is_err());
     }
 }
 
 #[test]
 fn malformed_direct_conversation_unit_cannot_fall_through_to_ordinary_batch() {
-    let parsed = serde_json::from_value::<SolandEventsSubmitRequestBody>(json!({
+    let parsed = serde_json::from_value::<EventsSubmitRequestBody>(json!({
         "unit_kind": "direct_conversation_founding",
         "idempotency_key": "ak:idempotency_key:019b5c20-0000-7000-8000-000000000001",
         "events": [],
@@ -191,10 +191,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
         events: Vec::new(),
         cbs_proof_bundles: Vec::new(),
     };
-    let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
-        &req.service_binding_ref,
-    )
-    .unwrap_err();
+    let err = validate_federation_service_binding(&req.service_binding_ref).unwrap_err();
     assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
 }
 
@@ -219,6 +216,5 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
         cbs_proof_bundles: Vec::new(),
     };
 
-    SolandEventsSubmitRequestBody::validate_federation_service_binding(&req.service_binding_ref)
-        .unwrap();
+    validate_federation_service_binding(&req.service_binding_ref).unwrap();
 }

@@ -2984,9 +2984,7 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    if let Err((code, message)) =
-        SolandEventsSubmitRequestBody::validate_federation_service_binding(&service_binding_ref)
-    {
+    if let Err((code, message)) = validate_federation_service_binding(&service_binding_ref) {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }

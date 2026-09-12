@@ -1,122 +1,33 @@
-use super::*;
-
 // ════════════════════════════════════════════════════════════════════════
 // events.submit discriminated request + admission gates
 // (spec B1.6 / T02 / T07 / T08 / T09 / T12 / T23).
 // ════════════════════════════════════════════════════════════════════════
+pub use arkret_models_collaboration::event_sync::EventsSubmitRequestBody;
 
-/// Registered `/_arkret/self/events` submission carriers. Ordinary online writes
-/// use `EventInitialSubmission { event, ... }`, individually or in `events[]`.
-/// Bare Events and malformed registered carriers are rejected during parsing.
-#[derive(Debug, Clone, serde::Serialize)]
-// Untagged wire union mirroring the SDK submit bodies; boxing a variant would
-// change the public constructor shape without changing the JSON.
-#[allow(clippy::large_enum_variant)]
-pub enum SolandEventsSubmitRequestBody {
-    /// Federation form — `service_binding_ref` is REQUIRED and all fields are
-    /// fields validated.
-    Federation(EventsSubmitFederationBatchRequestBody),
-    DirectConversationFounding(DirectConversationFoundingUnitSubmission),
-    AgentMembershipCascade(
-        arkret_models_collaboration::governance::agent_membership_cascade::AgentMembershipCascadeSubmission,
-    ),
-    /// First durable publication of one Event
-    /// (`authz/offline-publication.md` §2.1). The `authorization_lease` is the
-    /// only thing that can make this service mint and store an
-    /// [`arkret_wire::IngressReceipt`] for the Event, which is in turn the only
-    /// evidence that lets the Event be federated later. It is transport
-    /// evidence: it is not an Event field and never enters the Event digest.
-    ///
-    Initial(arkret_wire::EventInitialSubmission),
-    /// Account-client batch form. Every Event carries its own authorization
-    /// lease outside the signed Event envelope.
-    InitialBatch(SolandEventsInitialSubmitBatchRequestBody),
-}
+use super::*;
 
-impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-
-        let value = Value::deserialize(deserializer)?;
-        let object = value.as_object();
-        // `unit_kind` is a protocol discriminator, not an ignorable extension.
-        // A malformed founding unit cannot degrade into an ordinary submission.
-        if object.is_some_and(|object| object.contains_key("unit_kind")) {
-            return match object
-                .and_then(|object| object.get("unit_kind"))
-                .and_then(Value::as_str)
-            {
-                Some("direct_conversation_founding") => {
-                    serde_json::from_value::<DirectConversationFoundingUnitSubmission>(value)
-                        .map(Self::DirectConversationFounding)
-                        .map_err(D::Error::custom)
-                }
-                Some("agent_membership_cascade") => serde_json::from_value::<
-                    arkret_models_collaboration::governance::agent_membership_cascade::AgentMembershipCascadeSubmission,
-                >(value)
-                .map(Self::AgentMembershipCascade)
-                .map_err(D::Error::custom),
-                Some(kind) => Err(D::Error::custom(format!(
-                    "unknown registered Event unit_kind {kind:?}"
-                ))),
-                None => Err(D::Error::custom(
-                    "registered Event unit_kind must be a string",
-                )),
-            };
-        }
-        if object.is_some_and(|object| object.contains_key("service_binding_ref")) {
-            return serde_json::from_value::<EventsSubmitFederationBatchRequestBody>(value)
-                .map(Self::Federation)
-                .map_err(D::Error::custom);
-        }
-        if object.is_some_and(|object| object.contains_key("events")) {
-            return serde_json::from_value::<SolandEventsInitialSubmitBatchRequestBody>(value)
-                .map(Self::InitialBatch)
-                .map_err(D::Error::custom);
-        }
-        serde_json::from_value::<arkret_wire::EventInitialSubmission>(value)
-            .map(Self::Initial)
-            .map_err(D::Error::custom)
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SolandEventsInitialSubmitBatchRequestBody {
-    pub events: Vec<arkret_wire::EventInitialSubmission>,
-}
-
-impl SolandEventsSubmitRequestBody {
-    /// Spec B1.6 — validate the `service_binding_ref` carried on a
-    /// federation submit. All fields MUST be populated and well-shaped
-    /// per SDK typed validators (already enforced by deserialisation); we
-    /// additionally reject a `membership_frontier` containing duplicates.
-    pub fn validate_federation_service_binding(
-        binding: &FederationServiceBindingRef,
-    ) -> Result<(), (&'static str, String)> {
-        let mut seen = std::collections::BTreeSet::new();
-        for entry in &binding.membership_frontier {
-            if !seen.insert(entry.as_str()) {
-                return Err((
-                    arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-                    format!(
-                        "membership_frontier contains duplicate entry {:?}",
-                        entry.as_str()
-                    ),
-                ));
-            }
-        }
-        if binding.destination_kind.trim().is_empty() {
+pub(super) fn validate_federation_service_binding(
+    binding: &FederationServiceBindingRef,
+) -> Result<(), (&'static str, String)> {
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in &binding.membership_frontier {
+        if !seen.insert(entry.as_str()) {
             return Err((
                 arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-                "service_binding_ref.destination_kind MUST be a non-empty string".to_owned(),
+                format!(
+                    "membership_frontier contains duplicate entry {:?}",
+                    entry.as_str()
+                ),
             ));
         }
-        Ok(())
     }
+    if binding.destination_kind.trim().is_empty() {
+        return Err((
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+            "service_binding_ref.destination_kind MUST be a non-empty string".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Reject receipt objects at the `ak.self.events.command.submit.v1` entrypoint.

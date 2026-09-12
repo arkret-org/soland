@@ -767,7 +767,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let submit = match req.parse_json::<SolandEventsSubmitRequestBody>().await {
+    let submit = match req.parse_json::<EventsSubmitRequestBody>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -779,18 +779,10 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             return;
         }
     };
-    if matches!(submit, SolandEventsSubmitRequestBody::Federation(_)) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "federation peer event submission uses /_arkret/peer/events",
-        );
-        return;
-    }
+
     if matches!(
         submit,
-        SolandEventsSubmitRequestBody::DirectConversationFounding(_)
+        EventsSubmitRequestBody::DirectConversationFounding(_)
     ) && idempotency_key.is_some()
     {
         render_error(
@@ -803,9 +795,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     }
     let carries_transport_credential =
         req.headers().contains_key("authorization") || req.headers().contains_key("dpop");
-    if !carries_transport_credential
-        && let SolandEventsSubmitRequestBody::Initial(submission) = &submit
-    {
+    if !carries_transport_credential && let EventsSubmitRequestBody::Initial(submission) = &submit {
         let digest_suite = state
             .projections()
             .realm_digest_suite(submission.event.realm_id.as_str());
@@ -877,7 +867,7 @@ fn submit_event_authenticated<'a>(
     state: &'a AppState,
     session: &'a SessionRecord,
     idempotency_key: Option<String>,
-    submit: SolandEventsSubmitRequestBody,
+    submit: EventsSubmitRequestBody,
     res: &'a mut Response,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
@@ -974,20 +964,19 @@ fn submit_event_authenticated<'a>(
         }
 
         match submit {
-            SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
-            SolandEventsSubmitRequestBody::AgentMembershipCascade(submission) => {
+            EventsSubmitRequestBody::AgentMembershipCascade(submission) => {
                 match submit_agent_membership_cascade(state, session, submission).await {
                     Ok(outcome) => res.render(Json(outcome)),
                     Err(error) => render_submit_one_error(res, error),
                 }
             }
-            SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
+            EventsSubmitRequestBody::DirectConversationFounding(submission) => {
                 match submit_direct_conversation_founding_unit(state, session, submission).await {
                     Ok(outcome) => res.render(Json(outcome)),
                     Err(error) => render_submit_one_error(res, error),
                 }
             }
-            SolandEventsSubmitRequestBody::Initial(submission) => {
+            EventsSubmitRequestBody::Initial(submission) => {
                 let envelope =
                     serde_json::to_value(&submission.event).expect("Event serialization");
                 match submit_initial_event_submission(state, session, submission).await {
@@ -998,7 +987,7 @@ fn submit_event_authenticated<'a>(
                     Err(error) => render_submit_one_error(res, error),
                 }
             }
-            SolandEventsSubmitRequestBody::InitialBatch(batch) => {
+            EventsSubmitRequestBody::InitialBatch(batch) => {
                 match submit_initial_event_batch_outcome(state, session, batch.events).await {
                     Ok(outcome) => res.render(Json(outcome)),
                     Err(error) => render_submit_one_error(res, error),
@@ -1019,17 +1008,16 @@ fn submit_event_authenticated<'a>(
 async fn submit_event_dispatch(
     state: &AppState,
     session: &SessionRecord,
-    submit: SolandEventsSubmitRequestBody,
+    submit: EventsSubmitRequestBody,
 ) -> (StatusCode, Value) {
     match submit {
-        SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
-        SolandEventsSubmitRequestBody::AgentMembershipCascade(submission) => {
+        EventsSubmitRequestBody::AgentMembershipCascade(submission) => {
             match submit_agent_membership_cascade(state, session, submission).await {
                 Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
                 Err(error) => submit_one_error_value(error),
             }
         }
-        SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
+        EventsSubmitRequestBody::DirectConversationFounding(submission) => {
             match submit_direct_conversation_founding_unit(state, session, submission).await {
                 Ok(outcome) => (
                     StatusCode::OK,
@@ -1039,7 +1027,7 @@ async fn submit_event_dispatch(
                 Err(error) => submit_one_error_value(error),
             }
         }
-        SolandEventsSubmitRequestBody::Initial(submission) => {
+        EventsSubmitRequestBody::Initial(submission) => {
             let envelope = serde_json::to_value(&submission.event).expect("Event serialization");
             match submit_initial_event_submission(state, session, submission).await {
                 Ok(response) => {
@@ -1049,7 +1037,7 @@ async fn submit_event_dispatch(
                 Err(error) => submit_one_error_value(error),
             }
         }
-        SolandEventsSubmitRequestBody::InitialBatch(batch) => {
+        EventsSubmitRequestBody::InitialBatch(batch) => {
             match submit_initial_event_batch_outcome(state, session, batch.events).await {
                 Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
                 Err(error) => submit_one_error_value(error),

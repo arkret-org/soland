@@ -1423,9 +1423,9 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         );
         return;
     };
-    if let Err((code, message)) = SolandEventsSubmitRequestBody::validate_federation_service_binding(
-        &submission.service_binding_ref,
-    ) {
+    if let Err((code, message)) =
+        validate_federation_service_binding(&submission.service_binding_ref)
+    {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }
