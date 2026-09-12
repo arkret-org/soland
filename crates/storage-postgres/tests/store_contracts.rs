@@ -868,7 +868,9 @@ async fn postgres_mls_frontier_input_commits_atomically_and_survives_adapter_res
     }];
     request.mls_frontier_leaves = Some(leaves.clone());
     let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let mut ack = arkret_wire::ControlProposalAuthorityAck {
+    let mut ack = arkret_wire::ControlProposalAck {
+        kind: arkret_wire::ControlProposalAckKind::SignedAck,
+        defer_count: 0,
         realm_id: realm_id.clone(),
         proposal_digest: arkret_wire::Hash::new(request.event.canonical_digest.clone()).unwrap(),
         received_at: now,
@@ -883,12 +885,9 @@ async fn postgres_mls_frontier_input_commits_atomically_and_survives_adapter_res
             jws: "e30..c2ln".to_owned(),
         },
     };
-    ack.signature.payload_digest = ack.authority_ack_digest().unwrap();
-    request.control_proposal_ingress = Some(
-        arkret_state::state::store::ControlProposalIngress::AckRequired(
-            arkret_wire::ControlProposalAck::from_authority_acks(vec![ack], policy).unwrap(),
-        ),
-    );
+    ack.signature.payload_digest = ack.ack_body_digest().unwrap();
+    request.control_proposal_ingress =
+        Some(arkret_state::state::store::ControlProposalIngress::AckRequired(ack));
     let event_id = request.event.event_id.clone();
     let store = PgEventStore { pool: pool.clone() };
     let mut missing = request.clone();
@@ -2920,7 +2919,9 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
     let authority_set_ref =
         arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
     let decision_policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+    let mut authority_ack = arkret_wire::ControlProposalAck {
+        kind: arkret_wire::ControlProposalAckKind::SignedAck,
+        defer_count: 0,
         realm_id: realm_id.clone(),
         proposal_digest: proposal_digest.clone(),
         received_at: now,
@@ -2937,10 +2938,8 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
             jws: "e30..c2ln".to_owned(),
         },
     };
-    authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
-    let ack =
-        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], decision_policy)
-            .unwrap();
+    authority_ack.signature.payload_digest = authority_ack.ack_body_digest().unwrap();
+    let ack = authority_ack;
     let envelope = serde_json::to_value(&event).unwrap();
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
@@ -3862,7 +3861,9 @@ mod control_move_ingress_negatives {
         // bounds, so the fixture needs one well-formed authority Ack: its
         // signature digest must cover the member's canonical bytes, though the
         // JWS itself is not verified at admission.
-        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+        let mut authority_ack = arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            defer_count: 0,
             realm_id: realm_id.clone(),
             proposal_digest: proposal_digest.clone(),
             received_at: now,
@@ -3879,7 +3880,7 @@ mod control_move_ingress_negatives {
                 jws: "fixture-jws".to_owned(),
             },
         };
-        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        authority_ack.signature.payload_digest = authority_ack.ack_body_digest().unwrap();
         let ack = arkret_wire::ControlProposalAck {
             kind: arkret_wire::ControlProposalAckKind::SignedAck,
             realm_id: realm_id.clone(),
@@ -4005,7 +4006,7 @@ mod control_move_ingress_negatives {
         ack.proposal_digest = unbound_digest.clone();
         for member in &mut ack.authority_acks {
             member.proposal_digest = unbound_digest.clone();
-            member.signature.payload_digest = member.authority_ack_digest().unwrap();
+            member.signature.payload_digest = member.ack_body_digest().unwrap();
         }
 
         let error = PgEventCommitUnitOfWork::new(pool.clone())

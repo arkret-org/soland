@@ -116,7 +116,9 @@ mod control_proposal_ack_tests {
     fn ack(record: &CanonicalEventRecord) -> arkret_wire::ControlProposalAck {
         let created_at = record.received_at;
         let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+        let mut authority_ack = arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            defer_count: 0,
             realm_id: arkret_wire::RealmId::new(record.realm_id.clone().unwrap()).unwrap(),
             proposal_digest: arkret_wire::Hash::new(record.canonical_digest.clone()).unwrap(),
             received_at: created_at,
@@ -135,8 +137,8 @@ mod control_proposal_ack_tests {
                 jws: "e30..c2ln".to_owned(),
             },
         };
-        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
-        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
+        authority_ack.signature.payload_digest = authority_ack.ack_body_digest().unwrap();
+        authority_ack
     }
 
     #[test]

@@ -1128,11 +1128,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::MorphStageSet,
         apply_morph_stage_set_dispatch,
     );
-    // AKP-0007 — Circle lifecycle / membership dispatch. The seventh
-    // active kind, `ak.circle.seal_commit`, is reducer-derived (sub-
-    // seal on the Circle's profile cadence) and listed in the SDK's
-    // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
-    // it here.
+    // Circle lifecycle and membership security commands.
     m.insert(
         arkret_wire::EventKind::CircleCreate,
         apply_circle_create_dispatch,

@@ -155,7 +155,9 @@ mod transition_tests {
     fn ack() -> arkret_wire::ControlProposalAck {
         let created_at = Utc::now();
         let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+        let mut authority_ack = arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            defer_count: 0,
             realm_id: arkret_wire::RealmId::new(
                 "ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw".to_owned(),
             )
@@ -177,8 +179,8 @@ mod transition_tests {
                 jws: "e30..c2ln".to_owned(),
             },
         };
-        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
-        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
+        authority_ack.signature.payload_digest = authority_ack.ack_body_digest().unwrap();
+        authority_ack
     }
 
     fn transition() -> DeviceRevocationTransition {
