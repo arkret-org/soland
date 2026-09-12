@@ -310,7 +310,6 @@ mod tests {
         captured_rx.recv().unwrap();
         let mut successor = seal(&event, false);
         successor.predecessor_ref = Some(old_head.id.clone());
-        successor.previous_state_root = Some(old_head.state_root.clone());
         successor.notary_seq = old_head.notary_seq + 1;
         successor.id = successor.derive_id(DigestSuite::Sha256).unwrap();
         assert!(

@@ -241,27 +241,6 @@ pub(crate) fn validate_request_receipt_cryptography(
     )
 }
 
-fn service_signature<T: Serialize>(
-    state: &AppState,
-    value: &T,
-) -> Result<ProtocolSignature, AppError> {
-    let created_at = now();
-    let bytes = arkret_canonical::canonical_json_bytes(value)
-        .map_err(|error| AppError::internal(format!("Contact receipt canonicalize: {error}")))?;
-    let signature = state.notary_signing_key().sign(&bytes);
-    Ok(ProtocolSignature {
-        verification_method: DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(
-                state.service_did().as_str(),
-            ),
-        )
-        .map_err(|error| AppError::internal(format!("service verification method: {error}")))?,
-        created_at,
-        jws: Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
-            .map_err(|error| AppError::internal(format!("Contact signature encode: {error}")))?,
-    })
-}
-
 async fn validate_request_acceptance_receipt(
     state: &AppState,
     record: &ContactRecord,
@@ -1440,116 +1419,115 @@ async fn plan_contact_commit(
                 &holder,
                 &peer,
             )?;
-            let (mut history, expected_updated_at, created_at, mut request_slot_states) =
-                match existing {
-                    None if previous_terminal_contact_round_id.is_none() => {
-                        (Vec::new(), None, event.created_at, Vec::new())
+            let (mut history, expected_updated_at, created_at, request_slot_states) = match existing
+            {
+                None if previous_terminal_contact_round_id.is_none() => {
+                    (Vec::new(), None, event.created_at, Vec::new())
+                }
+                None => match continuity_evidence {
+                    Some(evidence) => (
+                        imported_contact_continuity_history(
+                            state,
+                            evidence,
+                            previous_terminal_contact_round_id.as_ref(),
+                        )?,
+                        None,
+                        event.created_at,
+                        Vec::new(),
+                    ),
+                    None => {
+                        return Err(crate::app_error!(
+                            ContinuityEvidenceUnavailable,
+                            "Contact continuity evidence is unavailable",
+                        ));
                     }
-                    None => match continuity_evidence {
-                        Some(evidence) => (
-                            imported_contact_continuity_history(
-                                state,
-                                evidence,
-                                previous_terminal_contact_round_id.as_ref(),
-                            )?,
-                            None,
-                            event.created_at,
-                            Vec::new(),
-                        ),
-                        None => {
-                            return Err(crate::app_error!(
-                                ContinuityEvidenceUnavailable,
-                                "Contact continuity evidence is unavailable",
-                            ));
-                        }
-                    },
-                    Some(existing) if existing.status == "tombstoned" => {
-                        let terminal =
-                            existing.contact_round_evidence.clone().ok_or_else(|| {
-                                crate::app_error!(
-                                    ContinuityEvidenceUnavailable,
-                                    "Contact continuity evidence is unavailable",
-                                )
-                            })?;
-                        if previous_terminal_contact_round_id.as_ref()
-                            != Some(&terminal.contact_round_id)
-                            || terminal.current_proofs.len() != 2
-                            || terminal.current_proofs.iter().any(|proof| {
-                                !proof.terminal
-                                    || proof.contact_round_id != terminal.contact_round_id
-                            })
-                        {
-                            return Err(AppError::conflict(
-                                "Contact request terminal predecessor is not the durable terminal head",
-                            ));
-                        }
-                        arkret_models_collaboration::contact_operations::validate_recontact_continuity(
+                },
+                Some(existing) if existing.status == "tombstoned" => {
+                    let terminal = existing.contact_round_evidence.clone().ok_or_else(|| {
+                        crate::app_error!(
+                            ContinuityEvidenceUnavailable,
+                            "Contact continuity evidence is unavailable",
+                        )
+                    })?;
+                    if previous_terminal_contact_round_id.as_ref()
+                        != Some(&terminal.contact_round_id)
+                        || terminal.current_proofs.len() != 2
+                        || terminal.current_proofs.iter().any(|proof| {
+                            !proof.terminal || proof.contact_round_id != terminal.contact_round_id
+                        })
+                    {
+                        return Err(AppError::conflict(
+                            "Contact request terminal predecessor is not the durable terminal head",
+                        ));
+                    }
+                    arkret_models_collaboration::contact_operations::validate_recontact_continuity(
                         &terminal,
                         &existing.contact_round_evidence_history,
                     )
                     .map_err(|error| {
-                        crate::app_error!(ContinuityInvalid,
+                        crate::app_error!(
+                            ContinuityInvalid,
                             format!("terminal Contact continuity is invalid: {error}"),
                         )
                     })?;
-                        let mut history = Vec::with_capacity(
-                            existing
-                                .contact_round_evidence_history
-                                .len()
-                                .saturating_add(1),
-                        );
-                        history.push(terminal);
-                        history.extend(existing.contact_round_evidence_history.iter().cloned());
-                        if history.len() > 64 {
-                            history = continuity_evidence
-                                .as_ref()
-                                .map(|evidence| {
-                                    imported_contact_continuity_history(
-                                        state,
-                                        evidence,
-                                        previous_terminal_contact_round_id.as_ref(),
-                                    )
-                                })
-                                .transpose()?
-                                .ok_or_else(|| {
-                                    crate::app_error!(
-                                        ContinuityEvidenceUnavailable,
-                                        "Contact continuity checkpoint is required",
-                                    )
-                                })?;
-                        }
-                        (
-                            history,
-                            Some(existing.updated_at),
-                            existing.created_at,
-                            existing.request_slot_states,
-                        )
-                    }
-                    Some(existing) if existing.status == "rejected" => {
-                        let expected = existing
+                    let mut history = Vec::with_capacity(
+                        existing
                             .contact_round_evidence_history
-                            .first()
-                            .map(|bundle| &bundle.contact_round_id);
-                        if previous_terminal_contact_round_id.as_ref() != expected {
-                            return Err(AppError::conflict(
-                                "Contact request does not preserve the last terminal predecessor",
-                            ));
-                        }
-                        (
-                            existing.contact_round_evidence_history,
-                            Some(existing.updated_at),
-                            existing.created_at,
-                            existing.request_slot_states,
-                        )
+                            .len()
+                            .saturating_add(1),
+                    );
+                    history.push(terminal);
+                    history.extend(existing.contact_round_evidence_history.iter().cloned());
+                    if history.len() > 64 {
+                        history = continuity_evidence
+                            .as_ref()
+                            .map(|evidence| {
+                                imported_contact_continuity_history(
+                                    state,
+                                    evidence,
+                                    previous_terminal_contact_round_id.as_ref(),
+                                )
+                            })
+                            .transpose()?
+                            .ok_or_else(|| {
+                                crate::app_error!(
+                                    ContinuityEvidenceUnavailable,
+                                    "Contact continuity checkpoint is required",
+                                )
+                            })?;
                     }
-                    Some(_) => {
-                        return Ok(ContactCommitPlan::Failed(ContactFailedOutcome {
-                            result_kind: ContactResultKind::Request,
-                            operation_id: reservation.operation_id.clone(),
-                            reason: ContactOperationRejectReason::ContactRoundConflict,
-                        }));
+                    (
+                        history,
+                        Some(existing.updated_at),
+                        existing.created_at,
+                        existing.request_slot_states,
+                    )
+                }
+                Some(existing) if existing.status == "rejected" => {
+                    let expected = existing
+                        .contact_round_evidence_history
+                        .first()
+                        .map(|bundle| &bundle.contact_round_id);
+                    if previous_terminal_contact_round_id.as_ref() != expected {
+                        return Err(AppError::conflict(
+                            "Contact request does not preserve the last terminal predecessor",
+                        ));
                     }
-                };
+                    (
+                        existing.contact_round_evidence_history,
+                        Some(existing.updated_at),
+                        existing.created_at,
+                        existing.request_slot_states,
+                    )
+                }
+                Some(_) => {
+                    return Ok(ContactCommitPlan::Failed(ContactFailedOutcome {
+                        result_kind: ContactResultKind::Request,
+                        operation_id: reservation.operation_id.clone(),
+                        reason: ContactOperationRejectReason::ContactRoundConflict,
+                    }));
+                }
+            };
             let pending_incoming_admitted = if same_service_target {
                 let target_account_id = peer.as_account_id().ok_or_else(|| {
                     AppError::internal("same-service Contact target is not an Account")

@@ -2442,13 +2442,7 @@ mod membership_hydration_tests {
                     notary_seq: sequence as u64,
                     availability_receipt_digests: Vec::new(),
                     covered_event_digests: Vec::new(),
-                    previous_state_root: predecessor.as_ref().map(|_| {
-                        arkret_state::compute_state_root(
-                            arkret_state::GovernanceView::new(&BTreeMap::new()),
-                            suite,
-                        )
-                        .unwrap()
-                    }),
+                    previous_state_root: None,
                     previous_digest_algorithm: None,
                     sealed_at: records.last().unwrap().received_at,
                     hlc: arkret_wire::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
