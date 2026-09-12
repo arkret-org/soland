@@ -142,29 +142,28 @@ pub async fn active_device_revocation_gate_selector(
             "device authorization is not active".to_owned(),
         ));
     };
-    let authorize_event = state
-        .event_queries()
-        .canonical_event(target_device_authorize_event_id.as_str())
+    let account = arkret_wire::AccountId::new(principal_id.clone(), station_id.clone());
+    let history = load_confirmed_device_history(state, &account)
         .await
-        .map_err(|error| ServiceError::Internal(error.to_string()))?
+        .map_err(|error| {
+            ServiceError::Conflict(format!("confirmed device history unavailable: {error}"))
+        })?
         .ok_or_else(|| {
-            ServiceError::Conflict("accepted device authorization Event is unavailable".to_owned())
+            ServiceError::Conflict("device authorization has no confirmed history".into())
         })?;
-    let event_device_id = authorize_event
-        .envelope
-        .pointer("/payload/device_id")
-        .and_then(Value::as_str);
-    if !accepted_authorization_binds_authority_tuple(
-        authorize_event.actor_id.as_str(),
-        authorize_event.kind.as_str(),
-        event_device_id,
-        principal_id.as_str(),
-        station_id.as_str(),
-        device_id.as_str(),
-    ) {
+    let authorization = history
+        .authorization(&target_device_authorize_event_id)
+        .filter(|authorization| history.is_currently_active(authorization))
+        .ok_or_else(|| {
+            ServiceError::Conflict(
+                "device mirror does not name an active confirmed authorization instance".into(),
+            )
+        })?;
+    if authorization.device_id() != &device_id
+        || authorization.authorized_generation_ref() != authorized_generation_ref
+    {
         return Err(ServiceError::Conflict(
-            "accepted device authorization Event does not bind the current authority tuple"
-                .to_owned(),
+            "device mirror differs from the confirmed authorization instance".into(),
         ));
     }
     let target_device_generation_ref = generation.current_ref;
@@ -180,36 +179,6 @@ pub async fn active_device_revocation_gate_selector(
         target_device_authorize_event_id: target_device_authorize_event_id.to_string(),
         target_device_generation_ref,
     })
-}
-
-/// `device-lifecycle.md` — the accepted `ak.device.authorize` Event a derived
-/// selector points at MUST re-verify the whole local account-authority tuple
-/// verbatim before the selector may be used: the same principal actor, the
-/// `ak.device.authorize` kind, this exact Station, and the same
-/// device. The same all-or-nothing re-check covers genesis, pairing and
-/// re-anchor writers, because all three reach durable state only through this
-/// selector. A selector is never partially trusted: one mismatched member is a
-/// conflict, and the caller MUST NOT fall back to a placeholder Event id,
-/// Station or device.
-fn accepted_authorization_binds_authority_tuple(
-    event_actor_id: &str,
-    event_kind: &str,
-    event_device_id: Option<&str>,
-    principal_id: &str,
-    station_id: &str,
-    device_id: &str,
-) -> bool {
-    let expected_actor = arkret_identifiers::DidCoreId::new(principal_id.to_owned())
-        .ok()
-        .zip(arkret_identifiers::DidCoreId::new(station_id.to_owned()).ok())
-        .map(|(principal_id, station_id)| {
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal_id, station_id))
-        });
-    expected_actor.is_some_and(|expected_actor| {
-        serde_json::from_str::<arkret_wire::ActorId>(event_actor_id)
-            .is_ok_and(|actor_id| actor_id == expected_actor)
-    }) && event_kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
-        && event_device_id == Some(device_id)
 }
 
 pub(crate) fn verified_device_authorization_binding(
@@ -318,92 +287,6 @@ mod tests {
             }),
         ));
         assert!(matches!(malformed, Err(ServiceError::SchemaViolation(_))));
-    }
-
-    const TUPLE_PRINCIPAL: &str = "ak:did_core:webvh:z6mkfixture:alice.example";
-    const TUPLE_STATION: &str = "ak:did_core:web:soland.example";
-    const TUPLE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000030";
-
-    fn binds_tuple(
-        actor_id: &str,
-        kind: &str,
-        station_id: Option<&str>,
-        device_id: Option<&str>,
-    ) -> bool {
-        let actor_id = station_id
-            .and_then(|station_id| {
-                arkret_identifiers::DidCoreId::new(actor_id.to_owned())
-                    .ok()
-                    .zip(arkret_identifiers::DidCoreId::new(station_id.to_owned()).ok())
-            })
-            .map(|(principal_id, station_id)| {
-                arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal_id, station_id))
-                    .to_string()
-            })
-            .unwrap_or_default();
-        accepted_authorization_binds_authority_tuple(
-            &actor_id,
-            kind,
-            device_id,
-            TUPLE_PRINCIPAL,
-            TUPLE_STATION,
-            TUPLE_DEVICE,
-        )
-    }
-
-    /// The canonical positive: every member of the authority tuple matches.
-    #[test]
-    fn accepted_authorization_binds_the_exact_authority_tuple() {
-        assert!(binds_tuple(
-            TUPLE_PRINCIPAL,
-            arkret_wire::EventKind::DeviceAuthorize.as_str(),
-            Some(TUPLE_STATION),
-            Some(TUPLE_DEVICE),
-        ));
-    }
-
-    /// One mismatched member — actor, kind, Station or device — is
-    /// enough to reject. Nothing is trusted partially, and a missing member is
-    /// never treated as a wildcard.
-    #[test]
-    fn a_single_authority_tuple_mismatch_rejects_the_selector() {
-        let authorize = arkret_wire::EventKind::DeviceAuthorize.as_str();
-        assert!(!binds_tuple(
-            "ak:did_core:webvh:z6mkfixture:mallory.example",
-            authorize,
-            Some(TUPLE_STATION),
-            Some(TUPLE_DEVICE),
-        ));
-        assert!(!binds_tuple(
-            TUPLE_PRINCIPAL,
-            arkret_wire::event_kind_str::DEVICE_REANCHOR,
-            Some(TUPLE_STATION),
-            Some(TUPLE_DEVICE),
-        ));
-        assert!(!binds_tuple(
-            TUPLE_PRINCIPAL,
-            authorize,
-            Some("ak:did_core:web:other-server.example"),
-            Some(TUPLE_DEVICE),
-        ));
-        assert!(!binds_tuple(
-            TUPLE_PRINCIPAL,
-            authorize,
-            None,
-            Some(TUPLE_DEVICE)
-        ));
-        assert!(!binds_tuple(
-            TUPLE_PRINCIPAL,
-            authorize,
-            Some(TUPLE_STATION),
-            Some("ak:device:01904100-0000-7000-8000-000000000031"),
-        ));
-        assert!(!binds_tuple(
-            TUPLE_PRINCIPAL,
-            authorize,
-            Some(TUPLE_STATION),
-            None
-        ));
     }
 
     /// The generation half of the same re-check: the projection's

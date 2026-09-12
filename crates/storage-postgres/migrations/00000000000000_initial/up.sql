@@ -1556,6 +1556,16 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER device_inventory_station_immutable BEFORE UPDATE ON device_inventory_station FOR EACH ROW EXECUTE FUNCTION immutable_device_inventory_station();
+-- Private reconstruction progress. Only an authenticated complete history may
+-- install this marker in the same transaction as the local device mirror.
+CREATE TABLE public.device_history_projections (
+    principal_id text NOT NULL,
+    station_id text NOT NULL REFERENCES public.device_inventory_station(station_id),
+    realm_id text NOT NULL,
+    confirmed_head text NOT NULL REFERENCES public.state_seals(id),
+    PRIMARY KEY (principal_id, station_id)
+);
+
 CREATE TABLE public.devices (
     station_id TEXT NOT NULL DEFAULT current_device_inventory_station() REFERENCES device_inventory_station(station_id),
     id uuid PRIMARY KEY,

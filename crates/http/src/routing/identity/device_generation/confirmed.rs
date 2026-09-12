@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_state::ordinary_history::HistoryEvidenceError;
@@ -21,7 +22,7 @@ fn invalid(error: impl std::fmt::Display) -> HistoryEvidenceError {
 pub(crate) async fn load_confirmed_device_history(
     state: &AppState,
     account: &AccountId,
-) -> Result<Option<arkret::DeviceAuthorizationHistory>, HistoryEvidenceError> {
+) -> Result<Option<Arc<arkret::DeviceAuthorizationHistory>>, HistoryEvidenceError> {
     if account.station_id != state.service_core_id() {
         return Err(invalid(
             "device inventory belongs to a different Station Account",
@@ -35,6 +36,22 @@ pub(crate) async fn load_confirmed_device_history(
     else {
         return Ok(None);
     };
+    let Some(head) = state
+        .projections()
+        .realm_seal_head(&binding.pcr_realm_id)
+        .await
+        .map_err(unavailable)?
+    else {
+        // Pending genesis has no active device generation. Its first Seal is
+        // authenticated by the separate closed founding-device path. A store
+        // error/quarantined head above remains unavailable, never this branch.
+        return Ok(None);
+    };
+    if let Some(history) = state.device_history_cache.lock().await.get(account)
+        && history.confirmed_head() == &head
+    {
+        return Ok(Some(history.clone()));
+    }
     let genesis = &binding.genesis_event;
     if binding.account_id != *account
         || genesis.realm_id != binding.pcr_realm_id
@@ -116,17 +133,6 @@ pub(crate) async fn load_confirmed_device_history(
     // Only now is the notary commitment authenticated independently of any
     // candidate Seal. The shared adapter rechecks the complete founding unit.
     let trusted_notary = &create.object.notary;
-    let Some(head) = state
-        .projections()
-        .realm_seal_head(&binding.pcr_realm_id)
-        .await
-        .map_err(unavailable)?
-    else {
-        // Pending genesis has no active device generation. Its first Seal is
-        // authenticated by the separate closed founding-device path. A store
-        // error/quarantined head above remains unavailable, never this branch.
-        return Ok(None);
-    };
     let mut seals = Vec::new();
     let mut seen = BTreeSet::new();
     let mut next = Some(head.clone());
@@ -162,6 +168,7 @@ pub(crate) async fn load_confirmed_device_history(
         &events,
         suite,
     )?;
+    let mut cache = state.device_history_cache.lock().await;
     if state
         .projections()
         .realm_seal_head(&binding.pcr_realm_id)
@@ -175,5 +182,7 @@ pub(crate) async fn load_confirmed_device_history(
         ));
     }
     // A writer must still check this exact head under the durable Realm lock.
+    let history = Arc::new(history);
+    cache.insert(account.clone(), history.clone());
     Ok(Some(history))
 }

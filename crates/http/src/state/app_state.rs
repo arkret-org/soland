@@ -142,6 +142,11 @@ pub struct AppState {
     sync: SyncService,
     jobs: JobsService,
     projections: ProjectionService,
+    pub(crate) device_history_cache: Arc<
+        tokio::sync::Mutex<
+            BTreeMap<arkret_wire::AccountId, Arc<arkret::DeviceAuthorizationHistory>>,
+        >,
+    >,
     authorization: AuthorizationService,
     realm_directory: RealmDirectoryService,
     /// Deployment-local account registration policy. It uses the canonical
@@ -1226,6 +1231,7 @@ impl AppState {
             sync,
             jobs,
             projections,
+            device_history_cache: Default::default(),
             realm_directory,
             account_registration_policy: Arc::new(Mutex::new(AccountRegistrationPolicy::default())),
             runtime_guards: RuntimeGuardService::default(),

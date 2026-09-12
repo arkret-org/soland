@@ -29,6 +29,11 @@ pub(super) async fn install(
         if heads.len() != 1 || heads[0].id != history.confirmed_head().as_str() {
             return Err(PersistenceError::Conflict("confirmed device history head advanced or is quarantined".into()).into());
         }
+        let installed = sql_query("SELECT confirmed_head AS id FROM device_history_projections WHERE principal_id=$1 AND station_id=$2 AND realm_id=$3")
+            .bind::<Text,_>(history.account_id().principal_id.as_str())
+            .bind::<Text,_>(history.account_id().station_id.as_str())
+            .bind::<Text,_>(history.realm_id().as_str()).get_result::<ConfirmedHead>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+        if installed.is_some_and(|installed| installed.id == history.confirmed_head().as_str()) { return Ok(()); }
         // This transaction may be resumed with the same complete history.
         // Old instances become unusable before any replacement becomes active;
         // never update old authorization coordinates to today's generation.
@@ -47,7 +52,7 @@ pub(super) async fn install(
                 "INSERT INTO devices(id,actor_id,device_id,payload,verification_state,created_at,updated_at,revoked_at) \
                  VALUES($1,$2,$3,$4,'verified',$5,$6,NULL) \
                  ON CONFLICT(actor_id,device_id) DO UPDATE SET \
-                 payload=EXCLUDED.payload || CASE WHEN devices.payload ? 'display_name' THEN jsonb_build_object('display_name',devices.payload->'display_name') ELSE '{}'::jsonb END, \
+                 payload=EXCLUDED.payload || jsonb_strip_nulls(jsonb_build_object('display_name',devices.payload->'display_name','last_seen_at',devices.payload->'last_seen_at','last_key_upload_at',devices.payload->'last_key_upload_at')), \
                  verification_state='verified',updated_at=EXCLUDED.updated_at,revoked_at=CASE WHEN devices.payload->>'device_authorize_event_id'=EXCLUDED.payload->>'device_authorize_event_id' THEN devices.revoked_at ELSE NULL END"
             ).bind::<sql_types::Uuid,_>(Uuid::now_v7())
                 .bind::<Text,_>(history.account_id().principal_id.as_str())
@@ -57,6 +62,10 @@ pub(super) async fn install(
                 .bind::<Timestamptz,_>(authorization.sealed_at())
                 .execute(&mut *conn).await.map_err(PersistenceError::database)?;
         }
+        sql_query("INSERT INTO device_history_projections(principal_id,station_id,realm_id,confirmed_head) VALUES($1,$2,$3,$4) ON CONFLICT(principal_id,station_id) DO UPDATE SET realm_id=EXCLUDED.realm_id,confirmed_head=EXCLUDED.confirmed_head")
+            .bind::<Text,_>(history.account_id().principal_id.as_str()).bind::<Text,_>(history.account_id().station_id.as_str())
+            .bind::<Text,_>(history.realm_id().as_str()).bind::<Text,_>(history.confirmed_head().as_str())
+            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
         Ok(())
     }).await.map_err(PgTransactionError::into_persistence)
 }

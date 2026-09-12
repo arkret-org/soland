@@ -475,6 +475,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    device_history_projections (principal_id, station_id) {
+        principal_id -> Text,
+        station_id -> Text,
+        realm_id -> Text,
+        confirmed_head -> Text,
+    }
+}
+
+diesel::table! {
     devices (id) {
         station_id -> Text,
         id -> Uuid,

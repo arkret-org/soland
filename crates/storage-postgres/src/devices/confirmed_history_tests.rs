@@ -67,6 +67,17 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
             .execute(&mut *conn).await.unwrap();
     }
     assert!(store.install_confirmed_history(&updated).await.is_err());
+    {
+        let mut conn = pool.get().await.unwrap();
+        let marker = sql_query("SELECT to_jsonb(confirmed_head) AS payload FROM device_history_projections WHERE principal_id=$1")
+            .bind::<Text,_>(source.account.principal_id.as_str()).get_result::<JsonPayloadRow>(&mut *conn).await.unwrap();
+        assert_eq!(
+            marker.payload,
+            serde_json::json!(original.confirmed_head()),
+            "failed mirror installation cannot advance its durable progress marker"
+        );
+    }
+
     assert_eq!(
         store
             .get(
@@ -118,8 +129,8 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
             actor: source.account.principal_id.to_string(),
             device_id: fixture::device(2).to_string(),
             display_name: Some("renamed after revoke".into()),
-            last_seen_at: None,
-            last_key_upload_at: None,
+            last_seen_at: Some(first.created_at),
+            last_key_upload_at: Some(first.updated_at),
             updated_at: chrono::Utc::now(),
         })
         .await
@@ -157,6 +168,37 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
         serde_json::json!(successor_id)
     );
     assert_ne!(old_authorize, successor_id);
+    assert_eq!(
+        active.payload["display_name"],
+        serde_json::json!("renamed after revoke")
+    );
+    assert_eq!(
+        active.payload["last_seen_at"],
+        serde_json::json!(first.created_at)
+    );
+    assert_eq!(
+        active.payload["last_key_upload_at"],
+        serde_json::json!(first.updated_at)
+    );
+    let restored_store = PgDeviceInventoryStore { pool: pool.clone() };
+    restored_store
+        .install_confirmed_history(&newest)
+        .await
+        .unwrap();
+    assert_eq!(
+        restored_store
+            .get(
+                source.account.principal_id.as_str(),
+                fixture::device(2).as_str()
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at,
+        active.updated_at,
+        "restarting the installer at an already installed head is a read-only exact replay"
+    );
+
     assert!(store.install_confirmed_history(&updated).await.is_err());
     assert_eq!(
         store
