@@ -135,7 +135,7 @@ pub struct EventCommitRequest {
 /// Static persistence-side guard for the one Ack-less Control-Move class.
 ///
 /// The HTTP admission layer additionally proves the PCR profile, current
-/// exact f=0 quorum authority and active accepted device generation.
+/// exact single-signing authority and active accepted device generation.
 /// Persistence cannot resolve those live projections, but it still refuses an
 /// exemption whose immutable Event shape is not a self-principal PCR device
 /// Move. This keeps the explicit commit flag from becoming a generic Ack
@@ -534,8 +534,6 @@ pub struct ManagedAuthorityClaim {
 #[derive(Clone, Debug)]
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
-    /// One Agent act-on-behalf approval nonce consumed by an Event in
-    /// this batch. The ledger row and Event are committed atomically.
     /// One moderation franking nonce consumed by a report Event in this
     /// batch. The ledger write is inseparable from the report Event: a failed
     /// commit consumes nothing, and a concurrent replay can commit at most
