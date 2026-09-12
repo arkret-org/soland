@@ -40,7 +40,7 @@ fn event(
     .unwrap();
     event.proofs.push(arkret_wire::ProducerEventProof {
         kind: "Ed25519Signature2020".into(),
-        verification_method: "did:web:fixture.example#device".parse().unwrap(),
+        verification_method: arkret_wire::DidUrl::new("did:web:fixture.example#device").unwrap(),
         event_digest: event.event_id.event_digest(),
         signer_resolution_evidence_ref: None,
         created_at: event.created_at,
@@ -149,12 +149,12 @@ fn completion_draft_fixture(
         account_id: peer.as_account_id().unwrap().clone(),
     };
     soland_storage::ContactCompletionDraft {
-        event:event.clone(),operation_id:"ak:operation:contact-fixture".parse().unwrap(),holder,
+        event:event.clone(),operation_id:arkret_wire::ProtocolOperationId::new("ak:operation:contact-fixture").unwrap(),holder,
         action:soland_storage::ContactCompletionAction::Request {slot_version:1,slot_predecessor:None},
         response_binding:soland_storage::ContactCompletionBinding {authenticated_actor:event.actor_id.clone(),idempotency_key:format!("contact-commit:{}",event.event_id),request_hash:format!("sha256:{}","b".repeat(64))},
         target:soland_storage::ContactDeliveryTarget {
             contact_address:PeerContactAddress {recipient:peer,service_resolution:arkret_models_identity::ServiceResolutionCarrier::ResolutionUrl {resolution_url:"https://station.example/_arkret/open/services/ak%3Adid_core%3Aweb%3Astation.example/resolution".into()},route_assistance:None},
-            introduction_evidence:Some(ContactIntroductionEvidence::ExplicitAddress),idempotency_key:format!("contact:{}",event.event_id).parse().unwrap(),
+            introduction_evidence:Some(ContactIntroductionEvidence::ExplicitAddress),idempotency_key:arkret_wire::IdempotencyKey::new(format!("contact:{}",event.event_id)).unwrap(),
         },local_mirror_target:None,
     }
 }
@@ -186,7 +186,8 @@ fn finalized_fixture(
     let receipt =
         RequestAcceptanceReceipt::sign_with(intent.request_receipt_core().unwrap(), |_| {
             Ok(arkret_wire::ProtocolSignature {
-                verification_method: "did:web:station.example#notary".parse().unwrap(),
+                verification_method: arkret_wire::DidUrl::new("did:web:station.example#notary")
+                    .unwrap(),
                 created_at: intent.accepted_at().unwrap(),
                 jws: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
                     [1_u8; 64],
