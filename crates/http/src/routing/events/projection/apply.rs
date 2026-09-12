@@ -316,31 +316,6 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             )
             .await?;
         }
-        MlsProjectionEffect::CommitFrontierContested {
-            group_id,
-            effective_scope,
-            epoch,
-        } => {
-            let Ok(effective_scope) =
-                serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
-            else {
-                return Err(
-                    "refusing to mark MLS frontier contested with invalid effective_scope"
-                        .to_owned(),
-                );
-            };
-            // §2.5.2 — concurrent commits drove `covered_frontier_cell` to `⊥`.
-            // Mirror the contested marker onto the durable epoch row so the
-            // group stays fail-closed (`decryption_pending`) across restarts
-            // until a resolving commit advances the epoch.
-            if let Err(error) = state
-                .mls_commits()
-                .mark_frontier_contested(&effective_scope, group_id, *epoch)
-                .await
-            {
-                return Err(format!("failed to mirror MLS contested frontier: {error}"));
-            }
-        }
     }
     Ok(())
 }

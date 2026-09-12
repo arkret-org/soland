@@ -1230,16 +1230,9 @@ pub async fn hydrate_projections_from_persistence(
         }
     }
 
-    // MLS commit-epoch projection — the reducer treats this in-memory map as the
-    // epoch CAS authority (`reducer/mls.rs apply_commit_epoch`). Without
-    // rehydration, after a restart the genesis guard sees no epoch row and an
-    // admin's add-member commit is rejected (or forks the epoch from 0),
-    // breaking E2EE membership advance. The durable `mls_commits` table carries
-    // the authoritative epoch per group. `accepted_commit_digest` /
-    // `accepted_from_epoch` are ⊥-contention bookkeeping not persisted to the
-    // durable row; defaulting them to `None` only loses contention detection
-    // against a commit that raced the exact restart boundary (vanishingly rare),
-    // never the durable epoch and governance binding.
+    // Restore the durable confirmed epoch and exact accepted Commit ref.
+    // The binding is the source of transition metadata. Missing optional
+    // in-memory Commit bytes/digest is not evidence of competing authority.
     if let Ok(records) = persistence.mls_commits().snapshot_all().await {
         for record in records {
             let Ok(scope_key) =
@@ -1264,8 +1257,6 @@ pub async fn hydrate_projections_from_persistence(
                     governance_binding: record.governance_binding,
                     accepted_commit_digest: None,
                     accepted_commit_ref: record.accepted_commit_ref.clone(),
-                    accepted_from_epoch: None,
-                    frontier_contested: record.frontier_contested,
                 },
             );
             if let Some(commit_ref) = record.accepted_commit_ref {

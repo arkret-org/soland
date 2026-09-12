@@ -64,8 +64,6 @@ fn seed_mls_genesis_with_binding(
             },
             accepted_commit_digest: None,
             accepted_commit_ref: None,
-            accepted_from_epoch: None,
-            frontier_contested: false,
         },
     );
 }

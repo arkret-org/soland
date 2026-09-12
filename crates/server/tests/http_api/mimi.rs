@@ -325,8 +325,6 @@ fn project_mimi_sender_and_frontier(
             accepted_commit_ref: Some(
                 "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
             ),
-            accepted_from_epoch: Some(epoch.saturating_sub(1)),
-            frontier_contested: false,
         },
     );
 }

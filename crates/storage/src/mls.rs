@@ -573,9 +573,6 @@ pub struct MlsCommitEpochRecord {
     pub governance_binding: Value,
     pub accepted_commit_ref: Option<String>,
     pub committed_at: i64,
-    /// `true` once concurrent commits contest the active generation. Cleared
-    /// when a resolving commit advances the epoch via `try_bump`.
-    pub frontier_contested: bool,
 }
 /// G3.S1 — KeyPackage store. The `try_claim` CAS path is what
 /// guarantees at-most-one Welcome per published KeyPackage.
@@ -762,15 +759,6 @@ pub trait MlsCommitStore: Send + Sync {
         &self,
         expected_prev_epoch: u64,
         advance: MlsCommitEpochAdvance<'_>,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
-    /// §2.5.2 — flag the group's current epoch row as contested (`⊥`) after
-    /// concurrent commits. A no-op (`Ok(None)`) when no epoch row exists or the
-    /// stored epoch has already advanced past `epoch`.
-    async fn mark_frontier_contested(
-        &self,
-        effective_scope: &Value,
-        group_id: &str,
-        epoch: u64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>>;
 }

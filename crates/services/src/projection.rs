@@ -219,11 +219,6 @@ pub enum MlsProjectionEffect {
         previous_epoch: u64,
         leader_actor_id: String,
     },
-    CommitFrontierContested {
-        group_id: String,
-        effective_scope: Value,
-        epoch: u64,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -355,15 +350,6 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                     effective_scope,
                     previous_epoch,
                     leader_actor_id,
-                },
-                soland_domain::reducer::MlsEffect::CommitFrontierContested {
-                    group_id,
-                    effective_scope,
-                    epoch,
-                } => MlsProjectionEffect::CommitFrontierContested {
-                    group_id,
-                    effective_scope,
-                    epoch,
                 },
             }),
             ProjectionEffect::RealmOrganizationProjected {
@@ -3696,15 +3682,10 @@ mod effective_checkpoint_tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: arkret_wire::MultiSignature {
-                kind: arkret_wire::MultiSigKind::MultiSig,
-                signatures: vec![arkret_wire::SealSignature {
-                    verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1")
-                        .unwrap(),
-                    payload_digest: test_hash(0xff),
-                    jws: "AAAA.BBBB.CCCC".to_owned(),
-                }],
-                view: 0,
+            notary_signature: arkret_wire::SealSignature {
+                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
+                payload_digest: test_hash(0xff),
+                jws: "AAAA.BBBB.CCCC".to_owned(),
             },
             sealed_at: chrono::DateTime::from_timestamp(1_800_000_000 + notary_seq as i64, 0)
                 .unwrap(),
@@ -3715,7 +3696,6 @@ mod effective_checkpoint_tests {
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
-            transaction_records: Vec::new(),
         };
         seal.id = seal
             .derive_id(arkret_canonical::DigestSuite::Sha256)
@@ -3853,7 +3833,9 @@ mod control_governance_health_tests {
 
     fn deadline_ack(event: &Event, received_at: DateTime<Utc>) -> ControlProposalAck {
         let policy = ControlProposalDecisionPolicy::default();
-        let mut member = arkret_wire::ControlProposalAuthorityAck {
+        let mut member = arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            defer_count: 0,
             realm_id: event.realm_id.clone(),
             proposal_digest: arkret_state::state::control_event_digest(
                 event,
@@ -3872,8 +3854,8 @@ mod control_governance_health_tests {
                 jws: "a..b".to_owned(),
             },
         };
-        member.signature.payload_digest = member.authority_ack_digest().unwrap();
-        ControlProposalAck::from_authority_acks(vec![member], policy).unwrap()
+        member.signature.payload_digest = member.ack_body_digest().unwrap();
+        member
     }
 
     #[tokio::test]
@@ -3898,15 +3880,11 @@ mod control_governance_health_tests {
                 covered_event_digests: Vec::new(),
                 previous_state_root: None,
                 previous_digest_algorithm: None,
-                notary_signature: arkret_wire::MultiSignature {
-                    kind: arkret_wire::MultiSigKind::MultiSig,
-                    signatures: vec![arkret_wire::SealSignature {
-                        verification_method: arkret_wire::DidUrl::new("did:web:notary.example#key")
-                            .unwrap(),
-                        payload_digest: hash(),
-                        jws: "a..b".to_owned(),
-                    }],
-                    view: 0,
+                notary_signature: arkret_wire::SealSignature {
+                    verification_method: arkret_wire::DidUrl::new("did:web:notary.example#key")
+                        .unwrap(),
+                    payload_digest: hash(),
+                    jws: "a..b".to_owned(),
                 },
                 sealed_at: ack.absolute_due_at + chrono::Duration::seconds(1),
                 hlc: Hlc::new("019f00000000-0000-00000001").unwrap(),
@@ -3918,7 +3896,6 @@ mod control_governance_health_tests {
                 command_results: Vec::new(),
                 authorization_closures: Vec::new(),
                 existence_anchors: Vec::new(),
-                transaction_records: Vec::new(),
             };
             let store = service.control_event_store();
             store

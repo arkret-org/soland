@@ -415,21 +415,10 @@ pub struct MlsCommitEpoch {
     pub committed_at: i64,
     /// Full governance binding accepted for the current epoch.
     pub governance_binding: Value,
-    /// `commit_digest` of the commit that advanced the group into the current
-    /// epoch. A *different* commit that attests the same base epoch
-    /// (`accepted_from_epoch`) drives the group's active generation to
-    /// `⊥` (encryption-and-audit.md §2.5.2). `None` at genesis (no commit yet).
+    /// Digest of the accepted Commit material at this epoch; absent at genesis.
     pub accepted_commit_digest: Option<String>,
-    /// Accepted Commit Event/control ref for the current epoch.
+    /// Exact accepted Commit Event ref for the current epoch.
     pub accepted_commit_ref: Option<String>,
-    /// Base epoch the `accepted_commit_digest` commit attested. Lets the reducer
-    /// tell a *concurrent* commit at that same base (⊥ contention) apart from a
-    /// plain stale / out-of-order replay (`mls_epoch_skew`). `None` at genesis.
-    pub accepted_from_epoch: Option<u64>,
-    /// `true` once concurrent commits contested the generation. While
-    /// contested, sends / decrypts on this epoch fail closed as
-    /// `decryption_pending` until a resolving commit advances the epoch.
-    pub frontier_contested: bool,
 }
 
 /// Reducer-derived MLS remove obligation created when an MLS-backed

@@ -47,13 +47,8 @@ const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 /// Reject code for Welcome payloads that try to carry plaintext sender,
 /// profile, relationship, or device metadata outside the opaque MLS bytes.
 const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
-/// Reject code for MLS Welcome payloads whose KeyPackage claim transcript
-/// is missing or does not bind the Welcome bytes to the recipient realm.
 /// Reject code for a second genesis against an already initialized group.
 const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
-/// Reject code emitted while a group's active generation is contested.
-/// Sends / decrypts on
-/// the contested epoch stay fail-closed until a resolving commit advances it.
 /// Reject code for a commit that advances while a remove obligation is pending
 /// but does not reference a matching `ak.mls.proposal{proposal_type="remove"}`.
 const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
@@ -291,16 +286,8 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 
 /// G3.S1 — enqueue a Welcome envelope for a recipient device.
 ///
-/// Payload shape:
-/// ```json
-/// {
-///   "mls_group_id":           "mls-group-<uuid>",
-///   "recipient_principal_id": "ak:did_core:web:bob.example",
-///   "recipient_device_id":    "ak:device:<uuid>",
-///   "ciphertext":             "<base64url(opaque MLS Welcome)>",
-///   "keypackage_ref":         "keypackage-<uuid>"
-/// }
-/// ```
+/// The closed SDK Welcome payload derives its group and epoch from the sole
+/// governance binding and carries the recipient endpoint and claim evidence.
 ///
 /// The reducer intentionally stores only the routing tuple and opaque
 /// Welcome bytes. Any plaintext sender/profile/relationship metadata in
@@ -435,12 +422,6 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     })
 }
 
-/// G3.S1 — initialize a new MLS group at epoch 0.
-///
-/// The canonical payload is `mls_genesis_payload` from the spec
-/// registry. The reducer stores the epoch and accepted governance binding;
-/// opaque GroupInfo / ratchet tree material remains in the
-/// durable event payload and object store references.
 /// Record a `ak.mls.proposal{proposal_type="remove"}` so a later commit can
 /// prove it is consuming a pending remove obligation.
 pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
@@ -494,6 +475,12 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
     })
 }
 
+/// G3.S1 — initialize a new MLS group at epoch 0.
+///
+/// The canonical payload is `mls_genesis_payload` from the spec
+/// registry. The reducer stores the epoch and accepted governance binding;
+/// opaque GroupInfo / ratchet tree material remains in the
+/// durable event payload and object store references.
 pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
     let validated = match serde_json::from_value::<
@@ -543,8 +530,6 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
             governance_binding,
             accepted_commit_digest: None,
             accepted_commit_ref: None,
-            accepted_from_epoch: None,
-            frontier_contested: false,
         },
     );
 
@@ -637,49 +622,8 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     {
         return reject(arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE);
     }
-    let accepted_digest = existing.accepted_commit_digest.clone();
     let creator_device_id = existing.creator_device_id.clone();
     let genesis_event_ref = existing.genesis_event_ref.clone();
-    let accepted_from_epoch = existing.accepted_from_epoch;
-    let prior_contested = existing.frontier_contested;
-
-    // §2.5.2 — concurrent commit detection. Two commits attesting the *same*
-    // base epoch with *different* commit material drive `covered_frontier_cell`
-    // to `⊥`. Because the reducer applies commits sequentially, the first
-    // already advanced the epoch and recorded `(accepted_from_epoch,
-    // accepted_commit_digest)`; the racing second still attests
-    // `accepted_from_epoch` but carries a different digest. A genuine race is
-    // distinguished from an unrelated stale replay by its attested base epoch:
-    // it names the same epoch from which the currently accepted commit
-    // advanced. No private wire marker is needed (or permitted by the
-    // registered `ak.mls.commit` payload schema).
-    let is_contention = accepted_from_epoch == Some(expected_prev_epoch)
-        && accepted_digest
-            .as_deref()
-            .is_some_and(|digest| digest != commit_digest);
-    if is_contention {
-        if prior_contested {
-            // The frontier is already `⊥` and another racing commit attests the
-            // contested base: stay fail-closed with the wire-visible
-            // `decryption_pending` reject until a resolving commit advances the
-            // epoch. (A reject never reaches persistence, so it does not need a
-            // mirror.)
-            return reject(arkret_wire::ReasonCode::DECRYPTION_PENDING);
-        }
-        // First racing commit at this base: drive `covered_frontier_cell` to
-        // `⊥`. The accepted `CommitFrontierContested` effect flips the marker on
-        // the real projection and is mirrored durably onto the epoch row; the
-        // epoch itself is left untouched.
-        if let Some(entry) = state.mls_commit_epochs.get_mut(&epoch_key) {
-            entry.frontier_contested = true;
-        }
-        return ProjectionEffect::Mls(MlsEffect::CommitFrontierContested {
-            group_id: group_id.to_owned(),
-            effective_scope,
-            epoch: current,
-        });
-    }
-
     if expected_prev_epoch != current {
         return reject(REASON_COMMIT_EPOCH_SKEW);
     }
@@ -699,10 +643,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         return reject(REASON_REMOVE_PROPOSAL_MISSING);
     }
 
-    // Reaching here with `expected_prev_epoch == current` is a forward advance.
-    // When the frontier was `⊥`, this is the resolving commit: the insert below
-    // both bumps the epoch and resets `frontier_contested = false`.
-
     let new_epoch = current.saturating_add(1);
     let committed_at = op.created_at.timestamp();
     let accepted_commit_ref = op.context.event_id.to_string();
@@ -719,8 +659,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             governance_binding,
             accepted_commit_digest: Some(commit_digest),
             accepted_commit_ref: Some(accepted_commit_ref.clone()),
-            accepted_from_epoch: Some(expected_prev_epoch),
-            frontier_contested: false,
         },
     );
     state.accepted_mls_commit_refs.insert(accepted_commit_ref);

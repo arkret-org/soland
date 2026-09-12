@@ -895,7 +895,7 @@ impl MlsCommitStore for PgMlsCommitStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, \
-             genesis_event_ref, governance_binding, accepted_commit_ref, committed_at, frontier_contested \
+             genesis_event_ref, governance_binding, accepted_commit_ref, committed_at \
              FROM mls_commits \
              WHERE effective_scope_kind = $1 \
                AND realm_id = $2 \
@@ -932,10 +932,10 @@ impl MlsCommitStore for PgMlsCommitStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO mls_commits \
-             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at, frontier_contested) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, NULL, $11, false) \
+             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, NULL, $11) \
              ON CONFLICT DO NOTHING \
-             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at, frontier_contested",
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at",
         )
         .bind::<sql_types::Uuid, _>(Uuid::now_v7())
         .bind::<Text, _>(&scope.kind)
@@ -975,14 +975,13 @@ impl MlsCommitStore for PgMlsCommitStore {
                leader_actor_id = $7, \
                 governance_binding = $8, \
                 accepted_commit_ref = $9, \
-                committed_at = $10, \
-               frontier_contested = false \
+                committed_at = $10 \
              WHERE effective_scope_kind = $1 \
                AND realm_id = $2 \
                AND circle_id IS NOT DISTINCT FROM $3 \
                AND mls_group_id = $4 \
                AND epoch = $5 \
-              RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at, frontier_contested",
+              RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at",
         )
         .bind::<Text, _>(&scope.kind)
         .bind::<Text, _>(&scope.realm_id)
@@ -1000,44 +999,12 @@ impl MlsCommitStore for PgMlsCommitStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn mark_frontier_contested(
-        &self,
-        effective_scope: &Value,
-        group_id: &str,
-        epoch: u64,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let scope = mls_effective_scope_parts(effective_scope)?;
-        let epoch = i64::try_from(epoch)
-            .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "UPDATE mls_commits SET frontier_contested = true \
-             WHERE effective_scope_kind = $1 \
-               AND realm_id = $2 \
-               AND circle_id IS NOT DISTINCT FROM $3 \
-               AND mls_group_id = $4 \
-               AND epoch = $5 \
-              RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at, frontier_contested",
-        )
-        .bind::<Text, _>(&scope.kind)
-        .bind::<Text, _>(&scope.realm_id)
-        .bind::<Nullable<Text>, _>(&scope.circle_id)
-        .bind::<Text, _>(group_id)
-        .bind::<BigInt, _>(epoch)
-        .get_result::<MlsCommitEpochRow>(&mut *conn).await
-        .optional()
-        .map(|row| row.map(MlsCommitEpochRecord::from))
-        .map_err(PersistenceError::database)
-    }
-
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at, frontier_contested \
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at \
              FROM mls_commits ORDER BY effective_scope_kind ASC, realm_id ASC, circle_id ASC, mls_group_id ASC",
         )
         .load::<MlsCommitEpochRow>(&mut *conn).await
@@ -1253,8 +1220,6 @@ struct MlsCommitEpochRow {
     accepted_commit_ref: Option<String>,
     #[diesel(sql_type = BigInt)]
     committed_at: i64,
-    #[diesel(sql_type = Bool)]
-    frontier_contested: bool,
 }
 impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
     fn from(row: MlsCommitEpochRow) -> Self {
@@ -1269,7 +1234,6 @@ impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
             governance_binding: row.governance_binding,
             accepted_commit_ref: row.accepted_commit_ref,
             committed_at: row.committed_at,
-            frontier_contested: row.frontier_contested,
         }
     }
 }

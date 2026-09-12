@@ -193,8 +193,6 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
             }),
             accepted_commit_digest: None,
             accepted_commit_ref: None,
-            accepted_from_epoch: None,
-            frontier_contested: false,
         },
     );
     let leave_at = base + Duration::minutes(30);

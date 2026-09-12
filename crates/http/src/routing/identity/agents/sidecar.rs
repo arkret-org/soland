@@ -255,9 +255,9 @@ fn sidecar_access_readiness(
     pending: &[PendingSidecarAccessReconciliation],
     has_group: bool,
     controller_device_ready: bool,
-    frontier_contested: bool,
+    epoch_binding_stale: bool,
 ) -> AgentSidecarAccessReadiness {
-    if frontier_contested
+    if epoch_binding_stale
         || pending.iter().any(|item| {
             matches!(
                 item.provisioning_phase,
@@ -646,8 +646,7 @@ async fn sidecar_view(
         &pending,
         epoch_row.is_some(),
         controller_device_ready,
-        epoch_row.is_some_and(|row| row.frontier_contested)
-            || (epoch_row.is_some() && !epoch_binding_current),
+        epoch_row.is_some() && !epoch_binding_current,
     );
     let mls_context = AgentSidecarMlsContext {
         participant_authority_digest: expected_binding.participant_authority_digest.clone(),
