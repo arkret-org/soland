@@ -870,7 +870,7 @@ async fn commit_consent_projection(
     Ok(())
 }
 
-async fn commit_contact_projection(
+pub(crate) async fn commit_contact_projection(
     conn: &mut diesel_async::AsyncPgConnection,
     commit: soland_storage::ContactProjectionCommit,
 ) -> PersistenceResult<()> {

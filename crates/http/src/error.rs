@@ -249,6 +249,7 @@ mod tests {
 /// Typed error returned by handlers.
 #[derive(Debug, Clone)]
 pub struct AppError {
+    frozen_problem: Option<Box<arkret_wire::problem_details::Problem>>,
     pub code: ErrorCode,
     pub message: Box<str>,
     /// Registry context for codes whose status varies by trust surface.
@@ -289,6 +290,12 @@ pub struct AppError {
 }
 
 impl AppError {
+    pub(crate) fn from_frozen_problem(problem: arkret_wire::problem_details::Problem) -> Self {
+        let mut error = Self::new(ErrorCode::FailedPrecondition, problem.detail.clone());
+        error.frozen_problem = Some(Box::new(problem));
+        error
+    }
+
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self::from(arkret_server::ProtocolRejection::new(code, message))
     }
@@ -306,6 +313,7 @@ impl AppError {
 
     fn from_protocol_rejection(rejection: arkret_server::ProtocolRejection) -> Self {
         Self {
+            frozen_problem: None,
             code: rejection.code(),
             message: rejection.message().to_owned().into_boxed_str(),
             status_context: rejection.status_context(),
@@ -511,6 +519,13 @@ impl From<arkret_server::ProtocolRejection> for AppError {
 #[async_trait]
 impl Writer for AppError {
     async fn write(self, _req: &mut Request, depot: &mut Depot, res: &mut Response) {
+        if let Some(problem) = self.frozen_problem.as_ref() {
+            let status =
+                StatusCode::from_u16(problem.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            render_problem_envelope(res, status, (**problem).clone());
+            return;
+        }
+
         let status = self.http_status();
         let wire = self.wire_code().to_owned();
         let development_mode = depot

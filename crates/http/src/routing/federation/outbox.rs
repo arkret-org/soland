@@ -810,6 +810,11 @@ impl FederationDispatcher {
     /// Run one dispatch pass. Pulled out of [`spawn`] so the
     /// integration test can drive the loop deterministically.
     pub async fn run_one_pass(&self) -> Result<(), String> {
+        if let Err(error) =
+            crate::routing::identity::account::materialize_contact_completions(&self.state).await
+        {
+            tracing::warn!(error=%error, "Contact completion scan is unavailable");
+        }
         self.revalidate_policy_suppressed().await;
         let now = now_unix_secs();
         // One random token per pass. A row re-claimed by anyone (including this

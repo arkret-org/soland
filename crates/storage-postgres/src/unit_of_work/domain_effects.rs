@@ -144,10 +144,10 @@ pub(super) async fn stage_domain_effects(
     {
         return Err(invalid("non-consent Event carries consent intent"));
     }
-    let contact_delivery_intent = contact
+    let contact_completion_intent = contact
         .as_ref()
-        .and_then(|commit| commit.delivery_intent.as_ref());
-    if let Some(intent) = contact_delivery_intent {
+        .and_then(|commit| commit.completion_intent.as_ref());
+    if let Some(intent) = contact_completion_intent {
         intent.validate_event_binding()?;
         if arkret_canonical::canonical_json_bytes(&intent.event).map_err(invalid)?
             != arkret_canonical::canonical_json_bytes(event).map_err(invalid)?
@@ -157,7 +157,11 @@ pub(super) async fn stage_domain_effects(
             ));
         }
     }
-    let contact_delivery_intent = contact_delivery_intent
+    let contact_completion_binding = contact_completion_intent
+        .map(|intent| serde_json::to_value(&intent.response_binding))
+        .transpose()
+        .map_err(invalid)?;
+    let contact_completion_intent = contact_completion_intent
         .map(serde_json::to_value)
         .transpose()
         .map_err(invalid)?;
@@ -168,8 +172,8 @@ pub(super) async fn stage_domain_effects(
         consent: consent.is_some(),
     })
     .map_err(invalid)?;
-    let affected = sql_query("UPDATE state_control_events SET pending_domain_effects=$2, contact_delivery_intent=$3 WHERE event_digest=$1 AND is_pending AND (pending_domain_effects IS NULL OR pending_domain_effects=$2) AND (contact_delivery_intent IS NULL OR contact_delivery_intent=$3)")
-        .bind::<Text, _>(digest).bind::<Jsonb, _>(effects).bind::<Nullable<Jsonb>, _>(contact_delivery_intent).execute(conn).await.map_err(PersistenceError::database)?;
+    let affected = sql_query("UPDATE state_control_events SET pending_domain_effects=$2, contact_completion_intent=$3, contact_completion_binding=$4 WHERE event_digest=$1 AND is_pending AND (pending_domain_effects IS NULL OR pending_domain_effects=$2) AND (contact_completion_intent IS NULL OR contact_completion_intent=$3) AND (contact_completion_binding IS NULL OR contact_completion_binding=$4)")
+        .bind::<Text, _>(digest).bind::<Jsonb, _>(effects).bind::<Nullable<Jsonb>, _>(contact_completion_intent).bind::<Nullable<Jsonb>, _>(contact_completion_binding).execute(conn).await.map_err(PersistenceError::database)?;
     if affected != 1 {
         return Err(invalid(
             "pending domain intent conflicts with registered Event",
@@ -217,13 +221,7 @@ pub(crate) async fn settle_domain_effects(
         .map_err(PersistenceError::database)?;
     }
     if outcome == CommandOutcome::Rejected {
-        sql_query(
-            "UPDATE state_control_events SET contact_delivery_intent=NULL WHERE event_digest=$1",
-        )
-        .bind::<Text, _>(digest)
-        .execute(conn)
-        .await
-        .map_err(PersistenceError::database)?;
+        crate::contacts::completion::reject_pending(conn, digest).await?;
     }
     Ok(())
 }
@@ -355,7 +353,7 @@ async fn apply_contact(
     super::commit_contact_projection(
         conn,
         ContactProjectionCommit {
-            delivery_intent: None,
+            completion_intent: None,
             record,
             expected_updated_at,
             conflict_code: "locked contact mirror changed".to_owned(),

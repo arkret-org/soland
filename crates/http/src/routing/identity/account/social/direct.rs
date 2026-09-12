@@ -47,18 +47,22 @@ pub(crate) async fn fresh_direct_contact_evidence(
         {
             return Ok(None);
         }
-        let Some(stored) = state
-            .event_queries()
-            .canonical_event(proof.head_event_ref.as_str())
+        let Some(snapshot) = state
+            .projections()
+            .control_proposal_snapshot(&proof.head_event_ref.event_digest())
             .await
-            .map_err(|error| AppError::internal(format!("Contact head lookup: {error}")))?
+            .map_err(|error| {
+                AppError::internal(format!("Contact head decision lookup: {error}"))
+            })?
         else {
             return Ok(None);
         };
-        let event: arkret_wire::Event =
-            serde_json::from_value(stored.envelope).map_err(|error| {
-                AppError::internal(format!("accepted Contact head decode: {error}"))
-            })?;
+        if !matches!(snapshot.command_decisions.as_slice(), [decision]
+            if decision.outcome == arkret_wire::CommandOutcome::Committed)
+        {
+            return Ok(None);
+        }
+        let event = snapshot.event;
         if event.actor_id != *holder || event.event_id != proof.head_event_ref {
             return Ok(None);
         }

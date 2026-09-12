@@ -530,7 +530,7 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
     submission: arkret_wire::EventInitialSubmission,
     contact_projection: soland_services::events::CommitContactProjection,
     deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
-    idempotency: soland_services::events::IdempotentResponse,
+    idempotency: Option<soland_services::events::IdempotentResponse>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     join_initial_submission_task(tokio::spawn(
         submit_initial_event_submission_with_contact_projection_owned(
@@ -551,14 +551,14 @@ async fn submit_initial_event_submission_with_contact_projection_owned(
     submission: arkret_wire::EventInitialSubmission,
     contact_projection: soland_services::events::CommitContactProjection,
     deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
-    idempotency: soland_services::events::IdempotentResponse,
+    idempotency: Option<soland_services::events::IdempotentResponse>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     submit_initial_event_submission_with_commit_extensions(
         &state,
         &session,
         submission,
         SubmitCommitOptions {
-            idempotency: Some(SubmitCommitIdempotency::Prepared(idempotency)),
+            idempotency: idempotency.map(SubmitCommitIdempotency::Prepared),
             device_pairing: None,
             contact_projection: Some(&contact_projection),
             additional_deliveries: &deliveries,

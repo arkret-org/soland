@@ -1,4 +1,4 @@
-mod delivery;
+pub(crate) mod completion;
 
 use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
 use arkret_wire::ActorId;
@@ -279,20 +279,29 @@ pub(super) async fn lock_contact(
 
 #[async_trait]
 impl ContactStore for PgContactStore {
-    async fn confirmed_delivery_intents(
+    async fn completion_for_request(
+        &self,
+        actor: &ActorId,
+        key: &str,
+        request_hash: &str,
+    ) -> PersistenceResult<Option<soland_storage::ContactCompletionState>> {
+        completion::lookup(&self.pool, actor, key, request_hash).await
+    }
+    async fn committed_completion_intents(
         &self,
         limit: u16,
-    ) -> PersistenceResult<Vec<soland_storage::ConfirmedContactDeliveryIntent>> {
-        delivery::confirmed(&self.pool, limit).await
+        after: Option<&arkret_wire::Hash>,
+    ) -> PersistenceResult<Vec<soland_storage::CommittedContactCompletionIntent>> {
+        completion::confirmed(&self.pool, limit, after).await
     }
-    async fn finalize_delivery_intent(
+    async fn finalize_completion_intent(
         &self,
-        ready: &soland_storage::ConfirmedContactDeliveryIntent,
-        record: &soland_storage::FederationOutboxRecord,
+        ready: &soland_storage::CommittedContactCompletionIntent,
+        result: &soland_storage::ContactCompletionResult,
+        record: Option<&soland_storage::FederationOutboxRecord>,
     ) -> PersistenceResult<bool> {
-        delivery::finalize(&self.pool, ready, record).await
+        completion::finalize(&self.pool, ready, result, record).await
     }
-
     async fn get(
         &self,
         requester_id: &ActorId,

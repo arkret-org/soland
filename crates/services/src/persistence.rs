@@ -129,26 +129,39 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn confirmed_contact_delivery_intents(
+    pub async fn contact_completion_for_request(
         &self,
-        limit: u16,
-    ) -> crate::ServiceResult<Vec<soland_storage::ConfirmedContactDeliveryIntent>> {
+        actor: &arkret_wire::ActorId,
+        key: &str,
+        request_hash: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::ContactCompletionState>> {
         Ok(self
             .persistence
             .contacts()
-            .confirmed_delivery_intents(limit)
+            .completion_for_request(actor, key, request_hash)
             .await?)
     }
-
-    pub async fn finalize_contact_delivery_intent(
+    pub async fn committed_contact_completion_intents(
         &self,
-        ready: &soland_storage::ConfirmedContactDeliveryIntent,
-        delivery: &soland_storage::FederationOutboxRecord,
+        limit: u16,
+        after: Option<&arkret_wire::Hash>,
+    ) -> crate::ServiceResult<Vec<soland_storage::CommittedContactCompletionIntent>> {
+        Ok(self
+            .persistence
+            .contacts()
+            .committed_completion_intents(limit, after)
+            .await?)
+    }
+    pub async fn finalize_contact_completion_intent(
+        &self,
+        ready: &soland_storage::CommittedContactCompletionIntent,
+        result: &soland_storage::ContactCompletionResult,
+        delivery: Option<&soland_storage::FederationOutboxRecord>,
     ) -> crate::ServiceResult<bool> {
         Ok(self
             .persistence
             .contacts()
-            .finalize_delivery_intent(ready, delivery)
+            .finalize_completion_intent(ready, result, delivery)
             .await?)
     }
 

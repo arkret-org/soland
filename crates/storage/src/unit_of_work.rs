@@ -47,7 +47,7 @@ pub fn admitted_cascade_agent_id(
 /// on that stale mirror revision. The adapter recomputes any local CAS under lock.
 #[derive(Clone, Debug)]
 pub struct ContactProjectionCommit {
-    pub delivery_intent: Option<crate::ContactDeliveryIntent>,
+    pub completion_intent: Option<crate::ContactCompletionIntent>,
     pub record: ContactRecord,
     pub expected_updated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub conflict_code: String,

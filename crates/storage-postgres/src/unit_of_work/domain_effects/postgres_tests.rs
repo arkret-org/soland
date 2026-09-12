@@ -124,83 +124,83 @@ fn seal(events: &[Event], digests: &[Hash], outcome: CommandOutcome) -> Seal {
 // signatures must never pass source-proof admission or be sent by production.
 fn delivery_fixture(
     event: &Event,
-    predecessor: &Event,
+    _predecessor: &Event,
     peer: &ActorId,
 ) -> (
-    soland_storage::ContactDeliveryIntent,
+    soland_storage::ContactCompletionIntent,
     soland_storage::FederationOutboxRecord,
 ) {
     use arkret_models_collaboration::contact_operations::{
-        ContactAcceptedOutcome, ContactCurrentProof, ContactLineage, ContactPeer, ContactScope,
-        PeerContactSubmitRequestBody,
+        ContactAcceptedOutcome, ContactPeer, PeerContactSubmitRequestBody,
+        RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
     };
-    use arkret_models_collaboration::governance::peer_contact::PeerContactAddress;
-    let signature = arkret_wire::ProtocolSignature {
-        verification_method: arkret_wire::DidUrl::new("did:web:station.example#notary").unwrap(),
-        created_at: event.created_at,
-        jws: arkret_wire::Base64UrlString::new("AA").unwrap(),
+    use arkret_models_collaboration::governance::peer_contact::{
+        ContactIntroductionEvidence, PeerContactAddress,
+    };
+    let holder = ContactPeer::Human {
+        account_id: event.actor_id.as_account_id().unwrap().clone(),
     };
     let peer = ContactPeer::Human {
         account_id: peer.as_account_id().unwrap().clone(),
     };
-    let lineage = ContactLineage {
-        contact_round_id: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
-        issuer: ContactPeer::Human {
-            account_id: event.actor_id.as_account_id().unwrap().clone(),
+    let mut receipt = RequestAcceptanceReceipt {
+        core: RequestAcceptanceReceiptCore {
+            holder: holder.clone(),
+            peer: peer.clone(),
+            slot_version: 1,
+            slot_predecessor: None,
+            previous_terminal_contact_round_id: None,
+            request_event_ref: event.event_id.clone(),
+            source_checkpoint: format!("sha256:{}", "c".repeat(64)).parse().unwrap(),
+            accepted_at: event.created_at,
+            issuer_id: holder.delivery_station_id().clone(),
         },
-        peer: peer.clone(),
-        version: 2,
-        predecessor_event_ref: Some(predecessor.event_id.clone()),
-        event_ref: event.event_id.clone(),
-        granted_to_peer_scopes: vec![ContactScope::DirectMessage],
-        terminal: None,
-        signature: signature.clone(),
-    };
-    let current_proof = ContactCurrentProof {
-        contact_round_id: lineage.contact_round_id.clone(),
-        issuer_id: peer.delivery_station_id().clone(),
-        peer: peer.clone(),
-        terminal: false,
-        head_event_ref: event.event_id.clone(),
-        accepted_frontier: vec![event.event_id.clone()],
-        complete_through: 2,
-        fresh_until: event.created_at + chrono::Duration::minutes(10),
-        signature,
-    };
-    let contact_address = PeerContactAddress {
-        recipient: peer,
-        service_resolution: arkret_models_identity::ServiceResolutionCarrier::ResolutionUrl {
-            resolution_url: "https://station.example/_arkret/open/services/ak%3Adid_core%3Aweb%3Astation.example/resolution".into(),
+        receipt_digest: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
+        signature: arkret_wire::ProtocolSignature {
+            verification_method: arkret_wire::DidUrl::new("did:web:station.example#notary")
+                .unwrap(),
+            created_at: event.created_at,
+            jws: arkret_wire::Base64UrlString::new("AA").unwrap(),
         },
-        route_assistance: None,
     };
+    receipt.receipt_digest = receipt.computed_core_digest().unwrap();
+    let contact_address=PeerContactAddress {recipient:peer,service_resolution:arkret_models_identity::ServiceResolutionCarrier::ResolutionUrl{resolution_url:"https://station.example/_arkret/open/services/ak%3Adid_core%3Aweb%3Astation.example/resolution".into()},route_assistance:None};
     let idempotency_key =
         arkret_wire::IdempotencyKey::new(format!("contact:{}", event.event_id)).unwrap();
-    let body = PeerContactSubmitRequestBody::ScopeUpdate {
+    let body = PeerContactSubmitRequestBody::Request {
         idempotency_key: idempotency_key.clone(),
         signed_event: event.clone(),
-        lineage: lineage.clone(),
-        current_proof: current_proof.clone(),
+        request_receipt: receipt.clone(),
         contact_address: contact_address.clone(),
+        introduction_evidence: ContactIntroductionEvidence::ExplicitAddress,
+        current_proof: None,
     };
-    let intent = soland_storage::ContactDeliveryIntent {
+    let intent = soland_storage::ContactCompletionIntent {
         event: event.clone(),
-        outcome: ContactAcceptedOutcome::ScopeUpdate {
+        outcome: ContactAcceptedOutcome::Request {
             operation_id: arkret_wire::ProtocolOperationId::new("ak:operation:contact-fixture")
                 .unwrap(),
-            lineage,
-            current_proof,
+            request_acceptance_receipt: receipt,
         },
-        contact_address,
-        introduction_evidence: None,
-        idempotency_key,
+        response_binding: soland_storage::ContactCompletionBinding {
+            authenticated_actor: event.actor_id.clone(),
+            idempotency_key: format!("contact-commit:{}", event.event_id),
+            request_hash: format!("sha256:{}", "b".repeat(64)),
+        },
+        delivery: Some(soland_storage::ContactDeliveryTarget {
+            contact_address,
+            introduction_evidence: Some(ContactIntroductionEvidence::ExplicitAddress),
+            idempotency_key,
+        }),
+        local_mirror: None,
     };
+    let target = intent.delivery.as_ref().unwrap();
     let delivery = soland_storage::FederationOutboxRecord::pending(
         uuid::Uuid::now_v7().to_string(),
-        intent.contact_address.delivery_station_id().clone(),
+        target.contact_address.delivery_station_id().clone(),
         "https://station.example".into(),
         "/_arkret/peer/contacts".into(),
-        intent.idempotency_key.as_str().into(),
+        target.idempotency_key.as_str().into(),
         String::from_utf8(arkret_canonical::canonical_json_bytes(&body).unwrap()).unwrap(),
         event.created_at.timestamp(),
     );
@@ -209,9 +209,13 @@ fn delivery_fixture(
 
 #[tokio::test]
 async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_member_order() {
-    for (index, outcome) in [CommandOutcome::Committed, CommandOutcome::Rejected]
-        .into_iter()
-        .enumerate()
+    for (index, (outcome, remote)) in [
+        (CommandOutcome::Committed, true),
+        (CommandOutcome::Committed, false),
+        (CommandOutcome::Rejected, true),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let database = crate::TestDatabase::lease().await;
         let pool = database.pool();
@@ -229,13 +233,19 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
         let alice = actor("domain-alice");
         let bob = actor("domain-bob");
         let consent_id = "ak:consent:01964137-0000-7000-8000-000000000001";
-        let request = event("ak.contact.requested", &realm, alice.clone(), 0, json!({}));
+        let request = event(
+            "ak.contact.requested",
+            &realm,
+            alice.clone(),
+            0,
+            json!({"peer":{"kind":"human","account_id":bob.as_account_id().unwrap()}}),
+        );
         let scope_a = event(
             "ak.contact.scope.update",
             &realm,
             alice.clone(),
             1,
-            json!({}),
+            json!({"peer":{"kind":"human","account_id":bob.as_account_id().unwrap()}}),
         );
         let scope_b = event("ak.contact.scope.update", &realm, bob.clone(), 1, json!({}));
         let grant_a = event(
@@ -283,7 +293,14 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             .await
             .unwrap();
         let initial = contact(alice.clone(), bob.clone(), &request);
-        let (delivery_intent, delivery) = delivery_fixture(&events[1], &request, &bob);
+        let (mut completion_intent, delivery) = delivery_fixture(&events[0], &request, &bob);
+        if !remote {
+            completion_intent.delivery = None;
+        }
+        let delivery_arg = remote.then_some(&delivery);
+        let completion_result = soland_storage::ContactCompletionResult::Accepted {
+            outcome: completion_intent.outcome.clone(),
+        };
         let holder = alice.as_account_id().unwrap().clone();
         let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.consent.grant.v1:{consent_id}"
@@ -312,7 +329,7 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
                 planned.granted_to_requester_scopes = vec!["invite".into()];
             }
             let contact = (index < 3).then_some(ContactProjectionCommit {
-                delivery_intent: (index == 1).then(|| delivery_intent.clone()),
+                completion_intent: (index == 0).then(|| completion_intent.clone()),
                 record: planned,
                 expected_updated_at: Some(request.created_at),
                 conflict_code: "stale admission CAS must not decide a Seal".into(),
@@ -353,20 +370,42 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
         assert!(consents.get(&holder, &cell_id).await.unwrap().is_none());
         assert!(
             contacts
-                .confirmed_delivery_intents(20)
+                .committed_completion_intents(20, None)
                 .await
                 .unwrap()
                 .is_empty()
         );
+        let binding = &completion_intent.response_binding;
+        let pending = contacts
+            .completion_for_request(
+                &binding.authenticated_actor,
+                &binding.idempotency_key,
+                &binding.request_hash,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.event.event_id, events[0].event_id);
+        assert!(pending.result.is_none());
+        assert!(
+            contacts
+                .completion_for_request(
+                    &binding.authenticated_actor,
+                    &binding.idempotency_key,
+                    "different request hash"
+                )
+                .await
+                .is_err()
+        );
         let seal = seal(&events, &digests, outcome);
-        let premature = soland_storage::ConfirmedContactDeliveryIntent {
-            event_digest: digests[1].clone(),
+        let premature = soland_storage::CommittedContactCompletionIntent {
+            event_digest: digests[0].clone(),
             deciding_seal_id: seal.id.clone(),
-            intent: delivery_intent.clone(),
+            intent: completion_intent.clone(),
         };
         assert!(
             contacts
-                .finalize_delivery_intent(&premature, &delivery)
+                .finalize_completion_intent(&premature, &completion_result, delivery_arg)
                 .await
                 .is_err(),
             "pending cannot enter outbox"
@@ -438,36 +477,68 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
                 .await
                 .unwrap()
         );
-        let ready = contacts.confirmed_delivery_intents(20).await.unwrap();
+        let ready = contacts
+            .committed_completion_intents(20, None)
+            .await
+            .unwrap();
         if outcome == CommandOutcome::Committed {
             assert_eq!(ready.len(), 1);
             assert_eq!(ready[0].deciding_seal_id, seal.id);
+            let mut altered = completion_result.clone();
+            if let soland_storage::ContactCompletionResult::Accepted {
+                outcome:
+                    arkret_models_collaboration::contact_operations::ContactAcceptedOutcome::Request {
+                        request_acceptance_receipt,
+                        ..
+                    },
+            } = &mut altered
+            {
+                request_acceptance_receipt.core.peer =
+                    request_acceptance_receipt.core.holder.clone();
+                request_acceptance_receipt.receipt_digest =
+                    request_acceptance_receipt.computed_core_digest().unwrap();
+            }
+            assert!(
+                contacts
+                    .finalize_completion_intent(&ready[0], &altered, delivery_arg)
+                    .await
+                    .is_err(),
+                "finality cannot rewrite admitted Contact claims"
+            );
             let mut wrong_seal = ready[0].clone();
             wrong_seal.deciding_seal_id = format!("ak:seal:sha256:{}", "f".repeat(64))
                 .parse()
                 .unwrap();
             assert!(
                 contacts
-                    .finalize_delivery_intent(&wrong_seal, &delivery)
+                    .finalize_completion_intent(&wrong_seal, &completion_result, delivery_arg)
                     .await
                     .is_err()
             );
             assert_eq!(
-                contacts.confirmed_delivery_intents(20).await.unwrap().len(),
+                contacts
+                    .committed_completion_intents(20, None)
+                    .await
+                    .unwrap()
+                    .len(),
                 1
             );
             let mut conn = pool.get().await.unwrap();
-            sql_query("CREATE FUNCTION fail_contact_delivery_finalize() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.contact_delivery_outbox_id IS NOT NULL THEN RAISE EXCEPTION 'test finalize failure'; END IF; RETURN NEW; END $$").execute(&mut conn).await.unwrap();
+            sql_query("CREATE FUNCTION fail_contact_delivery_finalize() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.contact_completion_result IS NOT NULL THEN RAISE EXCEPTION 'test finalize failure'; END IF; RETURN NEW; END $$").execute(&mut conn).await.unwrap();
             sql_query("CREATE TRIGGER fail_contact_delivery_finalize BEFORE UPDATE ON state_control_events FOR EACH ROW EXECUTE FUNCTION fail_contact_delivery_finalize()").execute(&mut conn).await.unwrap();
             drop(conn);
             assert!(
                 contacts
-                    .finalize_delivery_intent(&ready[0], &delivery)
+                    .finalize_completion_intent(&ready[0], &completion_result, delivery_arg)
                     .await
                     .is_err()
             );
             assert_eq!(
-                contacts.confirmed_delivery_intents(20).await.unwrap().len(),
+                contacts
+                    .committed_completion_intents(20, None)
+                    .await
+                    .unwrap()
+                    .len(),
                 1
             );
             let mut conn = pool.get().await.unwrap();
@@ -496,20 +567,20 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             drop(conn);
             assert!(
                 contacts
-                    .finalize_delivery_intent(&ready[0], &delivery)
+                    .finalize_completion_intent(&ready[0], &completion_result, delivery_arg)
                     .await
                     .unwrap()
             );
             assert!(
                 contacts
-                    .confirmed_delivery_intents(20)
+                    .committed_completion_intents(20, None)
                     .await
                     .unwrap()
                     .is_empty()
             );
             assert!(
                 !contacts
-                    .finalize_delivery_intent(&ready[0], &delivery)
+                    .finalize_completion_intent(&ready[0], &completion_result, delivery_arg)
                     .await
                     .unwrap()
             );
@@ -517,7 +588,7 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             rebound.payload_json.push(' ');
             assert!(
                 contacts
-                    .finalize_delivery_intent(&ready[0], &rebound)
+                    .finalize_completion_intent(&ready[0], &completion_result, Some(&rebound))
                     .await
                     .is_err(),
                 "an existing key fixes exact bytes"
@@ -526,7 +597,7 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             assert!(ready.is_empty());
             assert!(
                 contacts
-                    .finalize_delivery_intent(&premature, &delivery)
+                    .finalize_completion_intent(&premature, &completion_result, delivery_arg)
                     .await
                     .is_err(),
                 "rejected cannot enter outbox"
@@ -537,8 +608,56 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
                 #[diesel(sql_type=BigInt)]
                 count: i64,
             }
-            assert_eq!(sql_query("SELECT count(*)::bigint AS count FROM state_control_events WHERE contact_delivery_intent IS NOT NULL").get_result::<IntentCount>(&mut conn).await.unwrap().count, 0);
+            assert_eq!(sql_query("SELECT count(*)::bigint AS count FROM state_control_events WHERE contact_completion_intent IS NOT NULL").get_result::<IntentCount>(&mut conn).await.unwrap().count, 0);
         }
+        let completed = contacts
+            .completion_for_request(
+                &binding.authenticated_actor,
+                &binding.idempotency_key,
+                &binding.request_hash,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .result
+            .unwrap();
+        match (&completed, outcome) {
+            (
+                soland_storage::ContactCompletionResult::Accepted { .. },
+                CommandOutcome::Committed,
+            ) => {}
+            (
+                soland_storage::ContactCompletionResult::Rejected { problem },
+                CommandOutcome::Rejected,
+            ) => {
+                let reason = serde_json::to_value(problem).unwrap();
+                assert_eq!(problem.code(), "failed_precondition");
+                assert_eq!(reason["reason_code"], "state_mismatch");
+            }
+            _ => panic!("completion must preserve exact command outcome"),
+        }
+        // The private response binding survives the generic HTTP idempotency TTL.
+        let mut conn = pool.get().await.unwrap();
+        sql_query("DELETE FROM idempotency_keys")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        drop(conn);
+        let repeated = contacts
+            .completion_for_request(
+                &binding.authenticated_actor,
+                &binding.idempotency_key,
+                &binding.request_hash,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .result
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(completed).unwrap(),
+            serde_json::to_value(repeated).unwrap()
+        );
         let contact = contacts.get(&alice, &bob).await.unwrap();
         let consent = consents.get(&holder, &cell_id).await.unwrap();
         if outcome == CommandOutcome::Committed {

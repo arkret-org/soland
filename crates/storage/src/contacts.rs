@@ -36,16 +36,247 @@ pub trait ContactVerifiedMirrorStore: Send + Sync {
 /// confirmation is attached only after the exact command is committed.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ContactDeliveryIntent {
+pub struct ContactCompletionIntent {
     pub event: arkret_wire::Event,
     pub outcome: arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
+    pub response_binding: ContactCompletionBinding,
+    pub delivery: Option<ContactDeliveryTarget>,
+    pub local_mirror: Option<ContactVerifiedMirrorRecord>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactCompletionBinding {
+    pub authenticated_actor: ActorId,
+    pub idempotency_key: String,
+    pub request_hash: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactDeliveryTarget {
     pub contact_address: arkret_models_collaboration::governance::peer_contact::PeerContactAddress,
     pub introduction_evidence:
         Option<arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence>,
     pub idempotency_key: arkret_wire::IdempotencyKey,
 }
 
-impl ContactDeliveryIntent {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ContactCompletionResult {
+    Accepted {
+        outcome: arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
+    },
+    Rejected {
+        problem: arkret_wire::problem_details::Problem,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct ContactCompletionState {
+    pub event: arkret_wire::Event,
+    pub result: Option<ContactCompletionResult>,
+}
+
+impl ContactCompletionIntent {
+    pub fn delivery_carrier(
+        &self,
+        outcome: &arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody>,
+    > {
+        use arkret_models_collaboration::contact_operations::{
+            ContactAcceptedOutcome, PeerContactSubmitRequestBody,
+        };
+        let Some(target) = self.delivery.as_ref() else {
+            return Ok(None);
+        };
+        let event = self.event.clone();
+        let key = target.idempotency_key.clone();
+        let address = target.contact_address.clone();
+        Ok(Some(match outcome {
+            ContactAcceptedOutcome::Request {
+                request_acceptance_receipt,
+                ..
+            } => PeerContactSubmitRequestBody::Request {
+                idempotency_key: key,
+                signed_event: event,
+                request_receipt: request_acceptance_receipt.clone(),
+                contact_address: address,
+                introduction_evidence: target.introduction_evidence.clone().ok_or_else(|| {
+                    crate::PersistenceError::SchemaViolation(
+                        "Contact introduction evidence missing".into(),
+                    )
+                })?,
+                current_proof: None,
+            },
+            ContactAcceptedOutcome::Response {
+                normal_response_acceptance_receipt,
+                current_proof,
+                ..
+            } => PeerContactSubmitRequestBody::Response {
+                idempotency_key: key,
+                signed_event: event,
+                response_receipt: normal_response_acceptance_receipt.clone(),
+                contact_address: address,
+                current_proof: Some(current_proof.clone()),
+            },
+            ContactAcceptedOutcome::Reject {
+                reject_acceptance_receipt,
+                ..
+            } => PeerContactSubmitRequestBody::Reject {
+                idempotency_key: key,
+                signed_event: event,
+                reject_receipt: reject_acceptance_receipt.clone(),
+                contact_address: address,
+            },
+            ContactAcceptedOutcome::ScopeUpdate {
+                lineage,
+                current_proof,
+                ..
+            } => PeerContactSubmitRequestBody::ScopeUpdate {
+                idempotency_key: key,
+                signed_event: event,
+                lineage: lineage.clone(),
+                current_proof: current_proof.clone(),
+                contact_address: address,
+            },
+            ContactAcceptedOutcome::Tombstone {
+                lineage,
+                current_proof,
+                ..
+            } => PeerContactSubmitRequestBody::Tombstone {
+                idempotency_key: key,
+                signed_event: event,
+                lineage: lineage.clone(),
+                current_proof: current_proof.clone(),
+                contact_address: address,
+            },
+        }))
+    }
+
+    /// Only issuance timestamps, signatures and the authenticated current head
+    /// may differ from the admitted plan. The command's payload claims and
+    /// original receipt/lineage bindings remain immutable.
+    pub fn validate_finalized_outcome(
+        &self,
+        outcome: &arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
+    ) -> PersistenceResult<()> {
+        use arkret_models_collaboration::contact_operations::{
+            ContactAcceptedOutcome, ContactCurrentProof,
+        };
+        let invalid = || {
+            crate::PersistenceError::SchemaViolation(
+                "Contact completion changed its admitted claims".into(),
+            )
+        };
+        let preserve_head_identity =
+            |planned: &ContactCurrentProof, issued: &ContactCurrentProof| {
+                if planned.contact_round_id != issued.contact_round_id
+                    || planned.peer != issued.peer
+                    || planned.issuer_id != issued.issuer_id
+                {
+                    Err(invalid())
+                } else {
+                    Ok(())
+                }
+            };
+        let mut expected = self.outcome.clone();
+        match (&mut expected, outcome) {
+            (
+                ContactAcceptedOutcome::Request {
+                    request_acceptance_receipt: old,
+                    ..
+                },
+                ContactAcceptedOutcome::Request {
+                    request_acceptance_receipt: new,
+                    ..
+                },
+            ) => {
+                old.core.accepted_at = new.core.accepted_at;
+                old.receipt_digest = new.receipt_digest.clone();
+                if new
+                    .computed_core_digest()
+                    .map_err(|error| crate::PersistenceError::SchemaViolation(error.to_string()))?
+                    != new.receipt_digest
+                {
+                    return Err(invalid());
+                }
+                old.signature = new.signature.clone();
+            }
+            (
+                ContactAcceptedOutcome::Response {
+                    normal_response_acceptance_receipt: old,
+                    lineage: old_lineage,
+                    current_proof: old_proof,
+                    ..
+                },
+                ContactAcceptedOutcome::Response {
+                    normal_response_acceptance_receipt: new,
+                    lineage: new_lineage,
+                    current_proof: new_proof,
+                    ..
+                },
+            ) => {
+                old.accepted_at = new.accepted_at;
+                old.signature = new.signature.clone();
+                old_lineage.signature = new_lineage.signature.clone();
+                preserve_head_identity(old_proof, new_proof)?;
+                *old_proof = new_proof.clone();
+            }
+            (
+                ContactAcceptedOutcome::Reject {
+                    reject_acceptance_receipt: old,
+                    ..
+                },
+                ContactAcceptedOutcome::Reject {
+                    reject_acceptance_receipt: new,
+                    ..
+                },
+            ) => {
+                old.accepted_at = new.accepted_at;
+                old.signature = new.signature.clone();
+            }
+            (
+                ContactAcceptedOutcome::ScopeUpdate {
+                    lineage: old_lineage,
+                    current_proof: old_proof,
+                    ..
+                },
+                ContactAcceptedOutcome::ScopeUpdate {
+                    lineage: new_lineage,
+                    current_proof: new_proof,
+                    ..
+                },
+            )
+            | (
+                ContactAcceptedOutcome::Tombstone {
+                    lineage: old_lineage,
+                    current_proof: old_proof,
+                    ..
+                },
+                ContactAcceptedOutcome::Tombstone {
+                    lineage: new_lineage,
+                    current_proof: new_proof,
+                    ..
+                },
+            ) => {
+                old_lineage.signature = new_lineage.signature.clone();
+                preserve_head_identity(old_proof, new_proof)?;
+                *old_proof = new_proof.clone();
+            }
+            _ => return Err(invalid()),
+        }
+        let encode = |value: &ContactAcceptedOutcome| {
+            serde_json::to_value(value)
+                .map_err(|error| crate::PersistenceError::SchemaViolation(error.to_string()))
+        };
+        if encode(&expected)? != encode(outcome)? {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
     pub fn validate_event_binding(&self) -> PersistenceResult<()> {
         use arkret_models_collaboration::contact_operations::ContactAcceptedOutcome;
         use arkret_wire::EventKind;
@@ -80,7 +311,9 @@ impl ContactDeliveryIntent {
         };
         if self.event.kind != kind
             || &self.event.event_id != event_id
-            || (kind == EventKind::ContactRequested) != self.introduction_evidence.is_some()
+            || self.delivery.as_ref().is_some_and(|target| {
+                (kind == EventKind::ContactRequested) != target.introduction_evidence.is_some()
+            })
         {
             return Err(crate::PersistenceError::SchemaViolation(
                 "Contact delivery intent outcome does not bind its exact Event branch".to_owned(),
@@ -90,33 +323,42 @@ impl ContactDeliveryIntent {
     }
 }
 
-/// A durable committed decision with an unmaterialized local delivery intent.
+/// A durable committed decision with an unmaterialized local completion intent.
 /// This proves local finality only; it is not portable source-confirmation proof.
 #[derive(Clone, Debug)]
-pub struct ConfirmedContactDeliveryIntent {
+pub struct CommittedContactCompletionIntent {
     pub event_digest: arkret_wire::Hash,
     pub deciding_seal_id: arkret_wire::SealId,
-    pub intent: ContactDeliveryIntent,
+    pub intent: ContactCompletionIntent,
 }
 
 /// Trait for contact storage operations.
 #[async_trait]
 pub trait ContactStore: Send + Sync {
+    async fn completion_for_request(
+        &self,
+        actor: &ActorId,
+        key: &str,
+        request_hash: &str,
+    ) -> PersistenceResult<Option<ContactCompletionState>>;
+
     /// Only exact committed commands are eligible. Pending/rejected commands
     /// never enter the HTTP outbox. Concurrent readers are safe: finalization
     /// rechecks the durable decision and fixes one immutable payload atomically.
-    async fn confirmed_delivery_intents(
+    async fn committed_completion_intents(
         &self,
         limit: u16,
-    ) -> PersistenceResult<Vec<ConfirmedContactDeliveryIntent>>;
+        after: Option<&arkret_wire::Hash>,
+    ) -> PersistenceResult<Vec<CommittedContactCompletionIntent>>;
     /// The caller must have constructed the complete protocol confirmation
     /// before invoking this storage boundary. This method supplies no proof and
     /// never treats the local decision as a transferable authorization.
-    /// Atomically insert the immutable outbox row and consume its exact intent.
-    async fn finalize_delivery_intent(
+    /// Atomically freeze HTTP results, source evidence, optional outbox and intent.
+    async fn finalize_completion_intent(
         &self,
-        ready: &ConfirmedContactDeliveryIntent,
-        delivery: &crate::FederationOutboxRecord,
+        ready: &CommittedContactCompletionIntent,
+        result: &ContactCompletionResult,
+        delivery: Option<&crate::FederationOutboxRecord>,
     ) -> PersistenceResult<bool>;
 
     async fn get(
