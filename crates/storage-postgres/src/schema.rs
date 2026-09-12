@@ -341,8 +341,8 @@ diesel::table! {
         holder_account_id -> Jsonb,
         peer -> Jsonb,
         consent_scope -> Text,
-        grant_dots -> Jsonb,
-        revoked_dots -> Jsonb,
+        active_grants -> Jsonb,
+        revoked_grants -> Jsonb,
         updated_at -> Timestamptz,
     }
 }

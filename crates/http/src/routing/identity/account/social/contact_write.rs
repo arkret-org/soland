@@ -1369,9 +1369,6 @@ async fn commit(
         created_at: idempotency_created_at,
         expires_at: idempotency_created_at + chrono::Duration::hours(CONTACT_OUTCOME_TTL_HOURS),
     };
-    let committed_invite_policy = contact_projection
-        .as_ref()
-        .and_then(|projection| projection.invite_policy.clone());
     crate::routing::events::event_log::submit_initial_event_submission_with_contact_projection(
         state,
         session,
@@ -1393,11 +1390,6 @@ async fn commit(
     .map_err(|error| {
         crate::app_error!(FailedPrecondition, error.message()).with_rejection_code(error.code())
     })?;
-    if let Some((account_id, policy)) = committed_invite_policy {
-        state
-            .contacts()
-            .apply_committed_invite_policy(account_id, policy);
-    }
     json_ok(outcome)
 }
 

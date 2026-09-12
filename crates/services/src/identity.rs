@@ -539,10 +539,10 @@ impl ContactService {
         *self.runtime_invite_policies.lock() = policies.into_iter().collect();
     }
 
-    /// Reflect a policy already committed atomically by the Event unit of work
-    /// into the runtime read cache. The durable write is owned by that unit;
-    /// repeating it here would split one accepted Contact transition across
-    /// two persistence transactions.
+    /// Seed an isolated fixture policy. Production refreshes only the durable
+    /// result of an exact committed command through `hydrate_runtime`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn apply_committed_invite_policy(
         &self,
         account_id: AccountId,
@@ -3733,7 +3733,7 @@ mod consent_reload_tests {
                 self.started.notify_one();
                 self.release.acquire().await.unwrap().forget();
             } else {
-                cell.revoked_dots.extend(cell.grant_dots.keys().cloned());
+                cell.revoke_grants(cell.active_grants.keys().cloned().collect::<Vec<_>>());
             }
             Ok(vec![(
                 consent_cell_key(&cell.holder_account_id, &cell.cell_id),
@@ -3765,8 +3765,8 @@ mod consent_reload_tests {
                 holder_account_id: holder.clone(),
                 peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor { actor_id: arkret_wire::ActorId::account(holder.clone()) },
                 consent_scope: "messages".into(),
-                grant_dots: BTreeMap::from([("grant".into(), ConsentGrantDot { dot:"grant".into(), not_before:None, expires_at:None, granted_at:now })]),
-                revoked_dots: Default::default(), updated_at:now,
+                active_grants: BTreeMap::from([("grant".into(), ConsentGrantDot { dot:"grant".into(), not_before:None, expires_at:None, granted_at:now })]),
+                revoked_grants: Default::default(), updated_at:now,
             },
             reads:AtomicUsize::new(0), started:tokio::sync::Notify::new(), release:tokio::sync::Semaphore::new(0),
         });

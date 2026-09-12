@@ -1041,12 +1041,9 @@ async fn verify_mimi_consent_correlation(
                         && cell.consent_scope == correlation.purpose
                         && observed_dot_ids.iter().all(|observed_dot| {
                             observed_dot.as_str().is_some_and(|observed_dot| {
-                                cell.grant_dots.get(observed_dot).is_some_and(|dot| {
-                                    !cell.revoked_dots.contains(&dot.dot)
-                                        && dot
-                                            .expires_at
-                                            .is_none_or(|expires_at| expires_at > now())
-                                })
+                                cell.active_grants
+                                    .get(observed_dot)
+                                    .is_some_and(|dot| dot.is_active_at(now()))
                             })
                         })
                 });

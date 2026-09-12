@@ -102,7 +102,7 @@ pub fn validate_invite_policy_account(
 /// `consent_id` is the cell subject. Rows are only ever written inside the
 /// exact committed Seal transaction for the grant/revoke command, so
 /// this store exposes reads alone; boot hydration replays it into the working
-/// projection. `grant_dots` / `revoked_dots` are persisted as JSONB so the
+/// projection. `active_grants` / `revoked_grants` are persisted as JSONB so the
 /// `BTreeMap`/`BTreeSet` round-trip losslessly.
 #[async_trait]
 pub trait ConsentCellStore: Send + Sync {
@@ -145,51 +145,24 @@ pub trait MimiConsentCorrelationStore: Send + Sync {
 }
 #[doc(hidden)]
 pub type ContactKey = (ActorId, ActorId);
-/// Decode a persisted `grant_dots` JSONB object back into the in-memory
-/// `BTreeMap<String, ConsentGrantDot>`.
-pub fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {
-    let mut dots = BTreeMap::new();
-    let Some(object) = value.as_object() else {
-        return dots;
-    };
-    for (key, entry) in object {
-        let Some(dot) = entry
-            .get("dot")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
-            continue;
-        };
-        let granted_at = entry
-            .get("granted_at")
-            .and_then(Value::as_str)
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(chrono::Utc::now);
-        let not_before = entry
-            .get("not_before")
-            .and_then(Value::as_str)
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-        let expires_at = entry
-            .get("expires_at")
-            .and_then(Value::as_str)
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-        dots.insert(
-            key.clone(),
-            ConsentGrantDot {
-                dot,
-                not_before,
-                expires_at,
-                granted_at,
-            },
-        );
+/// Decode an exact local active/audit grant map. Corrupt rows must not become
+/// an empty authority view or manufacture grant timestamps from receiver time.
+pub fn decode_consent_grants(
+    value: &Value,
+) -> PersistenceResult<BTreeMap<String, ConsentGrantDot>> {
+    let grants: BTreeMap<String, ConsentGrantDot> =
+        serde_json::from_value(value.clone()).map_err(|error| {
+            super::PersistenceError::SchemaViolation(format!("invalid consent grant map: {error}"))
+        })?;
+    if grants.iter().any(|(tag, grant)| tag != &grant.dot) {
+        return Err(super::PersistenceError::SchemaViolation(
+            "consent grant key does not match its exact tag".to_owned(),
+        ));
     }
-    dots
+    Ok(grants)
 }
-/// Encode the in-memory `grant_dots` map into a JSONB object for storage.
-pub fn encode_grant_dots(dots: &BTreeMap<String, ConsentGrantDot>) -> Value {
+/// Encode one local active/audit grant map into a JSONB object for storage.
+pub fn encode_consent_grants(dots: &BTreeMap<String, ConsentGrantDot>) -> Value {
     let mut map = serde_json::Map::new();
     for (key, grant) in dots {
         map.insert(key.clone(), json_for_grant_dot(grant));
@@ -208,4 +181,35 @@ pub fn json_for_grant_dot(grant: &ConsentGrantDot) -> Value {
             .map(arkret_canonical::format_timestamp_canonical),
         "granted_at": arkret_canonical::format_timestamp_canonical(grant.granted_at),
     })
+}
+
+#[cfg(test)]
+mod consent_grant_codec_tests {
+    use super::*;
+
+    #[test]
+    fn consent_grant_codec_rejects_corruption_instead_of_synthesizing_authority() {
+        let grant = ConsentGrantDot {
+            dot: "event:0".to_owned(),
+            not_before: None,
+            expires_at: None,
+            granted_at: chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        };
+        let map = BTreeMap::from([(grant.dot.clone(), grant)]);
+        let encoded = encode_consent_grants(&map);
+        assert_eq!(decode_consent_grants(&encoded).unwrap(), map);
+        let mut missing_time = encoded.clone();
+        missing_time["event:0"]
+            .as_object_mut()
+            .unwrap()
+            .remove("granted_at");
+        assert!(decode_consent_grants(&missing_time).is_err());
+        let mut invalid_window = encoded.clone();
+        invalid_window["event:0"]["expires_at"] = serde_json::json!("invalid");
+        assert!(decode_consent_grants(&invalid_window).is_err());
+        let mut mismatched_tag = encoded;
+        mismatched_tag["event:0"]["dot"] = serde_json::json!("different:0");
+        assert!(decode_consent_grants(&mismatched_tag).is_err());
+        assert!(decode_consent_grants(&serde_json::json!([])).is_err());
+    }
 }

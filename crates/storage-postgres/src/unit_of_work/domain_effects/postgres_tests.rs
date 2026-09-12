@@ -1,5 +1,6 @@
 //! Real PostgreSQL Seal consumer tests. Local confirmed-store fixtures do not
 //! replace executor, signature, or Contact evidence verification tests.
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use arkret_canonical::DigestSuite;
@@ -166,7 +167,7 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             &realm,
             alice.clone(),
             3,
-            grant_a.payload.clone(),
+            serde_json::to_value(&grant_a.payload).unwrap(),
         );
         let dot = format!("{}:0", grant_a.event_id);
         let revoke = event(
@@ -211,8 +212,8 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
                 actor_id: bob.clone(),
             },
             consent_scope: "invite".into(),
-            grant_dots: BTreeMap::new(),
-            revoked_dots: BTreeSet::new(),
+            active_grants: BTreeMap::new(),
+            revoked_grants: BTreeMap::new(),
             updated_at: request.created_at,
         };
         let mut conn = pool.get().await.unwrap();
@@ -345,8 +346,15 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             assert_eq!(contact.request_event_ref, Some(events[1].event_id.clone()));
             assert_eq!(contact.response_event_ref, Some(events[2].event_id.clone()));
             let consent = consent.unwrap();
-            assert_eq!(consent.grant_dots.len(), 2);
-            assert_eq!(consent.revoked_dots, BTreeSet::from([dot]));
+            assert_eq!(consent.active_grants.len(), 1);
+            assert_eq!(
+                consent
+                    .revoked_grants
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([dot])
+            );
         } else {
             assert!(contact.is_none());
             assert!(consent.is_none());

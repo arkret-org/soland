@@ -3,11 +3,11 @@ use arkret_wire::ActorId;
 use diesel::sql_types::{BigInt, Binary};
 
 use super::{
-    Array, BTreeSet, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord,
-    ContactStore, ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore,
-    InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
-    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_grant_dots, ids, pg_conn, sql_query,
+    Array, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord, ContactStore,
+    ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore, InviteReceivePolicyStore, Jsonb,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, Nullable, OptionalExtension,
+    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    Value, async_trait, decode_consent_grants, ids, pg_conn, sql_query,
 };
 /// Encode a contact's Event reference for storage.
 ///
@@ -721,9 +721,9 @@ mod invite_policy_tests {
 // ── Pg-backed consent-cell store ─────────────────────────────────────────
 // Durable backing for the holder-private consent-cell projection, keyed by
 // (holder, cell_id) because `consent_id` is the cell subject. Column order
-// mirrors `ConsentCellRecord`; `grant_dots` is persisted as a JSONB object
-// `{dot -> {dot, not_before, expires_at, granted_at}}` and `revoked_dots` as a
-// JSONB string array so the in-memory `BTreeMap`/`BTreeSet` round-trip
+// mirrors `ConsentCellRecord`; `active_grants` is persisted as a JSONB object
+// `{dot -> {dot, not_before, expires_at, granted_at}}` and `revoked_grants` as a
+// audit map, so only `active_grants` participates in gate decisions. Both maps round-trip
 // losslessly. Writes happen only inside the exact committed Seal transaction.
 pub struct PgConsentCellStore {
     pub pool: PgPool,
@@ -739,27 +739,18 @@ struct ConsentCellRow {
     #[diesel(sql_type = Text)]
     consent_scope: String,
     #[diesel(sql_type = Jsonb)]
-    grant_dots: Value,
+    active_grants: Value,
     #[diesel(sql_type = Jsonb)]
-    revoked_dots: Value,
+    revoked_grants: Value,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 impl ConsentCellRow {
-    fn into_pair(self) -> (ConsentCellKey, ConsentCellRecord) {
+    fn into_pair(self) -> PersistenceResult<(ConsentCellKey, ConsentCellRecord)> {
         let holder_account_id: arkret_wire::AccountId =
-            serde_json::from_value(self.holder_account_id)
-                .expect("persisted consent holder account is valid");
-        let revoked_dots: BTreeSet<String> = self
-            .revoked_dots
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
+            serde_json::from_value(self.holder_account_id).map_err(|error| {
+                PersistenceError::SchemaViolation(format!("invalid consent holder: {error}"))
+            })?;
         let key = ConsentCellKey {
             holder_account_id: holder_account_id.clone(),
             cell_id: self.cell_id.clone(),
@@ -767,17 +758,28 @@ impl ConsentCellRow {
         let record = ConsentCellRecord {
             cell_id: self.cell_id,
             holder_account_id,
-            peer: serde_json::from_value(self.peer).expect("persisted consent peer is valid"),
+            peer: serde_json::from_value(self.peer).map_err(|error| {
+                PersistenceError::SchemaViolation(format!("invalid consent peer: {error}"))
+            })?,
             consent_scope: self.consent_scope,
-            grant_dots: decode_grant_dots(&self.grant_dots),
-            revoked_dots,
+            active_grants: decode_consent_grants(&self.active_grants)?,
+            revoked_grants: decode_consent_grants(&self.revoked_grants)?,
             updated_at: self.updated_at,
         };
-        (key, record)
+        if record
+            .active_grants
+            .keys()
+            .any(|tag| record.revoked_grants.contains_key(tag))
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "a consent grant cannot be both active and revoked".to_owned(),
+            ));
+        }
+        Ok((key, record))
     }
 }
 const CONSENT_CELL_COLUMNS: &str =
-    "cell_id, holder_account_id, peer, consent_scope, grant_dots, revoked_dots, updated_at";
+    "cell_id, holder_account_id, peer, consent_scope, active_grants, revoked_grants, updated_at";
 pub(super) async fn lock_consent_cell(
     conn: &mut diesel_async::AsyncPgConnection,
     holder: &arkret_wire::AccountId,
@@ -786,7 +788,8 @@ pub(super) async fn lock_consent_cell(
     let row = sql_query(format!("SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells WHERE holder_account_id=$1 AND cell_id=$2 FOR UPDATE"))
         .bind::<Jsonb, _>(serde_json::to_value(holder).map_err(|e| PersistenceError::Internal(e.to_string()))?)
         .bind::<Text, _>(cell).get_result::<ConsentCellRow>(conn).await.optional().map_err(PersistenceError::database)?;
-    Ok(row.map(|row| row.into_pair().1))
+    row.map(|row| row.into_pair().map(|(_, record)| record))
+        .transpose()
 }
 
 #[async_trait]
@@ -810,7 +813,8 @@ impl ConsentCellStore for PgConsentCellStore {
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        Ok(row.map(|row| row.into_pair().1))
+        row.map(|row| row.into_pair().map(|(_, record)| record))
+            .transpose()
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
@@ -821,6 +825,6 @@ impl ConsentCellStore for PgConsentCellStore {
             .get_results::<ConsentCellRow>(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
-        Ok(rows.into_iter().map(ConsentCellRow::into_pair).collect())
+        rows.into_iter().map(ConsentCellRow::into_pair).collect()
     }
 }

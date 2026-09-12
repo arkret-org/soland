@@ -781,15 +781,10 @@ async fn commit_consent_projection(
     commit: soland_storage::ConsentProjectionCommit,
 ) -> PersistenceResult<()> {
     let cell = commit.cell;
-    let grant_dots = soland_storage::encode_grant_dots(&cell.grant_dots);
-    let revoked_dots = serde_json::Value::Array(
-        cell.revoked_dots
-            .iter()
-            .map(|dot| serde_json::Value::String(dot.clone()))
-            .collect(),
-    );
+    let active_grants = soland_storage::encode_consent_grants(&cell.active_grants);
+    let revoked_grants = soland_storage::encode_consent_grants(&cell.revoked_grants);
     let affected = sql_query(
-        "INSERT INTO consent_cells (id, cell_id, holder_account_id, peer, consent_scope, grant_dots, revoked_dots, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (holder_account_id, cell_id) DO UPDATE SET grant_dots = EXCLUDED.grant_dots, revoked_dots = EXCLUDED.revoked_dots, updated_at = EXCLUDED.updated_at WHERE consent_cells.peer = EXCLUDED.peer AND consent_cells.consent_scope = EXCLUDED.consent_scope",
+        "INSERT INTO consent_cells (id, cell_id, holder_account_id, peer, consent_scope, active_grants, revoked_grants, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (holder_account_id, cell_id) DO UPDATE SET active_grants = EXCLUDED.active_grants, revoked_grants = EXCLUDED.revoked_grants, updated_at = EXCLUDED.updated_at WHERE consent_cells.peer = EXCLUDED.peer AND consent_cells.consent_scope = EXCLUDED.consent_scope",
     )
     .bind::<Uuid, _>(uuid::Uuid::now_v7())
     .bind::<Text, _>(&cell.cell_id)
@@ -800,8 +795,8 @@ async fn commit_consent_projection(
         PersistenceError::SchemaViolation(format!("consent peer is not serializable: {error}"))
     })?)
     .bind::<Text, _>(&cell.consent_scope)
-    .bind::<Jsonb, _>(&grant_dots)
-    .bind::<Jsonb, _>(&revoked_dots)
+    .bind::<Jsonb, _>(&active_grants)
+    .bind::<Jsonb, _>(&revoked_grants)
     .bind::<Timestamptz, _>(cell.updated_at)
     .execute(conn)
     .await

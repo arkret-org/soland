@@ -1,6 +1,6 @@
 //! Local mirror intents. Admission never publishes them; exact committed
 //! command/member order replays each intent against the transaction's state.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use arkret_models_collaboration::contact_operations::{
     ContactCurrentProof, ContactRoundEvidenceBundle,
@@ -373,12 +373,14 @@ async fn apply_consent(conn: &mut AsyncPgConnection, event: &Event) -> Persisten
     let (id, grant, revoke) = match event.kind {
         EventKind::ConsentGrant => {
             let p: ConsentGrantPayload =
-                serde_json::from_value(event.payload.clone()).map_err(invalid)?;
+                serde_json::from_value(serde_json::to_value(&event.payload).map_err(invalid)?)
+                    .map_err(invalid)?;
             (p.consent_id.to_string(), Some(p), None)
         }
         EventKind::ConsentRevoke => {
             let p: ConsentRevokePayload =
-                serde_json::from_value(event.payload.clone()).map_err(invalid)?;
+                serde_json::from_value(serde_json::to_value(&event.payload).map_err(invalid)?)
+                    .map_err(invalid)?;
             (p.consent_id.to_string(), None, Some(p))
         }
         _ => return Err(invalid("invalid consent command kind")),
@@ -393,15 +395,15 @@ async fn apply_consent(conn: &mut AsyncPgConnection, event: &Event) -> Persisten
             holder_account_id: holder.clone(),
             peer: grant.peer.clone(),
             consent_scope: grant.consent_scope.as_str().to_owned(),
-            grant_dots: BTreeMap::new(),
-            revoked_dots: BTreeSet::new(),
+            active_grants: BTreeMap::new(),
+            revoked_grants: BTreeMap::new(),
             updated_at: event.created_at,
         });
         if cell.peer != grant.peer || cell.consent_scope != grant.consent_scope.as_str() {
             return Err(invalid("confirmed consent intent rebind"));
         }
         let dot = format!("{}:0", event.event_id);
-        cell.grant_dots.insert(
+        cell.active_grants.insert(
             dot.clone(),
             soland_storage::ConsentGrantDot {
                 dot,
@@ -417,8 +419,12 @@ async fn apply_consent(conn: &mut AsyncPgConnection, event: &Event) -> Persisten
     };
     let mut holder_quarantine = None;
     if let Some(revoke) = revoke {
-        cell.revoked_dots
-            .extend(revoke.observed_dot_ids.iter().map(ToString::to_string));
+        cell.revoke_grants(
+            revoke
+                .observed_dot_ids
+                .iter()
+                .map(|dot| dot.as_str().to_owned()),
+        );
         cell.updated_at = revoke.revoked_at.unwrap_or(event.created_at);
         holder_quarantine = quarantine_invalidation(conn, &cell).await?;
     } else {

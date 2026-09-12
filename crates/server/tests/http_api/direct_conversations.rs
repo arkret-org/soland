@@ -1,6 +1,6 @@
 //! Contract tests for spec-canonical contacts and direct conversation resolve.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::Utc;
 
@@ -380,7 +380,7 @@ async fn seed_remote_claim_prerequisites(
             )),
         },
         consent_scope: "direct_message".to_owned(),
-        grant_dots: BTreeMap::from([(
+        active_grants: BTreeMap::from([(
             grant_dot.clone(),
             soland_services::identity::ConsentGrantDot {
                 dot: grant_dot,
@@ -389,7 +389,7 @@ async fn seed_remote_claim_prerequisites(
                 granted_at: now,
             },
         )]),
-        revoked_dots: BTreeSet::new(),
+        revoked_grants: BTreeMap::new(),
         updated_at: now,
     });
     (signing_key, authorize_event_id)

@@ -1431,8 +1431,8 @@ CREATE TABLE public.consent_cells (
     holder_account_id jsonb NOT NULL,
     peer jsonb NOT NULL,
     consent_scope text NOT NULL,
-    grant_dots jsonb DEFAULT '{}'::jsonb NOT NULL,
-    revoked_dots jsonb DEFAULT '[]'::jsonb NOT NULL,
+    active_grants jsonb DEFAULT '{}'::jsonb NOT NULL,
+    revoked_grants jsonb DEFAULT '{}'::jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 

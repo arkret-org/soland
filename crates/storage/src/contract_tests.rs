@@ -5596,7 +5596,7 @@ pub async fn assert_consent_projection_commit_contract(
             principal_id: peer.clone(),
         },
         consent_scope: "invite".to_owned(),
-        grant_dots: BTreeMap::from([(
+        active_grants: BTreeMap::from([(
             dot.clone(),
             ConsentGrantDot {
                 dot: dot.clone(),
@@ -5605,7 +5605,7 @@ pub async fn assert_consent_projection_commit_contract(
                 granted_at: now,
             },
         )]),
-        revoked_dots: BTreeSet::new(),
+        revoked_grants: BTreeMap::new(),
         updated_at: now,
     };
     stores

@@ -76,7 +76,7 @@ pub(crate) use soland_storage::{
     WebvhStore, account_with_primary_localpart_select, applet_registration_select_sql,
     applet_transaction_replay_select_sql, apply_key_package_claim, audit_uuid_index,
     classify_federation_outbox_completion, classify_security_transaction_first_write,
-    control_proposal_acks_by_digest, decode_grant_dots, decode_registration_outcome,
+    control_proposal_acks_by_digest, decode_consent_grants, decode_registration_outcome,
     decode_session_agent_payload, encode_session_payload, ensure_device_message_id, evaluate_drift,
     fresh_device_message_ack_token, frontier_exchange_failure_record,
     frontier_exchange_success_record, identity_anchor_slot_conflicts, mls_effective_scope_parts,

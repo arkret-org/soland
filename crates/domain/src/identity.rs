@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
 use arkret_models_collaboration::account_lifecycle::ConsentPeer;
@@ -19,7 +19,8 @@ pub struct ConsentCellKey {
     pub cell_id: CellRef,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsentGrantDot {
     pub dot: String,
     pub not_before: Option<DateTime<Utc>>,
@@ -49,16 +50,28 @@ pub struct ConsentCellRecord {
     pub holder_account_id: AccountId,
     pub peer: ConsentPeer,
     pub consent_scope: String,
-    pub grant_dots: BTreeMap<String, ConsentGrantDot>,
-    pub revoked_dots: BTreeSet<String>,
+    /// Current Seq-confirmed tagged set, including signed validity windows.
+    pub active_grants: BTreeMap<String, ConsentGrantDot>,
+    /// Query audit only; never an authorization input or a join tombstone set.
+    pub revoked_grants: BTreeMap<String, ConsentGrantDot>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl ConsentCellRecord {
+    /// Apply an exact committed removal to the active set. The returned audit
+    /// is retained only for the holder's existing consent query contract.
+    pub fn revoke_grants(&mut self, tags: impl IntoIterator<Item = String>) {
+        for tag in tags {
+            if let Some(grant) = self.active_grants.remove(&tag) {
+                self.revoked_grants.insert(tag, grant);
+            }
+        }
+    }
+
     pub fn has_active_grant_at(&self, at: DateTime<Utc>) -> bool {
-        self.grant_dots
-            .iter()
-            .any(|(dot, grant)| !self.revoked_dots.contains(dot) && grant.is_active_at(at))
+        self.active_grants
+            .values()
+            .any(|grant| grant.is_active_at(at))
     }
 }
 
@@ -109,15 +122,23 @@ mod consent_time_tests {
                 )),
             },
             consent_scope: "invite".to_owned(),
-            grant_dots: BTreeMap::new(),
-            revoked_dots: BTreeSet::new(),
+            active_grants: BTreeMap::new(),
+            revoked_grants: BTreeMap::new(),
             updated_at: at(10),
         };
         assert!(!cell.has_active_grant_at(at(25)));
-        cell.grant_dots.insert("event:0".to_owned(), dot());
+        cell.active_grants.insert("event:0".to_owned(), dot());
         assert!(cell.has_active_grant_at(at(25)));
-        cell.revoked_dots.insert("event:0".to_owned());
+        cell.revoke_grants(["event:0".to_owned()]);
         assert!(!cell.has_active_grant_at(at(25)));
+        assert!(cell.active_grants.is_empty());
+        assert_eq!(cell.revoked_grants.len(), 1);
+        // Audit retention does not prevent a separately signed regrant.
+        let mut regrant = dot();
+        regrant.dot = "later:0".to_owned();
+        cell.active_grants.insert(regrant.dot.clone(), regrant);
+        assert!(cell.has_active_grant_at(at(25)));
+        assert_eq!(cell.revoked_grants.len(), 1);
     }
 }
 

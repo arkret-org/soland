@@ -276,18 +276,18 @@ async fn plan_consent_grant(
             holder_account_id: holder_account_id.clone(),
             peer: peer.clone(),
             consent_scope: consent_scope.clone(),
-            grant_dots: BTreeMap::new(),
-            revoked_dots: BTreeSet::new(),
+            active_grants: BTreeMap::new(),
+            revoked_grants: BTreeMap::new(),
             updated_at: granted_at,
         },
     };
-    if cell.grant_dots.contains_key(&dot) || cell.revoked_dots.contains(&dot) {
+    if cell.active_grants.contains_key(&dot) || cell.revoked_grants.contains_key(&dot) {
         return Err(ConsentRejection::precondition(
             "consent_dot_replay",
             "this grant dot is already an element of the consent cell",
         ));
     }
-    cell.grant_dots.insert(
+    cell.active_grants.insert(
         dot.clone(),
         ConsentGrantDot {
             dot: dot.clone(),
@@ -372,21 +372,19 @@ async fn plan_consent_revoke(
     // refused before the Seal walk, so a foreign or replayed dot reports what
     // is wrong with it rather than what is wrong with the basis.
     for dot in &observed_dot_ids {
-        let Some(grant) = cell.grant_dots.get(dot) else {
+        let Some(grant) = cell.active_grants.get(dot) else {
             return Err(ConsentRejection::precondition(
-                "consent_observed_dot_unknown",
-                "observed dot is not an add dot of this consent cell",
+                if cell.revoked_grants.contains_key(dot) {
+                    "consent_observed_dot_removed"
+                } else {
+                    "consent_observed_dot_unknown"
+                },
+                "observed dot is not a current active grant of this consent cell",
             ));
         };
-        if cell.revoked_dots.contains(dot) {
-            return Err(ConsentRejection::precondition(
-                "consent_observed_dot_removed",
-                "observed dot was already removed from this consent cell",
-            ));
-        }
         if grant
             .expires_at
-            .is_some_and(|expires_at| expires_at <= revoked_at)
+            .is_some_and(|expires_at| expires_at < revoked_at)
         {
             return Err(ConsentRejection::precondition(
                 "consent_observed_dot_expired",
@@ -399,7 +397,7 @@ async fn plan_consent_revoke(
         basis_view.require_covers(state, dot).await?;
     }
 
-    cell.revoked_dots.extend(observed_dot_ids.iter().cloned());
+    cell.revoke_grants(observed_dot_ids.iter().cloned());
     cell.updated_at = revoked_at;
 
     let quarantine = plan_holder_quarantine_invalidation(
@@ -438,10 +436,9 @@ const MAX_CONSENT_BASIS_SEALS: usize = arkret_wire::cbs_proof_bundle::MAX_BUNDLE
 
 /// The Event digests a Control Move's frozen `seal_basis` observes.
 ///
-/// Cumulative coverage of a Seal is `delta` plus everything its predecessors
-/// covered, so the view is the union over the basis leaves' predecessor
-/// closure. A dot minted by an Event outside that set is one the revoker could
-/// not have observed at its own basis (§3.3).
+/// Only committed command results in the basis predecessor chain establish
+/// grant observability. Rejected results and material availability do not. A dot minted by an Event
+/// outside that set is one the revoker could not have observed at its own basis (§3.3).
 #[derive(Clone, Debug, Default)]
 struct SealBasisEventView {
     covered_event_digests: BTreeSet<String>,
@@ -517,8 +514,15 @@ async fn seal_basis_event_view(
                     "seal_basis names a Seal this service has not accepted",
                 )
             })?;
-        for digest in seal.delta.iter().chain(seal.covered_event_digests.iter()) {
-            covered_event_digests.insert(digest.as_str().to_owned());
+        for result in &seal.command_results {
+            if result.outcome == arkret_wire::CommandOutcome::Committed {
+                covered_event_digests.extend(
+                    result
+                        .unit_event_digests
+                        .iter()
+                        .map(|digest| digest.as_str().to_owned()),
+                );
+            }
         }
         pending.extend(seal.predecessor_ref.iter().cloned());
     }
@@ -1074,9 +1078,9 @@ fn consent_grant_dot(operation: &Operation) -> String {
 /// Active dots of one cell: added, not observed-removed, and inside their
 /// validity window.
 fn active_grant_dots(cell: &ConsentCellRecord, at: DateTime<Utc>) -> Vec<String> {
-    cell.grant_dots
+    cell.active_grants
         .iter()
-        .filter(|(dot, grant)| !cell.revoked_dots.contains(*dot) && grant.is_active_at(at))
+        .filter(|(_, grant)| grant.is_active_at(at))
         .map(|(_, grant)| grant.dot.clone())
         .collect()
 }
@@ -1192,7 +1196,7 @@ fn consent_response(
             ConsentState::Active
         },
         expires_at: cell
-            .grant_dots
+            .active_grants
             .values()
             .max_by_key(|grant| grant.granted_at)
             .and_then(|grant| grant.expires_at),
@@ -1200,11 +1204,14 @@ fn consent_response(
         updated_at: cell.updated_at,
         active_grant_dots,
         grant_dots: cell
-            .grant_dots
-            .values()
-            .map(|grant| grant.dot.clone())
+            .active_grants
+            .keys()
+            .chain(cell.revoked_grants.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect(),
-        revoked_dots: cell.revoked_dots.iter().cloned().collect(),
+        revoked_dots: cell.revoked_grants.keys().cloned().collect(),
     })
 }
 
@@ -1347,7 +1354,7 @@ async fn emit_consent_revoke_invalidation(
         "local_quarantine_entries_invalidated": quarantine_entries_invalidated,
         "eager_invalidation": true,
         "removed_dots": observed_dot_ids,
-        "revoked_dots": cell.revoked_dots.iter().cloned().collect::<Vec<_>>(),
+        "revoked_dots": cell.revoked_grants.keys().cloned().collect::<Vec<_>>(),
         "revoked_at": arkret_canonical::format_timestamp_canonical(revoked_at),
     });
     append_audit_log(
@@ -1517,7 +1524,7 @@ mod tests {
                 )),
             },
             consent_scope: consent_scope.to_owned(),
-            grant_dots: BTreeMap::from([(
+            active_grants: BTreeMap::from([(
                 dot.to_owned(),
                 ConsentGrantDot {
                     dot: dot.to_owned(),
@@ -1526,7 +1533,7 @@ mod tests {
                     granted_at: Utc::now(),
                 },
             )]),
-            revoked_dots: BTreeSet::new(),
+            revoked_grants: BTreeMap::new(),
             updated_at: Utc::now(),
         }
     }
@@ -1579,7 +1586,7 @@ mod tests {
         );
         assert_eq!(cell.consent_scope, "invite");
         assert_eq!(
-            cell.grant_dots.keys().cloned().collect::<Vec<_>>(),
+            cell.active_grants.keys().cloned().collect::<Vec<_>>(),
             vec![format!("{GRANT_EVENT}:0")]
         );
         // Nothing is written before the Event commits.
@@ -1632,7 +1639,7 @@ mod tests {
         let admission = plan_consent_grant(&state, &operation)
             .await
             .expect("regrant on the same intent is normative");
-        assert_eq!(admission.commit.cell.grant_dots.len(), 2);
+        assert_eq!(admission.commit.cell.active_grants.len(), 2);
     }
 
     #[tokio::test]
@@ -1692,7 +1699,7 @@ mod tests {
         );
 
         // A dot this cell already observed as removed.
-        cell.revoked_dots.insert(format!("{GRANT_EVENT}:0"));
+        cell.revoke_grants([format!("{GRANT_EVENT}:0")]);
         state.consents().install_committed_cell(cell);
         let payload = revoke_payload(json!([format!("{GRANT_EVENT}:0")]));
         let operation = consent_operation(
@@ -1750,14 +1757,14 @@ mod tests {
     fn a_dot_outside_its_validity_window_is_not_active() {
         let now = Utc::now();
         let mut cell = granted_cell(CONSENT_ID, PEER, "invite", "dot:0");
-        cell.grant_dots.get_mut("dot:0").unwrap().not_before =
+        cell.active_grants.get_mut("dot:0").unwrap().not_before =
             Some(now + chrono::Duration::hours(1));
         assert!(active_grant_dots(&cell, now).is_empty());
-        cell.grant_dots.get_mut("dot:0").unwrap().not_before = None;
-        cell.grant_dots.get_mut("dot:0").unwrap().expires_at =
+        cell.active_grants.get_mut("dot:0").unwrap().not_before = None;
+        cell.active_grants.get_mut("dot:0").unwrap().expires_at =
             Some(now - chrono::Duration::hours(1));
         assert!(active_grant_dots(&cell, now).is_empty());
-        cell.grant_dots.get_mut("dot:0").unwrap().expires_at = None;
+        cell.active_grants.get_mut("dot:0").unwrap().expires_at = None;
         assert_eq!(active_grant_dots(&cell, now), vec!["dot:0".to_owned()]);
     }
 
@@ -1868,7 +1875,7 @@ mod tests {
         );
 
         let mut cell = granted_cell(CONSENT_ID, PEER, "invite", &format!("{GRANT_EVENT}:0"));
-        cell.revoked_dots.insert(format!("{GRANT_EVENT}:0"));
+        cell.revoke_grants([format!("{GRANT_EVENT}:0")]);
         let admission = ConsentAdmission {
             holder_account_id: arkret_wire::AccountId::new(
                 DidCoreId::new(HOLDER.to_owned()).unwrap(),
@@ -1919,7 +1926,7 @@ mod tests {
                     consent_cell_id_for_consent_id(CONSENT_ID).unwrap(),
                 )
                 .expect("committed cell is published to the runtime projection")
-                .revoked_dots
+                .revoked_grants
                 .len(),
             1
         );
@@ -2258,7 +2265,7 @@ mod consent_peer_exact_matching_tests {
             holder_account_id: holder(),
             peer,
             consent_scope: "invite".to_owned(),
-            grant_dots: BTreeMap::from([(
+            active_grants: BTreeMap::from([(
                 format!("{MATCHING_GRANT_EVENT}:0"),
                 ConsentGrantDot {
                     dot: format!("{MATCHING_GRANT_EVENT}:0"),
@@ -2267,7 +2274,7 @@ mod consent_peer_exact_matching_tests {
                     granted_at: Utc::now(),
                 },
             )]),
-            revoked_dots: BTreeSet::new(),
+            revoked_grants: BTreeMap::new(),
             updated_at: Utc::now(),
         });
     }
