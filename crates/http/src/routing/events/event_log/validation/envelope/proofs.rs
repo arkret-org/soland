@@ -1242,8 +1242,8 @@ pub(super) fn verify_with_federated_signer_evidence(
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
         value: multibase.to_owned(),
     };
-    // The producer key is bound into the independently verified origin
-    // The producer proof carries the exact signer-evidence reference.
+    // Independent receiver verification bound this key to the exact Event and
+    // producer method before creating the internal admission context.
     let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
         jws,
         canonical_bytes,
