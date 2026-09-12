@@ -334,7 +334,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "quorum_unreachable",
+                arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                 format!("PCR genesis proposal policy unavailable: {error}"),
             )
         })?;
@@ -405,7 +405,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "quorum_unreachable",
+                arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                 format!("identity anchor proposal policy unavailable: {error}"),
             )
         })?;

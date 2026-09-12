@@ -269,7 +269,7 @@ async fn prepare_ghost_event(
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "quorum_unreachable",
+                arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                 format!("Applet-managed PCR genesis Control Proposal Ack unavailable: {error}"),
             )
         })?;
@@ -290,14 +290,14 @@ async fn prepare_ghost_event(
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
+                    arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                     format!("Control Proposal authority is unavailable: {error}"),
                 )
             })?
             .ok_or_else(|| {
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
+                    arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                     "current proposal authority profile is unavailable",
                 )
             })?;
@@ -317,7 +317,7 @@ async fn prepare_ghost_event(
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "quorum_unreachable",
+                arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                 format!("Control Proposal policy is unavailable: {error}"),
             )
         })?;
@@ -327,14 +327,14 @@ async fn prepare_ghost_event(
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
+                    arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                     format!("Control Proposal authority is unavailable: {error}"),
                 )
             })?
             .ok_or_else(|| {
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
+                    arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                     "this service cannot issue the current authority set's Control Proposal Ack",
                 )
             })?;

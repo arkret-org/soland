@@ -34,7 +34,7 @@ pub(super) fn test_notary(did: &str) -> arkret_wire::NotaryValue {
         frozen_public_key_b64u: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
     };
     descriptor.validate().unwrap();
-    arkret_wire::NotaryValue::new(descriptor, 0).expect("test f=0 notary")
+    arkret_wire::NotaryValue::new(descriptor, 0).expect("test single-authority notary")
 }
 
 pub(super) fn account_actor(principal_id: &str) -> arkret_wire::ActorId {

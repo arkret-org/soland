@@ -615,7 +615,7 @@ async fn verify_peer_bootstrap(
             RealmJoinBootstrapRecord::SealConclusion { .. } => {
                 return Err(crate::app_error!(
                     FrontierUnavailable,
-                    "quorum facts require an independently authenticated configuration"
+                    "Seal conclusions require an independently authenticated signer configuration"
                 ));
             }
             RealmJoinBootstrapRecord::Seal { seal } => {

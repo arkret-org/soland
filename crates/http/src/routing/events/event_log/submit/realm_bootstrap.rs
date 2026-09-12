@@ -330,7 +330,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     .map_err(|error| {
         SubmitOneError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "quorum_unreachable",
+            arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
             format!("Realm bootstrap Control Proposal Acks unavailable: {error}"),
         )
     })?;

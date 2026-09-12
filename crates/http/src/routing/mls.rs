@@ -25,8 +25,8 @@
 //! Deferred (mapped to TODO(G3.S1-followup) markers in `reducer/mls.rs`):
 //!   - decryption_pending   — deferred-decryption queue + retry.
 //!
-//! `ak.mls.commit` reducer validation now requires governance-binding
-//! quorum plus an attested covered frontier. `ak.mls.welcome` reducer
+//! `ak.mls.commit` reducer validation requires the confirmed governance binding
+//! and its authenticated covered frontier. `ak.mls.welcome` reducer
 //! validation queues only minimal routing metadata and rejects plaintext
 //! sender/profile/relationship side-band fields.
 

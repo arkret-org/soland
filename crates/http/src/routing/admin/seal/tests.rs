@@ -24,49 +24,31 @@ fn notary_value_from_cell_defaults_to_service_id_when_absent() {
         11,
     );
     let resp = notary_value_from_cell(None, &signer).unwrap();
-    assert_eq!(resp.kind_label(), "quorum");
     assert_eq!(
         resp.notary,
-        arkret_wire::NotaryValue::new(vec![signer], 0, 0).unwrap()
+        arkret_wire::NotaryValue::new(signer, 0).unwrap()
     );
     assert!(!resp.paused);
 }
 
 #[test]
-fn notary_value_from_cell_reads_authoritative_f0_quorum_form() {
+fn notary_value_from_cell_reads_authoritative_single_signer() {
     let signer = signer_descriptor("did:web:alice.example", 12);
     let default_signer = signer_descriptor("did:web:server.example", 13);
-    let expected = arkret_wire::NotaryValue::new(vec![signer.clone()], 0, 0).unwrap();
+    let expected = arkret_wire::NotaryValue::new(signer.clone(), 0).unwrap();
     let mut v = serde_json::to_value(&expected).unwrap();
     v.as_object_mut()
         .unwrap()
         .insert("paused".to_owned(), json!(false));
     let resp = notary_value_from_cell(Some(&v), &default_signer).unwrap();
-    assert_eq!(resp.kind_label(), "quorum");
     assert_eq!(resp.notary, expected);
     assert!(!resp.paused);
     let j = serde_json::to_value(&resp).unwrap();
-    assert_eq!(j["notary"]["kind"], "quorum");
+    assert!(j["notary"].get("kind").is_none());
     assert_eq!(
-        j["notary"]["signers"][0]["actor_id"],
+        j["notary"]["signer"]["actor_id"],
         json!({"kind": "service", "service_id": "ak:did_core:web:alice.example"})
     );
-}
-
-#[test]
-fn notary_value_from_cell_reads_authoritative_f1_quorum_form() {
-    let members = vec![
-        signer_descriptor("did:web:a.example", 21),
-        signer_descriptor("did:web:b.example", 22),
-        signer_descriptor("did:web:c.example", 23),
-        signer_descriptor("did:web:d.example", 24),
-    ];
-    let notary = arkret_wire::NotaryValue::new(members, 1, 0).unwrap();
-    let v = serde_json::to_value(&notary).unwrap();
-    let default_signer = signer_descriptor("did:web:s.example", 25);
-    let resp = notary_value_from_cell(Some(&v), &default_signer).unwrap();
-    assert_eq!(resp.kind_label(), "quorum");
-    assert_eq!(resp.notary, notary);
 }
 
 #[test]

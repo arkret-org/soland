@@ -49,7 +49,7 @@ pub(super) async fn resolve_control_proposal_ack(
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
+                    arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                     format!("Control Proposal policy is unavailable: {error}"),
                 )
             })?;
@@ -82,14 +82,14 @@ pub(super) async fn resolve_control_proposal_ack(
                         .map_err(|error| {
                             SubmitOneError::new(
                                 StatusCode::SERVICE_UNAVAILABLE,
-                                "quorum_unreachable",
+                                arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                                 format!("Control Proposal authority is unavailable: {error}"),
                             )
                         })?
                         .ok_or_else(|| {
                             SubmitOneError::new(
                                 StatusCode::SERVICE_UNAVAILABLE,
-                                "quorum_unreachable",
+                                arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                                 "current proposal authority profile is unavailable",
                             )
                         })?;
@@ -144,7 +144,7 @@ pub(super) async fn resolve_control_proposal_ack(
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
+                        arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                         format!("Control Proposal Ack signing failed: {error}"),
                     )
                 })?
@@ -158,14 +158,14 @@ pub(super) async fn resolve_control_proposal_ack(
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::SERVICE_UNAVAILABLE,
-                            "quorum_unreachable",
+                            arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                             format!("Control Proposal authority is unavailable: {error}"),
                         )
                     })?
                     .ok_or_else(|| {
                         SubmitOneError::new(
                             StatusCode::SERVICE_UNAVAILABLE,
-                            "quorum_unreachable",
+                            arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                             "current proposal authority profile is unavailable",
                         )
                     })?;
@@ -174,14 +174,14 @@ pub(super) async fn resolve_control_proposal_ack(
                 .await.map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
+                        arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                         format!("Control Proposal authority is unavailable: {error}"),
                     )
                 })?
                 .ok_or_else(|| {
                     SubmitOneError::new(
                         StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
+                        arkret_wire::error_codes::ErrorCode::SERVICE_UNAVAILABLE,
                         "this service cannot issue the current authority set's Control Proposal Ack",
                     )
                 })?;

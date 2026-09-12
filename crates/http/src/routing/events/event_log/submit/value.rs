@@ -1294,7 +1294,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     };
     if notary.signer.actor_id != event.actor_id {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
-            "current f=0 quorum notary is not the principal actor authority",
+            "current notary signer is not the principal actor authority",
         ));
     }
 

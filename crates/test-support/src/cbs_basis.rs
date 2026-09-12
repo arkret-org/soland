@@ -41,9 +41,9 @@ use crate::AppStateTestExt as _;
 const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
 /// Stable MLS group id used by E2EE fixture payloads.
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
-/// Build a frozen f=0 quorum fixture from a real deterministic Ed25519 key.
+/// Build a frozen single-authority fixture from a real deterministic Ed25519 key.
 #[must_use]
-pub fn test_f0_notary(did: &str) -> arkret_wire::NotaryValue {
+pub fn test_notary(did: &str) -> arkret_wire::NotaryValue {
     let signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
         Did::new(did.to_owned()).expect("fixture notary DID"),
         arkret_wire::DidUrl::new(format!("{did}#notary-key"))
@@ -51,7 +51,7 @@ pub fn test_f0_notary(did: &str) -> arkret_wire::NotaryValue {
         [0x53; 32],
     )
     .expect("fixture notary signer");
-    arkret_wire::NotaryValue::new(vec![signer.descriptor], 0, 0).expect("fixture f=0 notary")
+    arkret_wire::NotaryValue::new(signer.descriptor, 0).expect("fixture single-authority notary")
 }
 
 /// One fixture family's basis identity.
@@ -291,7 +291,7 @@ pub fn fixture_principal_control_realm_create_for_server(
             principal_id: principal.clone(),
             principal_did: principal_did.clone(),
             station_id,
-            notary: test_f0_notary(principal_did.as_str()),
+            notary: test_notary(principal_did.as_str()),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -390,7 +390,7 @@ pub fn realm_genesis_payload(
 /// Store the Realm's canonical `ak.realm.create`.
 ///
 /// The Control Proposal decision policy is read from this Event, so a Realm
-/// without one answers `quorum_unreachable` on every Control Move. A fixture
+/// without one cannot authenticate Control Move admission. A fixture
 /// that stands a Realm up out of band still owes it its genesis Event.
 pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject: &str) {
     // The genesis Event id has to be the one this Realm id derives from, or a
