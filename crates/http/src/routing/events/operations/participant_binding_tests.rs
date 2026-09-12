@@ -1,7 +1,6 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
-use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
 use arkret_state::state_model::ResolvedCellState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -16,7 +15,7 @@ const CALL_ID: &str = "ak:call:Aa5NVuAPR6HTlIsZAgPhBnb3iRqz7fRvyOkiCWbdOaLa";
 const FOCUS_ID: &str = "arkret_native_green";
 const ACTOR_ID: &str = "ak:did_core:webvh:z6mkalice";
 const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#media-2026-06";
+const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#notary-key";
 const PARTICIPANT_ID: &str = "ak:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
 
 fn participant_actor(principal: &str) -> arkret_wire::ActorId {
@@ -42,7 +41,7 @@ fn test_config() -> crate::config::AppConfig {
 
 /// Install a current-epoch media_service cell anchoring `issuer_kid` under
 /// `service_id`.
-fn install_media_service_with_service_id(state: &AppState, service_id: &str, issuer_kid: &str) {
+fn install_media_service_with_service_id(state: &AppState, service_id: &str, _issuer_kid: &str) {
     let cell_id = CellRef::new(arkret_wire::null_subject_cell(
         arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
     ))
@@ -57,8 +56,8 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
                 "service_id": service_id,
                 "foci": [{
                     "focus_id": FOCUS_ID,
-                    "backend": "arkret_native",
-                    "issuer_kid": issuer_kid,
+                    "focus_kind": "arkret_native",
+                    "token_endpoint": "https://media.soland.local/_arkret/self/rtc/token",
                     "connect_url": "wss://media.soland.local/native"
                 }]
             })),
@@ -70,7 +69,7 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
 fn install_media_service(state: &AppState, issuer_kid: &str) {
     install_media_service_with_service_id(
         state,
-        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
         issuer_kid,
     );
 }
@@ -78,29 +77,32 @@ fn install_media_service(state: &AppState, issuer_kid: &str) {
 /// Mint a self-signed binding through the shared issuer helper so the bytes
 /// are byte-symmetric with the verifier. `media-service-binding.md` §3: the
 /// signature covers ONLY the seven authoritative fields; the wire binding
-/// additionally carries the unsigned `scheme` / `issuer_kid` / `issued_at`
-/// metadata.
+/// carries only expires_at, issuer_kid and sig.
 fn signed_binding(state: &AppState, expires_at: &str) -> Value {
-    let issued_at = "2026-06-15T00:00:00.000Z";
     let mut value = json!({
-        "scheme": ParticipantBinding::SCHEMA,
         "issuer_kid": ISSUER_KID,
-        "realm_id": REALM_ID,
-        "call_id": CALL_ID,
-        "focus_id": FOCUS_ID,
-        "actor_id": participant_actor(ACTOR_ID),
-        "device_id": DEVICE_ID,
-        "participant_id": PARTICIPANT_ID,
-        "issued_at": issued_at,
         "expires_at": expires_at,
         "sig": "",
     });
-    let binding: CallMediaParticipantBinding = serde_json::from_value(value.clone()).unwrap();
-    let signing_input =
-        arkret_signatures::media::participant_binding_signing_input(&binding).unwrap();
+    let signing_input = binding_input(expires_at);
     let signing_key = state.notary_signing_key();
     value["sig"] = json!(URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes()));
     value
+}
+
+fn binding_input(expires_at: &str) -> Vec<u8> {
+    arkret_signatures::media::participant_binding_signing_input(
+        &arkret_signatures::media::ParticipantBindingContext {
+            actor_id: &participant_actor(ACTOR_ID),
+            call_id: &arkret_wire::CallId::new(CALL_ID).unwrap(),
+            device_id: &arkret_wire::DeviceId::new(DEVICE_ID).unwrap(),
+            expires_at: arkret_canonical::parse_timestamp_canonical(expires_at).unwrap(),
+            focus_id: FOCUS_ID,
+            participant_id: PARTICIPANT_ID,
+            realm_id: &arkret_wire::RealmId::new(REALM_ID).unwrap(),
+        },
+    )
+    .unwrap()
 }
 
 fn call_state_op(binding: Value) -> Operation {
@@ -111,12 +113,14 @@ fn call_state_op(binding: Value) -> Operation {
         arkret_wire::EventKind::CallState.as_str(),
         json!({
             "call_id": CALL_ID,
+            "focus": {"mode": "sfu", "session_focus": FOCUS_ID},
             "roster_delta": {
                 "op": "join",
                 "participant": {
                     "actor_id": participant_actor(ACTOR_ID),
                     "device_id": DEVICE_ID,
                     "participant_id": PARTICIPANT_ID,
+                    "focus_id": FOCUS_ID,
                     "participant_binding": binding,
                 }
             },
@@ -141,13 +145,11 @@ fn legal_self_signed_binding_passes_full_crypto_verification() {
 fn tampered_tuple_field_is_rejected_participant_binding_invalid() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
-    let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
+    let binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
     // Flip the signed actor_id without re-signing → signature no longer
     // covers these bytes.
-    binding["actor_id"] = json!(participant_actor("ak:did_core:webvh:z6mkmallory"));
     let mut op = call_state_op(binding);
-    // Keep the participant entry consistent with the tampered binding so the
-    // mismatch is caught by the signature, not the field cross-check.
+    // The sole enclosing ActorId carrier is covered by the signature.
     op.payload["roster_delta"]["participant"]["actor_id"] =
         json!(participant_actor("ak:did_core:webvh:z6mkmallory"));
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
@@ -250,14 +252,10 @@ fn expired_binding_is_rejected_participant_binding_invalid() {
 
 /// `media-service-binding.md` §3 — the signing input is exactly
 /// `LABEL || 0x00 || canonical_json(7 authoritative fields)`. Mutating an
-/// UNSIGNED metadata field (`issued_at`) MUST NOT break the signature
-/// (it is not covered), while the byte layout of the signing input MUST
+/// retired metadata field must fail closed, while the signing input MUST
 /// match the spec construction verbatim.
 fn signing_input_matches_spec_construction() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let binding: CallMediaParticipantBinding =
-        serde_json::from_value(signed_binding(&state, "2026-06-15T00:05:00.000Z")).unwrap();
-    let actual = arkret_signatures::media::participant_binding_signing_input(&binding).unwrap();
+    let actual = binding_input("2026-06-15T00:05:00.000Z");
 
     let mut expected = Vec::new();
     expected.extend_from_slice(ParticipantBinding::SCHEMA.as_bytes());
@@ -277,18 +275,17 @@ fn signing_input_matches_spec_construction() {
 }
 
 #[test]
-fn signing_input_layout_and_unsigned_metadata() {
+fn signing_input_layout_and_retired_metadata_rejection() {
     signing_input_matches_spec_construction();
 
-    // Mutating an unsigned metadata field (`issued_at`) leaves the binding
-    // verifiable: the signature only covers the seven authoritative fields.
+    // Retired fields are rejected even though the seven signed coordinates remain unchanged.
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
     let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
     binding["issued_at"] = json!("2000-01-01T00:00:00.000Z");
     let op = call_state_op(binding);
     assert!(
-        validate_operation_semantics(&state, std::slice::from_ref(&op)).is_ok(),
-        "mutating unsigned metadata must not break the binding signature"
+        validate_operation_semantics(&state, std::slice::from_ref(&op)).is_err(),
+        "retired binding metadata must be rejected"
     );
 }

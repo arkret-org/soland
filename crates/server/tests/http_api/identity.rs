@@ -81,7 +81,9 @@ async fn seed_current_principal_genesis(
     let acks = records
         .iter()
         .map(|record| {
-            let mut member = arkret_wire::ControlProposalAuthorityAck {
+            let mut member = arkret_wire::ControlProposalAck {
+                kind: arkret_wire::ControlProposalAckKind::SignedAck,
+                defer_count: 0,
                 realm_id: realm_id.clone(),
                 proposal_digest: record.canonical_digest.parse().unwrap(),
                 received_at: time,
@@ -95,7 +97,7 @@ async fn seed_current_principal_genesis(
                     jws: "e30..c2ln".to_owned(),
                 },
             };
-            member.signature.payload_digest = member.authority_ack_digest().unwrap();
+            member.signature.payload_digest = member.ack_body_digest().unwrap();
             arkret_wire::ControlProposalAck {
                 kind: arkret_wire::ControlProposalAckKind::SignedAck,
                 realm_id: member.realm_id.clone(),
@@ -105,7 +107,7 @@ async fn seed_current_principal_genesis(
                 absolute_due_at: member.absolute_due_at,
                 defer_count: 0,
                 authority_set_ref: member.authority_set_ref.clone(),
-                authority_acks: vec![member],
+                signature: member.signature,
             }
         })
         .collect();
@@ -524,7 +526,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
                 principal_id,
                 realm_id: pcr_realm_id,
                 did_version_id: "1-fixture".to_owned(),
-                log_head_digest: fixture_hash("1"),
                 control_key_digest: fixture_hash("2"),
                 registration_evidence_digest: fixture_hash("3"),
                 accepted_device_id: descriptor.device_id.clone(),
@@ -1312,10 +1313,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity_body() {
         resolved["method_evidence"]["version_id"],
         registered["did_log"][0]["versionId"]
     );
-    assert_eq!(
-        resolved["method_evidence"]["log_head_digest"],
-        registered["key_log_head"]
-    );
+    assert!(resolved["method_evidence"].get("log_head_digest").is_none());
     assert_eq!(
         resolved["method_evidence"]["control_key_digest"],
         format!(

@@ -695,36 +695,30 @@ async fn handle_rtc_token(
             "configured media issuer_kid is not a verification-method DID URL: {error}"
         ))
     })?;
-    let mut participant_binding = CallMediaParticipantBinding {
-        scheme: ParticipantBinding::SCHEMA.to_owned(),
-        sig: String::new(),
-        issuer_kid: issuer_kid.clone(),
-        realm_id,
-        call_id,
-        focus_id: body.focus_id.clone(),
-        actor_id,
-        device_id,
-        participant_id: participant_id.clone(),
-        issued_at,
-        expires_at,
-    };
-    let signing_input = arkret_signatures::media::participant_binding_signing_input(
-        &participant_binding,
-    )
-    .map_err(|error| AppError::internal(format!("participant binding signing input: {error}")))?;
-    participant_binding.sig = URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes());
-
-    let connect_url = issued_token.connect_url;
-
-    json_ok(CallMediaTokenExchangeOutcome {
+    let mut outcome = CallMediaTokenExchangeOutcome {
         focus_id: body.focus_id,
         backend_kind: focus.provider.backend_kind(),
-        connect_url,
+        connect_url: issued_token.connect_url,
         backend_token: issued_token.backend_token,
         participant_id,
-        participant_binding,
+        participant_binding: CallMediaParticipantBinding {
+            expires_at,
+            issuer_kid,
+            sig: String::new(),
+        },
         expires_at,
-    })
+        realm_id,
+        call_id,
+        actor_id,
+        device_id,
+    };
+    let signing_input = arkret_signatures::media::participant_binding_signing_input(
+        &arkret_signatures::media::ParticipantBindingContext::from_outcome(&outcome),
+    )
+    .map_err(|error| AppError::internal(format!("participant binding signing input: {error}")))?;
+    outcome.participant_binding.sig =
+        URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes());
+    json_ok(outcome)
 }
 
 /// MEDIA-2 focus selection against `ak.component.call.focus.v1`.

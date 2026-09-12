@@ -316,13 +316,6 @@ fn validate_typed_payload_shapes(
                 .and_then(|delta| delta.get("participant"))
                 .and_then(|participant| participant.get("participant_binding"))
             {
-                let scheme = binding.get("scheme").and_then(Value::as_str);
-                if scheme != Some(ParticipantBinding::SCHEMA) {
-                    return Err(
-                        "participant_binding_invalid: participant_binding.scheme must be \
-                         ak.media.participant_binding.v1",
-                    );
-                }
                 if binding
                     .get("issuer_kid")
                     .and_then(Value::as_str)
@@ -518,7 +511,7 @@ mod tests {
             arkret_wire::EventKind::RealmNotary,
             serde_json::json!({
                 "realm_id": "ak:realm:Ab-zkG-9qydcyuk0bIAwMd1Op6VQjpOjQ1PbK_fCMMmz",
-                "notary": serde_json::to_value(crate::test_f0_notary(
+                "notary": serde_json::to_value(crate::test_notary(
                     "did:web:notary.example",
                     31,
                 )).unwrap()

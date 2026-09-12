@@ -212,7 +212,8 @@ async fn current_key_result(
             return Some(SignerKeyQueryOutcome::Current(CurrentSignerKeyOutcome {
                 selector: selector.clone(),
                 status: SignerEvidenceResolvedStatus::Resolved,
-                key,
+                key: arkret_models_identity::QuerySigningKey::from_station_key(key, selector)
+                    .ok()?,
             }));
         }
     }
@@ -258,7 +259,11 @@ async fn historical_agent_key_result(
         HistoricalAgentSignerKeyOutcome {
             selector: historical.clone(),
             status: SignerEvidenceResolvedStatus::Resolved,
-            key,
+            key: arkret_models_identity::QuerySigningKey::from_station_key(
+                key,
+                &SignerKeyQuerySelector::HistoricalAgent(historical.clone()),
+            )
+            .ok()?,
             accepted_at: admission_evidence
                 .agent_authority_state_evidence
                 .state

@@ -111,7 +111,6 @@ pub(super) async fn run_webvh_resolution_checks(
     .map_err(|error| AppError::internal(format!("invalid WebVH control-key digest: {error}")))?;
     Ok(Some(IdentityMethodEvidence::DidWebvh {
         version_id,
-        log_head_digest,
         control_key_digest,
     }))
 }

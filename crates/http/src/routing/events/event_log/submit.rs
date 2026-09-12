@@ -2189,7 +2189,6 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
                 .account_subject
                 .clone(),
             did_version_id: request.did_version_id.clone(),
-            log_head_digest: request.log_head_digest.clone(),
             control_key_digest: request.control_key_digest.clone(),
             registration_evidence_digest: request
                 .registration_did_evidence
@@ -2245,7 +2244,6 @@ async fn existing_pcr_genesis_outcome(
                         && scope.realm_id == request.pcr_realm_id
                         && scope.audience_id == request.account_authority_id
                         && scope.did_version_id == request.did_version_id
-                        && scope.log_head_digest == request.log_head_digest
                         && scope.control_key_digest == request.control_key_digest
                         && request
                             .registration_did_evidence

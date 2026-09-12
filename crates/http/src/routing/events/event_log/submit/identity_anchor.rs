@@ -4,7 +4,6 @@ use super::*;
 pub(super) struct PcrGenesisPins {
     pub account_subject: Hash,
     pub did_version_id: String,
-    pub log_head_digest: Hash,
     pub control_key_digest: Hash,
     pub registration_evidence_digest: Hash,
 }
@@ -1859,7 +1858,6 @@ fn build_pcr_genesis_batch_receipt(
                 principal_id: create.actor_id.clone(),
                 realm_id: create.realm_id.clone(),
                 did_version_id: pins.did_version_id.clone(),
-                log_head_digest: pins.log_head_digest.clone(),
                 control_key_digest: pins.control_key_digest.clone(),
                 registration_evidence_digest: pins.registration_evidence_digest.clone(),
                 accepted_device_id: descriptor.device_id.clone(),
@@ -2182,7 +2180,7 @@ mod tests {
                     "ak:did_core:webvh:z6mkfixture".to_owned(),
                 )
                 .unwrap(),
-                notary: crate::test_f0_notary(principal_did.as_str(), 43),
+                notary: crate::test_notary(principal_did.as_str(), 43),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     did: principal_did.clone(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
@@ -2494,7 +2492,9 @@ mod tests {
         .unwrap();
         let proposal_digest = Hash::new(record.canonical_digest.clone()).unwrap();
         let received_at = record.received_at;
-        let mut member = arkret_wire::ControlProposalAuthorityAck {
+        let mut member = arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            defer_count: 0,
             realm_id: realm_id.clone(),
             proposal_digest: proposal_digest.clone(),
             received_at,
@@ -2511,7 +2511,7 @@ mod tests {
                 jws: "e30..c2ln".to_owned(),
             },
         };
-        member.signature.payload_digest = member.authority_ack_digest().unwrap();
+        member.signature.payload_digest = member.ack_body_digest().unwrap();
         arkret_wire::ControlProposalAck {
             kind: arkret_wire::ControlProposalAckKind::SignedAck,
             realm_id,
@@ -2521,7 +2521,7 @@ mod tests {
             absolute_due_at: member.absolute_due_at,
             defer_count: 0,
             authority_set_ref: member.authority_set_ref.clone(),
-            authority_acks: vec![member],
+            signature: member.signature,
         }
     }
 
