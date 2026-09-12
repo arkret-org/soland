@@ -286,12 +286,44 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             );
             assert!(
                 contacts.get(&alice, &bob).await.unwrap().is_none(),
-                "a late Seal transaction failure rolls back earlier Contact members"
+                "a rejected state root never publishes Contact members"
             );
             assert!(
                 consents.get(&holder, &cell_id).await.unwrap().is_none(),
-                "a late Seal transaction failure rolls back consent and invalidation"
+                "a rejected state root never publishes consent and invalidation"
             );
+        }
+        if outcome == CommandOutcome::Committed {
+            // A failure in the final member must undo already-applied mirrors,
+            // not just prevent publication before replay starts.
+            let mut conn = pool.get().await.unwrap();
+            sql_query(
+                "UPDATE state_control_events SET pending_domain_effects=$2 WHERE event_digest=$1",
+            )
+            .bind::<Text, _>(digests.last().unwrap().as_str())
+            .bind::<Jsonb, _>(json!({"contact":null,"consent":"corrupt"}))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            drop(conn);
+            assert!(
+                stores
+                    .event_seal_committer
+                    .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &BTreeSet::new(), &[])
+                    .await
+                    .is_err()
+            );
+            assert!(contacts.get(&alice, &bob).await.unwrap().is_none());
+            assert!(consents.get(&holder, &cell_id).await.unwrap().is_none());
+            let mut conn = pool.get().await.unwrap();
+            sql_query(
+                "UPDATE state_control_events SET pending_domain_effects=$2 WHERE event_digest=$1",
+            )
+            .bind::<Text, _>(digests.last().unwrap().as_str())
+            .bind::<Jsonb, _>(json!({"contact":null,"consent":true}))
+            .execute(&mut conn)
+            .await
+            .unwrap();
         }
         assert!(
             stores
