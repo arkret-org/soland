@@ -1292,10 +1292,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
             "Realm has no current accepted notary",
         ));
     };
-    if notary.fault_tolerance != 0
-        || notary.signers.len() != 1
-        || notary.signers[0].actor_id != event.actor_id
-    {
+    if notary.signer.actor_id != event.actor_id {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
             "current f=0 quorum notary is not the principal actor authority",
         ));

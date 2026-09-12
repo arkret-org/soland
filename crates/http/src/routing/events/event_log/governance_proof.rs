@@ -441,7 +441,7 @@ async fn apply_authoritative_event_seal_path(
             ));
         }
 
-        arkret_signatures::verify_seal_quorum_signatures(
+        arkret_signatures::verify_seal_signature(
             seal,
             &authoritative_notary,
             digest_suites.seal_digest_suite,

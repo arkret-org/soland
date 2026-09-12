@@ -489,14 +489,8 @@ async fn run_pending_realm_pass(
         Ok(SigningLeaseSlotResolution::NotaryValueUnavailable) => {
             return ControlSealAttemptOutcome::NotaryValueUnavailable;
         }
-        Ok(SigningLeaseSlotResolution::LocalSignerNotMember) => {
-            return ControlSealAttemptOutcome::LocalSignerNotMember;
-        }
-        Ok(SigningLeaseSlotResolution::ThresholdRequiresExternalCoordinator) => {
-            return ControlSealAttemptOutcome::ThresholdRequiresExternalCoordinator;
-        }
-        Ok(SigningLeaseSlotResolution::MixedRecoveryRequiresExternalCoordinator) => {
-            return ControlSealAttemptOutcome::MixedRecoveryRequiresExternalCoordinator;
+        Ok(SigningLeaseSlotResolution::LocalSignerNotAuthority) => {
+            return ControlSealAttemptOutcome::LocalSignerNotAuthority;
         }
         Err(error) => {
             tracing::warn!(%error, %realm_id, "control-seal coordinator could not resolve signer slot");
@@ -753,7 +747,7 @@ mod isolation_tests {
     async fn genesis_and_authority_unavailability_never_gain_partial_acceptance() {
         for (can_split, failure) in [
             (false, ControlSealAttemptOutcome::SigningFailed),
-            (true, ControlSealAttemptOutcome::LocalSignerNotMember),
+            (true, ControlSealAttemptOutcome::LocalSignerNotAuthority),
             (true, ControlSealAttemptOutcome::NotaryValueUnavailable),
         ] {
             let attempts = std::sync::atomic::AtomicUsize::new(0);

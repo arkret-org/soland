@@ -153,11 +153,7 @@ pub(super) async fn issue_control_proposal_ack(
             format!("proposal authority Ack issuance failed: {error}"),
         )
     })?;
-    let authority_ack = ack
-        .authority_acks
-        .into_iter()
-        .next()
-        .expect("single-authority mint produces one authority Ack");
+    let authority_ack = ack;
     let outcome = arkret_wire::ControlProposalAckIssueOutcome { authority_ack };
     let response_body = serde_json::to_value(&outcome).map_err(|error| {
         crate::app_error!(

@@ -1395,6 +1395,22 @@ CREATE INDEX pending_rhrk_acquisitions_archive_list_idx
     )
     WHERE state = 'accepted';
 
+-- Private, immutable signing reservations. They grant no accepted authority.
+CREATE TABLE public.state_seal_signing_positions (
+    realm_id text NOT NULL,
+    configuration_ref text NOT NULL,
+    notary_seq bigint NOT NULL CHECK (notary_seq >= 0),
+    predecessor_ref text,
+    digest_suite text NOT NULL,
+    body_digest text NOT NULL,
+    exact_body bytea NOT NULL,
+    PRIMARY KEY (realm_id, notary_seq),
+    CHECK ((notary_seq = 0) = (predecessor_ref IS NULL))
+);
+CREATE TRIGGER state_seal_signing_positions_immutable
+    BEFORE UPDATE OR DELETE ON public.state_seal_signing_positions
+    FOR EACH ROW EXECUTE FUNCTION public.reject_state_seal_identity_mutation();
+
 CREATE TABLE public.state_seal_signing_leases (
     realm_id text NOT NULL,
     signer_slot text NOT NULL,

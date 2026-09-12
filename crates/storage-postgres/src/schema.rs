@@ -1843,6 +1843,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    state_seal_signing_positions (realm_id, notary_seq) {
+        realm_id -> Text,
+        configuration_ref -> Text,
+        notary_seq -> Int8,
+        predecessor_ref -> Nullable<Text>,
+        digest_suite -> Text,
+        body_digest -> Text,
+        exact_body -> Bytea,
+    }
+}
+
+diesel::table! {
     state_seal_signing_leases (realm_id, signer_slot) {
         realm_id -> Text,
         signer_slot -> Text,
@@ -2058,6 +2070,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     state_seal_quarantine,
     state_seal_quarantine_realms,
     state_seal_signing_leases,
+    state_seal_signing_positions,
     state_seals,
     sync_cursor_handles,
     sync_cursor_revocations,

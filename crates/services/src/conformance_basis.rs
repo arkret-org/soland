@@ -350,12 +350,8 @@ pub fn build_realm_basis(
                     tag: None,
                     value: Some(
                         serde_json::to_value(
-                            arkret_wire::NotaryValue::new(
-                                vec![notary_signer.descriptor.clone()],
-                                0,
-                                0,
-                            )
-                            .map_err(|error| error.to_string())?,
+                            arkret_wire::NotaryValue::new(notary_signer.descriptor.clone(), 0)
+                                .map_err(|error| error.to_string())?,
                         )
                         .map_err(|error| error.to_string())?,
                     ),
@@ -473,7 +469,7 @@ pub fn build_realm_basis(
         )
         .map_err(|error| error.to_string())?,
     ];
-    let seal = Seal::sign_with_signers(
+    let seal = Seal::sign_with_signer(
         arkret_wire::UnsignedSeal {
             realm_id: realm.clone(),
             predecessor_ref: None,
@@ -491,11 +487,9 @@ pub fn build_realm_basis(
             command_results,
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
-            transaction_records: Vec::new(),
         },
-        0,
         arkret_canonical::DigestSuite::Sha256,
-        &[&signer],
+        &signer,
     )
     .map_err(|error| error.to_string())?;
 

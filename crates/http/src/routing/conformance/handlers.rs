@@ -443,12 +443,7 @@ pub async fn realm_basis(
             .await
             .map_err(|error| AppError::internal(format!("resolve current notary value: {error}")))?
             .ok_or_else(|| AppError::conflict("existing notary state is not materializable"))?;
-        let local_method =
-            BTreeSet::from([local_notary_signer.descriptor.verification_method.clone()]);
-        let local_descriptor_is_frozen = notary
-            .signer_descriptor(&local_notary_signer.descriptor.verification_method)
-            .is_some_and(|descriptor| descriptor == &local_notary_signer.descriptor);
-        if !local_descriptor_is_frozen || !notary.proposal_quorum_met(&local_method) {
+        if notary.signer != local_notary_signer.descriptor {
             return Err(AppError::conflict(
                 "existing conformance Realm notary is not controlled by the local frozen signer",
             ));

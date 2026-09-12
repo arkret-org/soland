@@ -1,6 +1,22 @@
 use super::*;
 
 impl ProjectionService {
+    pub async fn reserve_signing_body(
+        &self,
+        body: &arkret_wire::UnsignedSeal,
+        suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<arkret_wire::UnsignedSeal> {
+        self.seal_store().reserve_signing_body(body, suite).await
+    }
+
+    pub async fn signing_body(
+        &self,
+        realm: &RealmId,
+        sequence: u64,
+    ) -> StoreResult<Option<arkret_wire::UnsignedSeal>> {
+        self.seal_store().signing_body(realm, sequence).await
+    }
+
     /// Stage the entire ordered batch before installing any domain effect.
     /// The caller supplies only Events already committed by an exact Seal unit.
     pub fn apply_operations_with_effects_atomic(

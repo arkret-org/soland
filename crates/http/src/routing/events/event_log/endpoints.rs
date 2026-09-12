@@ -573,7 +573,6 @@ async fn prepare_pcr_seal(
             )
             .await
             .map_err(|error| crate::app_error!(StateMismatch, error.to_string()))?,
-        view: 0,
     };
     outcome.validate_for_request(&request).map_err(|error| {
         AppError::internal(format!(
@@ -656,12 +655,7 @@ async fn submit_event_seal(
             "Seal submission is limited to the caller's own or delegated Agent principal-control Realm",
         ));
     }
-    let [signature] = seal.notary_signature.signatures.as_slice() else {
-        return Err(crate::app_error!(
-            PolicyViolation,
-            "principal-control Seal submission requires one bound device signature",
-        ));
-    };
+    let signature = &seal.notary_signature;
     if !crate::routing::federation::move_seal::session_device_verification_method_matches(
         session_core_id.as_str(),
         &session.device_id,

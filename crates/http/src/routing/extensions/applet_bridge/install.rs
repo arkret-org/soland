@@ -364,12 +364,9 @@ fn validate_bot_managed_actor_unit(
                 .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
     let expected_host_notary = arkret_wire::NotaryValue::new(
-        vec![
-            state
-                .service_notary_signer_descriptor()
-                .map_err(AppError::internal)?,
-        ],
-        0,
+        state
+            .service_notary_signer_descriptor()
+            .map_err(AppError::internal)?,
         0,
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1657,12 +1654,9 @@ mod tests {
     #[test]
     fn hosted_applet_pcr_notary_rejects_actor_and_self_reported_descriptors() {
         let state = production_test_state();
-        let expected = arkret_wire::NotaryValue::new(
-            vec![state.service_notary_signer_descriptor().unwrap()],
-            0,
-            0,
-        )
-        .unwrap();
+        let expected =
+            arkret_wire::NotaryValue::new(state.service_notary_signer_descriptor().unwrap(), 0)
+                .unwrap();
         validate_hosted_applet_pcr_notary(&expected, &expected).unwrap();
 
         let actor_did = Did::new("did:web:actor.example".to_owned()).unwrap();
@@ -1675,7 +1669,7 @@ mod tests {
         .unwrap();
         assert!(
             validate_hosted_applet_pcr_notary(
-                &arkret_wire::NotaryValue::new(vec![actor_descriptor], 0, 0).unwrap(),
+                &arkret_wire::NotaryValue::new(actor_descriptor, 0).unwrap(),
                 &expected,
             )
             .is_err()
@@ -1691,7 +1685,7 @@ mod tests {
         .unwrap();
         assert!(
             validate_hosted_applet_pcr_notary(
-                &arkret_wire::NotaryValue::new(vec![self_reported_descriptor], 0, 0).unwrap(),
+                &arkret_wire::NotaryValue::new(self_reported_descriptor, 0).unwrap(),
                 &expected,
             )
             .is_err()

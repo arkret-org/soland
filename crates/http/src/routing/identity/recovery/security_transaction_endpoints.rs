@@ -1810,14 +1810,13 @@ async fn verify_recovery_unit_control_proposal_acks(
         if ack.realm_id != submission.event.realm_id
             || ack.proposal_digest != expected_digest
             || ack.authority_set_ref != context.authority_set_ref.authority_set_digest
-            || ack.authority_acks.len() != 1
-            || ack.authority_acks[0].signature.verification_method != *verification_method
+            || ack.signature.verification_method != *verification_method
         {
             return Err(AppError::conflict(
                 "recovery Control Proposal Ack does not bind the frozen authority and exact Event",
             ));
         }
-        let member = &ack.authority_acks[0];
+        let member = ack;
         let signing_bytes = member
             .canonical_bytes_for_signature()
             .map_err(|error| AppError::conflict(error.to_string()))?;

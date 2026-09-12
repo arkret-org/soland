@@ -57,12 +57,11 @@ pub(crate) async fn admin_get_seal_chain(
                     format!("confirmed Seal head {head_id} is missing"),
                 )
             })?;
-        let signers = seal
+        let signer = seal
             .notary_signature
-            .signatures
-            .iter()
-            .map(|signature| signature.verification_method.as_str().to_owned())
-            .collect();
+            .verification_method
+            .as_str()
+            .to_owned();
         let coverage = state
             .projections()
             .predecessor_covered_events(Some(&head_id))
@@ -80,7 +79,7 @@ pub(crate) async fn admin_get_seal_chain(
             state_root: Some(seal.state_root.as_str().to_owned()),
             control_event_count: coverage.len() as u64,
             created_at: Some(seal.hlc.as_str().to_owned()),
-            signers,
+            signer,
             is_compaction: seal.is_compaction(),
         })
     } else {

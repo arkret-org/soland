@@ -32,8 +32,6 @@ pub fn ed25519_notary_signer_descriptor(
         key_kind: NotaryKeyKind::Ed25519Raw32,
         jose_algorithm: NotaryJoseAlgorithm::Ed25519,
         frozen_public_key_b64u: arkret_canonical::base64url_encode(public_key),
-        frozen_public_key_digest: Hash::new(arkret_canonical::sha256_digest(public_key))
-            .map_err(|error| error.to_string())?,
     };
     descriptor.validate().map_err(|error| error.to_string())?;
     Ok(descriptor)

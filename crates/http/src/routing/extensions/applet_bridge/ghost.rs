@@ -462,12 +462,9 @@ async fn validate_ghost_managed_actor_unit(
                 .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
     let expected_host_notary = arkret_wire::NotaryValue::new(
-        vec![
-            state
-                .service_notary_signer_descriptor()
-                .map_err(AppError::internal)?,
-        ],
-        0,
+        state
+            .service_notary_signer_descriptor()
+            .map_err(AppError::internal)?,
         0,
     )
     .map_err(|error| AppError::internal(error.to_string()))?;

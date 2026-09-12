@@ -1,12 +1,9 @@
-use std::collections::BTreeSet;
-
 use arkret_identifiers::{Hash, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_wire::{
-    AuthoritySetRef, ControlProposalAck, ControlProposalAckKind, ControlProposalAuthorityAck,
-    ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalDeferReason, Event,
-    PayloadSignature,
+    AuthoritySetRef, ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy,
+    ControlProposalDeferReason, Event, PayloadSignature,
 };
 
 use crate::state::AppState;
@@ -69,48 +66,20 @@ pub(crate) fn mint_control_proposal_ack(
     received_at: chrono::DateTime<chrono::Utc>,
     policy: ControlProposalDecisionPolicy,
 ) -> Result<ControlProposalAck, String> {
-    policy.validate().map_err(|error| error.to_string())?;
-    let received_at = arkret_canonical::canonical::normalize_timestamp_canonical(received_at);
-    let mut authority_ack = ControlProposalAuthorityAck {
-        realm_id: realm_id.clone(),
-        proposal_digest: proposal_digest.clone(),
-        received_at,
-        decision_due_at: received_at + policy.decision_window,
-        absolute_due_at: received_at + policy.absolute_horizon,
-        authority_set_ref: authority_set_ref.clone(),
-        signature: PayloadSignature {
-            verification_method: state.service_verification_method("notary-key")?,
-            payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
-                .map_err(|error| error.to_string())?,
-            created_at: received_at,
-            jws: String::new(),
-        },
-    };
-    let bytes = authority_ack
-        .canonical_bytes_for_signature()
-        .map_err(|error| error.to_string())?;
-    authority_ack.signature.payload_digest = authority_ack
-        .authority_ack_digest()
-        .map_err(|error| error.to_string())?;
-    authority_ack.signature.jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
-        &bytes,
-        &authority_ack.signature.verification_method,
-        state.notary_signing_key().as_ref(),
-    )?;
-    let ack = ControlProposalAck {
-        kind: ControlProposalAckKind::SignedAck,
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_did(),
+        state.service_verification_method("notary-key")?,
+    );
+    ControlProposalAck::issue_with_signer(
         realm_id,
         proposal_digest,
-        received_at,
-        decision_due_at: received_at + policy.decision_window,
-        absolute_due_at: received_at + policy.absolute_horizon,
-        defer_count: 0,
         authority_set_ref,
-        authority_acks: vec![authority_ack],
-    };
-    ack.validate_structural(policy)
-        .map_err(|error| error.to_string())?;
-    Ok(ack)
+        received_at,
+        policy,
+        &signer,
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub(crate) async fn mint_control_proposal_acks(
@@ -278,9 +247,7 @@ pub(crate) async fn verify_agent_pcr_ack(
             "Agent PCR genesis authority differs from the accepted Agent delegation".to_owned(),
         );
     }
-    let [member] = ack.authority_acks.as_slice() else {
-        return Err("Agent PCR Ack requires exactly one delegated controller signature".to_owned());
-    };
+    let member = ack;
     let device_id = member
         .signature
         .verification_method
@@ -374,34 +341,25 @@ pub(crate) async fn verify_control_proposal_ack(
         return Err("Control Proposal Ack does not bind the current authority profile".to_owned());
     }
 
-    let mut signer_methods = BTreeSet::new();
-    for member in &ack.authority_acks {
-        if !signer_methods.insert(member.signature.verification_method.clone()) {
-            return Err("Control Proposal Ack repeats an authority member".to_owned());
-        }
-        let bytes = member
-            .canonical_bytes_for_signature()
-            .map_err(|error| error.to_string())?;
-        let descriptor = profile
-            .signer_descriptor(&member.signature.verification_method)
-            .ok_or_else(|| {
-                "Control Proposal Ack signer is absent from the frozen notary value".to_owned()
-            })?;
-        let frozen_signature = arkret_wire::SealSignature::from(member.signature.clone());
-        arkret_signatures::verify_frozen_notary_detached_jws(&frozen_signature, descriptor, &bytes)
-            .map_err(|error| error.to_string())?;
-    }
+    ack.validate_notary_authority(&profile)
+        .map_err(|error| error.to_string())?;
+    let bytes = ack
+        .canonical_bytes_for_signature()
+        .map_err(|error| error.to_string())?;
+    let frozen_signature = arkret_wire::SealSignature::from(ack.signature.clone());
+    arkret_signatures::verify_frozen_notary_detached_jws(
+        &frozen_signature,
+        &profile.signer,
+        &bytes,
+    )
+    .map_err(|error| error.to_string())?;
 
-    if !profile.proposal_quorum_met(&signer_methods) {
-        return Err("Control Proposal Ack does not satisfy the current notary quorum".to_owned());
-    }
     Ok(())
 }
 
 /// Verify one externally submitted decision against the immutable durable Ack,
 /// the exact preceding defer chain and the current proposal authority profile.
-/// Every proof is checked against its own canonical transcript; proof-set
-/// quorum validation alone never substitutes for cryptographic verification.
+/// The sole proof is checked against its canonical transcript and frozen key.
 pub(crate) async fn verify_control_proposal_decision(
     state: &AppState,
     event: &Event,
@@ -440,59 +398,19 @@ pub(crate) async fn verify_control_proposal_decision(
         .validate_chain_for_notary(ack, previous_decisions, policy, &notary)
         .map_err(|error| error.to_string())?;
 
-    let proofs = match decision {
-        ControlProposalDecision::SignedDefer { proofs, .. } => proofs,
-    };
-    for proof in proofs {
-        let binding = decision
-            .proof_binding_bytes(proof)
-            .map_err(|error| error.to_string())?;
-        let descriptor = notary
-            .signer_descriptor(&proof.verification_method)
-            .ok_or_else(|| {
-                "Control Proposal decision signer is absent from the frozen notary value".to_owned()
-            })?;
-        let frozen_signature = arkret_wire::SealSignature::from(proof.clone());
-        arkret_signatures::verify_frozen_notary_detached_jws(
-            &frozen_signature,
-            descriptor,
-            &binding,
-        )
+    let proof = decision.proof();
+    let binding = decision
+        .proof_binding_bytes(proof)
         .map_err(|error| error.to_string())?;
-    }
+    let frozen_signature = arkret_wire::SealSignature::from(proof.clone());
+    arkret_signatures::verify_frozen_notary_detached_jws(
+        &frozen_signature,
+        &notary.signer,
+        &binding,
+    )
+    .map_err(|error| error.to_string())?;
+
     Ok(())
-}
-
-#[cfg(test)]
-mod control_proposal_ack_quorum_tests {
-    use arkret_wire::notary::NotaryValue;
-
-    use super::*;
-
-    fn signer(name: &str) -> arkret_wire::NotarySignerDescriptor {
-        let notary = crate::test_f0_notary(&format!("did:web:{name}.example"), 51);
-        notary.signers.into_iter().next().unwrap()
-    }
-
-    fn signers(values: &[&str]) -> BTreeSet<arkret_wire::DidUrl> {
-        values
-            .iter()
-            .map(|value| signer(value).verification_method)
-            .collect()
-    }
-
-    #[test]
-    fn quorum_requires_the_fault_tolerant_threshold_of_distinct_members() {
-        let profile = NotaryValue::new(
-            vec![signer("a"), signer("b"), signer("c"), signer("d")],
-            1,
-            0,
-        )
-        .unwrap();
-        assert!(profile.proposal_quorum_met(&signers(&["a", "b", "c"])));
-        assert!(!profile.proposal_quorum_met(&signers(&["a", "b"])));
-        assert!(!profile.proposal_quorum_met(&signers(&["a", "b", "outsider"])));
-    }
 }
 
 fn select_control_proposal_ack_authority(
@@ -541,29 +459,29 @@ pub(crate) fn sign_control_proposal_defer(
         defer_count,
         reason_code,
         authority_set_ref: ack.authority_set_ref.clone(),
-        proofs: vec![PayloadSignature {
+        proof: PayloadSignature {
             verification_method: state.service_verification_method("notary-key")?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: decided_at,
             jws: String::new(),
-        }],
+        },
     };
     let digest = decision
         .decision_digest()
         .map_err(|error| error.to_string())?;
     {
-        let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision;
-        proofs[0].payload_digest = digest;
+        let ControlProposalDecision::SignedDefer { proof, .. } = &mut decision;
+        proof.payload_digest = digest;
     }
     let bytes = decision
         .canonical_bytes_for_signature()
         .map_err(|error| error.to_string())?;
     {
-        let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision;
-        proofs[0].jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
+        let ControlProposalDecision::SignedDefer { proof, .. } = &mut decision;
+        proof.jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
             &bytes,
-            &proofs[0].verification_method,
+            &proof.verification_method,
             state.notary_signing_key().as_ref(),
         )?;
     }
@@ -647,12 +565,11 @@ mod tests {
         .expect("service DID must produce a valid proposal Ack signer");
 
         assert_eq!(
-            ack.authority_acks[0].signature.verification_method,
+            ack.signature.verification_method,
             state.service_verification_method("notary-key").unwrap()
         );
         assert!(
-            ack.authority_acks[0]
-                .signature
+            ack.signature
                 .verification_method
                 .as_str()
                 .starts_with("did:")
@@ -673,7 +590,7 @@ mod tests {
             signing_key.verifying_key().as_bytes(),
         )
         .unwrap();
-        let notary = NotaryValue::new(vec![descriptor], 0, 0).unwrap();
+        let notary = NotaryValue::new(descriptor, 0).unwrap();
         let policy = ControlProposalDecisionPolicy::default();
         let received_at = Utc.with_ymd_and_hms(2026, 8, 25, 0, 0, 0).single().unwrap();
         let ack = mint_control_proposal_ack(
@@ -701,14 +618,11 @@ mod tests {
             .validate_chain_for_notary(&ack, &[], policy, &notary)
             .unwrap();
         for decision in [&defer] {
-            let proofs = match decision {
-                ControlProposalDecision::SignedDefer { proofs, .. } => proofs,
+            let proof = match decision {
+                ControlProposalDecision::SignedDefer { proof, .. } => proof,
             };
-            assert_eq!(
-                proofs[0].payload_digest,
-                decision.decision_digest().unwrap()
-            );
-            assert!(!proofs[0].jws.is_empty());
+            assert_eq!(proof.payload_digest, decision.decision_digest().unwrap());
+            assert!(!proof.jws.is_empty());
         }
     }
 }

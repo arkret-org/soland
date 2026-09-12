@@ -880,9 +880,7 @@ async fn seal_conclusion_outcome(
             missing_conclusion_queries.push(query.clone());
             continue;
         }
-        if configuration.fault_tolerance != 0
-            || configuration.signers.as_slice() != [local_descriptor.clone()]
-        {
+        if configuration.signer != local_descriptor {
             missing_conclusion_queries.push(query.clone());
             continue;
         }
@@ -899,11 +897,11 @@ async fn seal_conclusion_outcome(
             target_seal_ref: target.id.clone(),
             results,
         };
-        let Ok(certificate) = arkret_signatures::sign_seal_conclusion(statement, &[&signer]) else {
+        let Ok(certificate) = arkret_signatures::sign_seal_conclusion(statement, &signer) else {
             missing_conclusion_queries.push(query.clone());
             continue;
         };
-        if arkret_signatures::verify_seal_conclusion_quorum_signatures(&certificate, &configuration)
+        if arkret_signatures::verify_seal_conclusion_signature(&certificate, &configuration)
             .is_err()
         {
             missing_conclusion_queries.push(query.clone());
@@ -944,9 +942,7 @@ fn retained_conclusion_query_is_disclosable(
     use arkret_wire::SealConclusionSelector;
     is_retained(&query.target_seal_ref)
         && query.selectors.iter().all(|selector| match selector {
-            SealConclusionSelector::Command { .. } | SealConclusionSelector::Transaction { .. } => {
-                true
-            }
+            SealConclusionSelector::Command { .. } => true,
             SealConclusionSelector::Ancestry { ancestor_seal_ref } => {
                 is_retained(ancestor_seal_ref)
             }
@@ -965,8 +961,6 @@ async fn derive_seal_conclusion_results(
         SealConclusionAncestryOutcome, SealConclusionAncestrySelector,
         SealConclusionAncestrySelectorKind, SealConclusionCommandOutcome,
         SealConclusionCommandSelector, SealConclusionCommandSelectorKind, SealConclusionOutcome,
-        SealConclusionTransactionOutcome, SealConclusionTransactionSelector,
-        SealConclusionTransactionSelectorKind,
     };
 
     let mut results = Vec::with_capacity(selectors.len());
@@ -992,18 +986,6 @@ async fn derive_seal_conclusion_results(
             | arkret_wire::SealConclusionSelector::CellRange { .. }
             | arkret_wire::SealConclusionSelector::CommandEffect { .. } => {
                 return Ok(None);
-            }
-            arkret_wire::SealConclusionSelector::Transaction { record_index } => {
-                SealConclusionOutcome::Transaction(SealConclusionTransactionOutcome {
-                    selector: SealConclusionTransactionSelector {
-                        kind: SealConclusionTransactionSelectorKind::Transaction,
-                        record_index: *record_index,
-                    },
-                    record: target
-                        .transaction_records
-                        .get(usize::from(*record_index))
-                        .cloned(),
-                })
             }
             arkret_wire::SealConclusionSelector::Ancestry { ancestor_seal_ref } => {
                 SealConclusionOutcome::Ancestry(SealConclusionAncestryOutcome {

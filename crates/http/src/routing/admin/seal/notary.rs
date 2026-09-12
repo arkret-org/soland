@@ -18,7 +18,7 @@ pub(super) fn notary_value_from_cell(
 ) -> Result<AdminNotaryValue, AppError> {
     let Some(value) = value else {
         return Ok(admin_notary_value_from_sdk(
-            SdkNotaryValue::new(vec![default_signer.clone()], 0, 0)
+            SdkNotaryValue::new(default_signer.clone(), 0)
                 .map_err(|error| AppError::internal(error.to_string()))?,
             false,
         ));

@@ -805,13 +805,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .await
             .ok()
             .flatten()
-            .map(|(profile, _)| {
-                profile
-                    .signers
-                    .into_iter()
-                    .map(|member| member.actor_id.to_string())
-                    .collect()
-            })
+            .map(|(profile, _)| BTreeSet::from([profile.signer.actor_id.to_string()]))
             .unwrap_or_default();
     if authority_ids.is_empty() {
         return Vec::new();

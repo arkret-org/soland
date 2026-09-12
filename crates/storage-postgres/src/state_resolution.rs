@@ -1,5 +1,6 @@
 mod account_summary;
 mod current_results;
+mod signing;
 mod welcome_discovery;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -869,7 +870,8 @@ async fn realm_has_seal_collision(
 async fn insert_new_state_seal(
     conn: &mut AsyncPgConnection,
     insert: &StateSealInsert<'_>,
-) -> Result<(), diesel::result::Error> {
+) -> Result<(), EventSealCommitError> {
+    signing::validate_reserved_body(conn, insert).await?;
     account_summary::invalidate(conn, insert.realm_id).await?;
     sql_query(
         "INSERT INTO state_seals \
@@ -887,6 +889,7 @@ async fn insert_new_state_seal(
     .execute(conn)
     .await
     .map(|_| ())
+    .map_err(EventSealCommitError::from)
 }
 
 fn control_event_from_value(value: Value) -> StoreResult<Event> {
@@ -1753,6 +1756,22 @@ impl ControlEventStore for PgControlEventStore {
 
 #[async_trait]
 impl SealStore for PgSealStore {
+    async fn reserve_signing_body(
+        &self,
+        body: &arkret_wire::UnsignedSeal,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<arkret_wire::UnsignedSeal> {
+        signing::reserve_signing_body(self, body, digest_suite).await
+    }
+
+    async fn signing_body(
+        &self,
+        realm_id: &RealmId,
+        notary_seq: u64,
+    ) -> StoreResult<Option<arkret_wire::UnsignedSeal>> {
+        signing::signing_body(self, realm_id, notary_seq).await
+    }
+
     async fn try_claim_signing_lease(
         &self,
         realm_id: &RealmId,
@@ -2955,9 +2974,8 @@ impl CellStore for PgCellStore {
 #[cfg(test)]
 mod proposal_decision_tests {
     use arkret_wire::{
-        ControlProposalAck, ControlProposalAckKind, ControlProposalAuthorityAck,
-        ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalDeferReason,
-        PayloadSignature,
+        ControlProposalAck, ControlProposalAckKind, ControlProposalDecision,
+        ControlProposalDecisionPolicy, ControlProposalDeferReason, PayloadSignature,
     };
     use chrono::{DateTime, TimeZone, Utc};
 
@@ -2984,7 +3002,9 @@ mod proposal_decision_tests {
     }
 
     fn ack() -> ControlProposalAck {
-        let mut member = ControlProposalAuthorityAck {
+        let mut member = ControlProposalAck {
+            kind: ControlProposalAckKind::SignedAck,
+            defer_count: 0,
             realm_id: RealmId::new("ak:realm:ARbhO1ZYW_wEmLXo_1A_SBk1RXuTUmCoJg2PW6B5FMJz")
                 .unwrap(),
             proposal_digest: hash('a'),
@@ -2994,18 +3014,8 @@ mod proposal_decision_tests {
             authority_set_ref: hash('b'),
             signature: signature(hash('0'), at(0)),
         };
-        member.signature.payload_digest = member.authority_ack_digest().unwrap();
-        ControlProposalAck {
-            kind: ControlProposalAckKind::SignedAck,
-            realm_id: member.realm_id.clone(),
-            proposal_digest: member.proposal_digest.clone(),
-            received_at: member.received_at,
-            decision_due_at: member.decision_due_at,
-            absolute_due_at: member.absolute_due_at,
-            defer_count: 0,
-            authority_set_ref: member.authority_set_ref.clone(),
-            authority_acks: vec![member],
-        }
+        member.signature.payload_digest = member.ack_body_digest().unwrap();
+        member
     }
 
     fn signed_defer(ack: &ControlProposalAck) -> ControlProposalDecision {
@@ -3019,11 +3029,11 @@ mod proposal_decision_tests {
             defer_count: 1,
             reason_code: ControlProposalDeferReason::TemporarilyUnavailable,
             authority_set_ref: ack.authority_set_ref.clone(),
-            proofs: vec![signature(hash('0'), at(20))],
+            proof: signature(hash('0'), at(20)),
         };
         let decision_digest = decision.decision_digest().unwrap();
-        let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision;
-        proofs[0].payload_digest = decision_digest;
+        let ControlProposalDecision::SignedDefer { proof, .. } = &mut decision;
+        proof.payload_digest = decision_digest;
         decision
     }
 
@@ -3232,17 +3242,11 @@ mod event_seal_commit_tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: arkret_wire::MultiSignature {
-                kind: arkret_wire::MultiSigKind::MultiSig,
-                signatures: vec![SealSignature {
-                    verification_method: arkret_wire::DidUrl::new(
-                        "did:key:z6MkFixture#z6MkFixture",
-                    )
+            notary_signature: SealSignature {
+                verification_method: arkret_wire::DidUrl::new("did:key:z6MkFixture#z6MkFixture")
                     .unwrap(),
-                    payload_digest: placeholder_hash,
-                    jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-                }],
-                view: 0,
+                payload_digest: placeholder_hash,
+                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
             },
             sealed_at: Utc::now(),
             hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
@@ -3251,7 +3255,6 @@ mod event_seal_commit_tests {
             command_results: vec![command_result],
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
-            transaction_records: Vec::new(),
         };
         seal.id = seal
             .derive_id(arkret_canonical::DigestSuite::Sha256)
