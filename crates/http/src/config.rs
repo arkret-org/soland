@@ -1,3 +1,6 @@
+pub const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
+pub const CONFIGURED_SIGNING_KEY_REF: &str = "secret:SOLAND_NOTARY_SIGNING_KEY";
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;

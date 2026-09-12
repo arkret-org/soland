@@ -169,7 +169,7 @@ enum DrillError {
     Assertion(String),
 }
 
-const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
+use soland_http::config::SERVICE_IDENTITY_KEYSTORE_APP;
 
 fn open_service_identity_key_store(
     values: &BTreeMap<String, String>,

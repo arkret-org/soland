@@ -85,6 +85,7 @@ pub(super) enum SubmitCommitIdempotency {
 pub(super) struct SubmitCommitOptions<'a> {
     pub(super) idempotency: Option<SubmitCommitIdempotency>,
     pub(super) device_pairing: Option<&'a DevicePairingAdmission>,
+    pub(super) contact_completion_draft: Option<&'a soland_storage::ContactCompletionDraft>,
     pub(super) contact_projection: Option<&'a soland_services::events::CommitContactProjection>,
     pub(super) additional_deliveries: &'a [soland_services::federation::FederationDeliveryRecord],
 }
@@ -95,6 +96,7 @@ impl SubmitCommitOptions<'_> {
             idempotency: None,
             device_pairing: None,
             contact_projection: None,
+            contact_completion_draft: None,
             additional_deliveries: &[],
         }
     }
@@ -529,6 +531,7 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
     contact_projection: soland_services::events::CommitContactProjection,
+    completion_draft: soland_storage::ContactCompletionDraft,
     deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
     idempotency: Option<soland_services::events::IdempotentResponse>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
@@ -538,6 +541,7 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
             session.clone(),
             submission,
             contact_projection,
+            completion_draft,
             deliveries,
             idempotency,
         ),
@@ -550,6 +554,7 @@ async fn submit_initial_event_submission_with_contact_projection_owned(
     session: SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
     contact_projection: soland_services::events::CommitContactProjection,
+    completion_draft: soland_storage::ContactCompletionDraft,
     deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
     idempotency: Option<soland_services::events::IdempotentResponse>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
@@ -561,6 +566,7 @@ async fn submit_initial_event_submission_with_contact_projection_owned(
             idempotency: idempotency.map(SubmitCommitIdempotency::Prepared),
             device_pairing: None,
             contact_projection: Some(&contact_projection),
+            contact_completion_draft: Some(&completion_draft),
             additional_deliveries: &deliveries,
         },
     )

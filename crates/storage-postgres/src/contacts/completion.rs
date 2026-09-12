@@ -159,13 +159,10 @@ pub(super) async fn finalize(
         ));
     };
     ready.intent.validate_finalized_outcome(outcome)?;
-    let expected_carrier = ready.intent.delivery_carrier(outcome)?;
-    let mut finalized = ready.intent.clone();
-    finalized.outcome = outcome.clone();
-    finalized.validate_event_binding()?;
-    match (&ready.intent.delivery, delivery) {
-        (Some(target), Some(delivery)) => validate_destination(target, delivery)?,
-        (None, None) => {}
+    let expected_carrier = ready.intent.finalized_carrier(outcome)?;
+    match (ready.intent.requires_delivery(), delivery) {
+        (true, Some(delivery)) => validate_destination(&ready.intent.plan.target, delivery)?,
+        (false, None) => {}
         _ => {
             return Err(invalid(
                 "Contact completion changed its delivery obligation",
@@ -178,7 +175,7 @@ pub(super) async fn finalize(
             .bind::<Text,_>(ready.event_digest.as_str()).get_result::<CompletionRow>(conn).await.map_err(PersistenceError::database)?;
         let decision=decision(conn,ready.event_digest.as_str()).await?;
         if decision.outcome!="committed" || decision.seal_id!=ready.deciding_seal_id.as_str()
-            || row.event_json!=serde_json::to_value(&ready.intent.event).map_err(invalid)? { return Err(invalid("Contact completion does not bind the exact committed command").into()); }
+            || row.event_json!=serde_json::to_value(&ready.intent.plan.event).map_err(invalid)? { return Err(invalid("Contact completion does not bind the exact committed command").into()); }
         if let Some(existing)=row.contact_completion_result {
             if existing!=serde_json::to_value(result).map_err(invalid)? { return Err(invalid("Contact terminal result cannot be replaced").into()); }
             if let Some(delivery)=delivery { assert_same_outbox(conn,delivery).await?; }
@@ -187,7 +184,7 @@ pub(super) async fn finalize(
         if row.contact_completion_intent.as_ref()!=Some(&serde_json::to_value(&ready.intent).map_err(invalid)?) { return Err(invalid("Contact completion intent changed").into()); }
         let outbox_id=if let Some(delivery)=delivery {
             let body:arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody=serde_json::from_str(&delivery.payload_json).map_err(invalid)?;
-            if serde_json::to_value(&body).map_err(invalid)? != serde_json::to_value(expected_carrier.as_ref().ok_or_else(|| invalid("Contact delivery obligation is absent"))?).map_err(invalid)? {
+            if serde_json::to_value(&body).map_err(invalid)? != serde_json::to_value(&expected_carrier).map_err(invalid)? {
                 return Err(invalid("Contact outbox does not carry its exact finalized result").into());
             }
             let value=serde_json::to_value(&body).map_err(invalid)?;
@@ -196,7 +193,7 @@ pub(super) async fn finalize(
             Some(assert_same_outbox(conn,delivery).await?)
         }else{None};
         update_evidence(conn,&ready.intent,outcome).await?;
-        persist_result(conn,ready.event_digest.as_str(),&ready.intent.response_binding,result,outbox_id.as_deref()).await?;
+        persist_result(conn,ready.event_digest.as_str(),&ready.intent.plan.response_binding,result,outbox_id.as_deref()).await?;
         Ok(true)
     }).await.map_err(PgTransactionError::into_persistence)
 }
@@ -248,9 +245,12 @@ async fn update_evidence(
     intent: &ContactCompletionIntent,
     outcome: &arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
 ) -> PersistenceResult<()> {
-    use arkret_models_collaboration::contact_operations::{ContactAcceptedOutcome, ContactPeer};
+    use arkret_models_collaboration::contact_operations::{
+        ContactAcceptedOutcome, ContactPeer, ContactRound, ContactRoundEvidenceBundle,
+    };
     let peer: ContactPeer = serde_json::from_value(
         intent
+            .plan
             .event
             .payload
             .get("peer")
@@ -258,7 +258,7 @@ async fn update_evidence(
             .ok_or_else(|| invalid("Contact Event omits peer"))?,
     )
     .map_err(invalid)?;
-    let holder = &intent.event.actor_id;
+    let holder = &intent.plan.event.actor_id;
     let peer = peer.contact_actor_id();
     let mut record = if let Some(record) = super::lock_contact(conn, holder, &peer).await? {
         record
@@ -275,20 +275,21 @@ async fn update_evidence(
         _ => None,
     };
     if let Some(proof) = finalized_proof {
-        let bundle = record
-            .contact_round_evidence
-            .as_ref()
-            .ok_or_else(|| invalid("Contact complete round evidence is absent"))?;
-        if bundle.contact_round_id != proof.contact_round_id
-            || !bundle.current_proofs.iter().any(|head| {
-                head.peer == proof.peer
-                    && head.issuer_id == proof.issuer_id
-                    && head.head_event_ref == proof.head_event_ref
-            })
+        let head = if &record.requester_id == holder {
+            record.request_event_ref.as_ref()
+        } else {
+            record.response_event_ref.as_ref()
+        };
+        if record.contact_round_id.as_ref() != Some(&proof.contact_round_id)
+            || head != Some(&proof.head_event_ref)
         {
             return Err(PersistenceError::Conflict(
                 "Contact current head changed before signature publication".into(),
             ));
+        }
+        let head_decision = decision(conn, proof.head_event_ref.event_digest().as_str()).await?;
+        if head_decision.outcome != "committed" {
+            return Err(invalid("Contact proof head is not confirmed"));
         }
     }
     let mut mirror = None;
@@ -297,57 +298,76 @@ async fn update_evidence(
             request_acceptance_receipt: receipt,
             ..
         } => {
-            for prior in &mut record.request_receipts {
-                if prior.core.request_event_ref == intent.event.event_id {
-                    for slot in &mut record.request_slot_states {
-                        if slot.owner_id == intent.event.actor_id
-                            && slot.head_digest == prior.receipt_digest
-                        {
-                            slot.head_digest = receipt.receipt_digest.clone();
-                        }
-                    }
-                    *prior = receipt.clone();
+            if let Some(prior) = record
+                .request_receipts
+                .iter()
+                .find(|prior| prior.core.request_event_ref == intent.plan.event.event_id)
+            {
+                if prior != receipt {
+                    return Err(invalid("Contact source receipt is immutable"));
                 }
+            } else {
+                record.request_receipts.push(receipt.clone());
             }
-            if let Some(mut local) = intent.local_mirror.clone() {
-                local.source_receipt = receipt.clone();
-                local.verified_at = chrono::Utc::now();
-                mirror = Some(local);
+            if let Some(target) = &intent.plan.local_mirror_target {
+                mirror = Some(soland_storage::ContactVerifiedMirrorRecord {
+                    target_holder_principal_id: target.clone(),
+                    request_event_id: intent.plan.event.event_id.to_string(),
+                    request_digest: intent.plan.event.event_id.event_digest().to_string(),
+                    canonical_event_bytes: arkret_canonical::canonical_json_bytes(
+                        &intent.plan.event,
+                    )
+                    .map_err(invalid)?,
+                    source_receipt: receipt.clone(),
+                    issuer_id: receipt.core.issuer_id.to_string(),
+                    verified_at: chrono::Utc::now(),
+                });
             }
         }
         ContactAcceptedOutcome::Response {
-            normal_response_acceptance_receipt,
-            lineage: _,
+            normal_response_acceptance_receipt: receipt,
             current_proof,
             ..
         } => {
-            if let Some(bundle) = record.contact_round_evidence.as_mut() {
-                if bundle.contact_round_id == normal_response_acceptance_receipt.contact_round_id {
-                    bundle.normal_response_receipt =
-                        Some(normal_response_acceptance_receipt.clone());
-                    for proof in &mut bundle.current_proofs {
-                        if proof.peer == current_proof.peer
-                            && proof.issuer_id == current_proof.issuer_id
-                            && proof.head_event_ref == current_proof.head_event_ref
-                        {
-                            *proof = current_proof.clone();
-                        }
-                    }
-                }
+            let payload:arkret_models_collaboration::events_payloads::contact::ContactAcceptedPayload=serde_json::from_value(serde_json::to_value(&intent.plan.event.payload).map_err(invalid)?).map_err(invalid)?;
+            let mut pair = [
+                receipt.request_receipt.core.holder.contact_actor_id(),
+                receipt.request_receipt.core.peer.contact_actor_id(),
+            ];
+            if arkret_canonical::canonical_json_bytes(&pair[0]).map_err(invalid)?
+                > arkret_canonical::canonical_json_bytes(&pair[1]).map_err(invalid)?
+            {
+                pair.swap(0, 1);
             }
+            let contact_round = ContactRound::Normal {
+                sorted_pair_member_ids: pair,
+                request_event_ref: payload.request_event_ref,
+                request_acceptance_receipt_digest: payload.request_acceptance_receipt_digest,
+            };
+            record.contact_round_evidence = Some(ContactRoundEvidenceBundle {
+                contact_round_id: receipt.contact_round_id.clone(),
+                previous_terminal_contact_round_id: payload.previous_terminal_contact_round_id,
+                contact_round,
+                request_receipts: vec![receipt.request_receipt.clone()],
+                normal_response_receipt: Some(receipt.clone()),
+                glare_concurrency_attestations: None,
+                current_proofs: vec![current_proof.clone()],
+                continuity_checkpoint: None,
+            });
         }
         ContactAcceptedOutcome::ScopeUpdate { current_proof, .. }
         | ContactAcceptedOutcome::Tombstone { current_proof, .. } => {
-            if let Some(bundle) = record.contact_round_evidence.as_mut() {
-                for proof in &mut bundle.current_proofs {
-                    if proof.peer == current_proof.peer
-                        && proof.issuer_id == current_proof.issuer_id
-                        && proof.head_event_ref == current_proof.head_event_ref
-                    {
-                        *proof = current_proof.clone();
-                    }
-                }
-            }
+            let bundle = record
+                .contact_round_evidence
+                .as_mut()
+                .ok_or_else(|| invalid("Contact original round evidence has not completed"))?;
+            bundle.current_proofs.retain(|proof| {
+                proof.peer != current_proof.peer || proof.issuer_id != current_proof.issuer_id
+            });
+            bundle.current_proofs.push(current_proof.clone());
+            bundle
+                .current_proofs
+                .sort_by_key(|proof| proof.peer.contact_actor_id());
         }
         ContactAcceptedOutcome::Reject { .. } => {}
     }

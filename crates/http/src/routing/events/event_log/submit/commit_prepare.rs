@@ -181,6 +181,55 @@ pub(super) async fn prepare_accepted_event_command(
         } else {
             None
         };
+    let mut contact_projection =
+        commit_options.and_then(|options| options.contact_projection.cloned());
+    if let Some(draft) = commit_options.and_then(|options| options.contact_completion_draft) {
+        let invalid = |message: String| {
+            SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                message,
+            )
+        };
+        if draft.event.event_id != parsed.event_id
+            || arkret_canonical::canonical_json_bytes(&draft.event)
+                .map_err(|error| invalid(error.to_string()))?
+                != accepted_canonical_bytes
+        {
+            return Err(invalid(
+                "Contact plan does not bind the authenticated Event bytes".into(),
+            ));
+        }
+        let [proof] = draft.event.proofs.as_slice() else {
+            return Err(invalid("Contact requires one producer".into()));
+        };
+        let did_key = parsed
+            .producer_signing_key
+            .as_ref()
+            .ok_or_else(|| invalid("Contact verified producer key is unavailable".into()))?;
+        let multibase = did_key
+            .as_str()
+            .strip_prefix("did:key:")
+            .ok_or_else(|| invalid("Contact producer key is not did:key".into()))?;
+        let public = arkret_canonical::decode_ed25519_multibase(multibase)
+            .map_err(|error| invalid(error.to_string()))?;
+        let producer = arkret_models_collaboration::contact_operations::ContactProducerSigner {
+            verification_method: proof.verification_method.clone(),
+            public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                public,
+            ))
+            .map_err(|error| invalid(error.to_string()))?,
+        };
+        contact_projection
+            .as_mut()
+            .ok_or_else(|| invalid("Contact business projection is absent".into()))?
+            .completion_intent = Some(
+            draft
+                .clone()
+                .bind_producer(producer)
+                .map_err(|error| invalid(error.to_string()))?,
+        );
+    }
     let command = soland_services::events::CommitAcceptedEventCommand {
         publication_event: publication_event.cloned(),
         mls_public_producer,
@@ -192,7 +241,7 @@ pub(super) async fn prepare_accepted_event_command(
         device_pairing_authorization: commit_options
             .and_then(|options| options.device_pairing)
             .and_then(|admission| admission.commit_authorization.clone()),
-        contact_projection: commit_options.and_then(|options| options.contact_projection.cloned()),
+        contact_projection,
         consent_projection: consent_admission
             .map(crate::routing::identity::consent::ConsentAdmission::commit),
         event: soland_services::events::AcceptedEvent {

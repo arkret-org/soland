@@ -5,7 +5,7 @@ use arkret_models_collaboration::contact_operations::{
     ContactPreparedOutcome, ContactResultKind, ContactRound, ContactRoundEvidenceBundle,
     ContactScope, ContactScopeUpdatePayload, ContactScopeUpdateSchema,
     NormalResponseAcceptanceReceipt, OutgoingRequestState, OutgoingSlotAbsenceTranscript,
-    RejectAcceptanceReceipt, RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
+    RejectAcceptanceReceipt, RequestAcceptanceReceipt,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
@@ -1072,109 +1072,13 @@ fn accept_request_slot_transition(
     Ok(())
 }
 
-fn planned_request_receipt(
-    state: &AppState,
-    reservation: &ContactReservation,
-    event: &Event,
-    digest_suite: arkret_canonical::DigestSuite,
-    slot_version: u64,
-    slot_predecessor: Option<Hash>,
-) -> Result<RequestAcceptanceReceipt, AppError> {
-    let request_digest = Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
-        |error| AppError::internal(format!("accepted Contact request digest: {error}")),
-    )?)
-    .map_err(|error| AppError::internal(format!("accepted request digest invalid: {error}")))?;
-    let core = RequestAcceptanceReceiptCore {
-        holder: reservation.holder.clone(),
-        peer: reservation.branch.peer().clone(),
-        slot_version,
-        slot_predecessor,
-        previous_terminal_contact_round_id: event
-            .payload
-            .get("previous_terminal_contact_round_id")
-            .and_then(Value::as_str)
-            .map(|value| Hash::new(value.to_owned()))
-            .transpose()
-            .map_err(|error| {
-                AppError::param_invalid(format!("previous terminal contact_round: {error}"))
-            })?,
-        request_event_ref: event.event_id.clone(),
-        source_checkpoint: contact_hash(
-            arkret_wire::DomainSeparationId::CONTACT_REQUEST_SOURCE_CHECKPOINT_V1,
-            &json!({"event_ref": event.event_id, "event_digest": request_digest}),
-        )?,
-        accepted_at: now(),
-        issuer_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?,
-    };
-    let receipt_digest = contact_hash(
-        arkret_wire::DomainSeparationId::CONTACT_REQUEST_ACCEPTANCE_CORE_V1,
-        &core,
-    )?;
-    let signature = planned_contact_signature(state)?;
-    Ok(RequestAcceptanceReceipt {
-        core,
-        receipt_digest,
-        signature,
-    })
-}
-
-fn planned_lineage(
-    state: &AppState,
-    holder: ContactPeer,
-    peer: ContactPeer,
-    contact_round_id: Hash,
-    version: u64,
-    predecessor_event_ref: Option<EventId>,
-    event_ref: EventId,
-    scopes: Vec<ContactScope>,
-    terminal: bool,
-) -> Result<ContactLineage, AppError> {
-    let lineage = ContactLineage {
-        contact_round_id,
-        issuer: holder,
-        peer,
-        version,
-        predecessor_event_ref,
-        event_ref,
-        granted_to_peer_scopes: scopes,
-        terminal: terminal.then_some(true),
-        signature: ProtocolSignature {
-            verification_method: DidUrl::new(
-                crate::routing::federation::federation_service_signature_key_id(
-                    state.service_did().as_str(),
-                ),
-            )
-            .map_err(|error| AppError::internal(format!("service verification method: {error}")))?,
-            created_at: now(),
-            jws: Base64UrlString::new("AA").map_err(|error| {
-                AppError::internal(format!("Contact signature placeholder: {error}"))
-            })?,
-        },
-    };
-    Ok(lineage)
-}
-
-fn planned_current_proof(
+pub(super) fn signed_current_proof(
     state: &AppState,
     contact_round_id: Hash,
     peer: ContactPeer,
     event: &Event,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<ContactCurrentProof, AppError> {
-    let _issuer_did = event
-        .proofs
-        .iter()
-        .find_map(|proof| {
-            let (controller, _) = proof.verification_method.rsplit_once('#')?;
-            let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
-            (arkret_wire::project_did_to_core_id(&did).ok()
-                == Some(event.actor_id.signing_principal_id().clone()))
-            .then_some(did)
-        })
-        .ok_or_else(|| {
-            AppError::param_invalid("Contact Event has no actor-bound proof controller")
-        })?;
     let issuer = state.service_core_id();
     let terminal = event.kind == arkret_wire::EventKind::ContactTombstone;
     let head_digest = Hash::new(
@@ -1190,30 +1094,21 @@ fn planned_current_proof(
     }
     let fresh_until = now() + chrono::Duration::minutes(10);
     let complete_through = contact_direction_version(event)?;
-    Ok(ContactCurrentProof {
+    ContactCurrentProof::sign_with(
         contact_round_id,
-        issuer_id: issuer,
+        issuer,
         peer,
         terminal,
-        head_event_ref: event.event_id.clone(),
-        accepted_frontier: vec![event.event_id.clone()],
+        event.event_id.clone(),
+        vec![event.event_id.clone()],
         complete_through,
         fresh_until,
-        signature: planned_contact_signature(state)?,
-    })
-}
-
-fn planned_contact_signature(state: &AppState) -> Result<ProtocolSignature, AppError> {
-    Ok(ProtocolSignature {
-        verification_method: DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(
-                state.service_did().as_str(),
-            ),
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?,
-        created_at: now(),
-        jws: Base64UrlString::new("AA").map_err(|error| AppError::internal(error.to_string()))?,
-    })
+        |bytes| {
+            sign_contact_transcript(state, bytes)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+        },
+    )
+    .map_err(|error| AppError::internal(error.to_string()))
 }
 
 fn contact_direction_version(event: &Event) -> Result<u64, AppError> {
@@ -1235,30 +1130,20 @@ fn contact_direction_version(event: &Event) -> Result<u64, AppError> {
     }
 }
 
-pub(super) fn signed_current_proof(
-    state: &AppState,
-    contact_round_id: Hash,
-    peer: ContactPeer,
-    event: &Event,
-    digest_suite: arkret_canonical::DigestSuite,
-) -> Result<ContactCurrentProof, AppError> {
-    let mut proof = planned_current_proof(state, contact_round_id, peer, event, digest_suite)?;
-    proof.signature = sign_contact_transcript(
-        state,
-        &proof
-            .canonical_signing_bytes()
-            .map_err(|error| AppError::internal(error.to_string()))?,
-    )?;
-    Ok(proof)
-}
-
 fn sign_contact_transcript(state: &AppState, bytes: &[u8]) -> Result<ProtocolSignature, AppError> {
-    let mut signature = planned_contact_signature(state)?;
-    signature.jws = Base64UrlString::new(
-        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(bytes).to_bytes()),
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(signature)
+    Ok(ProtocolSignature {
+        verification_method: DidUrl::new(
+            crate::routing::federation::federation_service_signature_key_id(
+                state.service_did().as_str(),
+            ),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?,
+        created_at: now(),
+        jws: Base64UrlString::new(
+            URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(bytes).to_bytes()),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?,
+    })
 }
 
 #[cfg(test)]
@@ -1273,24 +1158,34 @@ fn signed_lineage(
     scopes: Vec<ContactScope>,
     terminal: bool,
 ) -> Result<ContactLineage, AppError> {
-    let mut lineage = planned_lineage(
-        state,
+    let producer = arkret_models_collaboration::contact_operations::ContactProducerSigner {
+        verification_method: DidUrl::new(
+            crate::routing::federation::federation_service_signature_key_id(
+                state.service_did().as_str(),
+            ),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?,
+        public_key_b64u: Base64UrlString::new(
+            URL_SAFE_NO_PAD.encode(state.notary_signing_key().verifying_key().as_bytes()),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?,
+    };
+    ContactLineage::sign_with(
+        contact_round_id,
         holder,
         peer,
-        contact_round_id,
         version,
         predecessor_event_ref,
         event_ref,
+        producer,
         scopes,
-        terminal,
-    )?;
-    lineage.signature = sign_contact_transcript(
-        state,
-        &lineage
-            .canonical_signing_bytes()
-            .map_err(|error| AppError::internal(error.to_string()))?,
-    )?;
-    Ok(lineage)
+        terminal.then_some(true),
+        |bytes| {
+            sign_contact_transcript(state, bytes)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+        },
+    )
+    .map_err(|error| AppError::internal(error.to_string()))
 }
 
 pub(crate) async fn local_requester_current_proof(
@@ -1440,32 +1335,36 @@ async fn commit(
         }
         _ => {}
     }
-    let (outcome, mut contact_projection) =
-        plan_contact_commit(state, &reservation, &body.signed_event).await?;
-    if matches!(outcome, ContactOperationOutcome::Failed { .. }) {
-        persist_final(
-            state,
-            &session.actor,
-            "ak.self.contact.command.commit",
-            &contact_phase_idempotency_key("commit", &body.idempotency_key),
-            &request_hash,
-            &outcome,
-        )
-        .await?;
-        return json_ok(outcome);
-    }
-    let mut completion_intent = prepare_contact_completion_intent(
+    let (contact_projection, action, local_mirror_target) =
+        match plan_contact_commit(state, &reservation, &body.signed_event).await? {
+            ContactCommitPlan::Failed(failed) => {
+                let outcome = ContactOperationOutcome::Failed { outcome: failed };
+                persist_final(
+                    state,
+                    &session.actor,
+                    "ak.self.contact.command.commit",
+                    &response_binding.idempotency_key,
+                    &request_hash,
+                    &outcome,
+                )
+                .await?;
+                return json_ok(outcome);
+            }
+            ContactCommitPlan::Ready {
+                projection,
+                action,
+                local_mirror_target,
+            } => (projection, action, local_mirror_target),
+        };
+    let completion_draft = prepare_contact_completion_draft(
         state,
         &reservation,
         &body.signed_event,
-        &outcome,
+        action,
         response_binding.clone(),
+        local_mirror_target,
     )
     .await?;
-    if let Some(commit) = contact_projection.as_mut() {
-        completion_intent.local_mirror = commit.verified_mirror.take();
-        commit.completion_intent = Some(completion_intent);
-    }
     crate::routing::events::event_log::submit_initial_event_submission_with_contact_projection(
         state,
         session,
@@ -1478,9 +1377,8 @@ async fn commit(
             control_proposal_ack: body.control_proposal_ack.clone(),
             membership_compensation_evidence: None,
         },
-        contact_projection.ok_or_else(|| {
-            AppError::internal("accepted Contact commit is missing its projection mutation")
-        })?,
+        contact_projection,
+        completion_draft,
         Vec::new(),
         None,
     )
@@ -1491,26 +1389,25 @@ async fn commit(
     completion::resolve_completion(state, &response_binding).await
 }
 
+enum ContactCommitPlan {
+    Failed(ContactFailedOutcome),
+    Ready {
+        projection: soland_services::events::CommitContactProjection,
+        action: soland_storage::ContactCompletionAction,
+        local_mirror_target: Option<String>,
+    },
+}
 async fn plan_contact_commit(
     state: &AppState,
     reservation: &ContactReservation,
     event: &Event,
-) -> Result<
-    (
-        ContactOperationOutcome,
-        Option<soland_services::events::CommitContactProjection>,
-    ),
-    AppError,
-> {
+) -> Result<ContactCommitPlan, AppError> {
+    use soland_storage::ContactCompletionAction;
     let holder = reservation.holder.contact_actor_id().clone();
     let peer = reservation.branch.peer().contact_actor_id().clone();
     let contacts = state.contacts();
-    let digest_suite = reservation
-        .event_draft
-        .event_digest
-        .digest_suite()
-        .map_err(|error| AppError::internal(format!("stored Contact digest suite: {error}")))?;
     let projection;
+    let mut local_mirror_target = None;
     let outcome = match &reservation.branch {
         ContactReservationBranch::Request {
             granted_to_peer_scopes,
@@ -1542,14 +1439,6 @@ async fn plan_contact_commit(
                     .unwrap_or_default(),
                 &holder,
                 &peer,
-            )?;
-            let request_receipt = planned_request_receipt(
-                state,
-                reservation,
-                event,
-                digest_suite,
-                slot_version,
-                slot_predecessor.clone(),
             )?;
             let (mut history, expected_updated_at, created_at, mut request_slot_states) =
                 match existing {
@@ -1654,26 +1543,13 @@ async fn plan_contact_commit(
                         )
                     }
                     Some(_) => {
-                        return Ok((
-                            ContactOperationOutcome::Failed {
-                                outcome: ContactFailedOutcome {
-                                    result_kind: ContactResultKind::Request,
-                                    operation_id: reservation.operation_id.clone(),
-                                    reason: ContactOperationRejectReason::ContactRoundConflict,
-                                },
-                            },
-                            None,
-                        ));
+                        return Ok(ContactCommitPlan::Failed(ContactFailedOutcome {
+                            result_kind: ContactResultKind::Request,
+                            operation_id: reservation.operation_id.clone(),
+                            reason: ContactOperationRejectReason::ContactRoundConflict,
+                        }));
                     }
                 };
-            accept_request_slot_transition(
-                &mut request_slot_states,
-                &holder,
-                &peer,
-                slot_version,
-                slot_predecessor.as_ref(),
-                request_receipt.receipt_digest.clone(),
-            )?;
             let pending_incoming_admitted = if same_service_target {
                 let target_account_id = peer.as_account_id().ok_or_else(|| {
                     AppError::internal("same-service Contact target is not an Account")
@@ -1693,24 +1569,8 @@ async fn plan_contact_commit(
             // trust tier. A DID without URL components legitimately uses `explicit_address`,
             // but its local recipient still needs the exact privately
             // resolvable request Event required to author a response.
-            let verified_mirror = (same_service_target && pending_incoming_admitted)
-                .then(|| {
-                    Ok::<_, AppError>(soland_storage::ContactVerifiedMirrorRecord {
-                        target_holder_principal_id: contact_mirror_target_holder_key(&peer),
-                        request_event_id: event.event_id.to_string(),
-                        request_digest: request_receipt.core.request_digest().to_string(),
-                        canonical_event_bytes: arkret_canonical::canonical_json_bytes(event)
-                            .map_err(|error| {
-                                AppError::internal(format!(
-                                    "same-service Contact mirror canonical Event: {error}"
-                                ))
-                            })?,
-                        source_receipt: request_receipt.clone(),
-                        issuer_id: state.service_id().clone(),
-                        verified_at: now(),
-                    })
-                })
-                .transpose()?;
+            local_mirror_target = (same_service_target && pending_incoming_admitted)
+                .then(|| contact_mirror_target_holder_key(&peer));
             projection = Some(soland_services::events::CommitContactProjection {
                 completion_intent: None,
                 record: ContactRecord {
@@ -1724,7 +1584,7 @@ async fn plan_contact_commit(
                     pending_incoming_admitted,
                     request_event_ref: Some(event.event_id.clone()),
                     request_slot_states,
-                    request_receipts: vec![request_receipt.clone()],
+                    request_receipts: Vec::new(),
                     request_mirror_receipts: Vec::new(),
                     contact_round_evidence: None,
                     contact_round_evidence_history: std::mem::take(&mut history),
@@ -1746,14 +1606,12 @@ async fn plan_contact_commit(
                 },
                 expected_updated_at,
                 conflict_code: "contact_round_conflict".to_owned(),
-                verified_mirror,
+                verified_mirror: None,
                 invite_policy: None,
             });
-            ContactOperationOutcome::Accepted {
-                outcome: ContactAcceptedOutcome::Request {
-                    operation_id: reservation.operation_id.clone(),
-                    request_acceptance_receipt: request_receipt,
-                },
+            ContactCompletionAction::Request {
+                slot_version,
+                slot_predecessor,
             }
         }
         ContactReservationBranch::Response {
@@ -1819,25 +1677,6 @@ async fn plan_contact_commit(
                 slot_predecessor.as_ref(),
                 outgoing_slot_absence_digest.clone(),
             )?;
-            let issuer = state.service_core_id();
-            let response_receipt = NormalResponseAcceptanceReceipt {
-                contact_round_id: contact_round_id.clone(),
-                request_receipt: request_receipt.clone(),
-                response_event_ref: event.event_id.clone(),
-                outgoing_slot_absence_digest,
-                accepted_at,
-                issuer_id: issuer,
-                signature: planned_contact_signature(state)?,
-            };
-            let current_proof = planned_current_proof(
-                state,
-                contact_round_id.clone(),
-                reservation.branch.peer().clone(),
-                event,
-                digest_suite,
-            )?;
-            let requester_current_proof =
-                local_requester_current_proof(state, contact_round_id, request_receipt).await?;
             record.status = "accepted".to_owned();
             record.request_receipts.clear();
             record.request_mirror_receipts.clear();
@@ -1845,30 +1684,7 @@ async fn plan_contact_commit(
             record.version = Some(1);
             record.granted_to_requester_scopes = contact_scope_strings(granted_to_peer_scopes);
             record.response_event_ref = Some(event.event_id.clone());
-            record.contact_round_evidence = Some(ContactRoundEvidenceBundle {
-                contact_round_id: contact_round_id.clone(),
-                previous_terminal_contact_round_id: request_receipt
-                    .core
-                    .previous_terminal_contact_round_id
-                    .clone(),
-                contact_round,
-                request_receipts: vec![request_receipt.clone()],
-                normal_response_receipt: Some(response_receipt.clone()),
-                glare_concurrency_attestations: None,
-                // A same-service pair already has the requester_id's accepted
-                // PCR Event and exact local principal authority pair, so its source
-                // can issue both holder checkpoints without a transport
-                // round-trip. Cross-service pairs still merge the requester_id
-                // proof returned by the peer carrier.
-                current_proofs: requester_current_proof
-                    .into_iter()
-                    .chain(std::iter::once(current_proof.clone()))
-                    .collect(),
-                continuity_checkpoint: record
-                    .contact_round_evidence_history
-                    .iter()
-                    .find_map(|bundle| bundle.continuity_checkpoint.clone()),
-            });
+            record.contact_round_evidence = None;
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             projection = Some(soland_services::events::CommitContactProjection {
                 completion_intent: None,
@@ -1878,24 +1694,9 @@ async fn plan_contact_commit(
                 verified_mirror: None,
                 invite_policy: None,
             });
-            let lineage = planned_lineage(
-                state,
-                reservation.holder.clone(),
-                reservation.branch.peer().clone(),
-                contact_round_id.clone(),
-                1,
-                None,
-                event.event_id.clone(),
-                granted_to_peer_scopes.clone(),
-                false,
-            )?;
-            ContactOperationOutcome::Accepted {
-                outcome: ContactAcceptedOutcome::Response {
-                    operation_id: reservation.operation_id.clone(),
-                    normal_response_acceptance_receipt: response_receipt,
-                    lineage,
-                    current_proof,
-                },
+            ContactCompletionAction::Response {
+                request_receipt: request_receipt.clone(),
+                absence,
             }
         }
         ContactReservationBranch::Reject {
@@ -1934,19 +1735,8 @@ async fn plan_contact_commit(
                 verified_mirror: None,
                 invite_policy: None,
             });
-            let accepted_at = now();
-            let issuer = state.service_core_id();
-            ContactOperationOutcome::Accepted {
-                outcome: ContactAcceptedOutcome::Reject {
-                    operation_id: reservation.operation_id.clone(),
-                    reject_acceptance_receipt: RejectAcceptanceReceipt {
-                        request_receipt: request_receipt.clone(),
-                        reject_event_ref: event.event_id.clone(),
-                        accepted_at,
-                        issuer_id: issuer,
-                        signature: planned_contact_signature(state)?,
-                    },
-                },
+            ContactCompletionAction::Reject {
+                request_receipt: request_receipt.clone(),
             }
         }
         ContactReservationBranch::ScopeUpdate {
@@ -1979,24 +1769,6 @@ async fn plan_contact_commit(
             // heads, so an empty intersection grants nothing.
             record.status = "accepted".to_owned();
             set_holder_head(&mut record, &holder, event.event_id.clone());
-            let current_proof = planned_current_proof(
-                state,
-                contact_round_id.clone(),
-                reservation.branch.peer().clone(),
-                event,
-                digest_suite,
-            )?;
-            if let Some(bundle) = record.contact_round_evidence.as_mut() {
-                bundle
-                    .current_proofs
-                    .retain(|proof| proof.peer != current_proof.peer);
-                bundle.current_proofs.push(current_proof.clone());
-                bundle.current_proofs.sort_by(|left, right| {
-                    left.peer
-                        .contact_actor_id()
-                        .cmp(&right.peer.contact_actor_id())
-                });
-            }
             projection = Some(soland_services::events::CommitContactProjection {
                 completion_intent: None,
                 record,
@@ -2005,24 +1777,7 @@ async fn plan_contact_commit(
                 verified_mirror: None,
                 invite_policy: None,
             });
-            let lineage = planned_lineage(
-                state,
-                reservation.holder.clone(),
-                reservation.branch.peer().clone(),
-                contact_round_id.clone(),
-                *version,
-                Some(predecessor_event_ref.clone()),
-                event.event_id.clone(),
-                granted_to_peer_scopes.clone(),
-                false,
-            )?;
-            ContactOperationOutcome::Accepted {
-                outcome: ContactAcceptedOutcome::ScopeUpdate {
-                    operation_id: reservation.operation_id.clone(),
-                    lineage,
-                    current_proof,
-                },
-            }
+            ContactCompletionAction::ScopeUpdate
         }
         ContactReservationBranch::Tombstone {
             contact_round_id,
@@ -2048,24 +1803,6 @@ async fn plan_contact_commit(
             record.request_mirror_receipts.clear();
             record.tombstone_event_ref = Some(event.event_id.clone());
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
-            let current_proof = planned_current_proof(
-                state,
-                contact_round_id.clone(),
-                reservation.branch.peer().clone(),
-                event,
-                digest_suite,
-            )?;
-            if let Some(bundle) = record.contact_round_evidence.as_mut() {
-                bundle
-                    .current_proofs
-                    .retain(|proof| proof.peer != current_proof.peer);
-                bundle.current_proofs.push(current_proof.clone());
-                bundle.current_proofs.sort_by(|left, right| {
-                    left.peer
-                        .contact_actor_id()
-                        .cmp(&right.peer.contact_actor_id())
-                });
-            }
             let invite_policy = if *block_peer {
                 let holder_account_id = match &reservation.holder {
                     ContactPeer::Human { account_id } => account_id.clone(),
@@ -2098,27 +1835,15 @@ async fn plan_contact_commit(
                 verified_mirror: None,
                 invite_policy,
             });
-            let lineage = planned_lineage(
-                state,
-                reservation.holder.clone(),
-                reservation.branch.peer().clone(),
-                contact_round_id.clone(),
-                *version,
-                Some(predecessor_event_ref.clone()),
-                event.event_id.clone(),
-                Vec::new(),
-                true,
-            )?;
-            ContactOperationOutcome::Accepted {
-                outcome: ContactAcceptedOutcome::Tombstone {
-                    operation_id: reservation.operation_id.clone(),
-                    lineage,
-                    current_proof,
-                },
-            }
+            ContactCompletionAction::Tombstone
         }
     };
-    Ok((outcome, projection))
+    Ok(ContactCommitPlan::Ready {
+        projection: projection
+            .ok_or_else(|| AppError::internal("Contact plan omits its projection"))?,
+        action: outcome,
+        local_mirror_target,
+    })
 }
 
 fn imported_contact_continuity_history(
@@ -2254,18 +1979,14 @@ fn imported_contact_continuity_history(
     Ok(tail)
 }
 
-async fn prepare_contact_completion_intent(
+async fn prepare_contact_completion_draft(
     state: &AppState,
     reservation: &ContactReservation,
     event: &Event,
-    outcome: &ContactOperationOutcome,
+    action: soland_storage::ContactCompletionAction,
     response_binding: soland_storage::ContactCompletionBinding,
-) -> Result<soland_storage::ContactCompletionIntent, AppError> {
-    let ContactOperationOutcome::Accepted { outcome } = outcome else {
-        return Err(AppError::internal(
-            "Contact completion requires accepted planning input",
-        ));
-    };
+    local_mirror_target: Option<String>,
+) -> Result<soland_storage::ContactCompletionDraft, AppError> {
     let introduction_evidence = match &reservation.branch {
         ContactReservationBranch::Request {
             introduction_evidence,
@@ -2273,27 +1994,36 @@ async fn prepare_contact_completion_intent(
         } => Some((**introduction_evidence).clone()),
         _ => None,
     };
-    let delivery = contact_delivery_address(
+    let contact_address = contact_delivery_address(
         state,
         reservation.branch.peer(),
         introduction_evidence.as_ref(),
     )
     .await?
-    .map(|contact_address| {
-        Ok::<_, AppError>(soland_storage::ContactDeliveryTarget {
+    .unwrap_or_else(|| PeerContactAddress {
+        recipient: reservation.branch.peer().clone(),
+        service_resolution: ServiceResolutionCarrier::ResolutionUrl {
+            resolution_url: format!(
+                "{}{}",
+                state.config().public_base_url.trim_end_matches('/'),
+                arkret_models_identity::canonical_service_resolution_path(&state.service_core_id())
+            ),
+        },
+        route_assistance: None,
+    });
+    Ok(soland_storage::ContactCompletionDraft {
+        event: event.clone(),
+        operation_id: reservation.operation_id.clone(),
+        holder: reservation.holder.clone(),
+        action,
+        response_binding,
+        target: soland_storage::ContactDeliveryTarget {
             contact_address,
             introduction_evidence,
             idempotency_key: IdempotencyKey::new(format!("peer-contact:{}", event.event_id))
                 .map_err(|error| AppError::internal(error.to_string()))?,
-        })
-    })
-    .transpose()?;
-    Ok(soland_storage::ContactCompletionIntent {
-        event: event.clone(),
-        outcome: outcome.clone(),
-        response_binding,
-        delivery,
-        local_mirror: None,
+        },
+        local_mirror_target,
     })
 }
 

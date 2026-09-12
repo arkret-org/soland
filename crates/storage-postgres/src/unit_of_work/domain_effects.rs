@@ -2,9 +2,6 @@
 //! command/member order replays each intent against the transaction's state.
 use std::collections::BTreeMap;
 
-use arkret_models_collaboration::contact_operations::{
-    ContactCurrentProof, ContactRoundEvidenceBundle,
-};
 use arkret_models_collaboration::governance::invite_addressing::*;
 use arkret_wire::{AccountId, ActorId, CommandOutcome, Event, EventKind};
 use diesel::sql_types::{BigInt, Jsonb, Nullable, Text};
@@ -40,18 +37,16 @@ enum ContactCommand {
     },
     Accept {
         scopes: Vec<String>,
-        evidence: ContactRoundEvidenceBundle,
+        round_id: arkret_wire::Hash,
         slots: Vec<soland_storage::ContactRequestSlotState>,
     },
     Reject {},
     Scope {
         scopes: Vec<String>,
         version: u64,
-        proofs: Vec<ContactCurrentProof>,
     },
     Tombstone {
         version: u64,
-        proofs: Vec<ContactCurrentProof>,
     },
 }
 
@@ -72,28 +67,16 @@ fn contact_intent(
     } else {
         record.granted_to_requester_scopes.clone()
     };
-    let proofs = record
-        .contact_round_evidence
-        .as_ref()
-        .map(|bundle| {
-            bundle
-                .current_proofs
-                .iter()
-                .filter(|proof| proof.head_event_ref == event.event_id)
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
     let command = match event.kind {
         EventKind::ContactRequested => ContactCommand::Request {
             initial: record.clone(),
         },
         EventKind::ContactAccepted => ContactCommand::Accept {
             scopes,
-            evidence: record
-                .contact_round_evidence
+            round_id: record
+                .contact_round_id
                 .clone()
-                .ok_or_else(|| invalid("Contact response evidence missing"))?,
+                .ok_or_else(|| invalid("Contact response round missing"))?,
             slots: record
                 .request_slot_states
                 .iter()
@@ -107,13 +90,11 @@ fn contact_intent(
             version: record
                 .version
                 .ok_or_else(|| invalid("Contact version missing"))?,
-            proofs,
         },
         EventKind::ContactTombstone => ContactCommand::Tombstone {
             version: record
                 .version
                 .ok_or_else(|| invalid("Contact version missing"))?,
-            proofs,
         },
         _ => return Err(invalid("non-Contact Event carries Contact intent")),
     };
@@ -149,7 +130,7 @@ pub(super) async fn stage_domain_effects(
         .and_then(|commit| commit.completion_intent.as_ref());
     if let Some(intent) = contact_completion_intent {
         intent.validate_event_binding()?;
-        if arkret_canonical::canonical_json_bytes(&intent.event).map_err(invalid)?
+        if arkret_canonical::canonical_json_bytes(&intent.plan.event).map_err(invalid)?
             != arkret_canonical::canonical_json_bytes(event).map_err(invalid)?
         {
             return Err(invalid(
@@ -158,7 +139,7 @@ pub(super) async fn stage_domain_effects(
         }
     }
     let contact_completion_binding = contact_completion_intent
-        .map(|intent| serde_json::to_value(&intent.response_binding))
+        .map(|intent| serde_json::to_value(&intent.plan.response_binding))
         .transpose()
         .map_err(invalid)?;
     let contact_completion_intent = contact_completion_intent
@@ -206,7 +187,7 @@ pub(crate) async fn settle_domain_effects(
         if outcome == CommandOutcome::Committed {
             let effects: PendingDomainEffects = serde_json::from_value(value).map_err(invalid)?;
             if let Some(contact) = effects.contact {
-                apply_contact(conn, event, contact).await?;
+                apply_contact(conn, event, digest, contact).await?;
             }
             if effects.consent {
                 apply_consent(conn, event).await?;
@@ -224,20 +205,6 @@ pub(crate) async fn settle_domain_effects(
         crate::contacts::completion::reject_pending(conn, digest).await?;
     }
     Ok(())
-}
-
-fn merge_proofs(record: &mut ContactRecord, proofs: Vec<ContactCurrentProof>) {
-    if let Some(bundle) = record.contact_round_evidence.as_mut() {
-        for proof in proofs {
-            bundle
-                .current_proofs
-                .retain(|current| current.peer != proof.peer);
-            bundle.current_proofs.push(proof);
-        }
-        bundle
-            .current_proofs
-            .sort_by_key(|proof| proof.peer.contact_actor_id());
-    }
 }
 
 fn replay_contact(
@@ -279,17 +246,17 @@ fn replay_contact(
         ContactCommand::Request { .. } => {}
         ContactCommand::Accept {
             scopes,
-            evidence,
+            round_id,
             slots,
         } => {
             record.status = "accepted".to_owned();
-            record.contact_round_id = Some(evidence.contact_round_id.clone());
+            record.contact_round_id = Some(round_id.clone());
             record.version = Some(1);
             record.granted_to_requester_scopes = scopes.clone();
             record.response_event_ref = Some(event.event_id.clone());
             record.request_receipts.clear();
             record.request_mirror_receipts.clear();
-            record.contact_round_evidence = Some(evidence.clone());
+            record.contact_round_evidence = None;
             for slot in slots {
                 record
                     .request_slot_states
@@ -303,11 +270,7 @@ fn replay_contact(
             record.request_receipts.clear();
             record.request_mirror_receipts.clear();
         }
-        ContactCommand::Scope {
-            scopes,
-            version,
-            proofs,
-        } => {
+        ContactCommand::Scope { scopes, version } => {
             if record.requester_id == event.actor_id {
                 record.granted_to_target_scopes = scopes.clone();
                 record.request_event_ref = Some(event.event_id.clone());
@@ -317,15 +280,18 @@ fn replay_contact(
             }
             record.version = Some(*version);
             record.status = "accepted".to_owned();
-            merge_proofs(&mut record, proofs.clone());
         }
-        ContactCommand::Tombstone { version, proofs } => {
+        ContactCommand::Tombstone { version } => {
             record.version = Some(*version);
             record.status = "tombstoned".to_owned();
             record.tombstone_event_ref = Some(event.event_id.clone());
+            if record.requester_id == event.actor_id {
+                record.request_event_ref = Some(event.event_id.clone());
+            } else {
+                record.response_event_ref = Some(event.event_id.clone());
+            }
             record.request_receipts.clear();
             record.request_mirror_receipts.clear();
-            merge_proofs(&mut record, proofs.clone());
         }
     }
     record.updated_at = updated_at;
@@ -335,10 +301,12 @@ fn replay_contact(
 async fn apply_contact(
     conn: &mut AsyncPgConnection,
     event: &Event,
-    intent: ContactIntent,
+    digest: &str,
+    mut intent: ContactIntent,
 ) -> PersistenceResult<()> {
     let current = crate::contacts::lock_contact(conn, &intent.requester, &intent.target).await?;
     let expected_updated_at = current.as_ref().map(|record| record.updated_at);
+    freeze_contact_receipt(conn, digest, &mut intent, current.as_ref()).await?;
     let record = replay_contact(event, &intent, current)?;
     // CAS is only a lock-protected local write check, freshly derived here.
     // An admission-time row revision is never a condition on Seal finality.
@@ -362,6 +330,97 @@ async fn apply_contact(
         },
     )
     .await
+}
+
+async fn freeze_contact_receipt(
+    conn: &mut AsyncPgConnection,
+    digest: &str,
+    contact: &mut ContactIntent,
+    current: Option<&ContactRecord>,
+) -> PersistenceResult<()> {
+    use soland_storage::ContactCompletionAction;
+    #[derive(diesel::QueryableByName)]
+    struct Pending {
+        #[diesel(sql_type=Nullable<Jsonb>)]
+        contact_completion_intent: Option<serde_json::Value>,
+    }
+    let row=sql_query("SELECT contact_completion_intent FROM state_control_events WHERE event_digest=$1 FOR UPDATE")
+        .bind::<Text,_>(digest).get_result::<Pending>(conn).await.map_err(PersistenceError::database)?;
+    let Some(raw) = row.contact_completion_intent else {
+        return Ok(());
+    };
+    let mut completion: soland_storage::ContactCompletionIntent =
+        serde_json::from_value(raw).map_err(invalid)?;
+    completion.validate_event_binding()?;
+    completion.freeze_acceptance_time(chrono::Utc::now())?;
+    let actor = &completion.plan.event.actor_id;
+    let peer = if actor == &contact.requester {
+        &contact.target
+    } else {
+        &contact.requester
+    };
+    let prior = current.and_then(|record| {
+        record
+            .request_slot_states
+            .iter()
+            .find(|slot| &slot.owner_id == actor && &slot.peer_id == peer)
+    });
+    let slot_next = match &completion.plan.action {
+        ContactCompletionAction::Request {
+            slot_version,
+            slot_predecessor,
+        } => Some((
+            *slot_version,
+            slot_predecessor,
+            completion.request_core_digest()?,
+        )),
+        ContactCompletionAction::Response { absence, .. } => {
+            absence.validate_shape().map_err(invalid)?;
+            if &absence.request_slot_owner != actor {
+                return Err(invalid(
+                    "Contact absence owner differs from confirmed actor",
+                ));
+            }
+            Some((
+                absence.cas_sequence,
+                &absence.slot_predecessor,
+                absence.digest().map_err(invalid)?,
+            ))
+        }
+        _ => None,
+    };
+    if let Some((sequence, predecessor, head)) = slot_next {
+        if sequence != prior.map_or(1, |slot| slot.accepted_sequence + 1)
+            || predecessor.as_ref() != prior.map(|slot| &slot.head_digest)
+        {
+            return Err(invalid(
+                "Contact committed slot does not consume its exact durable predecessor",
+            ));
+        }
+        let slots = match &mut contact.command {
+            ContactCommand::Request { initial } => &mut initial.request_slot_states,
+            ContactCommand::Accept { slots, .. } => slots,
+            _ => {
+                return Err(invalid(
+                    "Contact slot plan differs from committed domain transition",
+                ));
+            }
+        };
+        slots.retain(|slot| &slot.owner_id != actor || &slot.peer_id != peer);
+        slots.push(soland_storage::ContactRequestSlotState {
+            owner_id: actor.clone(),
+            peer_id: peer.clone(),
+            accepted_sequence: sequence,
+            head_digest: head,
+        });
+    }
+    sql_query("UPDATE state_control_events SET contact_completion_intent=$2 WHERE event_digest=$1")
+        .bind::<Text, _>(digest)
+        .bind::<Jsonb, _>(serde_json::to_value(completion).map_err(invalid)?)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    Ok(())
 }
 
 async fn block_peer(

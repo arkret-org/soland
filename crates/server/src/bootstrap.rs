@@ -26,7 +26,7 @@ use ed25519_dalek::SigningKey;
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_http::config::AppConfig;
+use soland_http::config::{AppConfig, CONFIGURED_SIGNING_KEY_REF, SERVICE_IDENTITY_KEYSTORE_APP};
 use soland_http::webvh_validation::{
     WebvhLogEntry, validate_log_chain, validate_rotation_authorization_for_log,
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
@@ -38,9 +38,6 @@ use soland_services::identity::{
 };
 use soland_services::persistence::PersistenceHandle;
 use soland_storage_postgres::{Db, PgPersistenceStore};
-
-const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
-const CONFIGURED_SIGNING_KEY_REF: &str = "secret:SOLAND_NOTARY_SIGNING_KEY";
 
 /// Runtime values resolved before AppState is constructed. The service DID is
 /// deliberately absent from [`AppConfig`].

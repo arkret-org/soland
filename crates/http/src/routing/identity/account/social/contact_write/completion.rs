@@ -51,7 +51,7 @@ pub(crate) async fn materialize_contact_completions(state: &AppState) -> Result<
         // not starve unrelated committed commands behind the first page.
         for item in &ready {
             if let Err(error) = materialize_one(state, item).await {
-                tracing::warn!(event_id=%item.intent.event.event_id,error=%error,"Contact committed completion remains pending");
+                tracing::warn!(event_id=%item.intent.plan.event.event_id,error=%error,"Contact committed completion remains pending");
             }
         }
         if ready.len() < 64 {
@@ -75,7 +75,7 @@ async fn materialize_one(
                 "Contact command evidence is unavailable"
             )
         })?;
-    if snapshot.event.event_id != ready.intent.event.event_id
+    if snapshot.event.event_id != ready.intent.plan.event.event_id
         || !matches!(snapshot.command_decisions.as_slice(),[decision] if decision.outcome==arkret_wire::CommandOutcome::Committed && decision.seal_id==ready.deciding_seal_id)
     {
         return Err(crate::app_error!(
@@ -84,12 +84,12 @@ async fn materialize_one(
         ));
     }
     let outcome = sign_outcome(state, &ready.intent).await?;
-    let delivery = if let Some(target) = &ready.intent.delivery {
+    let delivery = if ready.intent.requires_delivery() {
+        let target = &ready.intent.plan.target;
         let carrier = ready
             .intent
-            .delivery_carrier(&outcome)
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| AppError::internal("Contact delivery intent is absent"))?;
+            .finalized_carrier(&outcome)
+            .map_err(|error| AppError::internal(error.to_string()))?;
         let row = crate::routing::identity::contact_federation::prepare_peer_contact_carrier(
             state,
             target.contact_address.delivery_station_id().as_str(),
@@ -125,84 +125,174 @@ async fn sign_outcome(
     state: &AppState,
     intent: &ContactCompletionIntent,
 ) -> Result<ContactAcceptedOutcome, AppError> {
-    let mut outcome = intent.outcome.clone();
-    match &mut outcome {
-        ContactAcceptedOutcome::Request {
-            request_acceptance_receipt: receipt,
-            ..
+    use soland_storage::ContactCompletionAction;
+    let error = |error: arkret_wire::WireError| AppError::internal(error.to_string());
+    let accepted_at = intent
+        .accepted_at()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let event = &intent.plan.event;
+    let operation_id = intent.plan.operation_id.clone();
+    let producer = intent.producer_signer.clone();
+    let issuer = state.service_core_id();
+    // Receipt signatures refer to the actual durable slot-acceptance instant.
+    // Lineage and refreshed checkpoint signatures use their actual signing time.
+    let receipt_key = if matches!(
+        intent.plan.action,
+        ContactCompletionAction::Request { .. }
+            | ContactCompletionAction::Response { .. }
+            | ContactCompletionAction::Reject { .. }
+    ) {
+        Some(receipt_key_at_acceptance(state, accepted_at).await?)
+    } else {
+        None
+    };
+    let sign_receipt = |bytes: &[u8]| -> arkret_wire::Result<ProtocolSignature> {
+        let (method, key) = receipt_key.as_ref().ok_or_else(|| {
+            arkret_wire::WireError::Protocol("Contact receipt signing key missing".into())
+        })?;
+        Ok(ProtocolSignature {
+            verification_method: method.clone(),
+            created_at: now(),
+            jws: Base64UrlString::new(URL_SAFE_NO_PAD.encode(key.sign(bytes).to_bytes()))
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?,
+        })
+    };
+    let sign_lineage = |bytes: &[u8]| {
+        sign_contact_transcript(state, bytes)
+            .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+    };
+    Ok(match &intent.plan.action {
+        ContactCompletionAction::Request { .. } => ContactAcceptedOutcome::Request {
+            operation_id,
+            request_acceptance_receipt: RequestAcceptanceReceipt::sign_with(
+                intent
+                    .request_receipt_core()
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+                sign_receipt,
+            )
+            .map_err(error)?,
+        },
+        ContactCompletionAction::Response {
+            request_receipt,
+            absence,
         } => {
-            receipt.core.accepted_at = now();
-            receipt.receipt_digest = receipt
-                .computed_core_digest()
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            receipt.signature = sign_contact_transcript(
-                state,
-                &receipt
-                    .canonical_signing_bytes()
+            let payload: ContactAcceptedPayload = serde_json::from_value(
+                serde_json::to_value(&event.payload)
                     .map_err(|error| AppError::internal(error.to_string()))?,
-            )?;
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+            let receipt = NormalResponseAcceptanceReceipt::sign_with(
+                payload.contact_round_id.clone(),
+                request_receipt.clone(),
+                event.event_id.clone(),
+                producer.clone(),
+                absence.digest().map_err(error)?,
+                accepted_at,
+                issuer,
+                sign_receipt,
+            )
+            .map_err(error)?;
+            let lineage = ContactLineage::sign_with(
+                payload.contact_round_id.clone(),
+                intent.plan.holder.clone(),
+                payload.peer.clone(),
+                payload.version,
+                None,
+                event.event_id.clone(),
+                producer,
+                payload.granted_to_peer_scopes,
+                None,
+                sign_lineage,
+            )
+            .map_err(error)?;
+            let current_proof =
+                latest_direction_proof(state, intent, &payload.contact_round_id, &payload.peer)
+                    .await?;
+            ContactAcceptedOutcome::Response {
+                operation_id,
+                normal_response_acceptance_receipt: receipt,
+                lineage,
+                current_proof,
+            }
         }
-        ContactAcceptedOutcome::Response {
-            normal_response_acceptance_receipt: receipt,
-            lineage,
-            current_proof,
-            ..
-        } => {
-            receipt.accepted_at = now();
-            receipt.signature = sign_contact_transcript(
-                state,
-                &receipt
-                    .canonical_signing_bytes()
+        ContactCompletionAction::Reject { request_receipt } => ContactAcceptedOutcome::Reject {
+            operation_id,
+            reject_acceptance_receipt: RejectAcceptanceReceipt::sign_with(
+                request_receipt.clone(),
+                event.event_id.clone(),
+                producer,
+                accepted_at,
+                issuer,
+                sign_receipt,
+            )
+            .map_err(error)?,
+        },
+        ContactCompletionAction::ScopeUpdate => {
+            let payload: ContactScopeUpdatePayload = serde_json::from_value(
+                serde_json::to_value(&event.payload)
                     .map_err(|error| AppError::internal(error.to_string()))?,
-            )?;
-            lineage.signature = sign_contact_transcript(
-                state,
-                &lineage
-                    .canonical_signing_bytes()
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+            let lineage = ContactLineage::sign_with(
+                payload.contact_round_id.clone(),
+                intent.plan.holder.clone(),
+                payload.peer.clone(),
+                payload.version,
+                Some(payload.predecessor_event_ref),
+                event.event_id.clone(),
+                producer,
+                payload.granted_to_peer_scopes,
+                None,
+                sign_lineage,
+            )
+            .map_err(error)?;
+            let current_proof =
+                latest_direction_proof(state, intent, &payload.contact_round_id, &payload.peer)
+                    .await?;
+            ContactAcceptedOutcome::ScopeUpdate {
+                operation_id,
+                lineage,
+                current_proof,
+            }
+        }
+        ContactCompletionAction::Tombstone => {
+            let payload: ContactTombstonedPayload = serde_json::from_value(
+                serde_json::to_value(&event.payload)
                     .map_err(|error| AppError::internal(error.to_string()))?,
-            )?;
-            *current_proof = latest_direction_proof(state, intent, current_proof).await?;
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+            let lineage = ContactLineage::sign_with(
+                payload.contact_round_id.clone(),
+                intent.plan.holder.clone(),
+                payload.peer.clone(),
+                payload.version,
+                Some(payload.predecessor_event_ref),
+                event.event_id.clone(),
+                producer,
+                Vec::new(),
+                Some(true),
+                sign_lineage,
+            )
+            .map_err(error)?;
+            let current_proof =
+                latest_direction_proof(state, intent, &payload.contact_round_id, &payload.peer)
+                    .await?;
+            ContactAcceptedOutcome::Tombstone {
+                operation_id,
+                lineage,
+                current_proof,
+            }
         }
-        ContactAcceptedOutcome::Reject {
-            reject_acceptance_receipt: receipt,
-            ..
-        } => {
-            receipt.accepted_at = now();
-            receipt.signature = sign_contact_transcript(
-                state,
-                &receipt
-                    .canonical_signing_bytes()
-                    .map_err(|error| AppError::internal(error.to_string()))?,
-            )?;
-        }
-        ContactAcceptedOutcome::ScopeUpdate {
-            lineage,
-            current_proof,
-            ..
-        }
-        | ContactAcceptedOutcome::Tombstone {
-            lineage,
-            current_proof,
-            ..
-        } => {
-            lineage.signature = sign_contact_transcript(
-                state,
-                &lineage
-                    .canonical_signing_bytes()
-                    .map_err(|error| AppError::internal(error.to_string()))?,
-            )?;
-            *current_proof = latest_direction_proof(state, intent, current_proof).await?;
-        }
-    }
-    Ok(outcome)
+    })
 }
 async fn latest_direction_proof(
     state: &AppState,
     intent: &ContactCompletionIntent,
-    planned: &ContactCurrentProof,
+    round_id: &Hash,
+    direction_peer: &ContactPeer,
 ) -> Result<ContactCurrentProof, AppError> {
-    let holder = &intent.event.actor_id;
-    let peer = planned.peer.contact_actor_id();
+    let holder = &intent.plan.event.actor_id;
+    let peer = direction_peer.contact_actor_id();
     let record = if let Some(record) = state
         .contacts()
         .contact_any(holder, &peer)
@@ -223,24 +313,26 @@ async fn latest_direction_proof(
                 )
             })?
     };
-    let proof = record
-        .contact_round_evidence
-        .as_ref()
-        .filter(|bundle| bundle.contact_round_id == planned.contact_round_id)
-        .and_then(|bundle| {
-            bundle.current_proofs.iter().find(|proof| {
-                proof.peer == planned.peer && proof.issuer_id == state.service_core_id()
-            })
-        })
-        .ok_or_else(|| {
-            crate::app_error!(
-                TemporarilyUnavailable,
-                "Contact current directional head is unavailable"
-            )
-        })?;
+    if record.contact_round_id.as_ref() != Some(round_id) {
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
+            "Contact current round is unavailable"
+        ));
+    }
+    let head = if &record.requester_id == holder {
+        record.request_event_ref.as_ref()
+    } else {
+        record.response_event_ref.as_ref()
+    }
+    .ok_or_else(|| {
+        crate::app_error!(
+            TemporarilyUnavailable,
+            "Contact current directional head is unavailable"
+        )
+    })?;
     let snapshot = state
         .projections()
-        .control_proposal_snapshot(&proof.head_event_ref.event_digest())
+        .control_proposal_snapshot(&head.event_digest())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
@@ -249,7 +341,7 @@ async fn latest_direction_proof(
                 "Contact current head confirmation is unavailable"
             )
         })?;
-    if snapshot.event.event_id != proof.head_event_ref
+    if &snapshot.event.event_id != head
         || snapshot.event.actor_id != *holder
         || !matches!(snapshot.command_decisions.as_slice(),[decision] if decision.outcome==arkret_wire::CommandOutcome::Committed)
     {
@@ -260,8 +352,8 @@ async fn latest_direction_proof(
     }
     let next = signed_current_proof(
         state,
-        planned.contact_round_id.clone(),
-        planned.peer.clone(),
+        round_id.clone(),
+        direction_peer.clone(),
         &snapshot.event,
         snapshot
             .event
@@ -279,4 +371,84 @@ async fn latest_direction_proof(
         ));
     }
     Ok(next)
+}
+
+async fn receipt_key_at_acceptance(
+    state: &AppState,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(DidUrl, ed25519_dalek::SigningKey), AppError> {
+    let history = state
+        .dids()
+        .resolve_webvh_state_at(&state.service_did(), accepted_at)
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                TemporarilyUnavailable,
+                format!("Contact historical assertion state unavailable: {error}")
+            )
+        })?;
+    let document: arkret_models_identity::service_identity::ServiceDidDocument =
+        serde_json::from_value(history.document)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    let methods = document
+        .verification_method
+        .iter()
+        .filter(|method| document.assertion_method.contains(&method.id))
+        .map(|method| {
+            Ok((
+                DidUrl::new(method.id.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+                arkret_canonical::decode_ed25519_multibase(&method.public_key_multibase)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            ))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    let current = state.notary_signing_key();
+    let selected = if let Some((method, _)) = methods
+        .iter()
+        .find(|(_, public)| public == current.verifying_key().as_bytes())
+    {
+        (method.clone(), current.as_ref().clone())
+    } else {
+        let identity = state
+            .stored_service_identity()
+            .await
+            .map_err(AppError::internal)?;
+        let config = state.config().clone();
+        tokio::task::spawn_blocking(move || {
+            let store = config
+                .key_store
+                .open(crate::config::SERVICE_IDENTITY_KEYSTORE_APP)
+                .map_err(|error| error.to_string())?;
+            for reference in identity.identity.signing_key_refs {
+                let seed = if reference.as_str() == crate::config::CONFIGURED_SIGNING_KEY_REF {
+                    config.notary_signing_key_seed.map(|seed| seed.to_vec())
+                } else {
+                    store
+                        .as_ref()
+                        .and_then(|store| store.load(reference.as_str()).ok())
+                        .map(|bytes| bytes.to_vec())
+                };
+                let Some(seed) = seed else {
+                    continue;
+                };
+                let seed = zeroize::Zeroizing::new(seed);
+                let Ok(seed): Result<&[u8; 32], _> = seed.as_slice().try_into() else {
+                    continue;
+                };
+                let key = ed25519_dalek::SigningKey::from_bytes(seed);
+                if let Some((method, _)) = methods
+                    .iter()
+                    .find(|(_, public)| public == key.verifying_key().as_bytes())
+                {
+                    return Ok((method.clone(), key));
+                }
+            }
+            Err("Contact historical assertion private key is unavailable".to_owned())
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .map_err(|error| crate::app_error!(TemporarilyUnavailable, error))?
+    };
+    Ok(selected)
 }
