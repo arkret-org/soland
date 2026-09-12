@@ -2919,7 +2919,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
     let authority_set_ref =
         arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
     let decision_policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let mut authority_ack = arkret_wire::ControlProposalAck {
+    let mut ack = arkret_wire::ControlProposalAck {
         kind: arkret_wire::ControlProposalAckKind::SignedAck,
         defer_count: 0,
         realm_id: realm_id.clone(),
@@ -3857,10 +3857,9 @@ mod control_move_ingress_negatives {
         .unwrap();
         let authority_set_ref =
             arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
-        // The durable ingress path validates the aggregate Ack's protocol
-        // bounds, so the fixture needs one well-formed authority Ack: its
-        // signature digest must cover the member's canonical bytes, though the
-        // JWS itself is not verified at admission.
+        // The durable ingress path validates the single authority Ack bounds
+        // and its exact body digest; source signature authentication happens
+        // before this persistence boundary.
         let mut authority_ack = arkret_wire::ControlProposalAck {
             kind: arkret_wire::ControlProposalAckKind::SignedAck,
             defer_count: 0,
@@ -3880,18 +3879,7 @@ mod control_move_ingress_negatives {
                 jws: "fixture-jws".to_owned(),
             },
         };
-        authority_ack.signature.payload_digest = authority_ack.ack_body_digest().unwrap();
-        let ack = arkret_wire::ControlProposalAck {
-            kind: arkret_wire::ControlProposalAckKind::SignedAck,
-            realm_id: realm_id.clone(),
-            proposal_digest: proposal_digest.clone(),
-            received_at: now,
-            decision_due_at: now + chrono::Duration::hours(1),
-            absolute_due_at: now + chrono::Duration::hours(2),
-            defer_count: 0,
-            authority_set_ref,
-            authority_acks: vec![authority_ack],
-        };
+        ack.signature.payload_digest = ack.ack_body_digest().unwrap();
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         ControlAnchorFixture {
@@ -3998,16 +3986,11 @@ mod control_move_ingress_negatives {
         let _db_guard = DB_GUARD.lock().await;
         let fixture = control_anchor_fixture("ack-only");
         let mut ack = fixture.ack.clone();
-        // Repoint the whole aggregate, members included. Moving only the
-        // envelope's digest would trip the SDK's aggregate-consistency check
-        // first and never reach the binding check this case exists for.
-        let unbound_digest =
+        // Keep the single signed body internally consistent while binding it
+        // to a different proposal, so rejection tests the Event/Ack relation.
+        ack.proposal_digest =
             arkret_identifiers::Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
-        ack.proposal_digest = unbound_digest.clone();
-        for member in &mut ack.authority_acks {
-            member.proposal_digest = unbound_digest.clone();
-            member.signature.payload_digest = member.ack_body_digest().unwrap();
-        }
+        ack.signature.payload_digest = ack.ack_body_digest().unwrap();
 
         let error = PgEventCommitUnitOfWork::new(pool.clone())
             .commit_event(fixture.commit_request(Some(
