@@ -29,9 +29,11 @@ pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 const IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS: i64 = 30;
 
 mod backfill;
+mod historical_producer;
 pub(in crate::routing) use backfill::{
     admit_frontier_backfill_event, verify_frontier_backfill_event,
 };
+pub(in crate::routing::events::event_log) use historical_producer::verify_historical_producer;
 
 /// Bind the SDK's online-self publication lane to the exact authenticated
 /// principal authority context. Delayed publication is authorized by its
@@ -2589,7 +2591,7 @@ async fn accept_federated_seal_prerequisite(
 pub(in crate::routing) async fn verify_federated_event_admission(
     state: &AppState,
     event: &arkret_wire::Event,
-    _digest_suite: arkret_canonical::DigestSuite,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), String> {
     let [producer] = event.proofs.as_slice() else {
         return Err("accepted Event must carry exactly one producer proof".to_owned());
@@ -2632,11 +2634,11 @@ pub(in crate::routing) async fn verify_federated_event_admission(
         )
         .await?
     } else {
-        arkret_models_identity::ed25519_verification_key_from_evidence(&evidence)
-            .map_err(|error| format!("producer signer evidence is invalid: {error}"))?
-            .public_key
+        *verify_historical_producer(state, event, digest_suite)
+            .await?
+            .key()
     };
-    verify_federated_producer_event_proof(event, producer, &public_key)?;
+    verify_federated_producer_event_proof(event, producer, &public_key, digest_suite)?;
     let key = arkret_wire::DidKey::new(format!(
         "did:key:{}",
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(&public_key)
@@ -2705,17 +2707,19 @@ fn verify_federated_producer_event_proof(
     event: &arkret_wire::Event,
     producer: &arkret_wire::ProducerEventProof,
     producer_key: &[u8; 32],
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(), String> {
     let envelope_bytes = arkret_signatures::EventProofBuilder::new()
         .envelope_bytes(event)
         .map_err(|error| format!("federated Event canonicalization failed: {error}"))?;
-    arkret_signatures::verify_ed25519_detached_jws_proof(
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
         producer,
         &envelope_bytes,
         &event.actor_id,
         &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
             bytes: producer_key.to_vec(),
         },
+        digest_suite,
     )
     .map_err(|error| format!("admitted producer signature is invalid: {error}"))
 }

@@ -408,13 +408,19 @@ mod federated_producer_event_proof_tests {
         let producer = event.proofs[0].clone();
         let key = SigningKey::from_bytes(&[21_u8; 32]);
 
-        verify_federated_producer_event_proof(&event, &producer, key.verifying_key().as_bytes())
-            .expect("ordinary Event protected header verifies");
+        verify_federated_producer_event_proof(
+            &event,
+            &producer,
+            key.verifying_key().as_bytes(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("ordinary Event protected header verifies");
         let wrong_key = SigningKey::from_bytes(&[22_u8; 32]);
         verify_federated_producer_event_proof(
             &event,
             &producer,
             wrong_key.verifying_key().as_bytes(),
+            arkret_canonical::DigestSuite::Sha256,
         )
         .expect_err("an exact method binding cannot substitute different staged key bytes");
 
@@ -432,6 +438,7 @@ mod federated_producer_event_proof_tests {
             &event,
             &forbidden_kid,
             key.verifying_key().as_bytes(),
+            arkret_canonical::DigestSuite::Sha256,
         )
         .expect_err("Event protected headers must reject kid even with a valid signature");
     }

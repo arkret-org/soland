@@ -46,7 +46,7 @@ async fn verify_with_historical_signer_evidence(
     envelope_bytes: &[u8],
     event_actor: &arkret_wire::ActorId,
     signer: &arkret_wire::ActorId,
-) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
+) -> Result<arkret_wire::DidKey, EventValidationError> {
     let evidence_ref = proof
         .signer_resolution_evidence_ref
         .as_ref()
@@ -79,9 +79,13 @@ async fn verify_with_historical_signer_evidence(
                 format!("producer signer evidence lookup failed: {error}"),
             )
         })?;
-    let Some(dependency) = dependency else {
-        return Ok(None);
-    };
+    let dependency = dependency.ok_or_else(|| {
+        event_validation_error(
+            StatusCode::CONFLICT,
+            "dependency_missing",
+            "ordinary Event historical producer source is unavailable",
+        )
+    })?;
     let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
         authenticated_signer_resolution_evidence: evidence,
         ..
@@ -117,15 +121,31 @@ async fn verify_with_historical_signer_evidence(
         .await
         .map_err(|error| event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error))?
     } else {
-        arkret_models_identity::ed25519_verification_key_from_evidence(&evidence)
-            .map_err(|error| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
-                    format!("producer signer evidence is invalid: {error}"),
-                )
-            })?
-            .public_key
+        *crate::routing::events::event_log::submit::verify_historical_producer(
+            state,
+            event,
+            proof.event_digest.digest_suite().map_err(|error| {
+                event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
+            })?,
+        )
+        .await
+        .map_err(|error| {
+            let missing = error.starts_with("dependency_missing:");
+            event_validation_error(
+                if missing {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::BAD_REQUEST
+                },
+                if missing {
+                    "dependency_missing"
+                } else {
+                    "invalid_proof"
+                },
+                error,
+            )
+        })?
+        .key()
     };
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
         bytes: public_key.to_vec(),
@@ -147,7 +167,7 @@ async fn verify_with_historical_signer_evidence(
             "producer Event proof signature is invalid",
         )
     })?;
-    did_key_from_ed25519_bytes(&public_key).map(Some)
+    did_key_from_ed25519_bytes(&public_key)
 }
 
 pub(crate) async fn validate_event_proofs(
@@ -525,30 +545,23 @@ pub(crate) async fn validate_event_proofs(
                             format!("producer Event is invalid: {error}"),
                         )
                     })?;
-            if let Some(signing_key) = verify_with_historical_signer_evidence(
-                state,
-                &typed_event,
-                &typed_proof,
-                envelope_bytes,
-                &event_actor,
-                &signer,
-            )
-            .await?
+            let staged_applet_key = internal_admission.and_then(|admission| {
+                admission.applet_formal_producer_signing_key(session, object, &verification_method)
+            });
+            if root_anchored_candidate.is_none()
+                && root_anchor_method.is_none()
+                && minimal_metadata_context.is_none()
+                && staged_applet_key.is_none()
             {
-                return Ok(signing_key);
-            }
-            // A verified peer admission freezes the producer key at original
-            // acceptance. Later installation revocation or key rotation must
-            // not reinterpret an accepted historical Event through live gates.
-            if let Some(signing_key) = verify_with_federated_signer_evidence(
-                internal_admission,
-                session,
-                object,
-                &verification_method,
-                &proof_binding_bytes,
-                &jws,
-            )? {
-                return Ok(signing_key);
+                return verify_with_historical_signer_evidence(
+                    state,
+                    &typed_event,
+                    &typed_proof,
+                    envelope_bytes,
+                    &event_actor,
+                    &signer,
+                )
+                .await;
             }
             // Genesis and re-anchor authorize their candidate key in the same
             // atomic unit in which it first signs. The durable device
@@ -643,52 +656,7 @@ pub(crate) async fn validate_event_proofs(
                 )
                 .await;
             }
-            if internal_admission
-                .is_some_and(|admission| admission.is_local_service_producer(session, object))
-            {
-                let expected_method =
-                    state
-                        .service_verification_method("notary-key")
-                        .map_err(|error| {
-                            event_validation_error(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "internal_error",
-                                format!(
-                                    "local service Event signing method is unavailable: {error}"
-                                ),
-                            )
-                        })?;
-                if expected_method.as_str() != verification_method {
-                    return Err(event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "local service Event proof does not use the local service notary key",
-                    ));
-                }
-                let public_key = state.notary_signing_key().verifying_key();
-                let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                    bytes: public_key.to_bytes().to_vec(),
-                };
-                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-                    &typed_proof,
-                    envelope_bytes,
-                    &actor_did,
-                    &material,
-                    digest_suite,
-                )
-                .map_err(|error| {
-                    tracing::debug!(%error, "local service Event proof signature failed");
-                    event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "local service Event proof signature is invalid",
-                    )
-                })?;
-                return did_key_from_ed25519_bytes(public_key.as_bytes());
-            }
-            if let Some(signing_key) = internal_admission.and_then(|admission| {
-                admission.applet_formal_producer_signing_key(session, object, &verification_method)
-            }) {
+            if let Some(signing_key) = staged_applet_key {
                 let material = root_anchor_event_public_key(signing_key.as_str())?;
                 arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
                     &typed_proof,
@@ -707,187 +675,6 @@ pub(crate) async fn validate_event_proofs(
                 })?;
                 return Ok(signing_key.clone());
             }
-            if let Some(signing_key) = verify_with_installed_applet_registration_epoch(
-                state,
-                object,
-                &typed_proof,
-                envelope_bytes,
-                &actor_did,
-                &signer_controller,
-                &verification_method,
-                digest_suite,
-            )
-            .await?
-            {
-                return Ok(signing_key);
-            }
-            if let Some(signing_key) = internal_admission.and_then(|admission| {
-                admission.mimi_reporter_producer_signing_key(session, object, &verification_method)
-            }) {
-                let material = root_anchor_event_public_key(signing_key.as_str())?;
-                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-                    &typed_proof,
-                    envelope_bytes,
-                    &actor_did,
-                    &material,
-                    digest_suite,
-                )
-                .map_err(|error| {
-                    tracing::debug!(%error, "MIMI Agent reporter Event proof failed");
-                    event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "MIMI Agent reporter Event proof is invalid",
-                    )
-                })?;
-                return Ok(signing_key.clone());
-            }
-            if let Some(signing_key) = verify_with_active_agent_session(
-                state,
-                session,
-                &signer_controller,
-                &verification_method,
-                &proof_binding_bytes,
-                &jws,
-            )
-            .await?
-            {
-                return Ok(signing_key);
-            }
-            if object
-                .get("unsigned")
-                .and_then(|unsigned| unsigned.get("agent_authorization_admission"))
-                .is_some()
-            {
-                return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
-                    "Agent Event proof requires matching independently verified Agent signer evidence",
-                ));
-            }
-            // A development login may be either a synthetic local fixture with
-            // no PCR/device authority or a real registered principal that used
-            // the local login surface. Try the deterministic development key
-            // first, but fall through to the ordinary PCR/device verifier when
-            // it does not match. SessionGrant-backed and production sessions
-            // never enter this branch.
-            if state.config().development_mode && session.session_grant.is_none() {
-                let device_fragment = verification_method
-                    .rsplit_once('#')
-                    .map(|(_, fragment)| fragment)
-                    .ok_or_else(|| {
-                        event_validation_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_proof",
-                            "development device Event proof method has no device fragment",
-                        )
-                    })?;
-                arkret_wire::DeviceId::new(device_fragment.to_owned()).map_err(
-                    |_| {
-                        event_validation_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_proof",
-                            "development device Event proof method fragment is not a canonical device id",
-                        )
-                    },
-                )?;
-                let signing_key = arkret_signatures::development_signing_key(&verification_method);
-                let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                    bytes: signing_key.verifying_key().to_bytes().to_vec(),
-                };
-                let development_verification =
-                    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-                        &typed_proof,
-                        envelope_bytes,
-                        &actor_did,
-                        &material,
-                        digest_suite,
-                    );
-                crate::metrics::record_signature_verify(
-                    crate::metrics::SIGNATURE_SCHEME_DEVELOPMENT,
-                    development_verification.is_ok(),
-                );
-                if development_verification.is_ok() {
-                    return did_key_from_ed25519_bytes(signing_key.verifying_key().as_bytes());
-                }
-                tracing::debug!(
-                    "deterministic development Event key did not match; trying registered device authority"
-                );
-            }
-            // §5.4/§8.2: `{principal}#{device_id}` resolves from the current
-            // device-set projection. DID control/delegation methods resolve
-            // from the DID document and retain the high-risk freshness gate.
-            // Both branches go through the SDK's **Event proof** verifier, not
-            // the generic detached-JWS one: the Event protected-header profile
-            // rejects a `kid` member and requires the protected-header
-            // algorithm to be Ed25519. Handing hand-built
-            // binding bytes to the generic verifier — as this call site used to
-            // do — silently dropped both checks.
-            {
-                let verification = if object.get("kind").and_then(Value::as_str)
-                    == Some(arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
-                {
-                    crate::jws_verify::verify_registered_identity_resolution_event_proof_async(
-                        &typed_proof,
-                        envelope_bytes,
-                        &actor_did,
-                        &verification_method,
-                        &signer_controller,
-                        state,
-                    )
-                    .await
-                } else {
-                    let device_fragment = verification_method
-                        .rsplit_once('#')
-                        .map(|(_, fragment)| fragment)
-                        .ok_or_else(|| {
-                            event_validation_error(
-                                StatusCode::BAD_REQUEST,
-                                "invalid_proof",
-                                "ordinary device Event proof method has no device fragment",
-                            )
-                        })?;
-                    arkret_wire::DeviceId::new(device_fragment.to_owned()).map_err(|_| {
-                        event_validation_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_proof",
-                            "ordinary device Event proof method fragment is not a canonical device id",
-                        )
-                    })?;
-                    crate::jws_verify::verify_principal_authorized_event_proof_async(
-                        &typed_proof,
-                        envelope_bytes,
-                        &actor_did,
-                        &verification_method,
-                        &signer_controller,
-                        state,
-                    )
-                    .await
-                };
-                let signing_key = verification.map_err(|error| {
-                    use crate::jws_verify::PrincipalAuthorizedJwsError;
-
-                    match error {
-                        PrincipalAuthorizedJwsError::HighRiskDidFreshness(reason) => {
-                            tracing::debug!(%reason, "event proof DID freshness gate failed");
-                            event_validation_error(
-                                StatusCode::BAD_REQUEST,
-                                "stale_did_document",
-                                "event proof DID document is stale or unavailable for verification",
-                            )
-                        }
-                        PrincipalAuthorizedJwsError::Verification(reason) => {
-                            tracing::debug!(%reason, "event proof JWS verification failed");
-                            event_validation_error(
-                                StatusCode::BAD_REQUEST,
-                                "invalid_proof",
-                                "event proof JWS verification failed",
-                            )
-                        }
-                    }
-                })?;
-                return Ok(signing_key);
-            }
         }
     }
     Err(event_validation_error(
@@ -897,380 +684,6 @@ pub(crate) async fn validate_event_proofs(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn verify_with_installed_applet_registration_epoch(
-    state: &AppState,
-    object: &serde_json::Map<String, Value>,
-    proof: &arkret_wire::ProducerEventProof,
-    envelope_bytes: &[u8],
-    actor_id: &arkret_wire::ActorId,
-    signer_controller: &str,
-    verification_method: &str,
-    digest_suite: arkret_canonical::DigestSuite,
-) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
-    let Some(applet_id) = object.get("applet_id").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    let producer = object
-        .get("executed_by")
-        .or_else(|| object.get("actor_id"))
-        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok());
-    if !matches!(producer, Some(arkret_wire::ActorId::Service { .. })) {
-        return Ok(None);
-    }
-    let fail = |code: &'static str, message: &'static str| {
-        event_validation_error(StatusCode::BAD_REQUEST, code, message)
-    };
-    let effective_scope: arkret_wire::ScopeRef = serde_json::from_value(
-        object
-            .get("scope_ref")
-            .cloned()
-            .ok_or_else(|| fail("schema_violation", "Applet Event proof requires scope_ref"))?,
-    )
-    .map_err(|_| {
-        fail(
-            "schema_violation",
-            "Applet Event proof scope_ref is invalid",
-        )
-    })?;
-    let record = crate::routing::extensions::applet_bridge::record::applet_record(
-        state,
-        applet_id,
-        &effective_scope,
-    )
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, %applet_id, "failed to read installed Applet proof authority");
-        event_validation_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "Applet proof authority store is unavailable",
-        )
-    })?
-    .ok_or_else(|| {
-        fail(
-            "applet_registration_unauthorized",
-            "Applet Event proof has no installed registration",
-        )
-    })?;
-    if record.revoked_at.is_some()
-        || !matches!(record.status.as_str(), "installed" | "partially_installed")
-    {
-        return Err(fail(
-            "applet_revoked",
-            "Applet Event proof registration is not active",
-        ));
-    }
-    let package = &record.package;
-    if package.service_id.as_str() != signer_controller
-        || package.webhook_auth.key_ref.as_str() != verification_method
-    {
-        return Err(fail(
-            "applet_registration_epoch_signing_key_mismatch",
-            "Applet Event proof does not use the installed service signing key",
-        ));
-    }
-    let evidence =
-        crate::routing::extensions::applet_bridge::registration_epoch_evidence_from_record(&record)
-            .map_err(|reason| {
-                tracing::error!(%reason, %applet_id, "stored Applet registration Event is invalid");
-                event_validation_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "stored Applet registration Event is invalid",
-                )
-            })?;
-    if !evidence.contains_signing_key(verification_method) {
-        return Err(fail(
-            "applet_registration_epoch_signing_key_mismatch",
-            "Applet Event proof key is outside the installed registration epoch",
-        ));
-    }
-    let document =
-        crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
-            tracing::debug!(%reason, %applet_id, "Applet Event proof DID resolution failed");
-            fail(
-                "applet_registration_epoch_evidence_mismatch",
-                "Applet Event proof DID document could not be resolved",
-            )
-        })?;
-    evidence
-        .validate_against_did_document(&document)
-        .map_err(|reason| {
-            tracing::debug!(%reason, %applet_id, "Applet Event proof epoch evidence mismatch");
-            fail(
-                "applet_registration_epoch_evidence_mismatch",
-                "Applet Event proof registration-epoch evidence is stale or mismatched",
-            )
-        })?;
-    let public_key =
-        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
-            .map_err(|reason| {
-                tracing::debug!(%reason, %applet_id, "Applet Event proof key resolution failed");
-                fail(
-                    "applet_registration_epoch_signing_key_mismatch",
-                    "Applet Event proof signing key is unavailable",
-                )
-            })?;
-    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-        bytes: public_key.to_bytes().to_vec(),
-    };
-    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-        proof,
-        envelope_bytes,
-        actor_id,
-        &material,
-        digest_suite,
-    )
-    .map_err(|error| {
-        tracing::debug!(%error, %applet_id, "Applet Event proof signature failed");
-        fail("invalid_proof", "Applet Event proof signature is invalid")
-    })?;
-    did_key_from_ed25519_bytes(public_key.as_bytes()).map(Some)
-}
-
-async fn verify_with_active_agent_session(
-    state: &AppState,
-    session: &SessionRecord,
-    signer_id: &str,
-    verification_method: &str,
-    canonical_bytes: &[u8],
-    jws: &str,
-) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
-    let Some(agent_session) = session.agent_session.as_ref() else {
-        return Ok(None);
-    };
-    if session.actor != signer_id
-        || agent_session.freshness_state != arkret_wire::FreshnessState::Fresh
-    {
-        return Err(event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent Event proof requires a fresh session for the Event actor",
-        ));
-    }
-    let Some(grant) = session.session_grant.as_ref() else {
-        return Err(event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent Event proof requires a typed session-grant authority binding",
-        ));
-    };
-    let arkret_models_identity::SessionGrantHolderBinding::AgentRuntime {
-        agent_id,
-        device_id,
-        agent_key_authorization_ref,
-        verification_method: granted_verification_method,
-    } = &grant.holder_binding
-    else {
-        return Err(event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent Event proof cannot use a human-device session grant",
-        ));
-    };
-    if agent_id.as_str() != signer_id
-        || device_id.as_str() != session.device_id
-        || granted_verification_method.as_str() != verification_method
-    {
-        return Err(event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent Event proof does not match its typed session-grant key binding",
-        ));
-    }
-    let agent_record = state
-        .agent_pairings()
-        .agent(signer_id)
-        .await
-        .map_err(|_| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "temporarily_unavailable",
-                "Agent state is unavailable",
-            )
-        })?
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                "Agent is unavailable",
-            )
-        })?;
-    let Some((_, authorization_ref)) =
-        crate::routing::identity::agents::accepted_active_agent_key_authorizations(
-            state,
-            &agent_record,
-        )
-        .await
-        .map_err(|_| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "temporarily_unavailable",
-                "Agent accepted key state is unavailable",
-            )
-        })?
-        .into_iter()
-        .find(|(_, event_ref)| event_ref == agent_key_authorization_ref.as_str())
-    else {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "Agent Event proof verification method is not currently authorized",
-        ));
-    };
-    if authorization_ref != agent_key_authorization_ref.as_str() {
-        return Err(event_validation_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_proof",
-            "Agent session grant names a stale key authorization Event",
-        ));
-    }
-    let authorization = state
-        .event_queries()
-        .canonical_event(&authorization_ref)
-        .await
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                format!("Agent key authorization lookup failed: {error}"),
-            )
-        })?
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "Agent key authorization Event is unavailable",
-            )
-        })?;
-    let payload = authorization
-        .envelope
-        .get("payload")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "Agent key authorization payload is unavailable",
-            )
-        })?;
-    if authorization.kind != arkret_wire::EventKind::AgentKeyAuthorize.as_str()
-        || payload.get("agent_id").and_then(Value::as_str) != Some(signer_id)
-        || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
-    {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "Agent key authorization does not match the Event signer",
-        ));
-    }
-    let event: arkret_wire::Event =
-        serde_json::from_value(authorization.envelope).map_err(|_| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "Agent authorization Event is invalid",
-            )
-        })?;
-    let authorized_key =
-        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
-            &event,
-        )
-        .map_err(|_| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "Agent authorization raw key is invalid",
-            )
-        })?;
-    let key_bytes = URL_SAFE_NO_PAD
-        .decode(authorized_key.public_key.key.as_str())
-        .map_err(|_| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "Agent authorization key encoding is invalid",
-            )
-        })?;
-    let signing_key = did_key_from_ed25519_bytes(&key_bytes)?;
-    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes: key_bytes };
-    // The session grant selects an accepted authorization; Event signatures
-    // use its inline runtime key, independently of the HTTP session DPoP key.
-    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
-        jws,
-        canonical_bytes,
-        &material,
-    );
-    crate::metrics::record_signature_verify(
-        crate::metrics::SIGNATURE_SCHEME_AGENT_SESSION,
-        outcome.is_ok(),
-    );
-    outcome.map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "Agent Event proof JWS verification failed",
-        )
-    })?;
-    Ok(Some(signing_key))
-}
-
-pub(super) fn verify_with_federated_signer_evidence(
-    internal_admission: Option<&InternalEventAdmission>,
-    session: &SessionRecord,
-    object: &serde_json::Map<String, Value>,
-    verification_method: &str,
-    canonical_bytes: &[u8],
-    jws: &str,
-) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
-    let Some(signing_key) = internal_admission.and_then(|admission| {
-        admission.federated_producer_signing_key(session, object, verification_method)
-    }) else {
-        return Ok(None);
-    };
-    let multibase = signing_key
-        .as_str()
-        .strip_prefix("did:key:")
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "federated signer evidence must carry an Ed25519 did:key",
-            )
-        })?;
-    let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
-        value: multibase.to_owned(),
-    };
-    // Independent receiver verification bound this key to the exact Event and
-    // producer method before creating the internal admission context.
-    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
-        jws,
-        canonical_bytes,
-        &material,
-    );
-    crate::metrics::record_signature_verify(
-        crate::metrics::SIGNATURE_SCHEME_FEDERATED_SIGNER_EVIDENCE,
-        outcome.is_ok(),
-    );
-    outcome.map_err(|error| {
-        tracing::debug!(%error, "federated Event proof JWS verification failed");
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "federated Event proof JWS verification failed",
-        )
-    })?;
-    Ok(Some(signing_key.clone()))
-}
-
-/// Parse the wire proof into the SDK [`arkret_wire::ProducerEventProof`] and reproduce the
-/// canonical proof-binding transcript it must have signed (`encoding.md` §6).
-///
-/// The typed proof is returned alongside the bytes because the DID-rooted
-/// verification path needs the proof itself: the SDK's Event-profile verifier
-/// derives the transcript from `(proof, actor_id)` on its own and applies header
-/// checks the generic detached-JWS profile does not.
 pub(super) fn event_proof_binding_bytes(
     event_digest: &str,
     actor_id: &arkret_wire::ActorId,
@@ -1531,10 +944,10 @@ mod tests {
     /// `event-and-patch.md` sections 2.4 and 3.1 plus
     /// `content-moderation.md` section 3.4: a receiving service directly
     /// authors the durable franking-proof Event as its own service principal.
-    /// Its producer proof therefore resolves through the exact local service
-    /// DID method, never through the development-device proof branch.
+    /// Its exact producer source must still be available and authenticated;
+    /// an internal business marker cannot substitute the local notary key.
     #[tokio::test]
-    async fn accepts_exactly_bound_service_franking_event_producer_proof() {
+    async fn internal_service_admission_cannot_replace_missing_historical_source() {
         let state = state();
         let (event, session, realm_id, target_event_id) = signed_service_franking_event(&state);
         let envelope_bytes =
@@ -1561,38 +974,6 @@ mod tests {
             Some(&admission),
         )
         .await
-        .expect("an exactly bound service-authored franking Event must verify with the notary key");
-    }
-
-    #[tokio::test]
-    async fn service_franking_producer_branch_rejects_a_different_target_binding() {
-        let state = state();
-        let (event, session, realm_id, _) = signed_service_franking_event(&state);
-        let envelope_bytes =
-            arkret_canonical::canonical_json_bytes(&event.event().digest_payload().unwrap())
-                .unwrap();
-        let event_digest = event.event().proofs[0].event_digest.to_string();
-        let object = serde_json::to_value(event.event()).unwrap();
-        let object = object.as_object().unwrap();
-        let admission = InternalEventAdmission::service_franking_proof(
-            &realm_id,
-            event.event().actor_id.clone(),
-            "ak:event:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        );
-
-        let error = validate_event_proofs(
-            object,
-            &state,
-            &session,
-            state.service_id().as_str(),
-            &event_digest,
-            arkret_canonical::DigestSuite::Sha256,
-            &envelope_bytes,
-            &[],
-            Some(&admission),
-        )
-        .await
-        .expect_err("a service admission for another target must not authorize the producer key");
-        assert_eq!(error.code, "invalid_proof");
+        .expect_err("an internal service marker cannot replace authenticated source evidence");
     }
 }

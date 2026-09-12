@@ -1,9 +1,9 @@
 use super::*;
 
-async fn historical_device_selector(
+async fn historical_device_producer(
     state: &AppState,
     event: &Event,
-) -> Result<Option<soland_storage::DeviceRevocationGateSelector>, SubmitOneError> {
+) -> Result<Option<arkret::historical_producer::VerifiedHistoricalEventProducer>, SubmitOneError> {
     let [producer] = event.proofs.as_slice() else {
         return Ok(None);
     };
@@ -48,14 +48,31 @@ async fn historical_device_selector(
     else {
         return Ok(None);
     };
-    let core = &device_projection_attestation.attestation;
-    Ok(Some(soland_storage::DeviceRevocationGateSelector {
-        principal_id: core.account_id.principal_id.clone(),
-        station_id: core.account_id.station_id.clone(),
-        device_id: core.device_id.to_string(),
-        target_device_authorize_event_id: core.device_authorize_event_id.to_string(),
-        target_device_generation_ref: core.authorized_generation_ref,
-    }))
+    let _ = device_projection_attestation;
+    let suite = arkret::signed_event_digest_claim(event)
+        .and_then(|digest| digest.digest_suite().map_err(Into::into))
+        .map_err(|error| {
+            SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
+        })?;
+    verify_historical_producer(state, event, suite)
+        .await
+        .map(Some)
+        .map_err(|error| {
+            let missing = error.starts_with("dependency_missing:");
+            SubmitOneError::new(
+                if missing {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::BAD_REQUEST
+                },
+                if missing {
+                    "dependency_missing"
+                } else {
+                    "invalid_proof"
+                },
+                error,
+            )
+        })
 }
 
 /// Resolve the producer's exact device generation and reject every revocation
@@ -66,18 +83,26 @@ pub(super) async fn validate_local_event_device_revocation_gate(
     session: &SessionRecord,
     parsed: &ValidatedEventEnvelope,
     submitted_event: &Event,
-) -> Result<Option<soland_storage::DeviceRevocationGateSelector>, SubmitOneError> {
+) -> Result<
+    (
+        Option<soland_storage::DeviceRevocationGateSelector>,
+        Option<arkret::historical_producer::VerifiedHistoricalEventProducer>,
+    ),
+    SubmitOneError,
+> {
     let remote = session.token_hash.starts_with("federation:")
         || session.token_hash.starts_with("proof-authenticated:");
     if !remote && parsed.device_id.is_none() {
-        return Ok(None);
+        return Ok((None, None));
     }
-    let selector = if remote {
-        let Some(selector) = historical_device_selector(state, submitted_event).await? else {
-            return Ok(None);
-        };
-        selector
-    } else {
+    if remote {
+        // The atomic Event commit consumes this opaque source and checks known
+        // revocations. A remote principal has no local current-device mirror.
+        return historical_device_producer(state, submitted_event)
+            .await
+            .map(|producer| (None, producer));
+    }
+    let selector = {
         let producer_principal_id = submitted_event
             .executed_by
             .as_ref()
@@ -104,7 +129,7 @@ pub(super) async fn validate_local_event_device_revocation_gate(
             )
         })?;
     match gate_status {
-        soland_storage::DeviceRevocationGateStatus::Active => Ok(Some(selector)),
+        soland_storage::DeviceRevocationGateStatus::Active => Ok((Some(selector), None)),
         soland_storage::DeviceRevocationGateStatus::Pending { .. } => Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "device_revocation_pending",

@@ -1534,48 +1534,34 @@ pub(super) async fn accepted_event_envelope(
                 error.to_string(),
             )
         })?;
-    let evidence_digest = producer
+    let evidence_ref = producer
         .signer_resolution_evidence_ref
         .as_ref()
         .ok_or_else(|| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid_proof",
-                "ordinary Event producer proof must reference signer evidence",
-            )
-        })?
-        .content_digest()
-        .map_err(|error| {
-            SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
-        })?;
-    let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-        content_digest: evidence_digest,
-    };
-    let dependency = state
-        .persistence()
-        .governance_dependency_store()
-        .get_unscoped_signer_evidence(&selector)
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                error.to_string(),
-            )
-        })?
-        .ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "dependency_missing",
-                "producer signer evidence is unavailable",
+                "ordinary Event proof omits signer evidence",
             )
         })?;
-    let governance_dependency = vec![soland_storage::GovernanceDependencyWrite {
-        realm_id: event.realm_id.clone(),
-        source: soland_storage::GovernanceDependencySource::Event(event_digest.clone()),
-        edge_index: 0,
-        item: dependency,
-    }];
+    let retained =
+        super::historical_producer::retained_historical_producer_dependencies(state, evidence_ref)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(StatusCode::CONFLICT, "dependency_missing", error)
+            })?;
+    let governance_dependency = retained
+        .into_iter()
+        .enumerate()
+        .map(
+            |(edge_index, item)| soland_storage::GovernanceDependencyWrite {
+                realm_id: event.realm_id.clone(),
+                source: soland_storage::GovernanceDependencySource::Event(event_digest.clone()),
+                edge_index: edge_index as u64,
+                item,
+            },
+        )
+        .collect();
     let canonical_bytes =
         canonical::canonical_json_bytes(&event.digest_payload().map_err(|error| {
             SubmitOneError::new(
@@ -2319,7 +2305,7 @@ pub(super) async fn submit_event_value_with_context(
         },
     )
     .await?;
-    let local_device_revocation_gate =
+    let (local_device_revocation_gate, historical_producer) =
         validate_local_event_device_revocation_gate(state, session, &parsed, &submitted_event)
             .await?;
     let (accepted_event, envelope, accepted_canonical_bytes, governance_dependency) =
@@ -2466,6 +2452,7 @@ pub(super) async fn submit_event_value_with_context(
             device_revoke_target_device_id: device_revoke_target_device_id.as_deref(),
             control_proposal_ack: control_proposal_ack.as_ref(),
             local_device_revocation_gate,
+            historical_producer,
             mls_frontier_leaves: context.mls_frontier_leaves,
             membership_compensation_evidence: context.membership_compensation_evidence,
             internal_admission: context.internal_admission,
