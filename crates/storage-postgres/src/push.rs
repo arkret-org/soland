@@ -150,7 +150,8 @@ mod tests {
             .await
             .unwrap();
         let first_target = record.push_target_id.clone();
-        record.registration_id = "push_registration:second".parse().unwrap();
+        record.registration_id =
+            arkret_wire::OpaqueLocalId::new("push_registration:second").unwrap();
         record.push_target_id = "ak:pseudonym:push:lg8aqJ2eJjms1GQpkzloxGn8F802f8RfmfmfsC85eRo"
             .parse()
             .unwrap();

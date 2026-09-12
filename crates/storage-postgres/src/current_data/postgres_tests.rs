@@ -540,7 +540,7 @@ async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publish
             CommandOutcome::Rejected => SealCommandOutcome::rejected(
                 digests[0].clone(),
                 digests.clone(),
-                "state_mismatch".parse().unwrap(),
+                arkret_wire::error_codes::ReasonCode::StateMismatch,
                 DigestSuite::Sha256,
             )
             .unwrap(),
@@ -567,14 +567,11 @@ async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publish
             covered_event_digests: vec![],
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: arkret_wire::MultiSignature {
-                kind: arkret_wire::MultiSigKind::MultiSig,
-                view: 0,
-                signatures: vec![arkret_wire::SealSignature {
-                    verification_method: "did:web:station.example#notary".parse().unwrap(),
-                    payload_digest: placeholder,
-                    jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".into(),
-                }],
+            notary_signature: arkret_wire::SealSignature {
+                verification_method: arkret_wire::DidUrl::new("did:web:station.example#notary")
+                    .unwrap(),
+                payload_digest: placeholder,
+                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".into(),
             },
             sealed_at: chrono::Utc::now(),
             hlc: "019f00000000-0000-00000001".parse().unwrap(),
@@ -582,7 +579,6 @@ async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publish
             command_results: vec![result],
             authorization_closures: vec![],
             existence_anchors: vec![],
-            transaction_records: vec![],
         };
         seal.id = seal.derive_id(DigestSuite::Sha256).unwrap();
         assert!(

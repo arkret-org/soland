@@ -77,7 +77,7 @@ fn seal(events: &[Event], digests: &[Hash], outcome: CommandOutcome) -> Seal {
         CommandOutcome::Rejected => SealCommandOutcome::rejected(
             digests[0].clone(),
             digests.to_vec(),
-            "state_mismatch".parse().unwrap(),
+            arkret_wire::error_codes::ReasonCode::StateMismatch,
             DigestSuite::Sha256,
         )
         .unwrap(),
@@ -103,14 +103,11 @@ fn seal(events: &[Event], digests: &[Hash], outcome: CommandOutcome) -> Seal {
         covered_event_digests: vec![],
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::MultiSignature {
-            kind: arkret_wire::MultiSigKind::MultiSig,
-            view: 0,
-            signatures: vec![arkret_wire::SealSignature {
-                verification_method: "did:web:station.example#notary".parse().unwrap(),
-                payload_digest: placeholder,
-                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".into(),
-            }],
+        notary_signature: arkret_wire::SealSignature {
+            verification_method: arkret_wire::DidUrl::new("did:web:station.example#notary")
+                .unwrap(),
+            payload_digest: placeholder,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".into(),
         },
         sealed_at: events[0].created_at,
         hlc: "019f00000000-0000-00000001".parse().unwrap(),
@@ -118,7 +115,6 @@ fn seal(events: &[Event], digests: &[Hash], outcome: CommandOutcome) -> Seal {
         command_results: vec![result],
         authorization_closures: vec![],
         existence_anchors: vec![],
-        transaction_records: vec![],
     };
     seal.id = seal.derive_id(DigestSuite::Sha256).unwrap();
     seal
