@@ -848,7 +848,6 @@ diesel::table! {
         governance_binding -> Jsonb,
         accepted_commit_ref -> Nullable<Text>,
         committed_at -> Int8,
-        frontier_contested -> Bool,
     }
 }
 
@@ -1201,23 +1200,6 @@ diesel::table! {
         updated_by -> Nullable<Jsonb>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
-    }
-}
-
-diesel::table! {
-    push_bridge_cache (bridge_describe_url) {
-        push_gateway_url -> Text,
-        service_base_url -> Text,
-        bridge_describe_url -> Text,
-        fetch_state -> Text,
-        cache_state -> Text,
-        contract_digest -> Text,
-        fetched_at -> Timestamptz,
-        remote_contract -> Jsonb,
-        trust_level -> Text,
-        freshness_at -> Timestamptz,
-        etag -> Text,
-        updated_at -> Timestamptz,
     }
 }
 
@@ -2022,7 +2004,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     projection_spaces,
     projection_strand_watches,
     projection_strands,
-    push_bridge_cache,
     push_devices,
     realm_invites,
     realm_meta,

@@ -2146,15 +2146,11 @@ CREATE TABLE public.mls_commits (
     epoch bigint NOT NULL,
     leader_actor_id text NOT NULL,
     creator_device_id text NOT NULL,
-    -- Same blocker as `notifications.source_event_id`: `reducer/mls.rs` and
-    -- `routing/events/projection/apply.rs` fall back to the Operation id when
-    -- the genesis payload carries no `event_id`, so this is not yet an Event
-    -- identity column.
+    -- Exact accepted genesis Event identity from the verified operation context.
     genesis_event_ref text NOT NULL,
     governance_binding jsonb DEFAULT '{}'::jsonb NOT NULL,
     accepted_commit_ref text,
     committed_at bigint NOT NULL,
-    frontier_contested boolean DEFAULT false NOT NULL,
     CONSTRAINT mls_commits_effective_scope_check CHECK ((((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL)) OR ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL))))
 );
 
@@ -2850,27 +2846,6 @@ CREATE INDEX projection_spaces_scope_circle_id_idx ON public.projection_spaces U
 
 CREATE INDEX projection_spaces_state_idx ON public.projection_spaces USING btree (state);
 
--- Keyed by `bridge_describe_url`: the describe endpoint IS the cache key, so
--- the row does not also carry it under a second `id` alias.
-CREATE TABLE public.push_bridge_cache (
-    push_gateway_url text NOT NULL,
-    service_base_url text NOT NULL,
-    bridge_describe_url text PRIMARY KEY,
-    fetch_state text NOT NULL,
-    cache_state text NOT NULL,
-    contract_digest text NOT NULL,
-    fetched_at timestamp with time zone NOT NULL,
-    remote_contract jsonb NOT NULL,
-    trust_level text DEFAULT 'pending'::text NOT NULL,
-    freshness_at timestamp with time zone DEFAULT now() NOT NULL,
-    etag text DEFAULT ''::text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-CREATE INDEX push_bridge_cache_fetched_at_idx ON public.push_bridge_cache USING btree (fetched_at);
-
-CREATE INDEX push_bridge_cache_trust_freshness_idx ON public.push_bridge_cache USING btree (trust_level, freshness_at);
-
 CREATE TABLE public.push_devices (
     id text PRIMARY KEY,
     actor_id text,
@@ -2882,6 +2857,9 @@ CREATE TABLE public.push_devices (
     payload jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+CREATE UNIQUE INDEX push_devices_account_device_route_idx ON public.push_devices ((payload->'account_id'), device_id, (payload->>'push_route_id'));
+CREATE INDEX push_devices_source_target_idx ON public.push_devices ((payload->'account_id'->>'station_id'), (payload->>'push_target_id'), device_id);
 
 CREATE TABLE public.realm_invites (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
