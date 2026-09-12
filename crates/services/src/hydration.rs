@@ -129,48 +129,35 @@ pub fn parse_child_scope_policy(
     Ok(Some(policy))
 }
 
-async fn operation_from_projection_event(
-    persistence: &dyn soland_storage::PersistenceStore,
+fn operation_from_hydration_record(
     projection_adapter: &dyn HydrationProjectionAdapter,
-    event: &soland_storage::ProjectionEventRecord,
+    record: &CanonicalEventRecord,
     projection_name: &str,
 ) -> soland_storage::PersistenceResult<arkret_event_draft::ProjectedEventOperation> {
-    let record = persistence
-        .events()
-        .get(&event.event_id)
-        .await?
-        .ok_or_else(|| {
-            soland_storage::PersistenceError::Internal(format!(
-                "{projection_name} projection event {} has no canonical Event",
-                event.event_id
-            ))
-        })?;
     projection_adapter
-        .operation_from_canonical_record(&application_canonical_event(&record))
+        .operation_from_canonical_record(&application_canonical_event(record))
         .ok_or_else(|| {
             soland_storage::PersistenceError::Internal(format!(
                 "{projection_name} canonical Event {} cannot be projected",
-                event.event_id
+                record.event_id
             ))
         })
 }
 
-async fn replay_projection_event(
-    persistence: &dyn soland_storage::PersistenceStore,
+fn replay_hydration_record(
     projection_adapter: &dyn HydrationProjectionAdapter,
     proj: &mut ProjectionState,
-    event: soland_storage::ProjectionEventRecord,
+    record: CanonicalEventRecord,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_name: &str,
 ) -> soland_storage::PersistenceResult<()> {
     let mut operation =
-        operation_from_projection_event(persistence, projection_adapter, &event, projection_name)
-            .await?;
-    if event.event_kind == arkret_wire::EventKind::CircleMemberState.as_str() {
+        operation_from_hydration_record(projection_adapter, &record, projection_name)?;
+    if record.kind == arkret_wire::EventKind::CircleMemberState.as_str() {
         let payload = operation.payload.as_object_mut().ok_or_else(|| {
             soland_storage::PersistenceError::Internal(format!(
                 "{projection_name} projection event {} has a non-object payload",
-                event.event_id
+                record.event_id
             ))
         })?;
         // This replay source was selected from confirmed command results. Restore
@@ -183,7 +170,7 @@ async fn replay_projection_event(
     {
         return Err(soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} failed deterministic hydration: {reason}",
-            event.event_id
+            record.event_id
         )));
     }
     Ok(())
@@ -214,9 +201,9 @@ pub async fn hydrate_sidecar_projections(
         );
     }
 
-    let events = confirmed_projection_events(persistence, projection).await?;
+    let events = hydration_replay_records(persistence, projection).await?;
     for event in events {
-        if event.event_kind == arkret_wire::EventKind::SidecarCreate.as_str() {
+        if event.kind == arkret_wire::EventKind::SidecarCreate.as_str() {
             let Ok(event_id) = arkret_wire::EventId::new(event.event_id.clone()) else {
                 continue;
             };
@@ -236,18 +223,16 @@ pub async fn hydrate_sidecar_context_projections(
     projection_adapter: &dyn HydrationProjectionAdapter,
     projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
-    let events = confirmed_projection_events(persistence, projection).await?;
+    let events = hydration_replay_records(persistence, projection).await?;
     for event in events {
-        if event.event_kind == arkret_wire::EventKind::SidecarContextAttach.as_str() {
-            replay_projection_event(
-                persistence,
+        if event.kind == arkret_wire::EventKind::SidecarContextAttach.as_str() {
+            replay_hydration_record(
                 projection_adapter,
                 proj,
                 event,
                 hydration_hlc,
                 "sidecar-context-attach",
-            )
-            .await?;
+            )?;
         }
     }
     Ok(())
@@ -259,6 +244,14 @@ pub async fn hydrate_sidecar_context_projections(
 async fn confirmed_hydration_records(
     persistence: &dyn soland_storage::PersistenceStore,
     projection: &crate::projection::ProjectionService,
+) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
+    select_hydration_records(persistence, projection, None).await
+}
+
+async fn select_hydration_records(
+    persistence: &dyn soland_storage::PersistenceStore,
+    projection: &crate::projection::ProjectionService,
+    published_ordinary: Option<&BTreeSet<String>>,
 ) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
     let records = persistence.events().snapshot_all().await?;
     let realms = records
@@ -304,6 +297,9 @@ async fn confirmed_hydration_records(
         if seen.contains(&record.event_id) {
             continue;
         }
+        if published_ordinary.is_some_and(|published| !published.contains(&record.event_id)) {
+            continue;
+        }
         let event = serde_json::from_value::<Event>(record.envelope.clone())
             .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
         if event.auth_context.is_some()
@@ -322,22 +318,25 @@ async fn confirmed_hydration_records(
     Ok(result)
 }
 
-async fn confirmed_projection_events(
+/// A committed command is recoverable from its canonical Event even when the
+/// process stopped before appending any derived timeline row. Independent
+/// ordinary inputs retain their existing published-source boundary here; this
+/// helper does not claim to implement historical eligibility reclassification.
+async fn hydration_replay_records(
     persistence: &dyn soland_storage::PersistenceStore,
     projection: &crate::projection::ProjectionService,
-) -> soland_storage::PersistenceResult<Vec<soland_storage::ProjectionEventRecord>> {
-    let mut indexed = persistence
+) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
+    let published = persistence
         .projection_events()
         .snapshot_all()
         .await?
         .into_iter()
-        .map(|event| (event.event_id.clone(), event))
-        .collect::<BTreeMap<_, _>>();
-    Ok(confirmed_hydration_records(persistence, projection)
-        .await?
-        .into_iter()
-        .filter_map(|record| indexed.remove(&record.event_id))
-        .collect())
+        .map(|event| event.event_id)
+        .collect::<BTreeSet<_>>();
+    // Apply the timeline boundary only in the independent ordinary branch.
+    // The command branch retains its exact confirmed-prefix provenance and
+    // never infers confirmation from timeline presence or a later snapshot.
+    select_hydration_records(persistence, projection, Some(&published)).await
 }
 
 /// Rebuild ordinary Realm genesis from its exact confirmed command unit.
@@ -827,24 +826,22 @@ pub async fn hydrate_projections_from_persistence(
     // so restore them from the durable event stream. Agent authorize/revoke
     // transitions must retain confirmed command order; querying each
     // kind independently would lose their relative ordering.
-    let events = confirmed_projection_events(persistence, projection).await?;
+    let events = hydration_replay_records(persistence, projection).await?;
     for event in events.iter().cloned() {
-        let projection_name = match arkret_wire::EventKind::from_wire(&event.event_kind) {
+        let projection_name = match arkret_wire::EventKind::from_wire(&event.kind) {
             arkret_wire::EventKind::AgentKeyAuthorize | arkret_wire::EventKind::AgentKeyRevoke => {
                 "agent-key"
             }
             arkret_wire::EventKind::KeyBackupActiveSeries => "active-series",
             _ => continue,
         };
-        replay_projection_event(
-            persistence,
+        replay_hydration_record(
             projection_adapter,
             proj,
             event,
             &hydration_hlc,
             projection_name,
-        )
-        .await?;
+        )?;
     }
 
     fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {
@@ -1266,7 +1263,7 @@ pub async fn hydrate_projections_from_persistence(
     }
     for event in events
         .iter()
-        .filter(|event| event.event_kind == arkret_wire::EventKind::MlsCommit.as_str())
+        .filter(|event| event.kind == arkret_wire::EventKind::MlsCommit.as_str())
     {
         proj.accepted_mls_commit_refs.insert(event.event_id.clone());
     }
@@ -1281,7 +1278,7 @@ pub async fn hydrate_projections_from_persistence(
         .into_iter()
         .filter(|event| {
             matches!(
-                arkret_wire::EventKind::from_wire(&event.event_kind),
+                arkret_wire::EventKind::from_wire(&event.kind),
                 arkret_wire::EventKind::StrandCreate
                     | arkret_wire::EventKind::StrandUpdate
                     | arkret_wire::EventKind::StrandArchive
@@ -1294,15 +1291,13 @@ pub async fn hydrate_projections_from_persistence(
         })
         .collect::<Vec<_>>();
     for event in replay_events {
-        replay_projection_event(
-            persistence,
+        replay_hydration_record(
             projection_adapter,
             proj,
             event,
             &hydration_hlc,
             "accepted-event-reducer",
-        )
-        .await?;
+        )?;
     }
     // Run after object mirrors because a native Sidecar attachment validates
     // that its referenced source Relation or Strand already exists.

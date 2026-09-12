@@ -3122,8 +3122,8 @@ mod membership_hydration_tests {
     }
 
     #[tokio::test]
-    async fn key_backup_active_series_rehydrates_from_projection_events() {
-        use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
+    async fn key_backup_active_series_rehydrates_without_timeline_after_confirmation() {
+        use soland_storage::ProjectionEventRecord;
 
         let database = TestDatabase::lease().await;
         let store = PgPersistenceStore::new(database.pool());
@@ -3161,30 +3161,31 @@ mod membership_hydration_tests {
             first_payload.clone(),
             now,
         );
-        let first_event_id = first_source.event_id.clone();
         store
             .events()
             .put(first_source)
             .await
             .expect("persist active-series canonical Event");
-        let appended = store
-            .projection_events()
-            .append(ProjectionEventRecord {
-                event_id: first_event_id,
-                realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::KeyBackupActiveSeries
-                    .as_str()
-                    .to_owned(),
-                operation_kind: "event".to_owned(),
-                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned()),
-                sender: Some(actor.to_owned()),
-                payload: first_payload,
-                created_at: now,
-                received_at: now,
-            })
+        assert!(
+            store
+                .projection_events()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
+            let mut unconfirmed = ProjectionState::new();
+            hydrate_projections_from_persistence(
+                &store,
+                &mut unconfirmed,
+                &RuntimeHydrationProjectionAdapter,
+                &hydration_command_view(&store, outcome).await,
+            )
             .await
-            .expect("append active-series projection event");
-        assert_eq!(appended, ProjectionEventAppendOutcome::Inserted);
+            .expect("unconfirmed source remains invisible");
+            assert!(unconfirmed.key_backup_active_series.is_empty());
+        }
 
         let mut proj = ProjectionState::new();
         hydrate_projections_from_persistence(
@@ -3276,7 +3277,7 @@ mod membership_hydration_tests {
     }
 
     #[tokio::test]
-    async fn agent_key_authorization_rehydrates_from_projection_events() {
+    async fn agent_key_authorization_rehydrates_with_partial_timeline() {
         use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
 
         let database = TestDatabase::lease().await;
@@ -3337,30 +3338,11 @@ mod membership_hydration_tests {
             }),
             now,
         );
-        let revoke_event_id = revoke_source.event_id.clone();
         store
             .events()
             .put(revoke_source)
             .await
             .expect("persist agent-key revocation canonical Event");
-        store
-            .projection_events()
-            .append(ProjectionEventRecord {
-                event_id: revoke_event_id,
-                realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::AgentKeyRevoke.as_str().to_owned(),
-                operation_kind: "event".to_owned(),
-                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775906".to_owned()),
-                sender: Some(agent_id.to_owned()),
-                payload: serde_json::json!({
-                    "agent_id": agent_id,
-                    "key_id": key_id
-                }),
-                created_at: now,
-                received_at: now,
-            })
-            .await
-            .expect("append agent-key revocation projection event");
         let replacement_source = canonical_projection_source_event(
             realm_id,
             agent_id,
@@ -3378,27 +3360,29 @@ mod membership_hydration_tests {
             .put(replacement_source)
             .await
             .expect("persist replacement agent-key authorization canonical Event");
-        store
-            .projection_events()
-            .append(ProjectionEventRecord {
-                event_id: replacement_event_id.clone(),
-                realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::AgentKeyAuthorize
-                    .as_str()
-                    .to_owned(),
-                operation_kind: "event".to_owned(),
-                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775908".to_owned()),
-                sender: Some(agent_id.to_owned()),
-                payload: serde_json::json!({
-                    "agent_id": agent_id,
-                    "key_id": replacement_key_id,
-                    "accepted_event_id": replacement_event_id
-                }),
-                created_at: now,
-                received_at: now,
-            })
+        // Crash after the first timeline row must not discard later members
+        // of the same exact committed unit, including the revocation.
+        assert_eq!(
+            store
+                .projection_events()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
+            let mut unconfirmed = ProjectionState::new();
+            hydrate_projections_from_persistence(
+                &store,
+                &mut unconfirmed,
+                &RuntimeHydrationProjectionAdapter,
+                &hydration_command_view(&store, outcome).await,
+            )
             .await
-            .expect("append replacement agent-key authorization projection event");
+            .expect("a timeline row cannot grant command eligibility");
+            assert!(!unconfirmed.agent_has_authorized_key(agent_id));
+        }
 
         let mut proj = ProjectionState::new();
         assert!(!proj.agent_has_authorized_key(agent_id));
