@@ -4,6 +4,10 @@ use super::{AgentSessionRecord, PersistenceResult, SessionRecord, Value, async_t
 pub trait SessionStore: Send + Sync {
     async fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>>;
     async fn put(&self, record: &SessionRecord) -> PersistenceResult<()>;
+    async fn device_authorization(
+        &self,
+        token: &str,
+    ) -> PersistenceResult<Option<crate::DeviceRevocationGateSelector>>;
     async fn delete(&self, token: &str) -> PersistenceResult<()>;
     async fn cleanup_expired(&self) -> PersistenceResult<usize>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>>;

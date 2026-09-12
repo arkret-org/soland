@@ -274,6 +274,58 @@ fn status_from_rows(rows: &[TargetStateRow]) -> DeviceRevocationGateStatus {
         })
 }
 
+#[derive(QueryableByName)]
+struct CurrentDeviceBindingRow {
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+    #[diesel(sql_type = Bool)]
+    active: bool,
+}
+
+/// Freeze the currently installed instance while a private artifact is
+/// inserted. The caller still authenticates its holder before this boundary.
+pub(crate) async fn current_device_binding_in_transaction(
+    conn: &mut AsyncPgConnection,
+    principal_id: &arkret_wire::DidCoreId,
+    station_id: &arkret_wire::DidCoreId,
+    device_id: &str,
+) -> PersistenceResult<Option<DeviceRevocationGateSelector>> {
+    ensure_head_locked(conn, principal_id.as_str(), station_id.as_str(), device_id).await?;
+    let row = sql_query("SELECT payload,(verification_state='verified' AND revoked_at IS NULL) AS active FROM devices WHERE actor_id=$1 AND station_id=$2 AND device_id=$3 FOR SHARE")
+        .bind::<Text,_>(principal_id.as_str()).bind::<Text,_>(station_id.as_str()).bind::<Text,_>(device_id)
+        .get_result::<CurrentDeviceBindingRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    let Some(row) = row.filter(|row| row.active) else {
+        return Ok(None);
+    };
+    let event = row
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "verified device omits its original authorization".into(),
+            )
+        })?;
+    let generation = row
+        .payload
+        .get("authorized_generation_ref")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "verified device omits its original generation".into(),
+            )
+        })?;
+    arkret_wire::EventId::new(event.to_owned())
+        .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+    Ok(Some(DeviceRevocationGateSelector {
+        principal_id: principal_id.clone(),
+        station_id: station_id.clone(),
+        device_id: device_id.into(),
+        target_device_authorize_event_id: event.into(),
+        target_device_generation_ref: generation,
+    }))
+}
+
 pub(crate) async fn gate_status_in_transaction(
     conn: &mut AsyncPgConnection,
     selector: &DeviceRevocationGateSelector,
@@ -285,9 +337,27 @@ pub(crate) async fn gate_status_in_transaction(
         &selector.device_id,
     )
     .await?;
-    target_rows(conn, selector, None)
-        .await
-        .map(|rows| status_from_rows(&rows))
+    let status = status_from_rows(&target_rows(conn, selector, None).await?);
+    if status != DeviceRevocationGateStatus::Active {
+        return Ok(status);
+    }
+    let Some(current) = current_device_binding_in_transaction(
+        conn,
+        &selector.principal_id,
+        &selector.station_id,
+        &selector.device_id,
+    )
+    .await?
+    else {
+        return Ok(DeviceRevocationGateStatus::AuthorityMismatch);
+    };
+    if current.target_device_generation_ref != selector.target_device_generation_ref {
+        return Ok(DeviceRevocationGateStatus::GenerationMismatch);
+    }
+    if current != *selector {
+        return Ok(DeviceRevocationGateStatus::AuthorityMismatch);
+    }
+    Ok(DeviceRevocationGateStatus::Active)
 }
 
 pub(crate) async fn ensure_gate_allowed_in_transaction(

@@ -432,15 +432,48 @@ async fn enforce_session_device_revocation_gate(
     .await;
     let current = match current {
         Ok(current) => current,
-        Err(_) if state.config().development_mode && session.session_grant.is_none() => {
-            // The deployment-local dev-login surface deliberately creates a
-            // synthetic session before a PCR authorization exists so pairing
-            // and account-bootstrap flows can be exercised. Such a placeholder
-            // has no accepted generation that could be pending or revoked; the
-            // revoked_at check above still rejects an explicitly revoked
-            // device. Production and SessionGrant-backed sessions remain
-            // fail-closed on every missing or stale authority selector.
-            return Ok(());
+        Err(error) if state.config().development_mode && session.session_grant.is_none() => {
+            // Only an unbound bootstrap placeholder receives the local dev-login
+            // exception. A previously authorized instance cannot become a
+            // placeholder again after revocation or while its mirror rebuilds.
+            let persisted_binding = state
+                .persistence()
+                .session_device_authorization(&session.token_hash)
+                .await
+                .map_err(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "session authorization binding unavailable",
+                    )
+                })?;
+            let device = state
+                .identities()
+                .find_device(soland_services::identity::FindDeviceQuery {
+                    actor_id: session.actor.clone(),
+                    device_id: session.device_id.clone(),
+                })
+                .await
+                .map_err(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "device authorization unavailable",
+                    )
+                })?;
+            if persisted_binding.is_none()
+                && device.is_none_or(|device| {
+                    device.revoked_at.is_none()
+                        && device.verification_state == "unverified"
+                        && !device
+                            .payload
+                            .as_object()
+                            .is_some_and(|p| p.contains_key("device_authorize_event_id"))
+                })
+            {
+                return Ok(());
+            }
+            return Err(session_device_selector_error(&error));
         }
         Err(error) => return Err(session_device_selector_error(&error)),
     };
@@ -477,7 +510,22 @@ async fn enforce_session_device_revocation_gate(
             target_device_generation_ref: binding.model_generation_ref,
         }
     } else {
-        current.clone()
+        state
+            .persistence()
+            .session_device_authorization(&session.token_hash)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "session authorization binding unavailable",
+                )
+            })?
+            .ok_or((
+                StatusCode::UNAUTHORIZED,
+                "auth_expired",
+                "session has no immutable device authorization binding",
+            ))?
     };
     if selector != current {
         return Err((

@@ -99,6 +99,37 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
             .unwrap();
     }
     store.install_confirmed_history(&updated).await.unwrap();
+    use soland_storage::{DeviceRevocationStore, SessionStore};
+    let sessions = crate::PgSessionStore { pool: pool.clone() };
+    let account_pk = {
+        let mut conn = pool.get().await.unwrap();
+        sql_query("INSERT INTO accounts(principal_id,station_id) VALUES($1,$2) RETURNING to_jsonb(pk) AS payload")
+            .bind::<Text,_>(source.account.principal_id.as_str()).bind::<Text,_>(source.account.station_id.as_str())
+            .get_result::<JsonPayloadRow>(&mut *conn).await.unwrap().payload.as_i64().unwrap()
+    };
+    let session = soland_storage::SessionRecord {
+        token_hash: "frozen-device-instance".into(),
+        account_pk: soland_storage::AccountPk(account_pk),
+        actor: source.account.principal_id.to_string(),
+        device_id: fixture::device(2).to_string(),
+        audience: source.account.station_id.to_string(),
+        session_public_key: None,
+        agent_session: None,
+        expires_at: first.created_at + chrono::Duration::days(1),
+        created_at: first.created_at,
+        revoked_at: None,
+    };
+    sessions.put(&session).await.unwrap();
+    let session_binding = sessions
+        .device_authorization(&session.token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    let gates = crate::device_revocations::PgDeviceRevocationStore { pool: pool.clone() };
+    assert_eq!(
+        gates.gate_status(&session_binding).await.unwrap(),
+        DeviceRevocationGateStatus::Active
+    );
     let old_authorize = updated
         .authorizations()
         .last()
@@ -168,6 +199,41 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
         serde_json::json!(successor_id)
     );
     assert_ne!(old_authorize, successor_id);
+    sessions.put(&session).await.unwrap();
+    assert_eq!(
+        sessions
+            .device_authorization(&session.token_hash)
+            .await
+            .unwrap(),
+        Some(session_binding.clone()),
+        "persisting an old session cannot relabel it with the successor authorization"
+    );
+    assert_eq!(
+        gates.gate_status(&session_binding).await.unwrap(),
+        DeviceRevocationGateStatus::AuthorityMismatch,
+        "the same DeviceId does not inherit its previous session authorization"
+    );
+    let mut different_holder = session.clone();
+    different_holder.device_id = fixture::device(1).to_string();
+    assert!(
+        sessions.put(&different_holder).await.is_err(),
+        "a token cannot switch its immutable holder"
+    );
+    let mut revoked_session = session.clone();
+    revoked_session.revoked_at = Some(first.created_at);
+    sessions.put(&revoked_session).await.unwrap();
+    sessions.put(&session).await.unwrap();
+    assert!(
+        sessions
+            .get(&session.token_hash)
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked_at
+            .is_some(),
+        "stale session writes cannot undo durable revocation"
+    );
+
     assert_eq!(
         active.payload["display_name"],
         serde_json::json!("renamed after revoke")
