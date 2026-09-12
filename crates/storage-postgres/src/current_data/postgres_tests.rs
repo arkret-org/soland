@@ -409,7 +409,7 @@ async fn conditional_space_metadata_is_published_without_a_seal() {
         &realm,
         &actor,
         1,
-        json!({"object":{"schema":"ak.schema.space.v1","realm_id":realm,"title":"before"}}),
+        json!({"object":{"schema":"ak.schema.space.v1","realm_id":realm,"kind":"folder","title":"before","created_by":actor,"created_at":"2026-09-10T00:00:00.000Z"}}),
         &[],
     );
     persist(&pool, create.clone()).await.unwrap();
@@ -483,7 +483,7 @@ async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publish
             &realm,
             &actor,
             (index * 2 + 11) as u64,
-            json!({"object":{"schema":"ak.schema.space.v1","realm_id":realm,"title":"sealed"}}),
+            json!({"object":{"schema":"ak.schema.space.v1","realm_id":realm,"kind":"folder","title":"sealed","created_by":actor,"created_at":"2026-09-10T00:00:00.000Z"}}),
             &[],
         );
         let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
