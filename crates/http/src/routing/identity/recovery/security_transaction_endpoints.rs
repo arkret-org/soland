@@ -2065,10 +2065,7 @@ mod tests {
     fn pending_confirmed_backup_pointer_returns_retryable_unavailable() {
         let error =
             pending_backup_projection(soland_services::projection::MetadataProjectionPending);
-        assert_eq!(
-            error.http_status(),
-            axum::http::StatusCode::SERVICE_UNAVAILABLE
-        );
+        assert_eq!(error.http_status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(error.wire_code(), "temporarily_unavailable");
     }
 
