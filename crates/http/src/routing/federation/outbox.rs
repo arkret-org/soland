@@ -2491,9 +2491,6 @@ mod tests {
                 arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
                     .unwrap();
             event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
-                key_id: arkret_wire::OpaqueLocalId::new("device-1").unwrap(),
-                key_epoch: 0,
-                credential_epoch: None,
                 authority_refs: vec![authority_ref],
             });
             event.event_id = event

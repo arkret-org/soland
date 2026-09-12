@@ -884,7 +884,6 @@ pub(crate) async fn post_recovery_policy(
         vec![arkret_wire::ProfileRef::new("ak.schema.recovery_policy.v1").unwrap()];
     soland_test_support::cbs_basis::apply_registered_cbs_plane(
         &mut event,
-        &event_verification_method,
         soland_test_support::cbs_basis::FixtureBasis::shared(&[]),
     );
     let signer = arkret_signatures::Ed25519PayloadSigner::new(

@@ -75,9 +75,6 @@ pub(super) async fn persist_mimi_canonical_message_event(
     // draft. Attaching it after authoring only worked while signing silently
     // re-derived `event_id`, which is exactly the identity hole this closes.
     let auth_context = arkret_wire::AuthContext {
-        key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
-        key_epoch: 0,
-        credential_epoch: None,
         authority_refs: vec![seal.id.clone()],
     };
     let mut event =

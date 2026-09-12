@@ -2116,15 +2116,6 @@ async fn applet_message_event(
         None => seed_applet_message_grant_basis(state, package, realm_id, authorization_ref).await,
     };
     event.auth_context = Some(arkret_wire::AuthContext {
-        key_id: arkret_wire::OpaqueLocalId::new(
-            verification_method
-                .as_str()
-                .split_once('#')
-                .map_or(verification_method.as_str(), |(_, key)| key),
-        )
-        .expect("fixture auth_context key id is an opaque local id"),
-        key_epoch: 0,
-        credential_epoch: None,
         authority_refs: vec![seal_id],
     });
     let signing_key = applet_service_signing_key(&verification_method);

@@ -212,15 +212,6 @@ async fn prepare(
         )
     })?;
     let auth = AuthContext {
-        key_id: arkret_wire::OpaqueLocalId::new(
-            session
-                .device_id
-                .strip_prefix("ak:")
-                .unwrap_or(&session.device_id),
-        )
-        .map_err(invalid)?,
-        key_epoch: 0,
-        credential_epoch: None,
         authority_refs: vec![authority_ref.clone()],
     };
     let direct = state

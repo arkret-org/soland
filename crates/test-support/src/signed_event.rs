@@ -297,10 +297,10 @@ impl<'a> CallerSignedEvent<'a> {
         // CBS envelope shape, which follows from the kind's registered plane.
         match self.basis {
             CallerSignedBasis::Fixture(basis) => {
-                apply_registered_cbs_plane(&mut event, verification_method.as_str(), basis);
+                apply_registered_cbs_plane(&mut event, basis);
             }
             CallerSignedBasis::AcceptedSeal(seal_id) => {
-                apply_registered_cbs_plane_seal(&mut event, verification_method.as_str(), seal_id);
+                apply_registered_cbs_plane_seal(&mut event, seal_id);
             }
             CallerSignedBasis::AnchorUnit => {}
         }

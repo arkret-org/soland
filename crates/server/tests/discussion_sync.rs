@@ -793,11 +793,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         soland_test_support::cbs_basis::FixtureBasis::shared(&DATA_PLANE_GRANT_ACTIONS);
     soland_test_support::cbs_basis::seed_realm_basis(state, realm_id, actor_id, fixture_basis)
         .await;
-    soland_test_support::cbs_basis::apply_registered_cbs_plane(
-        &mut event,
-        &verification_method,
-        fixture_basis,
-    );
+    soland_test_support::cbs_basis::apply_registered_cbs_plane(&mut event, fixture_basis);
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(verification_method.as_str()),
         actor_did,

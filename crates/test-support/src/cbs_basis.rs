@@ -897,11 +897,7 @@ async fn persist_and_project_realm_genesis_event_with_history_access(
 /// the B-model `ak.device.reanchor`, which fixes its frontier in
 /// `payload.pre_fence_seal_frontier`. Non-reducer-input kinds carry no CBS field either
 /// (`Event::validate_for_submit_structural`).
-pub fn apply_registered_cbs_plane(
-    event: &mut arkret_wire::Event,
-    verification_method: &str,
-    basis: FixtureBasis<'_>,
-) {
+pub fn apply_registered_cbs_plane(event: &mut arkret_wire::Event, basis: FixtureBasis<'_>) {
     if !carries_a_cbs_basis(event) {
         return;
     }
@@ -916,7 +912,7 @@ pub fn apply_registered_cbs_plane(
         event.actor_id.signing_principal_id(),
         basis,
     );
-    apply_registered_cbs_plane_seal(event, verification_method, seal.id);
+    apply_registered_cbs_plane_seal(event, seal.id);
 }
 
 /// Give `event` the CBS envelope shape its kind's registry row declares, citing
@@ -926,33 +922,12 @@ pub fn apply_registered_cbs_plane(
 /// accepted Seal on its frontier, and its Moves have to cite *that* — the
 /// synthetic basis of [`realm_basis_seal`] belongs to a Realm that was stood up
 /// straight in `AppState` and covers nothing the notary ever sealed.
-/// `auth_context.key_id` is a bounded opaque local id, not a typed object id:
-/// `event-envelope.schema.json` anchors it to `^(?!ak:)[A-Za-z0-9._:-]{1,128}$`
-/// because the `ak:` lexical space belongs to typed object ids and
-/// responsibility DIDs alone (`zh/models/common-fields.md` section 2.1). The
-/// fixture verification method carries `#ak:device:<uuid>` as its fragment, so
-/// the sigil is stripped before the fragment becomes a key id.
-fn fixture_auth_context_key_id(verification_method: &str) -> arkret_wire::OpaqueLocalId {
-    let fragment = verification_method
-        .split_once('#')
-        .map_or(verification_method, |(_, key)| key);
-    arkret_wire::OpaqueLocalId::new(fragment.strip_prefix("ak:").unwrap_or(fragment))
-        .expect("fixture auth_context key id is an opaque local id")
-}
-
-pub fn apply_registered_cbs_plane_seal(
-    event: &mut arkret_wire::Event,
-    verification_method: &str,
-    seal_id: SealId,
-) {
+pub fn apply_registered_cbs_plane_seal(event: &mut arkret_wire::Event, seal_id: SealId) {
     if !carries_a_cbs_basis(event) {
         return;
     }
     if event.kind.is_data_plane() {
         event.auth_context = Some(arkret_wire::AuthContext {
-            key_id: fixture_auth_context_key_id(verification_method),
-            key_epoch: 0,
-            credential_epoch: None,
             authority_refs: vec![seal_id],
         });
     } else if event.kind.is_control_plane() {

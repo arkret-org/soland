@@ -129,9 +129,6 @@ pub(crate) async fn prepare_franking_proof_event(
         )
     })?;
     let auth_context = arkret_wire::AuthContext {
-        key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
-        key_epoch: 0,
-        credential_epoch: None,
         authority_refs: vec![seal.id.clone()],
     };
     let digest_suite = state.projections().realm_digest_suite(realm_id);

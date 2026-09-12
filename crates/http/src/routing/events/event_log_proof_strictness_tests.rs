@@ -1733,7 +1733,7 @@ fn ordinary_event_derived_cells() -> Vec<String> {
 
 /// A ordinary Event citing `grants` through `refs[role=authorized_by]`, which is
 /// where v1 puts a capability citation — `auth_context` is closed over
-/// `{key_id, key_epoch, credential_epoch, authority_refs}`.
+/// `{authority_refs}`.
 fn ordinary_event_object_with_refs(
     authority_ref: &str,
     grants: Vec<String>,
@@ -1746,8 +1746,6 @@ fn ordinary_event_object_with_refs(
             .map(|grant_id| json!({"id": grant_id, "role": "authorized_by", "critical": true}))
             .collect::<Vec<Value>>(),
         "auth_context": {
-            "key_id": "device:01904100-0000-7000-8000-a11ce0000001",
-            "key_epoch": 1,
             "authority_refs": [authority_ref]
         },
         // A ordinary Event carries a payload, and `ordinary_event_constraint_context`
