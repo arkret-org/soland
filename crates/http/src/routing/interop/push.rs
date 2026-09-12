@@ -1,10 +1,8 @@
-//! Push notification surfaces (register / unregister / notify).
+//! Station-owned authenticated push registration surfaces.
 //!
 //! Surfaces:
 //! - `POST /_arkret/edge/push/register-device` — register a device token + push gateway
 //! - `POST /_arkret/edge/push/unregister-device` — remove an authenticated actor's device token
-//! - `POST /_arkret/edge/push/notify` — validate the privacy-preserving target and gateway contract
-//!   before fan-out.
 //!
 //! Device registration authenticates with an ordinary bearer session; there is
 //! no header-carried alternative.
@@ -14,32 +12,17 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::json;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::delivery::PushContractDrift;
-use subtle::ConstantTimeEq;
 
 use super::audit::append_audit_log;
-use super::push_outbound::{
-    derive_push_gateway_service_base_url, join_push_gateway_url, refresh_push_gateway_description,
-};
 use super::{authenticated_session, hmac_sha256, now, sha256_hex};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{
-    PushNotifyOutcome, PushNotifyRequestBody, PushRegisterDeviceRequestBody,
-    PushUnregisterDeviceRequestBody,
-};
+use crate::wire::{PushRegisterDeviceRequestBody, PushUnregisterDeviceRequestBody};
 
-/// C33.1 (T0-3a): freshness budget for the persisted gateway-contract
-/// snapshot before `push_notify` fails closed. Picked to be lenient enough
-/// to absorb a routine refresh cadence but tight enough to surface a stuck
-/// fetch worker before fan-out leaks past a stale contract. v1 unreleased,
-/// no operator knob yet — bump here when the refresh worker lands.
-const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
 pub(crate) const PUSH_TARGET_SALT_ROTATION_SECONDS: i64 = 30 * 24 * 60 * 60;
-const PUSH_TARGET_RETAIN_SECONDS: i64 = 24 * 60 * 60;
 
 pub(crate) fn push_target_privacy_derivation_claim(
     now: chrono::DateTime<chrono::Utc>,
@@ -51,8 +34,7 @@ pub(crate) fn push_target_privacy_derivation_claim(
             salt_epoch_id: push_target_salt_epoch_id_at(now),
             salt_rotation_seconds: PUSH_TARGET_SALT_ROTATION_SECONDS as u64,
             input_binding: Some(vec![
-                arkret_models_discovery::service_description::PushTargetInputBinding::RecipientDidCoreId,
-                arkret_models_discovery::service_description::PushTargetInputBinding::DidCoreId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::AccountId,
                 arkret_models_discovery::service_description::PushTargetInputBinding::DeviceId,
                 arkret_models_discovery::service_description::PushTargetInputBinding::PushRouteId,
                 arkret_models_discovery::service_description::PushTargetInputBinding::SaltEpochId,
@@ -74,15 +56,13 @@ const PUSH_TARGET_ID_PREFIX: &str = "ak:pseudonym:push:";
 /// registration handle are spelled from.
 fn derive_push_target_tag(
     root_key: &[u8; 32],
-    recipient_id: &str,
-    principal_id: &str,
+    account_id: &arkret_wire::AccountId,
     device_id: &str,
     push_route_id: &str,
     salt_epoch_id: &str,
 ) -> Result<String, AppError> {
     let input = json!({
-        "recipient_id": recipient_id,
-        "principal_id": principal_id,
+        "account_id": account_id,
         "device_id": device_id,
         "push_route_id": push_route_id,
         "salt_epoch_id": salt_epoch_id,
@@ -100,16 +80,14 @@ fn derive_push_target_tag(
 #[cfg(test)]
 fn derive_push_target_id(
     root_key: &[u8; 32],
-    recipient_id: &str,
-    principal_id: &str,
+    account_id: &arkret_wire::AccountId,
     device_id: &str,
     push_route_id: &str,
     salt_epoch_id: &str,
 ) -> Result<arkret_identifiers::PushTargetId, AppError> {
     let tag = derive_push_target_tag(
         root_key,
-        recipient_id,
-        principal_id,
+        account_id,
         device_id,
         push_route_id,
         salt_epoch_id,
@@ -151,28 +129,22 @@ pub(super) async fn push_register(
     if body.device_id.as_str().trim().is_empty() {
         return Err(AppError::param_invalid("invalid device_id"));
     }
-    let principal_id = session.actor.clone();
-    let device_id = body.device_id.as_str().to_owned();
-    let platform = body.platform.clone();
-    let app_id = body.app_id.clone();
-    let push_gateway = body.push_gateway_url.clone();
-    let push_key = body.push_key.clone();
-    let recipient_id = body
-        .recipient_id
-        .as_ref()
-        .map(|did| did.as_str())
-        .unwrap_or(state.service_id().as_str());
-    if recipient_id != state.service_id() {
+    let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
+        state, &session,
+    )
+    .await
+    .map_err(|(_, code, message)| AppError::from_rejection(canonical_error_code(code), message))?;
+    if account_id.station_id.as_str() != state.service_id() {
         return Err(AppError::param_invalid(
-            "recipient_id must match this service",
+            "registration account must belong to this Station",
         ));
     }
+    let device_id = body.device_id.as_str().to_owned();
     let push_route_id = push_route_id_for_registration(&body);
     let salt_epoch_id = push_target_salt_epoch_id_at(now());
     let push_target_tag = derive_push_target_tag(
         state.deliveries().push_target_hmac_key(),
-        state.service_id(),
-        &principal_id,
+        &account_id,
         &device_id,
         &push_route_id,
         &salt_epoch_id,
@@ -183,50 +155,33 @@ pub(super) async fn push_register(
                 AppError::internal(format!("derived push target is invalid: {error}"))
             })?;
     let registration_id = push_registration_id(&push_target_tag)?;
-    let previous_registrations = state
-        .deliveries()
-        .push_devices()
-        .await
-        .unwrap_or_else(|error| {
-            tracing::error!(%error, "failed to read prior push device registrations");
-            Vec::new()
-        });
-    let retained_push_targets = retained_push_targets_for_route(
-        &previous_registrations,
-        &principal_id,
-        &device_id,
-        &push_route_id,
-        push_target_id.as_str(),
-        now() + chrono::Duration::seconds(PUSH_TARGET_RETAIN_SECONDS),
-    );
+    let registration = arkret_models_integration::PushRegistrationRecord {
+        registration_id: registration_id.clone(),
+        account_id,
+        device_id: body.device_id,
+        push_gateway: format!(
+            "{}/",
+            derive_push_gateway_service_base_url(&body.push_gateway_url)
+                .ok_or_else(|| AppError::param_invalid("invalid push gateway URL"))?
+        ),
+        push_key: body.push_key,
+        platform: body.platform,
+        app_id: body.app_id,
+        visible_notification_opt_in: body.visible_notification_opt_in,
+        push_route_id,
+        push_target_id: push_target_id.clone(),
+        salt_epoch_id,
+        expires_at: None,
+        retained_push_targets: Vec::new(),
+    };
     state
         .deliveries()
-        .unregister_push_device(&principal_id, &device_id, None, app_id.as_deref())
+        .register_push_device(
+            serde_json::to_value(registration)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        )
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    if let Err(error) = state
-        .deliveries()
-        .register_push_device(json!({
-            "registration_id": registration_id,
-            "actor": session.actor,
-            "principal_id": principal_id,
-            "device_id": device_id,
-            "platform": platform,
-            "app_id": app_id,
-            "push_gateway": push_gateway,
-            "push_key": push_key,
-            "recipient_id": state.service_id().as_str(),
-            "push_route_id": push_route_id,
-            "push_target_id": push_target_id.clone(),
-            "salt_epoch_id": salt_epoch_id,
-            "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
-            "retained_push_targets": retained_push_targets,
-            "auth_mode": "bearer",
-        }))
-        .await
-    {
-        tracing::error!(%error, "failed to persist push device registration");
-    }
     json_ok(
         arkret_models_integration::models_push::PushRegisterDeviceOutcome {
             push_target_id,
@@ -269,76 +224,6 @@ fn push_route_id_for_registration(body: &PushRegisterDeviceRequestBody) -> Strin
         })
 }
 
-fn retained_push_targets_for_route(
-    registrations: &[Value],
-    principal_id: &str,
-    device_id: &str,
-    push_route_id: &str,
-    new_push_target_id: &str,
-    retained_until: chrono::DateTime<chrono::Utc>,
-) -> Vec<Value> {
-    registrations
-        .iter()
-        .filter(|registration| {
-            registration.get("actor").and_then(Value::as_str) == Some(principal_id)
-                && registration.get("device_id").and_then(Value::as_str) == Some(device_id)
-                && registration.get("push_route_id").and_then(Value::as_str) == Some(push_route_id)
-        })
-        .filter_map(|registration| {
-            let target = registration.get("push_target_id").and_then(Value::as_str)?;
-            if target == new_push_target_id {
-                return None;
-            }
-            Some(json!({
-                "push_target_id": target,
-                "salt_epoch_id": registration
-                    .get("salt_epoch_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown"),
-                "retained_until": retained_until,
-            }))
-        })
-        .collect()
-}
-
-fn push_registration_accepts_target(
-    registration: &Value,
-    push_target_id: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    if registration
-        .get("push_target_id")
-        .and_then(Value::as_str)
-        .is_some_and(|registered| constant_time_str_eq(registered, push_target_id))
-    {
-        return true;
-    }
-    registration
-        .get("retained_push_targets")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|entry| {
-            let target_matches = entry
-                .get("push_target_id")
-                .and_then(Value::as_str)
-                .is_some_and(|registered| constant_time_str_eq(registered, push_target_id));
-            if !target_matches {
-                return false;
-            }
-            entry
-                .get("retained_until")
-                .and_then(Value::as_str)
-                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                .map(|retained_until| retained_until.with_timezone(&chrono::Utc) >= now)
-                .unwrap_or(false)
-        })
-}
-
-fn constant_time_str_eq(left: &str, right: &str) -> bool {
-    left.as_bytes().ct_eq(right.as_bytes()).into()
-}
-
 #[salvo::oapi::endpoint(
     operation_id = "ak.edge.push.command.unregister_device",
     tags("interop")
@@ -357,10 +242,20 @@ pub(super) async fn push_unregister(
     if body.device_id.as_str().trim().is_empty() {
         return Err(AppError::param_invalid("invalid device_id"));
     }
+    let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
+        state, &session,
+    )
+    .await
+    .map_err(|(_, code, message)| AppError::from_rejection(canonical_error_code(code), message))?;
+    if account_id.station_id.as_str() != state.service_id() {
+        return Err(AppError::param_invalid(
+            "registration account must belong to this Station",
+        ));
+    }
     let removed = state
         .deliveries()
         .unregister_push_device(
-            &session.actor,
+            &account_id,
             body.device_id.as_str(),
             body.push_key.as_deref(),
             body.app_id.as_deref(),
@@ -383,221 +278,31 @@ pub(super) async fn push_unregister(
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.edge.push.command.notify", tags("interop"))]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.notify.v1"))]
-pub(super) async fn push_notify(
-    body: JsonBody<PushNotifyRequestBody>,
-    depot: &mut Depot,
-) -> JsonResult<PushNotifyOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    // The SDK owns the closed-shape rules for this body (push-notifications.md
-    // and push-operations.schema.json): the notification must satisfy one of
-    // the blind / visible oneOf branches, both of which require
-    // timing_profile_hint. Without this call a body satisfying neither branch
-    // was accepted, because the field is Option on the wire type and nothing
-    // here checked it.
-    arkret_models_integration::models_push::validate_push_notify_contract_shape(&body)
-        .map_err(AppError::param_invalid)?;
-    let push_target_id = body
-        .notification
-        .push_target_id
-        .as_ref()
-        .ok_or_else(|| AppError::param_invalid("notification.push_target_id is required"))?;
-    let devices = body.notification.devices.clone();
-    let notification = serde_json::to_value(&body.notification).map_err(|error| {
-        AppError::internal(format!("push notification request serialize: {error}"))
-    })?;
-    if push_notification_leaks_private_payload(&notification, None) {
-        return Err(AppError::param_invalid(
-            "push notification must not include plaintext content or stable identifiers",
-        ));
-    }
-    let registered = state.deliveries().push_devices().await.unwrap_or_default();
-    let mut outcomes = Vec::with_capacity(devices.len());
-    let max_age = chrono::Duration::hours(PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS);
-    for device in devices {
-        let device_id = device.device_id.as_str();
-        let Some(registered_device) = registered
-            .iter()
-            .filter(|registered| registered["device_id"].as_str() == Some(device_id))
-            .find(|registered| {
-                push_registration_accepts_target(registered, push_target_id.as_str(), now())
-            })
-        else {
-            let has_device = registered
-                .iter()
-                .any(|registered| registered["device_id"].as_str() == Some(device_id));
-            let reason = if has_device {
-                arkret_models_integration::models_push::PushNotifyReasonCode::PushTargetUnknown
-            } else {
-                arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown
-            };
-            outcomes.push(
-                arkret_models_integration::models_push::PushNotifyDeviceOutcome::rejected(
-                    device.device_id,
-                    reason,
-                    None,
-                ),
-            );
-            continue;
-        };
-        let actor = registered_device
-            .get("actor")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-
-        // C33.1 fail-closed: every push fan-out must be backed by a trusted,
-        // fresh gateway-contract snapshot. Anything other than `Match` is a
-        // hard reject (no notify is sent, an audit row is appended, the
-        // device shows up in `rejected`).
-        let push_gateway_url = registered_device
-            .get("push_gateway")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let drift = verify_push_gateway_contract_drift(state, push_gateway_url, max_age).await;
-        // C33.1 fail-closed semantics — production must reject anything but
-        // `Match`. Development mode (which has no real push bridge cache
-        // warmed) treats `Unknown` as a soft pass so local fixtures don't
-        // need to pre-load the cache.
-        let drift_blocks = match drift {
-            PushContractDrift::Match => false,
-            PushContractDrift::Unknown => !state.config().development_mode,
-            _ => true,
-        };
-        if drift_blocks {
-            let drift_label = drift.as_str();
-            append_audit_log(
-                state,
-                Some(actor),
-                "push.notify.contract_drift_rejected",
-                json!({
-                    "device_id": device_id,
-                    "push_gateway": push_gateway_url,
-                    "drift_result": drift_label,
-                }),
-                "rejected",
-            )
-            .await;
-            outcomes.push(
-                arkret_models_integration::models_push::PushNotifyDeviceOutcome::rejected(
-                    device.device_id,
-                    arkret_models_integration::models_push::PushNotifyReasonCode::PushGatewayUnreachable,
-                    None,
-                ),
-            );
-            continue;
-        }
-        outcomes.push(
-            arkret_models_integration::models_push::PushNotifyDeviceOutcome::accepted(
-                device.device_id,
-            ),
-        );
-    }
-    json_ok(PushNotifyOutcome {
-        push_target_id: push_target_id.clone(),
-        outcomes,
-    })
-}
-
-/// Resolve the gateway URL of a registered device into its canonical describe URL
-/// and ask `PushBridgeCacheStore::verify_contract_freshness` whether the
-/// persisted snapshot is trusted + fresh + matches its own digest. A missing
-/// or stale snapshot is refreshed from canonical ServiceDescribe before the
-/// final fail-closed decision.
-async fn verify_push_gateway_contract_drift(
-    state: &AppState,
-    push_gateway_url: &str,
-    max_age: chrono::Duration,
-) -> PushContractDrift {
-    let trimmed = push_gateway_url.trim();
-    if trimmed.is_empty() {
-        return PushContractDrift::Unknown;
-    }
-    let Some(service_base_url) = derive_push_gateway_service_base_url(trimmed) else {
-        return PushContractDrift::Unknown;
-    };
-    let bridge_describe_url = join_push_gateway_url(&service_base_url, "/_arkret/describe");
-    let service = state.deliveries();
-    let initial = match service
-        .current_push_bridge_contract(&bridge_describe_url)
-        .await
+pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(push_gateway_url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
     {
-        Ok(Some(record)) if !record.contract_digest.is_empty() => service
-            .verify_push_bridge_contract_freshness(
-                &bridge_describe_url,
-                &record.contract_digest,
-                max_age,
-            )
-            .await
-            .unwrap_or(PushContractDrift::Unknown),
-        Ok(_) => PushContractDrift::Unknown,
-        Err(error) => {
-            tracing::error!(%error, "failed to read push bridge cache snapshot");
-            PushContractDrift::Unknown
+        return None;
+    }
+    let mut value = parsed.as_str().trim_end_matches('/').to_owned();
+
+    for suffix in [
+        "/_arkret/describe",
+        "/_arkret/edge/push/notify",
+        "/_arkret/edge/push",
+    ] {
+        if let Some(prefix) = value.strip_suffix(suffix) {
+            value = prefix.trim_end_matches('/').to_owned();
+            break;
         }
-    };
-    if initial == PushContractDrift::Match {
-        return initial;
-    }
-    if state.config().development_mode {
-        return initial;
     }
 
-    if let Err(error) = refresh_push_gateway_description(state, trimmed).await {
-        tracing::warn!(%error, push_gateway = trimmed, "canonical push gateway refresh failed");
-        return initial;
-    }
-    let refreshed_digest = match service
-        .current_push_bridge_contract(&bridge_describe_url)
-        .await
-    {
-        Ok(Some(record)) => record.contract_digest,
-        _ => return PushContractDrift::Unknown,
-    };
-    service
-        .verify_push_bridge_contract_freshness(&bridge_describe_url, &refreshed_digest, max_age)
-        .await
-        .unwrap_or(PushContractDrift::Unknown)
-}
-
-fn push_notification_leaks_private_payload(
-    value: &serde_json::Value,
-    parent_key: Option<&str>,
-) -> bool {
-    match value {
-        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
-            if parent_key == Some("devices")
-                && matches!(key.as_str(), "device_id" | "push_key" | "app_id")
-            {
-                return false;
-            }
-            matches!(
-                key.as_str(),
-                "title"
-                    | "body"
-                    | "preview"
-                    | "content"
-                    | "plaintext"
-                    | "message"
-                    | "event_id"
-                    | "realm_id"
-                    | "space_id"
-                    | "strand_id"
-                    | "thread_id"
-                    | "sender"
-                    | "sender_actor_display_name"
-                    | "sender_did"
-                    | "sender_display_name"
-                    | "space_name"
-                    | "kind"
-            ) || push_notification_leaks_private_payload(value, Some(key.as_str()))
-        }),
-        serde_json::Value::Array(values) => values
-            .iter()
-            .any(|value| push_notification_leaks_private_payload(value, parent_key)),
-        _ => false,
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 #[cfg(test)]
@@ -610,8 +315,10 @@ mod tests {
         let epoch = "ak.push.salt_epoch.42";
         let first = derive_push_target_id(
             &root_key,
-            "did:web:soland.example",
-            "did:web:alice.example",
+            &arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+            ),
             "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.web",
             epoch,
@@ -619,8 +326,10 @@ mod tests {
         .unwrap();
         let again = derive_push_target_id(
             &root_key,
-            "did:web:soland.example",
-            "did:web:alice.example",
+            &arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+            ),
             "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.web",
             epoch,
@@ -628,8 +337,10 @@ mod tests {
         .unwrap();
         let other_route = derive_push_target_id(
             &root_key,
-            "did:web:soland.example",
-            "did:web:alice.example",
+            &arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+            ),
             "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.voip",
             epoch,
@@ -637,8 +348,10 @@ mod tests {
         .unwrap();
         let other_service = derive_push_target_id(
             &root_key,
-            "did:web:org.example",
-            "did:web:alice.example",
+            &arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:org.example").unwrap(),
+            ),
             "ak:device:01904100-0000-7000-8000-000000000001",
             "inkson.web",
             epoch,
@@ -650,43 +363,5 @@ mod tests {
         assert_ne!(first, other_service);
         assert!(!first.as_str().contains("alice"));
         assert!(!first.as_str().contains("device"));
-    }
-
-    #[test]
-    fn retained_push_target_acceptance_is_time_bounded() {
-        let current = "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8";
-        let retained = "ak:pseudonym:push:lg8aqJ2eJjms1GQpkzloxGn8F802f8RfmfmfsC85eRo";
-        let now = chrono::DateTime::parse_from_rfc3339("2026-06-19T00:00:00.000Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let registration = json!({
-            "push_target_id": current,
-            "retained_push_targets": [{
-                "push_target_id": retained,
-                "salt_epoch_id": "ak.push.salt_epoch.41",
-                "retained_until": "2026-06-19T01:00:00.000Z"
-            }]
-        });
-
-        assert!(push_registration_accepts_target(
-            &registration,
-            current,
-            now
-        ));
-        assert!(push_registration_accepts_target(
-            &registration,
-            retained,
-            now
-        ));
-        assert!(!push_registration_accepts_target(
-            &registration,
-            retained,
-            now + chrono::Duration::hours(2)
-        ));
-        assert!(!push_registration_accepts_target(
-            &registration,
-            "ak:pseudonym:push:UexBBxDU_HwM4WRtsyOi991M5L1tvE3wxicZW-gZeSg",
-            now
-        ));
     }
 }

@@ -46,7 +46,6 @@ pub struct PgPersistenceStore {
     history_traversal_retentions: PgHistoryTraversalRetentionStore,
     history_response_streams: PgHistoryResponseStreamStore,
     pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore,
-    push_bridge_cache: PgPushBridgeCacheStore,
     audit: PgAuditStore,
     push_devices: PgPushDeviceStore,
     events: PgEventStore,
@@ -131,7 +130,6 @@ impl PgPersistenceStore {
             history_traversal_retentions: PgHistoryTraversalRetentionStore { pool: pool.clone() },
             history_response_streams: PgHistoryResponseStreamStore { pool: pool.clone() },
             pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore { pool: pool.clone() },
-            push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
             push_devices: PgPushDeviceStore { pool: pool.clone() },
             events: PgEventStore { pool: pool.clone() },
@@ -357,10 +355,6 @@ impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
 
     fn signal_relay(&self) -> &dyn SignalRelayStore {
         &self.signal_relay
-    }
-
-    fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
-        &self.push_bridge_cache
     }
 
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {

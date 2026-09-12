@@ -6,7 +6,6 @@ mod mimi;
 pub(crate) mod moderation;
 pub(crate) mod participant_binding;
 mod push;
-mod push_outbound;
 pub(crate) mod webrtc;
 
 pub(crate) use blob::MAX_BLOB_UPLOAD_BYTES;
@@ -45,13 +44,12 @@ pub fn router() -> Router {
 
 pub fn protocol_router() -> Router {
     Router::new()
-        // `edge` — push gateway canonical surface.
+        // `edge` — Station-owned push registration surface.
         .push(
             Router::with_path("edge").push(
                 Router::new()
                     .push(Router::with_path("push/register-device").post(push::push_register))
-                    .push(Router::with_path("push/unregister-device").post(push::push_unregister))
-                    .push(Router::with_path("push/notify").post(push::push_notify)),
+                    .push(Router::with_path("push/unregister-device").post(push::push_unregister)),
             ),
         )
         // `self` — RTC, blob, moderation report.

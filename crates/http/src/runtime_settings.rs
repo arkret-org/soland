@@ -82,9 +82,6 @@ pub struct RuntimeSettings {
     pub federation_peers: Vec<String>,
     /// Mesh vs hub outbound fanout topology.
     pub federation_fanout_topology: FederationFanoutTopology,
-    /// Service DIDs promotable from `pending` to `trusted` on push-bridge
-    /// snapshot import.
-    pub push_bridge_trusted_ids: Vec<String>,
     /// Rate-limit ceilings.
     pub rate_limit: RateLimitSettings,
 }
@@ -98,7 +95,6 @@ impl RuntimeSettings {
             admin_principal_ids: config.admin_principal_ids.clone(),
             federation_peers: config.federation_peers.clone(),
             federation_fanout_topology: config.federation_fanout_topology,
-            push_bridge_trusted_ids: config.push_bridge_trusted_ids.clone(),
             rate_limit: RateLimitSettings::from_limiter_config(&config.rate_limiter),
         }
     }
@@ -133,9 +129,6 @@ impl RuntimeSettings {
             keys::FEDERATION_FANOUT_TOPOLOGY => {
                 self.federation_fanout_topology = decode(key, value)?
             }
-            keys::PUSH_BRIDGE_TRUSTED_SERVICE_IDS => {
-                self.push_bridge_trusted_ids = decode(key, value)?
-            }
             keys::RATE_LIMIT => {
                 self.rate_limit = decode(key, value)?;
                 self.floor_rate_limit();
@@ -154,9 +147,6 @@ impl RuntimeSettings {
             keys::FEDERATION_PEERS => serde_json::to_value(&self.federation_peers),
             keys::FEDERATION_FANOUT_TOPOLOGY => {
                 serde_json::to_value(self.federation_fanout_topology)
-            }
-            keys::PUSH_BRIDGE_TRUSTED_SERVICE_IDS => {
-                serde_json::to_value(&self.push_bridge_trusted_ids)
             }
             keys::RATE_LIMIT => serde_json::to_value(self.rate_limit),
             other => anyhow::bail!("unknown setting key: {other}"),
@@ -182,7 +172,6 @@ pub mod keys {
     pub const ADMIN_PRINCIPAL_IDS: &str = "admin_principal_ids";
     pub const FEDERATION_PEERS: &str = "federation_peers";
     pub const FEDERATION_FANOUT_TOPOLOGY: &str = "federation_fanout_topology";
-    pub const PUSH_BRIDGE_TRUSTED_SERVICE_IDS: &str = "push_bridge_trusted_ids";
     pub const RATE_LIMIT: &str = "rate_limit";
 
     /// Every recognized key, for validation / documentation.
@@ -190,7 +179,6 @@ pub mod keys {
         ADMIN_PRINCIPAL_IDS,
         FEDERATION_PEERS,
         FEDERATION_FANOUT_TOPOLOGY,
-        PUSH_BRIDGE_TRUSTED_SERVICE_IDS,
         RATE_LIMIT,
     ];
 }
@@ -209,7 +197,6 @@ mod tests {
             admin_principal_ids: vec![DidCoreId::new("ak:did_core:web:ops.example").unwrap()],
             federation_peers: vec!["https://peer.example|did:web:peer.example".to_owned()],
             federation_fanout_topology: FederationFanoutTopology::Hub,
-            push_bridge_trusted_ids: vec!["did:web:push.example".to_owned()],
             rate_limit: RateLimitSettings {
                 window_seconds: 60,
                 default_per_minute: 600,
@@ -298,7 +285,6 @@ mod tests {
                 admin_principal_ids: vec![],
                 federation_peers: vec![],
                 federation_fanout_topology: FederationFanoutTopology::Mesh,
-                push_bridge_trusted_ids: vec![],
                 rate_limit: RateLimitSettings {
                     window_seconds: 1,
                     default_per_minute: 1,

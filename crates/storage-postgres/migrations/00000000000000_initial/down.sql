@@ -166,7 +166,6 @@ DROP TABLE IF EXISTS projection_strand_watches CASCADE;
 DROP TABLE IF EXISTS projection_strands CASCADE;
 DROP TABLE IF EXISTS projection_morphs CASCADE;
 DROP TABLE IF EXISTS projection_spaces CASCADE;
-DROP TABLE IF EXISTS push_bridge_cache CASCADE;
 DROP TABLE IF EXISTS push_devices CASCADE;
 DROP TABLE IF EXISTS realm_invites CASCADE;
 DROP TABLE IF EXISTS recovery_policies CASCADE;

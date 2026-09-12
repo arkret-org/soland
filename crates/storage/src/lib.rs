@@ -371,7 +371,6 @@ pub trait DeliveryPolicyStoreRegistry: Send + Sync {
     fn federation_operations(&self) -> &dyn FederationOperationsStore;
     fn push_devices(&self) -> &dyn PushDeviceStore;
     fn signal_relay(&self) -> &dyn SignalRelayStore;
-    fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore;
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore;

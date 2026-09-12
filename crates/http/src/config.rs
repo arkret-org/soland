@@ -464,18 +464,6 @@ pub struct AppConfig {
     pub db_pool_max_size: Option<usize>,
     /// Env: `SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS`.
     pub db_pool_acquire_timeout_seconds: Option<u64>,
-    /// Max age (in seconds) a cached outbound push bridge contract is allowed
-    /// to keep its trusted state without re-verification. Snapshots whose
-    /// `freshness_at` is older than this are treated as stale on cache_hit and
-    /// trigger a fresh remote fetch (and downgrade to `trust_level=stale` if
-    /// the upstream is unreachable). Default 900s (15 min).
-    /// Env: `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS`.
-    pub push_bridge_cache_ttl_seconds: u64,
-    /// Service DIDs allowed to be promoted from `trust_level=pending` to
-    /// `trusted` on snapshot import. Empty (default) means imports stay at
-    /// `pending` and have to be promoted manually via the live-fetch path.
-    /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS` (comma-separated).
-    pub push_bridge_trusted_ids: Vec<String>,
     /// Base URL of the push gateway (floria) this deployment notifies over
     /// the registered internal channel when an account is deactivated
     /// (`account-lifecycle.md` §7.1, Push-route completion criterion). The fanout
@@ -922,8 +910,6 @@ impl AppConfig {
             otel: OtelConfig::default(),
             db_pool_max_size: None,
             db_pool_acquire_timeout_seconds: None,
-            push_bridge_cache_ttl_seconds: 900,
-            push_bridge_trusted_ids: Vec::new(),
             deactivation_push_gateway_url: None,
             deactivation_push_gateway_bearer: None,
             resumable_upload_dir: PathBuf::from("./soland-resumable-uploads"),
@@ -1163,20 +1149,6 @@ impl AppConfig {
         let db_pool_acquire_timeout_seconds =
             env_non_empty(values, "SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS")
                 .and_then(|value| value.parse::<u64>().ok());
-        let push_bridge_cache_ttl_seconds = lookup(values, "SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(900);
-        let push_bridge_trusted_ids = lookup(values, "SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
-            .ok()
-            .map(|value| {
-                value
-                    .split(',')
-                    .map(|v| v.trim().to_owned())
-                    .filter(|v| !v.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
         let deactivation_push_gateway_url =
             env_non_empty(values, "SOLAND_DEACTIVATION_PUSH_GATEWAY_URL");
         let deactivation_push_gateway_bearer =
@@ -1303,8 +1275,6 @@ impl AppConfig {
             otel,
             db_pool_max_size,
             db_pool_acquire_timeout_seconds,
-            push_bridge_cache_ttl_seconds,
-            push_bridge_trusted_ids,
             deactivation_push_gateway_url,
             deactivation_push_gateway_bearer,
             resumable_upload_dir,

@@ -10,13 +10,9 @@ use super::{Utc, WebvhDocumentRecord};
 /// `put_document` stamps records with
 /// `expires_at = fetched_at + this value`; high-risk callers use the same
 /// value as their default `max_age` for `verify_did_document_freshness`.
-/// The 15-minute window matches the conservative push-contract freshness
-/// gate because soland does not perform on-demand network refreshes.
 pub const WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS: i64 = 15 * 60;
 
-/// Result of `verify_did_document_freshness`. Semantics match
-/// [`DriftResult`]: high-risk paths fail closed on anything other than
-/// `Fresh`.
+/// Result of `verify_did_document_freshness`. High-risk paths require `Fresh`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebvhFreshness {
     /// Record age is within `max_age` and may be accepted.
@@ -36,9 +32,7 @@ impl WebvhFreshness {
 }
 
 /// Decide the freshness of a [`WebvhDocumentRecord`] at `now` under the
-/// supplied `max_age`. This follows [`verify_contract_freshness`] /
-/// [`evaluate_drift`]: a pure function with fail-closed semantics centralized
-/// in one place.
+/// supplied `max_age`.
 ///
 /// The decision compares `age = now - record.fetched_at` against `max_age`:
 /// `age > max_age` returns [`WebvhFreshness::Stale`], otherwise

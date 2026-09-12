@@ -10,7 +10,6 @@ struct PersistenceDeviceDelivery(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceMessages(Arc<dyn PersistenceStore>);
 struct PersistenceSignalRelay(Arc<dyn PersistenceStore>);
 struct PersistenceBlobs(Arc<dyn PersistenceStore>);
-struct PersistencePushBridgeCache(Arc<dyn PersistenceStore>);
 #[async_trait::async_trait]
 impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
     async fn store_notification(
@@ -76,7 +75,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
         let push_registrations_removed = match self
             .0
             .push_devices()
-            .unregister(actor_id, device_id, None, None)
+            .purge_principal_device(actor_id, device_id)
             .await
         {
             Ok(count) => count,
@@ -98,7 +97,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
 
     async fn unregister_push_device(
         &self,
-        actor_id: &str,
+        actor_id: &arkret_wire::AccountId,
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
@@ -191,44 +190,6 @@ impl crate::delivery::BlobPort for PersistenceBlobs {
     }
     async fn blobs(&self) -> crate::ServiceResult<Vec<crate::delivery::BlobState>> {
         Ok(self.0.blobs().snapshot_all().await?)
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
-    async fn store_entry(
-        &self,
-        bridge_describe_url: &str,
-        record: crate::delivery::OutboundPushBridgeCacheState,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .push_bridge_cache()
-            .put(bridge_describe_url, record)
-            .await?;
-        Ok(())
-    }
-
-    async fn current_contract(
-        &self,
-        bridge_describe_url: &str,
-    ) -> crate::ServiceResult<Option<crate::delivery::OutboundPushBridgeCacheState>> {
-        Ok(self
-            .0
-            .push_bridge_cache()
-            .current_contract(bridge_describe_url)
-            .await?)
-    }
-    async fn verify_contract_freshness(
-        &self,
-        bridge_describe_url: &str,
-        observed_digest: &str,
-        max_age: chrono::Duration,
-    ) -> crate::ServiceResult<crate::delivery::PushContractDrift> {
-        Ok(self
-            .0
-            .push_bridge_cache()
-            .verify_contract_freshness(bridge_describe_url, observed_digest, max_age)
-            .await?)
     }
 }
 
@@ -343,7 +304,6 @@ pub fn build_persistence_delivery_service(
         device_messages: Arc::new(PersistenceDeviceMessages(persistence.clone())),
         signals: Arc::new(PersistenceSignalRelay(persistence.clone())),
         blobs: Arc::new(PersistenceBlobs(persistence.clone())),
-        push_bridge_cache: Arc::new(PersistencePushBridgeCache(persistence)),
         object_storage,
         push_target_hmac_key,
     })

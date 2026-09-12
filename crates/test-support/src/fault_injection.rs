@@ -458,9 +458,6 @@ impl soland_storage::DeliveryPolicyStoreRegistry for FaultInjectingStore {
     fn signal_relay(&self) -> &dyn soland_storage::SignalRelayStore {
         self.inner.signal_relay()
     }
-    fn push_bridge_cache(&self) -> &dyn soland_storage::PushBridgeCacheStore {
-        self.inner.push_bridge_cache()
-    }
     fn policy_documents(&self) -> &dyn soland_storage::PolicyDocumentStore {
         self.inner.policy_documents()
     }

@@ -82,7 +82,7 @@ pub trait DeviceDeliveryPort: Send + Sync {
     async fn register_push_device(&self, registration: Value) -> ServiceResult<()>;
     async fn unregister_push_device(
         &self,
-        actor_id: &str,
+        actor_id: &arkret_wire::AccountId,
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
@@ -95,10 +95,7 @@ pub trait DeviceDeliveryPort: Send + Sync {
 /// Presence, typing, call signalling and read receipts are all Signals in v1:
 /// they share this one opaque relay record instead of four plaintext shapes,
 /// and the server sees only the AAD-bound envelope header.
-pub use soland_storage::{
-    BlobRecord as BlobState, DriftResult as PushContractDrift,
-    OutboundPushBridgeCacheRecord as OutboundPushBridgeCacheState,
-};
+pub use soland_storage::BlobRecord as BlobState;
 pub use soland_storage::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord as DeviceMessageState,
@@ -110,25 +107,6 @@ pub trait BlobPort: Send + Sync {
     async fn blob(&self, blob_ref: &str) -> ServiceResult<Option<BlobState>>;
     async fn store_blob(&self, blob_ref: &str, blob: BlobState) -> ServiceResult<()>;
     async fn blobs(&self) -> ServiceResult<Vec<BlobState>>;
-}
-
-#[async_trait]
-pub trait PushBridgeCachePort: Send + Sync {
-    async fn store_entry(
-        &self,
-        bridge_describe_url: &str,
-        record: OutboundPushBridgeCacheState,
-    ) -> ServiceResult<()>;
-    async fn current_contract(
-        &self,
-        bridge_describe_url: &str,
-    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>>;
-    async fn verify_contract_freshness(
-        &self,
-        bridge_describe_url: &str,
-        observed_digest: &str,
-        max_age: chrono::Duration,
-    ) -> ServiceResult<PushContractDrift>;
 }
 
 /// Live Signal relay (`sync/signal.md` §4).
@@ -211,7 +189,6 @@ pub struct DeliveryService {
     device_messages: Arc<dyn DeviceMessagePort>,
     signals: Arc<dyn SignalRelayPort>,
     blobs: Arc<dyn BlobPort>,
-    push_bridge_cache: Arc<dyn PushBridgeCachePort>,
     object_storage: Arc<dyn ObjectStoragePort>,
     push_target_hmac_key: [u8; 32],
 }
@@ -222,7 +199,6 @@ pub struct DeliveryServiceRuntime {
     pub device_messages: Arc<dyn DeviceMessagePort>,
     pub signals: Arc<dyn SignalRelayPort>,
     pub blobs: Arc<dyn BlobPort>,
-    pub push_bridge_cache: Arc<dyn PushBridgeCachePort>,
     pub object_storage: Arc<dyn ObjectStoragePort>,
     pub push_target_hmac_key: [u8; 32],
 }
@@ -235,7 +211,6 @@ impl DeliveryService {
             device_messages,
             signals,
             blobs,
-            push_bridge_cache,
             object_storage,
             push_target_hmac_key,
         } = runtime;
@@ -245,7 +220,6 @@ impl DeliveryService {
             device_messages,
             signals,
             blobs,
-            push_bridge_cache,
             object_storage,
             push_target_hmac_key,
         }
@@ -341,7 +315,7 @@ impl DeliveryService {
     }
     pub async fn unregister_push_device(
         &self,
-        actor_id: &str,
+        actor_id: &arkret_wire::AccountId,
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
@@ -488,34 +462,6 @@ impl DeliveryService {
     pub async fn blobs(&self) -> ServiceResult<Vec<BlobState>> {
         self.blobs.blobs().await
     }
-
-    pub async fn store_push_bridge_cache_entry(
-        &self,
-        bridge_describe_url: &str,
-        record: OutboundPushBridgeCacheState,
-    ) -> ServiceResult<()> {
-        self.push_bridge_cache
-            .store_entry(bridge_describe_url, record)
-            .await
-    }
-    pub async fn current_push_bridge_contract(
-        &self,
-        bridge_describe_url: &str,
-    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
-        self.push_bridge_cache
-            .current_contract(bridge_describe_url)
-            .await
-    }
-    pub async fn verify_push_bridge_contract_freshness(
-        &self,
-        bridge_describe_url: &str,
-        observed_digest: &str,
-        max_age: chrono::Duration,
-    ) -> ServiceResult<PushContractDrift> {
-        self.push_bridge_cache
-            .verify_contract_freshness(bridge_describe_url, observed_digest, max_age)
-            .await
-    }
 }
 
 #[cfg(test)]
@@ -532,7 +478,6 @@ mod tests {
     struct NoDeviceMessages;
     struct NoSignalRelay;
     struct NoBlobs;
-    struct NoPushBridgeCache;
     struct NoObjectStorage;
 
     #[async_trait]
@@ -567,31 +512,6 @@ mod tests {
 
         async fn delete(&self, _key: &str) -> Result<(), String> {
             Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl PushBridgeCachePort for NoPushBridgeCache {
-        async fn store_entry(
-            &self,
-            _bridge_describe_url: &str,
-            _record: OutboundPushBridgeCacheState,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn current_contract(
-            &self,
-            _bridge_describe_url: &str,
-        ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
-            Ok(None)
-        }
-        async fn verify_contract_freshness(
-            &self,
-            _bridge_describe_url: &str,
-            _observed_digest: &str,
-            _max_age: chrono::Duration,
-        ) -> ServiceResult<PushContractDrift> {
-            Ok(PushContractDrift::Unknown)
         }
     }
 
@@ -729,7 +649,7 @@ mod tests {
         }
         async fn unregister_push_device(
             &self,
-            _actor_id: &str,
+            _actor_id: &arkret_wire::AccountId,
             _device_id: &str,
             _push_key: Option<&str>,
             _app_id: Option<&str>,
@@ -785,7 +705,6 @@ mod tests {
             device_messages: Arc::new(NoDeviceMessages),
             signals: Arc::new(NoSignalRelay),
             blobs: Arc::new(NoBlobs),
-            push_bridge_cache: Arc::new(NoPushBridgeCache),
             object_storage: Arc::new(NoObjectStorage),
             push_target_hmac_key: [0; 32],
         });
