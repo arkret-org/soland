@@ -1372,6 +1372,16 @@ pub(crate) async fn publish_confirmed_seal_commands(
             .await
             .map_err(|error| format!("reload confirmed consent cells: {error}"))?;
     }
+    if committed_events
+        .iter()
+        .any(|event| event.kind == arkret_wire::EventKind::ContactTombstone)
+    {
+        state
+            .contacts()
+            .hydrate_runtime()
+            .await
+            .map_err(|error| format!("reload confirmed Contact invite policy: {error}"))?;
+    }
     for result in &seal.command_results {
         if result.outcome != arkret_wire::CommandOutcome::Committed {
             continue;

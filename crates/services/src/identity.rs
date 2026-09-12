@@ -459,10 +459,12 @@ pub struct ContactService {
     /// sealed, so hydration rebuilds it by replaying the accepted
     /// `ak.direct_conversation.bound` Events, which are the authority.
     runtime_direct_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindings>>>,
+    runtime_policy_reload: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ContactService {
     pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
+        let _reload = self.runtime_policy_reload.lock().await;
         self.replace_runtime_invite_policies(self.invite_policies.policies().await?);
         Ok(())
     }
@@ -476,6 +478,7 @@ impl ContactService {
             invite_policies,
             runtime_invite_policies: Arc::new(Mutex::new(BTreeMap::new())),
             runtime_direct_bindings: Arc::new(Mutex::new(BTreeMap::new())),
+            runtime_policy_reload: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -514,6 +517,7 @@ impl ContactService {
         policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> ServiceResult<()> {
         soland_storage::validate_invite_policy_account(account_id, &policy)?;
+        let _reload = self.runtime_policy_reload.lock().await;
         self.invite_policies
             .save_policy(account_id, policy.clone())
             .await?;
