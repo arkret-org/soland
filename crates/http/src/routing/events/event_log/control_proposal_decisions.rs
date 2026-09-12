@@ -92,42 +92,12 @@ async fn load_snapshot(
     Ok(snapshot)
 }
 
-fn decision_parts(
-    decisions: &[ControlProposalDecision],
-) -> Result<
-    (
-        Vec<ControlProposalDecision>,
-        Option<ControlProposalDecision>,
-    ),
-    AppError,
-> {
-    let mut defers = Vec::new();
-    let mut terminal_reject = None;
-    for decision in decisions {
-        if decision.is_reject() {
-            if terminal_reject.replace(decision.clone()).is_some() {
-                return Err(AppError::internal(
-                    "control proposal snapshot contains multiple terminal rejects",
-                ));
-            }
-        } else {
-            if terminal_reject.is_some() {
-                return Err(AppError::internal(
-                    "control proposal snapshot continues after terminal reject",
-                ));
-            }
-            defers.push(decision.clone());
-        }
-    }
-    Ok((defers, terminal_reject))
-}
-
 fn read_outcome(
     request: &ControlProposalDecisionReadRequestBody,
     snapshot: ControlProposalSnapshot,
     observed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ControlProposalDecisionReadOutcome, AppError> {
-    let (defers, terminal_reject) = decision_parts(&snapshot.decisions)?;
+    let defers = snapshot.decisions.clone();
     let authority_kind = if snapshot.control_proposal_ack.is_some() {
         ControlProposalAuthorityKind::ControlProposalAck
     } else {
@@ -158,11 +128,6 @@ fn read_outcome(
             ));
         }
     };
-    if accepted_seal_id.is_some() && terminal_reject.is_some() {
-        return Err(AppError::internal(
-            "control proposal snapshot has conflicting terminal states",
-        ));
-    }
     let is_overdue = snapshot.decision_overdue
         || snapshot.control_proposal_ack.as_ref().is_some_and(|ack| {
             let current_due_at = defers
@@ -173,8 +138,6 @@ fn read_outcome(
         });
     let proposal_state = if accepted_seal_id.is_some() {
         ControlProposalState::Sealed
-    } else if terminal_reject.is_some() {
-        ControlProposalState::Rejected
     } else if is_overdue {
         ControlProposalState::Overdue
     } else if !defers.is_empty() {
@@ -190,7 +153,6 @@ fn read_outcome(
         proposal_state,
         control_proposal_ack: snapshot.control_proposal_ack,
         defer_decisions: (!defers.is_empty()).then_some(defers),
-        terminal_reject,
         fault_reason: (proposal_state == ControlProposalState::Overdue)
             .then_some(ControlProposalDecisionFaultReason::DecisionOverdue),
         accepted_seal_id,
@@ -205,23 +167,14 @@ fn submit_outcome(
     decision: &ControlProposalDecision,
     status: ControlProposalDecisionSubmitStatus,
 ) -> Result<ControlProposalDecisionSubmitOutcome, AppError> {
-    let decision_kind = if decision.is_reject() {
-        ControlProposalDecisionKind::SignedReject
-    } else {
-        ControlProposalDecisionKind::SignedDefer
-    };
     let outcome = ControlProposalDecisionSubmitOutcome {
         status,
         proposal_digest: decision.proposal_digest().clone(),
         decision_digest: decision.decision_digest().map_err(|error| {
             AppError::internal(format!("accepted proposal decision digest failed: {error}"))
         })?,
-        decision_kind,
-        proposal_state: if decision.is_reject() {
-            ControlProposalState::Rejected
-        } else {
-            ControlProposalState::Deferred
-        },
+        decision_kind: ControlProposalDecisionKind::SignedDefer,
+        proposal_state: ControlProposalState::Deferred,
     };
     outcome
         .validate_for_request(&ControlProposalDecisionSubmitRequestBody {
@@ -280,16 +233,6 @@ pub(super) async fn submit_control_proposal_decision(
     if !snapshot.command_decisions.is_empty() {
         return Err(AppError::conflict("control proposal is already sealed")
             .with_wire_code("duplicate_conflict"));
-    }
-    if snapshot
-        .decisions
-        .iter()
-        .any(ControlProposalDecision::is_reject)
-    {
-        return Err(AppError::conflict(
-            "control proposal already has a different terminal decision",
-        )
-        .with_wire_code("duplicate_conflict"));
     }
     let policy = crate::control_proposal::control_proposal_policy(state, decision.realm_id(), &[])
         .await

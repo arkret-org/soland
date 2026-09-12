@@ -1411,12 +1411,6 @@ impl ControlEventStore for PgControlEventStore {
                 .ok_or_else(|| {
                     StoreError::NotFound(format!("control Event {digest} not in store"))
                 })?;
-                if row.is_sealed {
-                    return Err(StoreError::Conflict(format!(
-                        "sealed control Event {digest} cannot receive another proposal decision"
-                    ))
-                    .into());
-                }
                 let ack = row
                     .control_proposal_ack
                     .ok_or_else(|| {
@@ -1433,9 +1427,9 @@ impl ControlEventStore for PgControlEventStore {
                 if decisions.contains(&decision) {
                     return Ok(());
                 }
-                if decisions.iter().any(ControlProposalDecision::is_reject) {
+                if row.is_sealed {
                     return Err(StoreError::Conflict(format!(
-                        "control Event {digest} already has a terminal signed rejection"
+                        "sealed control Event {digest} cannot receive another proposal decision"
                     ))
                     .into());
                 }
@@ -2955,7 +2949,7 @@ impl CellStore for PgCellStore {
 mod proposal_decision_tests {
     use arkret_wire::{
         ControlProposalAck, ControlProposalAckKind, ControlProposalAuthorityAck,
-        ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalRejectReason,
+        ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalDeferReason,
         PayloadSignature,
     };
     use chrono::{DateTime, TimeZone, Utc};
@@ -3007,23 +3001,21 @@ mod proposal_decision_tests {
         }
     }
 
-    fn signed_reject(ack: &ControlProposalAck) -> ControlProposalDecision {
-        let mut decision = ControlProposalDecision::SignedReject {
+    fn signed_defer(ack: &ControlProposalAck) -> ControlProposalDecision {
+        let mut decision = ControlProposalDecision::SignedDefer {
             realm_id: ack.realm_id.clone(),
             proposal_digest: ack.proposal_digest.clone(),
             proposal_ack_digest: ack.proposal_ack_digest().unwrap(),
             decided_at: at(20),
-            decision_due_at: ack.decision_due_at,
+            decision_due_at: ack.decision_due_at + chrono::Duration::seconds(30),
             absolute_due_at: ack.absolute_due_at,
-            defer_count: 0,
-            reason_code: ControlProposalRejectReason::PolicyDenied,
+            defer_count: 1,
+            reason_code: ControlProposalDeferReason::TemporarilyUnavailable,
             authority_set_ref: ack.authority_set_ref.clone(),
             proofs: vec![signature(hash('0'), at(20))],
         };
         let decision_digest = decision.decision_digest().unwrap();
-        let ControlProposalDecision::SignedReject { proofs, .. } = &mut decision else {
-            unreachable!("constructed a signed reject");
-        };
+        let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision;
         proofs[0].payload_digest = decision_digest;
         decision
     }
@@ -3031,7 +3023,7 @@ mod proposal_decision_tests {
     #[test]
     fn postgres_append_validation_uses_the_effective_realm_policy() {
         let ack = ack();
-        let decision = signed_reject(&ack);
+        let decision = signed_defer(&ack);
 
         assert!(
             validate_proposal_decision_append(

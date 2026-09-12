@@ -23,6 +23,10 @@ struct TargetStateRow {
     #[diesel(sql_type = Bool)]
     decision_overdue: bool,
     #[diesel(sql_type = Nullable<Text>)]
+    deciding_seal_id: Option<String>,
+    #[diesel(sql_type = Bool)]
+    command_rejected: bool,
+    #[diesel(sql_type = Nullable<Text>)]
     covering_seal_id: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     covered_at: Option<chrono::DateTime<Utc>>,
@@ -167,15 +171,15 @@ async fn target_rows(
         "SELECT t.proposal_digest, t.proposal_event_id, t.accepted_at, t.acceptance_seq, \
                 t.control_proposal_ack, c.proposal_decisions, \
                 COALESCE(b.decision_overdue, false) AS decision_overdue, \
-                b.seal_id AS covering_seal_id, b.sealed_at AS covered_at \
+                b.seal_id AS deciding_seal_id, COALESCE(b.outcome = 'rejected', false) AS command_rejected, \
+                CASE WHEN b.outcome = 'committed' THEN b.seal_id END AS covering_seal_id, b.sealed_at AS covered_at \
          FROM device_revocation_targets t \
          JOIN state_control_events c ON c.event_digest = t.proposal_digest \
          LEFT JOIN LATERAL ( \
-             SELECT binding.seal_id, binding.sealed_at, \
+             SELECT binding.seal_id, binding.sealed_at, binding.outcome, \
                     bool_or(binding.decision_overdue) OVER () AS decision_overdue \
              FROM state_seal_control_events binding \
              WHERE binding.event_digest = c.event_digest \
-               AND binding.outcome = 'committed' \
                AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
                                WHERE q.seal_id = binding.seal_id) \
              ORDER BY binding.sealed_at, binding.seal_id LIMIT 1 \
@@ -213,8 +217,15 @@ fn target_record(
                 )
             })?,
         }
-    } else if let Some(terminal_decision) = terminal_reject(&row.proposal_decisions)? {
-        DeviceRevocationTargetStatus::Rejected { terminal_decision }
+    } else if row.command_rejected {
+        let deciding_seal_id = row.deciding_seal_id.ok_or_else(|| {
+            PersistenceError::Internal("rejected device command lacks deciding Seal".to_owned())
+        })?;
+        DeviceRevocationTargetStatus::Rejected {
+            deciding_seal_id: arkret_identifiers::SealId::new(deciding_seal_id).map_err(
+                |error| PersistenceError::Internal(format!("invalid deciding Seal: {error}")),
+            )?,
+        }
     } else {
         let decisions: Vec<arkret_wire::ControlProposalDecision> =
             serde_json::from_value(row.proposal_decisions).map_err(|error| {
@@ -242,24 +253,6 @@ fn target_record(
     })
 }
 
-fn is_rejected(decisions: &Value) -> bool {
-    decisions.as_array().is_some_and(|items| {
-        items
-            .iter()
-            .any(|item| item.get("kind").and_then(Value::as_str) == Some("signed_reject"))
-    })
-}
-
-fn terminal_reject(
-    decisions: &Value,
-) -> PersistenceResult<Option<arkret_wire::ControlProposalDecision>> {
-    let decisions: Vec<arkret_wire::ControlProposalDecision> =
-        serde_json::from_value(decisions.clone()).map_err(|error| {
-            PersistenceError::Internal(format!("stored control proposal decisions: {error}"))
-        })?;
-    Ok(decisions.into_iter().find(|decision| decision.is_reject()))
-}
-
 fn status_from_rows(rows: &[TargetStateRow]) -> DeviceRevocationGateStatus {
     if let Some(sealed) = rows.iter().find_map(|row| {
         row.covering_seal_id
@@ -271,7 +264,7 @@ fn status_from_rows(rows: &[TargetStateRow]) -> DeviceRevocationGateStatus {
         };
     }
     rows.iter()
-        .filter(|row| row.covering_seal_id.is_none() && !is_rejected(&row.proposal_decisions))
+        .filter(|row| row.deciding_seal_id.is_none())
         .map(|row| row.proposal_digest.as_str())
         .min()
         .map_or(DeviceRevocationGateStatus::Active, |digest| {
@@ -363,7 +356,7 @@ pub(crate) async fn insert_transition_in_transaction(
     let live = target_rows(conn, &transition.selector, None)
         .await?
         .into_iter()
-        .filter(|row| !is_rejected(&row.proposal_decisions))
+        .filter(|row| !row.command_rejected)
         .count();
     let decision = soland_storage::classify_device_revocation_transition(
         transition,
@@ -564,16 +557,6 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
         .map_err(|error| error.into_persistence())
     }
 
-    async fn mark_rejected(
-        &self,
-        _proposal_digest: &str,
-        _terminal_decision: &arkret_wire::ControlProposalDecision,
-    ) -> PersistenceResult<bool> {
-        // The signed decision is the SSOT in state_control_events; gate reads
-        // join it directly, so there is no second mutable rejection flag.
-        Ok(false)
-    }
-
     async fn commit_decision(
         &self,
         proposal_digest: &str,
@@ -595,12 +578,6 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
             .get_result::<DecisionCommitRow>(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
-            if row.is_sealed {
-                return Err(PersistenceError::Conflict(format!(
-                    "failed_precondition: sealed control Event {proposal_digest} cannot receive another proposal decision"
-                ))
-                .into());
-            }
             let ack: arkret_wire::ControlProposalAck =
                 serde_json::from_value(row.control_proposal_ack).map_err(|error| {
                     PersistenceError::Internal(format!("stored Control Proposal Ack: {error}"))
@@ -612,14 +589,10 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
             if decisions.contains(&decision) {
                 return Ok(ControlProposalDecisionCommitOutcome::Duplicate);
             }
-            if decisions
-                .iter()
-                .any(arkret_wire::ControlProposalDecision::is_reject)
-            {
-                return Err(PersistenceError::Conflict(
-                    "failed_precondition: control Event already has a terminal signed rejection"
-                        .to_owned(),
-                )
+            if row.is_sealed {
+                return Err(PersistenceError::Conflict(format!(
+                    "failed_precondition: sealed control Event {proposal_digest} cannot receive another proposal decision"
+                ))
                 .into());
             }
             decision
@@ -826,4 +799,45 @@ pub(crate) async fn stage_sealed_revocation_in_transaction(
         .map_err(PersistenceError::database)?;
     }
     Ok(inserted > 0)
+}
+
+#[cfg(test)]
+mod decision_gate_tests {
+    use super::*;
+
+    fn row(digest: &str, outcome: Option<bool>) -> TargetStateRow {
+        TargetStateRow {
+            proposal_digest: digest.to_owned(),
+            proposal_event_id: String::new(),
+            accepted_at: Utc::now(),
+            acceptance_seq: 1,
+            control_proposal_ack: Value::Null,
+            proposal_decisions: serde_json::json!([]),
+            decision_overdue: false,
+            deciding_seal_id: outcome.map(|_| "deciding-seal".to_owned()),
+            command_rejected: outcome == Some(false),
+            covering_seal_id: (outcome == Some(true)).then(|| "committed-seal".to_owned()),
+            covered_at: outcome.map(|_| Utc::now()),
+        }
+    }
+
+    #[test]
+    fn rejected_command_releases_only_its_own_pending_device_fence() {
+        assert_eq!(
+            status_from_rows(&[row("rejected", Some(false))]),
+            DeviceRevocationGateStatus::Active
+        );
+        assert_eq!(
+            status_from_rows(&[row("rejected", Some(false)), row("other", None)]),
+            DeviceRevocationGateStatus::Pending {
+                blocking_proposal_digest: "other".to_owned()
+            },
+        );
+        assert_eq!(
+            status_from_rows(&[row("rejected", Some(false)), row("committed", Some(true))]),
+            DeviceRevocationGateStatus::Revoked {
+                covering_seal_id: "committed-seal".to_owned()
+            },
+        );
+    }
 }

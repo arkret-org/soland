@@ -55,7 +55,7 @@ pub enum DeviceRevocationTargetStatus {
         decision_overdue: bool,
     },
     Rejected {
-        terminal_decision: arkret_wire::ControlProposalDecision,
+        deciding_seal_id: arkret_identifiers::SealId,
     },
     Revoked {
         covering_seal_id: String,
@@ -389,12 +389,6 @@ pub trait DeviceRevocationStore: Send + Sync {
         &self,
         request: DeviceRevocationGateLinearizationRequest,
     ) -> PersistenceResult<DeviceRevocationGateLinearization>;
-
-    async fn mark_rejected(
-        &self,
-        proposal_digest: &str,
-        terminal_decision: &arkret_wire::ControlProposalDecision,
-    ) -> PersistenceResult<bool>;
 
     /// Atomically append a verified decision and update the typed revoke view.
     /// PostgreSQL updates the generic row in one transaction and derives the

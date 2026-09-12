@@ -771,17 +771,6 @@ impl soland_storage::DeviceRevocationStore for PersistenceHandle {
             .await
     }
 
-    async fn mark_rejected(
-        &self,
-        proposal_digest: &str,
-        terminal_decision: &arkret_wire::ControlProposalDecision,
-    ) -> PersistenceResult<bool> {
-        self.persistence
-            .device_revocations()
-            .mark_rejected(proposal_digest, terminal_decision)
-            .await
-    }
-
     async fn commit_decision(
         &self,
         proposal_digest: &str,
