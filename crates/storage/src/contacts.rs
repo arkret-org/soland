@@ -147,12 +147,12 @@ impl ContactCompletionIntent {
         use arkret_wire::EventKind;
         let invalid = |message: &str| crate::PersistenceError::SchemaViolation(message.into());
         self.producer_signer
-            .validate()
+            .validate_for_event(&self.plan.event, &self.plan.holder)
             .map_err(|error| invalid(&error.to_string()))?;
         let [proof] = self.plan.event.proofs.as_slice() else {
             return Err(invalid("Contact requires one authenticated producer proof"));
         };
-        if proof.verification_method != self.producer_signer.verification_method
+        if &proof.verification_method != self.producer_signer.verification_method()
             || self.plan.holder.contact_actor_id() != self.plan.event.actor_id
         {
             return Err(invalid(

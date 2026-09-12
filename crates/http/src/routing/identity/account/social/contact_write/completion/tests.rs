@@ -127,13 +127,15 @@ fn confirmed_contact_receipt_uses_historical_key_after_rotation_and_keystore_reo
                 [3_u8; 32],
             ),
             producer_signer:
-                arkret_models_collaboration::contact_operations::ContactProducerSigner {
-                    verification_method: method.clone(),
-                    public_key_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
-                        old.verifying_key().to_bytes(),
-                    ))
-                    .unwrap(),
-                },
+                arkret_models_collaboration::contact_operations::ContactProducerSigner::Direct(
+                    arkret_models_collaboration::contact_operations::ContactDirectProducerSigner {
+                        verification_method: method.clone(),
+                        public_key_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
+                            old.verifying_key().to_bytes(),
+                        ))
+                        .unwrap(),
+                    },
+                ),
             source_checkpoint: format!("sha256:{}", "3".repeat(64)).parse().unwrap(),
             accepted_at,
             issuer_id: station,

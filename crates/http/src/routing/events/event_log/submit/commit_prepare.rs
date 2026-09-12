@@ -213,13 +213,60 @@ pub(super) async fn prepare_accepted_event_command(
             .ok_or_else(|| invalid("Contact producer key is not did:key".into()))?;
         let public = arkret_canonical::decode_ed25519_multibase(multibase)
             .map_err(|error| invalid(error.to_string()))?;
-        let producer = arkret_models_collaboration::contact_operations::ContactProducerSigner {
-            verification_method: proof.verification_method.clone(),
-            public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
-                public,
-            ))
-            .map_err(|error| invalid(error.to_string()))?,
-        };
+        let encoded_key =
+            arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(public))
+                .map_err(|error| invalid(error.to_string()))?;
+        let producer = if draft.event.executed_by.is_some() {
+            let record = state
+                .agent_pairings()
+                .agent(draft.event.actor_id.signing_principal_id().as_str())
+                .await
+                .map_err(|error| invalid(error.to_string()))?
+                .ok_or_else(|| invalid("Contact Agent native identity is unavailable".into()))?;
+            // The stored immutable delegation supplies a locator, never a new
+            // authorization. Authenticate its complete native chain before the
+            // exact producer projection is frozen with the pending command.
+            let (locator, _) = record
+                .controller_authorization_ref
+                .as_str()
+                .split_once('#')
+                .ok_or_else(|| {
+                    invalid("Contact Agent delegation has no full DID locator".into())
+                })?;
+            let did = arkret_wire::Did::new(locator).map_err(|error| invalid(error.to_string()))?;
+            let mut entries = state
+                .dids()
+                .log_events(did.as_str())
+                .await
+                .map_err(|error| invalid(error.to_string()))?;
+            entries.sort_by_key(|entry| entry.seq);
+            let history = ContactAgentHistory(arkret_models_identity::IdentityLogListOutcome {
+                did: did.clone(),
+                method: arkret_models_identity::DidMethodUri::Webvh,
+                native_history: Some(true),
+                entries: entries.into_iter().map(|entry| entry.operation).collect(),
+                next_cursor: None,
+                has_more: false,
+            });
+            let identity = arkret::contact_authorization::verify_contact_agent_identity(
+                &draft.event,
+                &draft.holder,
+                &did,
+                &history,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            arkret_models_collaboration::contact_operations::ContactProducerSigner::delegated(
+                proof.verification_method.clone(),
+                encoded_key,
+                identity.did().clone(),
+            )
+        } else {
+            arkret_models_collaboration::contact_operations::ContactProducerSigner::direct(
+                proof.verification_method.clone(),
+                encoded_key,
+            )
+        }
+        .map_err(|error| invalid(error.to_string()))?;
         contact_projection
             .as_mut()
             .ok_or_else(|| invalid("Contact business projection is absent".into()))?
@@ -289,4 +336,23 @@ pub(super) async fn prepare_accepted_event_command(
         deliveries,
     };
     Ok(PreparedAcceptedEventCommand { command })
+}
+
+/// Only supplies retained native bytes; the SDK authenticates the whole chain.
+struct ContactAgentHistory(arkret_models_identity::IdentityLogListOutcome);
+impl arkret_identity::AuthorityDidHistoryResolver for ContactAgentHistory {
+    fn resolve_complete_history(
+        &self,
+        did: &arkret_wire::Did,
+    ) -> Result<
+        arkret_models_identity::IdentityLogListOutcome,
+        arkret_identity::AuthorityHistoryUnavailable,
+    > {
+        if &self.0.did != did {
+            return Err(arkret_identity::AuthorityHistoryUnavailable {
+                message: "unrelated Contact Agent DID".into(),
+            });
+        }
+        Ok(self.0.clone())
+    }
 }

@@ -4015,31 +4015,96 @@ mod tests {
         }
     }
 
+    fn signed_request_receipt(
+        holder: ContactPeer,
+        peer: ContactPeer,
+        source_did: &str,
+        event_ref: &str,
+    ) -> RequestAcceptanceReceipt {
+        use arkret_models_collaboration::contact_operations::{
+            ContactProducerSigner, RequestAcceptanceReceiptCore,
+        };
+        use ed25519_dalek::Signer as _;
+        let source_key = ed25519_dalek::SigningKey::from_bytes(&[31; 32]);
+        let holder_key = ed25519_dalek::SigningKey::from_bytes(&[29; 32]);
+        let accepted_at = chrono::DateTime::parse_from_rfc3339("2026-08-09T00:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let method = arkret_wire::DidUrl::new(format!(
+            "{}#device",
+            web_did(holder.contact_actor_id().signing_principal_id().as_str())
+        ))
+        .unwrap();
+        let core = RequestAcceptanceReceiptCore {
+            issuer_id: holder.delivery_station_id().clone(),
+            holder,
+            peer,
+            slot_version: 1,
+            slot_predecessor: None,
+            previous_terminal_contact_round_id: None,
+            request_event_ref: arkret_wire::EventId::new(event_ref).unwrap(),
+            producer_signer: ContactProducerSigner::direct(
+                method,
+                arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                    holder_key.verifying_key().to_bytes(),
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+            source_checkpoint: arkret_wire::Hash::new(format!("sha256:{}", "c".repeat(64)))
+                .unwrap(),
+            accepted_at,
+        };
+        let receipt = RequestAcceptanceReceipt::sign_with(core, |bytes| {
+            Ok(arkret_wire::ProtocolSignature {
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{source_did}#federation-signing-key"
+                ))
+                .unwrap(),
+                created_at: accepted_at,
+                jws: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                    source_key.sign(bytes).to_bytes(),
+                ))
+                .unwrap(),
+            })
+        })
+        .unwrap();
+        // This fixture authenticates the source transcript and exact producer
+        // descriptor. These projection tests do not supply a complete Event or
+        // native DID history and do not stand in for the receiving adapter.
+        arkret_signatures::contact_receipt::verify_contact_request_acceptance_receipt(
+            &receipt,
+            &receipt.core.request_event_ref,
+            &source_key.verifying_key(),
+        )
+        .unwrap();
+        receipt
+    }
     fn request_receipt(
         holder: &str,
         peer: &str,
         issuer: &str,
         event_ref: &str,
     ) -> RequestAcceptanceReceipt {
-        serde_json::from_value(json!({
-            "core": {
-                "holder": {"kind": "human", "account_id": {"principal_id": holder, "station_id": issuer}},
-                "peer": {"kind": "human", "account_id": {"principal_id": peer,
-                    "station_id": if peer == ALICE { ALICE_SERVICE } else { BOB_SERVICE }}},
-                "slot_version": 1,
-                "request_event_ref": event_ref,
-                "source_checkpoint": format!("sha256:{}", "c".repeat(64)),
-                "accepted_at": "2026-08-09T00:00:00.000Z",
-                "issuer_id": issuer
-            },
-            "receipt_digest": format!("sha256:{}", "d".repeat(64)),
-            "signature": {
-                "verification_method": format!("{}#federation-signing-key", web_did(issuer)),
-                "created_at": "2026-08-09T00:00:00.000Z",
-                "jws": "YWJj"
-            }
-        }))
-        .expect("request receipt fixture")
+        let participant = |principal: &str, station: &str| ContactPeer::Human {
+            account_id: arkret_wire::AccountId::new(
+                DidCoreId::new(principal).unwrap(),
+                DidCoreId::new(station).unwrap(),
+            ),
+        };
+        signed_request_receipt(
+            participant(holder, issuer),
+            participant(
+                peer,
+                if peer == ALICE {
+                    ALICE_SERVICE
+                } else {
+                    BOB_SERVICE
+                },
+            ),
+            &web_did(issuer),
+            event_ref,
+        )
     }
 
     #[test]
@@ -4112,24 +4177,22 @@ mod tests {
             "message": "hi from across the federation",
         });
         let request_event_ref = "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
-        let request_receipt: RequestAcceptanceReceipt = serde_json::from_value(json!({
-            "core": {
-                "holder": {"kind": "human", "account_id": {"principal_id": requester_id, "station_id": source_id}},
-                "peer": {"kind": "human", "account_id": {"principal_id": target, "station_id": state.service_id()}},
-                "slot_version": 1,
-                "request_event_ref": request_event_ref,
-                "source_checkpoint": format!("sha256:{}", "c".repeat(64)),
-                "accepted_at": "2026-08-09T00:00:00.000Z",
-                "issuer_id": source_id
+        let request_receipt = signed_request_receipt(
+            ContactPeer::Human {
+                account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new(requester_id).unwrap(),
+                    DidCoreId::new(source_id).unwrap(),
+                ),
             },
-            "receipt_digest": format!("sha256:{}", "d".repeat(64)),
-            "signature": {
-                "verification_method": "did:web:remote.local#federation-signing-key",
-                "created_at": "2026-08-09T00:00:00.000Z",
-                "jws": "YWJj"
-            }
-        }))
-        .expect("request receipt fixture");
+            ContactPeer::Human {
+                account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new(target).unwrap(),
+                    state.service_core_id().clone(),
+                ),
+            },
+            "did:web:remote.local",
+            request_event_ref,
+        );
 
         let requester = account_actor(requester_id, source_id);
         let target_actor = account_actor(target, state.service_id());

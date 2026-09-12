@@ -1137,18 +1137,20 @@ fn signed_lineage(
     scopes: Vec<ContactScope>,
     terminal: bool,
 ) -> Result<ContactLineage, AppError> {
-    let producer = arkret_models_collaboration::contact_operations::ContactProducerSigner {
-        verification_method: DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(
-                state.service_did().as_str(),
-            ),
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?,
-        public_key_b64u: Base64UrlString::new(
-            URL_SAFE_NO_PAD.encode(state.notary_signing_key().verifying_key().as_bytes()),
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?,
-    };
+    let producer = arkret_models_collaboration::contact_operations::ContactProducerSigner::Direct(
+        arkret_models_collaboration::contact_operations::ContactDirectProducerSigner {
+            verification_method: DidUrl::new(
+                crate::routing::federation::federation_service_signature_key_id(
+                    state.service_did().as_str(),
+                ),
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?,
+            public_key_b64u: Base64UrlString::new(
+                URL_SAFE_NO_PAD.encode(state.notary_signing_key().verifying_key().as_bytes()),
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        },
+    );
     ContactLineage::sign_with(
         contact_round_id,
         holder,
@@ -2631,6 +2633,7 @@ mod device_authorization_account_tests {
 
     #[test]
     fn normal_response_requires_the_exact_unconsumed_incoming_receipt() {
+        use arkret_wire::{Base64UrlString, DidUrl, ProtocolSignature};
         use soland_services::identity::ContactRecord;
 
         use super::{
@@ -2641,27 +2644,68 @@ mod device_authorization_account_tests {
             "ak:did_core:web:station.example",
             "ak:did_core:web:remote.example",
         ] {
-            let receipt: RequestAcceptanceReceipt = serde_json::from_value(serde_json::json!({
-                "core": {
-                    "holder": {"kind":"human", "account_id": {
-                        "principal_id":"ak:did_core:web:alice.example", "station_id":peer_station
-                    }},
-                    "peer": {"kind":"human", "account_id": {
-                        "principal_id":"ak:did_core:web:bob.example", "station_id":"ak:did_core:web:station.example"
-                    }},
-                    "slot_version":1,
-                    "request_event_ref":"ak:event:AQ0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                    "source_checkpoint":hash('a'),
-                    "accepted_at":"2026-09-09T00:00:00.000Z",
-                    "issuer_id":peer_station
+            use arkret_models_collaboration::contact_operations::{
+                ContactProducerSigner, RequestAcceptanceReceiptCore,
+            };
+            use ed25519_dalek::Signer as _;
+            let source_key = ed25519_dalek::SigningKey::from_bytes(&[31; 32]);
+            let holder_key = ed25519_dalek::SigningKey::from_bytes(&[29; 32]);
+            let accepted_at = chrono::DateTime::parse_from_rfc3339("2026-09-09T00:00:00.000Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let core = RequestAcceptanceReceiptCore {
+                holder: ContactPeer::Human {
+                    account_id: AccountId::new(
+                        DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                        DidCoreId::new(peer_station).unwrap(),
+                    ),
                 },
-                "receipt_digest":hash('b'),
-                "signature": {
-                    "verification_method":"did:web:station.example#signing",
-                    "created_at":"2026-09-09T00:00:00.000Z",
-                    "jws":"YWJj"
-                }
-            })).unwrap();
+                peer: ContactPeer::Human {
+                    account_id: AccountId::new(
+                        DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
+                        DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+                    ),
+                },
+                slot_version: 1,
+                slot_predecessor: None,
+                previous_terminal_contact_round_id: None,
+                request_event_ref: EventId::new(
+                    "ak:event:AQ0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap(),
+                producer_signer: ContactProducerSigner::direct(
+                    DidUrl::new("did:web:alice.example#device").unwrap(),
+                    Base64UrlString::new(arkret_canonical::base64url_encode(
+                        holder_key.verifying_key().to_bytes(),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap(),
+                source_checkpoint: hash('a'),
+                accepted_at,
+                issuer_id: DidCoreId::new(peer_station).unwrap(),
+            };
+            let receipt = RequestAcceptanceReceipt::sign_with(core, |bytes| {
+                Ok(ProtocolSignature {
+                    verification_method: DidUrl::new(format!(
+                        "did:web:{}#signing",
+                        peer_station.strip_prefix("ak:did_core:web:").unwrap()
+                    ))
+                    .unwrap(),
+                    created_at: accepted_at,
+                    jws: Base64UrlString::new(arkret_canonical::base64url_encode(
+                        source_key.sign(bytes).to_bytes(),
+                    ))
+                    .unwrap(),
+                })
+            })
+            .unwrap();
+            arkret_signatures::contact_receipt::verify_contact_request_acceptance_receipt(
+                &receipt,
+                &receipt.core.request_event_ref,
+                &source_key.verifying_key(),
+            )
+            .unwrap();
             let record = ContactRecord {
                 requester_id: receipt.core.holder.contact_actor_id(),
                 target_id: receipt.core.peer.contact_actor_id(),

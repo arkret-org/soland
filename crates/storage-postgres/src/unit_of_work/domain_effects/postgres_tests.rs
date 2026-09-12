@@ -161,13 +161,15 @@ fn completion_draft_fixture(
 fn fixture_producer(
     event: &Event,
 ) -> arkret_models_collaboration::contact_operations::ContactProducerSigner {
-    arkret_models_collaboration::contact_operations::ContactProducerSigner {
-        verification_method: event.proofs[0].verification_method.clone(),
-        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
-            [7_u8; 32],
-        ))
-        .unwrap(),
-    }
+    arkret_models_collaboration::contact_operations::ContactProducerSigner::Direct(
+        arkret_models_collaboration::contact_operations::ContactDirectProducerSigner {
+            verification_method: event.proofs[0].verification_method.clone(),
+            public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                [7_u8; 32],
+            ))
+            .unwrap(),
+        },
+    )
 }
 fn delivery_fixture(event: &Event, peer: &ActorId) -> soland_storage::ContactCompletionIntent {
     completion_draft_fixture(event, peer)
