@@ -1091,47 +1091,6 @@ pub struct OutboundPushBridgeCacheRecord {
     pub etag: String,
 }
 
-/// One row of the persistent multisig coordinator buffer.
-///
-/// Holds an in-flight pending Seal that is awaiting threshold partial
-/// signatures. The `partials` map is keyed by signer DID → submitted partial
-/// payload (`{signature_b64, kid, submitted_at}`). When the number of
-/// partials reaches `threshold_k`, the leader aggregates them via SDK
-/// `ThresholdAggregator` and publishes the final threshold-signed Seal,
-/// then deletes the row.
-#[derive(Clone, Debug)]
-pub struct MultisigPendingRecord {
-    pub seal_id: String,
-    pub realm_id: String,
-    pub digest_suite: arkret_canonical::DigestSuite,
-    pub threshold_k: u32,
-    pub threshold_n: u32,
-    pub members: Vec<String>,
-    /// Canonical bytes (base64) the partial signatures sign over. Empty when
-    /// the buffer was created without an explicit canonical body (smoke
-    /// tests). Real partial-signature aggregation requires this to be
-    /// non-empty.
-    pub canonical_b64: String,
-    /// `signer_did` -> JSON `{signature_b64, kid, submitted_at}`.
-    pub partials: BTreeMap<String, Value>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    /// Node id of the watchdog instance currently leasing this row, or
-    /// `None` when unclaimed. The lease is valid until
-    /// [`MultisigPendingRecord::claimed_until`].
-    pub claimed_by_node_id: Option<String>,
-    /// Lease expiry timestamp. A row is "claimable" when this is `None` or
-    /// in the past.
-    pub claimed_until: Option<chrono::DateTime<chrono::Utc>>,
-    /// Partition-tolerant fencing token. Every successful
-    /// `try_claim` bumps this counter; a stale leader (whose lease was
-    /// silently superseded after a network partition healed) carries the
-    /// pre-bump value so its post-aggregate `delete_with_fence` /
-    /// `renew_claim` is rejected at the row level. Monotonic across the
-    /// row's lifetime.
-    pub claim_seq: i64,
-}
-
 #[derive(Clone, Debug)]
 pub struct PolicyDocumentRecord {
     pub policy_id: String,

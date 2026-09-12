@@ -2422,30 +2422,6 @@ CREATE TABLE public.retention_tombstones (
 
 CREATE INDEX retention_tombstones_realm_idx ON public.retention_tombstones USING btree (realm_id);
 
-CREATE TABLE public.multisig_pending (
-    seal_id text PRIMARY KEY,
-    realm_id text NOT NULL,
-    digest_suite text NOT NULL CHECK (digest_suite IN ('sha256', 'blake3')),
-    threshold_k integer NOT NULL,
-    threshold_n integer NOT NULL,
-    members text[] NOT NULL,
-    canonical_b64 text DEFAULT ''::text NOT NULL,
-    partials jsonb DEFAULT '{}'::jsonb NOT NULL,
-    claimed_by_node_id text,
-    claimed_until timestamp with time zone,
-    claim_seq bigint DEFAULT 0 NOT NULL,
-    expires_at timestamp with time zone DEFAULT (now() + '01:00:00'::interval) NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-CREATE INDEX multisig_pending_claim_seq_idx ON public.multisig_pending USING btree (claim_seq);
-
-CREATE INDEX multisig_pending_claimed_idx ON public.multisig_pending USING btree (claimed_until);
-
-CREATE INDEX multisig_pending_expires_idx ON public.multisig_pending USING btree (expires_at);
-
-CREATE INDEX multisig_pending_space_idx ON public.multisig_pending USING btree (realm_id);
-
 CREATE SEQUENCE public.notification_projection_position_seq AS bigint;
 
 CREATE TABLE public.notifications (

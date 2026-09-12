@@ -57,7 +57,6 @@ mod mls;
 mod mls_public_state;
 pub use mls_public_state::*;
 mod moderation;
-mod multisig;
 mod notifications;
 mod organization_registration;
 mod policy;
@@ -73,9 +72,6 @@ mod sessions;
 mod sidecars;
 mod signal;
 mod sync_cursor;
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub mod transition_contract_tests;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;
@@ -103,7 +99,6 @@ pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;
 pub use moderation::*;
-pub use multisig::*;
 pub use notifications::*;
 pub use organization_registration::*;
 pub use policy::*;
@@ -395,7 +390,6 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
     fn device_keys(&self) -> &dyn DeviceKeyStore;
     fn one_time_keys(&self) -> &dyn OneTimeKeyStore;
     fn key_backups(&self) -> &dyn KeyBackupStore;
-    fn multisig_pending(&self) -> &dyn MultisigPendingStore;
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore;
     fn circle_projections(&self) -> &dyn CircleProjectionStore;
     fn strand_projections(&self) -> &dyn StrandProjectionStore;

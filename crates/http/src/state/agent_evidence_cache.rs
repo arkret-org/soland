@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_models_identity::{AgentAuthorityStateLease, ControllerAccountGateAttestation};
+use arkret_models_identity::{AgentAuthorityStateAttestation, ControllerAccountGateAttestation};
 use arkret_wire::{DidCoreId, DidUrl, Hash};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -13,7 +13,7 @@ type GateSlot = Arc<tokio::sync::Mutex<Option<ControllerAccountGateAttestation>>
 #[derive(Default)]
 pub(crate) struct AgentEvidenceCache {
     gates: Mutex<BTreeMap<(DidCoreId, DidCoreId, DidCoreId), GateSlot>>,
-    pub(crate) state_leases: Mutex<BTreeMap<(Hash, DidUrl), AgentAuthorityStateLease>>,
+    pub(crate) state_attestations: Mutex<BTreeMap<(Hash, DidUrl), AgentAuthorityStateAttestation>>,
     pub(crate) verified_contexts:
         Mutex<BTreeMap<(DidCoreId, DidUrl), arkret::VerifiedAgentCurrentContext>>,
 }

@@ -28,8 +28,8 @@ struct DeviceGenerationEventSealContext {
     principal_id: DidCoreId,
     current_generation_ref: Option<u64>,
     records: Vec<soland_services::events::AcceptedEvent>,
-    accepted_frontier_refs: Vec<SealId>,
-    cas_frontier_refs: Vec<SealId>,
+    accepted_head_ref: Option<SealId>,
+    cas_head_ref: Option<SealId>,
     generation_fence: Option<crate::notary::FirstGenerationEventSealRequirement>,
     bootstrap_required_delta: Vec<Hash>,
     bootstrap_device_id: String,
@@ -483,6 +483,7 @@ async fn reproject_admitted_collision_winner(
 fn app_error_from_seal_reject(reject: SealReject) -> AppError {
     let code = match &reject {
         SealReject::UnknownPredecessor
+        | SealReject::ConfirmedHeadChanged
         | SealReject::DeltaAlreadyCovered
         | SealReject::Structural(_)
         | SealReject::MissingControlEvent { .. }
@@ -490,7 +491,6 @@ fn app_error_from_seal_reject(reject: SealReject) -> AppError {
         | SealReject::MissingSealBasis { .. }
         | SealReject::SealBasisOutsideClosure { .. }
         | SealReject::ControlEventSetRootMismatch { .. }
-        | SealReject::CompletenessRootMismatch { .. }
         | SealReject::CoveredSetMismatch
         | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
         SealReject::Store(_) => ErrorCode::InternalError,
@@ -757,9 +757,9 @@ async fn device_generation_event_seal_context(
             "active re-anchor belongs to a different principal",
         ));
     }
-    let cas_frontier_refs = state
+    let cas_head_ref = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_head(realm_id)
         .await
         .map_err(|error| {
             crate::app_error!(
@@ -767,10 +767,10 @@ async fn device_generation_event_seal_context(
                 format!("Seal frontier unavailable: {error}"),
             )
         })?;
-    let accepted_frontier_refs = if let Some(requirement) = &generation_fence {
-        requirement.accepted_frontier_refs.clone()
+    let accepted_head_ref = if let Some(requirement) = &generation_fence {
+        requirement.accepted_head_ref.clone()
     } else {
-        cas_frontier_refs.clone()
+        cas_head_ref.clone()
     };
 
     Ok(Some(DeviceGenerationEventSealContext {
@@ -778,8 +778,8 @@ async fn device_generation_event_seal_context(
         principal_id,
         current_generation_ref: generation.map(|generation| generation.current_ref),
         records,
-        accepted_frontier_refs,
-        cas_frontier_refs,
+        accepted_head_ref,
+        cas_head_ref,
         generation_fence,
         bootstrap_required_delta,
         bootstrap_device_id: bootstrap_payload.device_id.as_str().to_owned(),
@@ -974,7 +974,7 @@ async fn try_apply_device_generation_event_seal(
     };
     if !state
         .projections()
-        .seal_predecessors_known(seal.predecessor_ref.as_slice())
+        .seal_predecessor_known(seal.predecessor_ref.as_ref())
         .await
         .map_err(|error| {
             crate::app_error!(
@@ -987,16 +987,14 @@ async fn try_apply_device_generation_event_seal(
             "B-model Event Seal has an unknown predecessor",
         ));
     }
-    let mut expected_frontier = context.accepted_frontier_refs.clone();
-    expected_frontier.sort();
-    if seal.predecessor_ref.as_slice() != expected_frontier.as_slice() {
+    if seal.predecessor_ref != context.accepted_head_ref {
         return Err(device_generation_fenced(
             "B-model Event Seal predecessors differ from the complete accepted generation frontier",
         ));
     }
     let predecessor_coverage = state
         .projections()
-        .predecessor_covered_events(seal.predecessor_ref.as_slice())
+        .predecessor_covered_events(seal.predecessor_ref.as_ref())
         .await
         .map_err(app_error_from_seal_reject)?;
     if seal
@@ -1082,12 +1080,8 @@ async fn try_apply_device_generation_event_seal(
             "B-model Event Seal control_event_set_root mismatch",
         ));
     }
-    let expected_notary_seq = if seal.predecessor_ref.is_none() {
-        0
-    } else {
-        let mut maximum = None;
-        for predecessor in seal.predecessor_ref.as_slice() {
-            let value = state
+    let expected_notary_seq = if let Some(predecessor) = seal.predecessor_ref.as_ref() {
+        let value = state
                 .projections()
                 .seal_by_id(predecessor)
                 .await
@@ -1098,13 +1092,12 @@ async fn try_apply_device_generation_event_seal(
                     )
                 })?
                 .ok_or_else(|| seal_admission_error("B-model Event Seal predecessor is missing"))?;
-            maximum = Some(maximum.map_or(value.notary_seq, |current: u64| {
-                current.max(value.notary_seq)
-            }));
-        }
-        maximum
-            .and_then(|sequence| sequence.checked_add(1))
+        value
+            .notary_seq
+            .checked_add(1)
             .ok_or_else(|| seal_admission_error("B-model Event Seal notary_seq overflow"))?
+    } else {
+        0
     };
     if seal.notary_seq != expected_notary_seq {
         return Err(seal_admission_error(
@@ -1117,7 +1110,7 @@ async fn try_apply_device_generation_event_seal(
         .as_ref()
         .map(|requirement| {
             crate::notary::validate_first_generation_event_seal(
-                seal.predecessor_ref.as_slice(),
+                seal.predecessor_ref.as_ref(),
                 &predecessor_coverage,
                 &target,
                 requirement,
@@ -1132,7 +1125,7 @@ async fn try_apply_device_generation_event_seal(
     {
         arkret_models_collaboration::events_payloads::device_identity::validate_device_reanchor_recovery_first_seal(
             &requirement.payload,
-            seal.predecessor_ref.as_slice(),
+            seal.predecessor_ref.as_ref(),
             &seal.delta,
             &requirement.reanchor_digest,
             &requirement.replacement_authorize_digest,
@@ -1249,10 +1242,8 @@ async fn try_apply_device_generation_event_seal(
             )
         })?;
     let admitted_generation_ref = context.current_generation_ref;
-    let mut admitted_frontier = context.accepted_frontier_refs.clone();
-    admitted_frontier.sort();
-    let mut admitted_cas_frontier = context.cas_frontier_refs.clone();
-    admitted_cas_frontier.sort();
+    let admitted_head_ref = context.accepted_head_ref.clone();
+    let admitted_cas_head_ref = context.cas_head_ref.clone();
     let admitted_reanchor_digest = context
         .generation_fence
         .as_ref()
@@ -1435,13 +1426,9 @@ async fn try_apply_device_generation_event_seal(
         .ok_or_else(|| {
             device_generation_fenced("B-model device generation disappeared during Seal admission")
         })?;
-    let mut refreshed_frontier = refreshed.accepted_frontier_refs.clone();
-    refreshed_frontier.sort();
-    let mut refreshed_cas_frontier = refreshed.cas_frontier_refs.clone();
-    refreshed_cas_frontier.sort();
     if refreshed.current_generation_ref != admitted_generation_ref
-        || refreshed_frontier != admitted_frontier
-        || refreshed_cas_frontier != admitted_cas_frontier
+        || refreshed.accepted_head_ref != admitted_head_ref
+        || refreshed.cas_head_ref != admitted_cas_head_ref
         || refreshed
             .generation_fence
             .as_ref()
@@ -1463,10 +1450,10 @@ async fn try_apply_device_generation_event_seal(
         .seal_digest_suite;
     match state
         .projections()
-        .commit_event_seal_if_frontier(
+        .commit_event_seal_if_head(
             seal,
             digest_suite,
-            &context.cas_frontier_refs,
+            context.cas_head_ref.as_ref(),
             &new_ops,
             &target,
             &availability_dependency_writes,
@@ -1573,9 +1560,9 @@ pub(crate) async fn apply_agent_event_seal(
         return Ok(committed_seal_effect(seal));
     }
 
-    let mut leaves = state
+    let head = state
         .projections()
-        .realm_seal_leaves(&seal.realm_id)
+        .realm_seal_head(&seal.realm_id)
         .await
         .map_err(|error| {
             crate::app_error!(
@@ -1583,15 +1570,15 @@ pub(crate) async fn apply_agent_event_seal(
                 format!("Agent PCR Seal frontier unavailable: {error}"),
             )
         })?;
-    leaves.sort();
-    if seal.predecessor_ref.as_slice() != leaves.as_slice() {
+    let leaves = head.iter().cloned().collect::<Vec<_>>();
+    if seal.predecessor_ref != head {
         return Err(seal_admission_error(
             "Agent PCR Seal predecessors differ from the complete accepted frontier",
         ));
     }
     let current = state
         .projections()
-        .predecessor_covered_events(&leaves)
+        .predecessor_covered_events(head.as_ref())
         .await
         .map_err(app_error_from_seal_reject)?;
 
@@ -1857,10 +1844,10 @@ pub(crate) async fn apply_agent_event_seal(
         .map_err(|error| AppError::internal(format!("retain Agent Seal signer: {error}")))?;
     match state
         .projections()
-        .commit_event_seal_if_frontier(
+        .commit_event_seal_if_head(
             seal,
             digest_suite,
-            &leaves,
+            head.as_ref(),
             &new_ops,
             &target,
             &availability_dependency_writes,
@@ -1935,9 +1922,9 @@ pub(crate) async fn apply_inbound_seal(
     } else {
         arkret_wire::event_envelope::EventSubmitContext::Standard
     };
-    let expected_store_frontier = state
+    let expected_store_head = state
         .projections()
-        .realm_seal_leaves(&seal.realm_id)
+        .realm_seal_head(&seal.realm_id)
         .await
         .map_err(|error| {
             crate::app_error!(
@@ -1959,10 +1946,10 @@ pub(crate) async fn apply_inbound_seal(
         .seal_digest_suite;
     match state
         .projections()
-        .commit_event_seal_if_frontier(
+        .commit_event_seal_if_head(
             seal,
             digest_suite,
-            &expected_store_frontier,
+            expected_store_head.as_ref(),
             &prepared.new_ops,
             &prepared.covered_event_digests,
             &governance_dependencies,
@@ -2202,7 +2189,7 @@ mod seal_delta_tests {
             .conformance_append_confirmed_effects(&realm, &basis.seal.id, &basis.ops)
             .await
             .unwrap();
-        let before = projections.realm_seal_leaves(&realm).await.unwrap();
+        let before = projections.realm_seal_basis_leaves(&realm).await.unwrap();
         let before_state = projections
             .effective_state_at(&before, &realm)
             .await
@@ -2218,22 +2205,29 @@ mod seal_delta_tests {
         ))
         .unwrap();
         fn sign(seal: &mut Seal, method: arkret_wire::DidUrl, seed: [u8; 32]) {
-            let bytes = seal.canonical_bytes_for_id().unwrap();
-            seal.id = Seal::id_from_canonical_bytes(&bytes, arkret_canonical::DigestSuite::Sha256)
+            let body = seal.canonical_bytes_for_id().unwrap();
+            seal.id = Seal::id_from_canonical_bytes(&body, arkret_canonical::DigestSuite::Sha256)
                 .unwrap();
-            seal.notary_signature = NotarySig::Single(arkret_wire::SealSignature {
-                verification_method: method.clone(),
-                payload_digest: arkret_wire::Hash::new(
-                    arkret_canonical::canonical_digest_with_suite(&bytes, "sha256").unwrap(),
-                )
-                .unwrap(),
-                jws: soland_services::identity::sign_ed25519_frozen_notary_jws(
-                    &bytes,
-                    &method,
-                    &ed25519_dalek::SigningKey::from_bytes(&seed),
-                )
-                .unwrap(),
-            });
+            let bytes = seal
+                .commit_transcript_bytes(arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+            seal.notary_signature = arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                signatures: vec![arkret_wire::SealSignature {
+                    verification_method: method.clone(),
+                    payload_digest: arkret_wire::Hash::new(
+                        arkret_canonical::canonical_digest_with_suite(&bytes, "sha256").unwrap(),
+                    )
+                    .unwrap(),
+                    jws: soland_services::identity::sign_ed25519_frozen_notary_jws(
+                        &bytes,
+                        &method,
+                        &ed25519_dalek::SigningKey::from_bytes(&seed),
+                    )
+                    .unwrap(),
+                }],
+                view: 0,
+            };
         }
         sign(
             &mut candidate,
@@ -2271,7 +2265,7 @@ mod seal_delta_tests {
                 "directory_governance_proof_signature_invalid"
             );
             assert!(projections.seal_by_id(&forged.id).await.unwrap().is_none());
-            assert_eq!(projections.realm_seal_leaves(&realm).await.unwrap(), before);
+            assert_eq!(projections.realm_seal_basis_leaves(&realm).await.unwrap(), before);
             assert_eq!(
                 projections
                     .effective_state_at(&before, &realm)
@@ -2437,32 +2431,49 @@ mod seal_delta_tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(arkret_wire::SealSignature {
-                verification_method: arkret_wire::DidUrl::new(
-                    "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
-                )
-                .unwrap(),
-                payload_digest: placeholder_digest,
-                jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
-            }),
+            notary_signature: arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                signatures: vec![arkret_wire::SealSignature {
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
+                    )
+                    .unwrap(),
+                    payload_digest: placeholder_digest,
+                    jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
+                }],
+                view: 0,
+            },
             sealed_at: chrono::Utc::now(),
             hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
+            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+                .unwrap(),
+            command_results: Vec::new(),
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
         };
         let canonical_bytes = seal.canonical_bytes_for_id().unwrap();
         seal.id =
             Seal::id_from_canonical_bytes(&canonical_bytes, arkret_canonical::DigestSuite::Sha256)
                 .unwrap();
-        seal.notary_signature = NotarySig::Single(arkret_wire::SealSignature {
-            verification_method: arkret_wire::DidUrl::new(
-                "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
-            )
-            .unwrap(),
-            payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
-                &canonical_bytes,
-            ))
-            .unwrap(),
-            jws: signer.sign_detached_jws(&canonical_bytes),
-        });
+        let transcript = seal
+            .commit_transcript_bytes(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        seal.notary_signature = arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            signatures: vec![arkret_wire::SealSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
+                )
+                .unwrap(),
+                payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
+                    &transcript,
+                ))
+                .unwrap(),
+                jws: signer.sign_detached_jws(&transcript),
+            }],
+            view: 0,
+        };
 
         verify_device_seal_signature(&seal, &public_key, arkret_canonical::DigestSuite::Sha256)
             .unwrap();

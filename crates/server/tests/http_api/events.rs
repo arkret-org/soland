@@ -731,7 +731,6 @@ async fn seed_agent_grant_session_with_suite(
     for digest in [
         &availability.seal_body.control_event_set_root,
         &availability.seal_body.state_root,
-        &availability.seal_body.completeness_root,
     ]
     .into_iter()
     .chain(availability.seal_body.availability_receipt_digests.iter())

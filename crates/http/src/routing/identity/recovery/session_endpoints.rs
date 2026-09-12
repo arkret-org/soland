@@ -820,28 +820,26 @@ pub(super) async fn recovery_session_create(
         device_generation_status,
         accepted_seal_frontier,
     ) = if let Some(generation) = device_generation {
-        let leaves =
-            crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
+        let accepted_head =
+            crate::routing::identity::device_generation::accepted_device_generation_seal_head(
                 state, &principal, &realm_id,
             )
             .await
-            .map_err(recovery_store_error)?;
-        if leaves.is_empty() {
-            return Err(
+            .map_err(recovery_store_error)?
+            .ok_or_else(|| {
                 AppError::conflict("recovery requires a non-empty accepted Seal frontier")
-                    .with_wire_code("device_reanchor_frontier_mismatch"),
-            );
-        }
+                    .with_wire_code("device_reanchor_frontier_mismatch")
+            })?;
         let view = state
             .projections()
-            .effective_seal_view(&leaves, &realm_id)
+            .effective_seal_view(std::slice::from_ref(&accepted_head), &realm_id)
             .await
             .map_err(|error| {
                 AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
                     .with_wire_code("device_reanchor_frontier_mismatch")
             })?;
         let accepted_seal_frontier = arkret_wire::DeviceReanchorPreFenceSealFrontier {
-            leaves,
+            leaves: vec![accepted_head],
             control_event_set_root: view.control_event_set_root,
             state_root: view.state_root,
         };

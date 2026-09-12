@@ -147,20 +147,14 @@ async fn accepted_seal_root(
     let cell = arkret_identifiers::CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
         .expect("the authority-root cell ref constant is well-formed");
     let value = match effective.get(&cell) {
-        Some(arkret_state::state_model::ResolvedCellState::Bottom(_)) => {
+        Some(arkret_state::state_model::ResolvedCellState::Sequenced(state)) => state.value.clone(),
+        Some(_) => {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
-                "realm_authority_root_conflict",
-                "the Realm authority-root cell is in conflict at the Event's governance basis",
+                "realm_authority_root_invalid_state",
+                "the Realm authority-root cell did not resolve as sequenced_state",
             ));
         }
-        Some(state) => state.settled_value().cloned().ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "realm_authority_root_conflict",
-                "the Realm authority-root cell has unresolved concurrent values",
-            )
-        })?,
         None => {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,

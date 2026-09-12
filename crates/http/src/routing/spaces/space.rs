@@ -618,7 +618,7 @@ pub(crate) async fn invite_token_realm_resolution(
     let Ok(realm_id) = RealmId::new(invite.realm_id.clone()) else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };
-    let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id).await else {
+    let Ok(mut leaves) = state.projections().realm_seal_basis_leaves(&realm_id).await else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };
     leaves.sort();
@@ -628,7 +628,7 @@ pub(crate) async fn invite_token_realm_resolution(
     }
     let Ok(covered_events) = state
         .projections()
-        .predecessor_covered_events(&seal_basis.leaves)
+        .seal_basis_covered_events(&seal_basis.leaves)
         .await
     else {
         return InviteTokenRealmResolution::FrontierUnavailable;
@@ -879,7 +879,7 @@ mod tests {
     }
 
     fn test_seal(
-        predecessor_refs: Vec<arkret_identifiers::SealId>,
+        predecessor_ref: Option<arkret_identifiers::SealId>,
         delta: Vec<arkret_identifiers::Hash>,
         notary_seq: u64,
     ) -> arkret_wire::Seal {
@@ -887,7 +887,7 @@ mod tests {
             id: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64)))
                 .unwrap(),
             realm_id: RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap(),
-            predecessor_ref: predecessor_refs.into_iter().next(),
+            predecessor_ref,
             delta,
             control_event_set_root: test_hash(0x22),
             state_root: test_hash(0x77),
@@ -896,16 +896,27 @@ mod tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: arkret_wire::seal::NotarySig::Single(arkret_wire::SealSignature {
-                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
-                payload_digest: test_hash(0xff),
-                jws: "AAAA.BBBB.CCCC".to_owned(),
-            }),
+            notary_signature: arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                signatures: vec![arkret_wire::SealSignature {
+                    verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1")
+                        .unwrap(),
+                    payload_digest: test_hash(0xff),
+                    jws: "AAAA.BBBB.CCCC".to_owned(),
+                }],
+                view: 0,
+            },
             sealed_at: chrono::Utc
                 .with_ymd_and_hms(2026, 8, 29, 0, 0, notary_seq as u32)
                 .unwrap(),
             hlc: arkret_identifiers::Hlc::new(format!("019041000000-{notary_seq:04x}-aabbccdd"))
                 .unwrap(),
+            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+                .unwrap(),
+            command_results: Vec::new(),
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
         };
         seal.id = seal
             .derive_id(arkret_canonical::DigestSuite::Sha256)
@@ -964,7 +975,7 @@ mod tests {
         let state = test_state();
         put_pending_invite(&state, "barrier-token").await;
 
-        let old_seal = test_seal(Vec::new(), Vec::new(), 1);
+        let old_seal = test_seal(None, Vec::new(), 1);
         state
             .projections()
             .test_put_seal(&old_seal, arkret_canonical::DigestSuite::Sha256)
@@ -977,7 +988,7 @@ mod tests {
         );
 
         let create_move = test_hash(0x44);
-        let create_seal = test_seal(vec![old_seal.id], vec![create_move.clone()], 2);
+        let create_seal = test_seal(Some(old_seal.id), vec![create_move.clone()], 2);
         state
             .projections()
             .test_put_seal(&create_seal, arkret_canonical::DigestSuite::Sha256)

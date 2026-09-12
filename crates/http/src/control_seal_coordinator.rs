@@ -362,10 +362,10 @@ async fn run_realm_pass(
 ) -> ControlSealAttemptOutcome {
     let realm_id = &claim.realm_id;
     let page = async {
-        let leaves = state.projections().realm_seal_leaves(realm_id).await?;
+        let predecessor_ref = state.projections().realm_seal_head(realm_id).await?;
         // Genesis is a closed atomic anchor unit and cannot be split by a
         // previously persisted ordinary-work cursor.
-        let cursor = if leaves.is_empty() {
+        let cursor = if predecessor_ref.is_none() {
             None
         } else {
             claim.scan_cursor.as_ref()
@@ -373,7 +373,8 @@ async fn run_realm_pass(
         // An outer timeout or process crash cannot reach the in-pass split
         // below. The next durable claim probes one item, so a hanging batch
         // cannot repeatedly skip healthy neighbors on every cursor wrap.
-        let page_limit = control_seal_page_limit(leaves.is_empty(), claim.isolate_candidates);
+        let page_limit =
+            control_seal_page_limit(predecessor_ref.is_none(), claim.isolate_candidates);
         let mut pending = state
             .projections()
             .pending_control_events_for_notary(realm_id, cursor, page_limit)

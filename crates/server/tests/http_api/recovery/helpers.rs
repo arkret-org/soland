@@ -1041,9 +1041,9 @@ pub(crate) async fn post_recovery_policy(
                 .unwrap(),
         )
         .unwrap();
-        let (control_root, completeness_root) = soland_test_support::test_seal_roots(
+        let control_root = soland_test_support::test_control_event_set_root(
             &state,
-            &leaves,
+            leaves.first(),
             &[(event.clone(), arkret_canonical::DigestSuite::Sha256)],
             arkret_canonical::DigestSuite::Sha256,
         )
@@ -1054,12 +1054,12 @@ pub(crate) async fn post_recovery_policy(
             state.service_did(),
             state.service_verification_method("notary-key").unwrap(),
         );
-        let successor = arkret_wire::Seal::sign_single_with_roots(
+        let successor = soland_test_support::sign_test_seal(
+            &state,
             realm,
-            leaves,
+            leaves.first().cloned(),
             vec![event_digest],
             control_root,
-            completeness_root,
             predecessor_state_root.expect("recovery policy predecessor state root"),
             arkret_identifiers::Hlc::new(format!(
                 "{:012x}-{logical:04x}-a11ce102",
@@ -1069,7 +1069,7 @@ pub(crate) async fn post_recovery_policy(
             arkret_canonical::DigestSuite::Sha256,
             &seal_signer,
         )
-        .unwrap();
+        .await;
         state
             .test_put_seal(&successor, arkret_canonical::DigestSuite::Sha256)
             .await

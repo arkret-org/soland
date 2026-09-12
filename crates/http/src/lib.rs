@@ -20,7 +20,6 @@ pub mod ids;
 mod invite_claim_proofs;
 pub mod jws_verify;
 pub mod metrics;
-pub mod multisig_watchdog;
 pub mod notary;
 pub mod openapi;
 pub mod openapi_routes;

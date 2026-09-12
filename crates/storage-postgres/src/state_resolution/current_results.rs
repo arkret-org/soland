@@ -559,6 +559,9 @@ pub(super) async fn publish(
                 continue;
             }
             None => serde_json::json!({"status":"removed"}),
+            Some(ResolvedCellState::Bottom(_)) if descriptor.state_model == "causal_register" => {
+                serde_json::json!({"status":"unavailable","reason":"bottom"})
+            }
             Some(_) if descriptor.state_model == "causal_register" => {
                 let Some(heads) = causal_heads.get(&cell_id).filter(|heads| !heads.is_empty())
                 else {
@@ -588,9 +591,6 @@ pub(super) async fn publish(
                 }
                 serde_json::json!({"status":"heads","heads":result_heads})
             }
-            Some(ResolvedCellState::Bottom(_)) if family == "ak.component.agent.key.v1" => {
-                serde_json::json!({"status":"unavailable","reason":"bottom"})
-            }
             Some(state) if family == "ak.component.agent.key.v1" => {
                 let Some(value) = state.settled_value() else {
                     ready = false;
@@ -614,7 +614,8 @@ pub(super) async fn publish(
                 continue;
             }
             Some(ResolvedCellState::Bottom(_)) => {
-                serde_json::json!({"status":"unavailable","reason":"bottom"})
+                ready = false;
+                continue;
             }
             Some(state) => {
                 let Some(value) = state.settled_value() else {

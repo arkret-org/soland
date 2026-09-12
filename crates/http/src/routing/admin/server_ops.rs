@@ -5,7 +5,7 @@
 //! with local `org.arkret.soland.*` operation IDs and the `soland-admin`
 //! OpenAPI tag. These endpoints share that
 //! namespace with the soland operator infrastructure (seal DAG, bottom-cell
-//! repair, multisig -- see [`super::seal`]) and the admin collection snapshot
+//! repair -- see [`super::seal`]) and the admin collection snapshot
 //! (see [`super::collection`]); salvo router fallthrough keeps the three
 //! sub-trees from colliding.
 

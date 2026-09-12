@@ -1363,32 +1363,56 @@ fn data_event_dummy_signature() -> arkret_wire::SealSignature {
 }
 
 async fn insert_data_event_seal(state: &AppState, delta: Vec<arkret_identifiers::Hash>) -> String {
-    insert_data_event_seal_with(state, Vec::new(), delta).await
+    insert_data_event_seal_with(state, None, delta).await
 }
 
 async fn insert_data_event_seal_with(
     state: &AppState,
-    predecessor_refs: Vec<arkret_identifiers::SealId>,
+    predecessor_ref: Option<arkret_identifiers::SealId>,
     delta: Vec<arkret_identifiers::Hash>,
 ) -> String {
     use chrono::TimeZone;
 
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let notary_seq = u64::from(predecessor_ref.is_some());
+    let command_results = delta
+        .iter()
+        .cloned()
+        .map(|digest| {
+            arkret_wire::CommandResult::committed(
+                digest.clone(),
+                vec![digest],
+                Vec::new(),
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap()
+        })
+        .collect();
     let mut seal = arkret_wire::Seal {
         id: data_event_placeholder_seal_id(),
         realm_id: realm,
-        predecessor_ref: predecessor_refs.into_iter().next(),
+        predecessor_ref,
         delta,
         control_event_set_root: data_event_hash(0x22),
         state_root: data_event_hash(0x77),
-        notary_seq: 1,
+        notary_seq,
         availability_receipt_digests: Vec::new(),
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
+        notary_signature: arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            signatures: vec![data_event_dummy_signature()],
+            view: 0,
+        },
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
+        configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+            .unwrap(),
+        command_results,
+        authorization_closures: Vec::new(),
+        existence_anchors: Vec::new(),
+        transaction_records: Vec::new(),
     };
     seal.id = seal
         .derive_id(arkret_canonical::DigestSuite::Sha256)
@@ -1556,9 +1580,27 @@ async fn insert_data_event_revocation_successor(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
+        notary_signature: arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            signatures: vec![data_event_dummy_signature()],
+            view: 0,
+        },
         sealed_at,
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0001-aabbccdd".to_owned()).unwrap(),
+        configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+            .unwrap(),
+        command_results: vec![
+            arkret_wire::CommandResult::committed(
+                move_id.clone(),
+                vec![move_id.clone()],
+                Vec::new(),
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
+        ],
+        authorization_closures: Vec::new(),
+        existence_anchors: Vec::new(),
+        transaction_records: Vec::new(),
     };
     successor.id = successor
         .derive_id(arkret_canonical::DigestSuite::Sha256)

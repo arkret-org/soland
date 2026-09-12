@@ -121,7 +121,7 @@ async fn accepted_agent_selector_claim(
     };
     let leaves = state
         .projections()
-        .realm_seal_leaves(&pcr_realm_id)
+        .realm_seal_basis_leaves(&pcr_realm_id)
         .await
         .map_err(|_| selector_not_found())?;
     if leaves.is_empty() {

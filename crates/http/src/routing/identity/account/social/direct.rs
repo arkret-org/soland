@@ -598,8 +598,8 @@ mod participant_authority_tests {
         ));
         let bottom = BTreeMap::from([(
             arkret_identifiers::CellRef::new(cell).unwrap(),
-            ResolvedCellState::Bottom(arkret_wire::Bottom::new(
-                arkret_wire::BottomKind::Conflict,
+            ResolvedCellState::Bottom(arkret_wire::Bottom::conflict(
+                vec![arkret_identifiers::CellRef::new(cell).unwrap()],
                 Vec::new(),
             )),
         )]);

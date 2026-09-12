@@ -4,7 +4,6 @@ use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
 use soland::process_config::arg_value;
 use soland_http::config::{AppConfig, StartupOverrides};
-use soland_http::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland_http::service;
 use soland_http::state::AppState;
 use soland_storage_postgres::Db;
@@ -212,21 +211,6 @@ async fn run() -> anyhow::Result<()> {
              and outbound HTTP must be on the allow-list",
         );
     }
-
-    // Spawn the multisig leader-election watchdog. The task wakes every
-    // 30s by default, scans `multisig_pending` for rows
-    // whose threshold is met + canonical_b64 is non-empty, claims an
-    // unleased row, and aggregates via SDK `ThresholdAggregator`. Returns
-    // a JoinHandle we drop on the floor — the task lives for the process
-    // lifetime and shutdown_signal teardown closes the runtime.
-    let watchdog_config = MultisigWatchdogConfig::for_service(state.service_id());
-    let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
-    tracing::info!(
-        worker = "multisig_watchdog",
-        enabled = true,
-        service_id = %state.service_id(),
-        "background worker configured"
-    );
 
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     tracing::info!(

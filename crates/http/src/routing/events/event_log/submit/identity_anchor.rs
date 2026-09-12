@@ -554,7 +554,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let realm_id = first.realm_id.clone();
         let raw_leaves = state
             .projections()
-            .realm_seal_leaves(&realm_id)
+            .realm_seal_basis_leaves(&realm_id)
             .await
             .map_err(|error| {
                 SubmitOneError::new(
@@ -1082,7 +1082,7 @@ async fn identical_historical_retry_with_wake(
                 )
             })?;
             if pending_index_needs_recovery {
-                let mut event = serde_json::from_value::<arkret_wire::Event>(
+                let event = serde_json::from_value::<arkret_wire::Event>(
                     record.envelope.clone(),
                 )
                 .map_err(|error| {
@@ -1589,8 +1589,8 @@ async fn validate_pre_fence_seal_frontier(
     basis: Option<&arkret_wire::DeviceReanchorPreFenceSealFrontier>,
 ) -> Result<(), SubmitOneError> {
     let realm_id = parsed.realm_id.clone();
-    let leaves =
-        crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
+    let accepted_head =
+        crate::routing::identity::device_generation::accepted_device_generation_seal_head(
             state,
             parsed.actor_id.as_str(),
             &realm_id,
@@ -1603,25 +1603,16 @@ async fn validate_pre_fence_seal_frontier(
                 format!("accepted Seal frontier unavailable: {error}"),
             )
         })?;
-    if leaves.is_empty() {
+    let Some(accepted_head) = accepted_head else {
         if basis.is_some() {
             return Err(frontier_error());
         }
         return Ok(());
-    }
+    };
     let Some(basis) = basis else {
         return Err(frontier_error());
     };
-    let declared_leaves = basis
-        .leaves
-        .iter()
-        .map(|leaf| leaf.as_str())
-        .collect::<Vec<_>>();
-    let mut expected_leaves = leaves.iter().map(|leaf| leaf.as_str()).collect::<Vec<_>>();
-    expected_leaves.sort_unstable();
-    let mut declared_sorted = declared_leaves;
-    declared_sorted.sort_unstable();
-    if declared_sorted != expected_leaves {
+    if basis.leaves.as_slice() != std::slice::from_ref(&accepted_head) {
         return Err(frontier_error());
     }
     // The declared roots are compare-and-swap operands, not decoration: the
@@ -1631,7 +1622,7 @@ async fn validate_pre_fence_seal_frontier(
     // does not reuse the leaves-only Control Move seal_basis.
     let view = state
         .projections()
-        .effective_seal_view(&leaves, &realm_id)
+        .effective_seal_view(std::slice::from_ref(&accepted_head), &realm_id)
         .await
         .map_err(|_| frontier_error())?;
     if view.control_event_set_root != basis.control_event_set_root

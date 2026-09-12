@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{EventId, Hash, RealmId};
+use arkret_identifiers::{EventId, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
     FrankingProof, FrankingSealObservationOutcome, FrankingSealObservationRequest,
 };
@@ -902,14 +902,14 @@ async fn materialize_franking_seal_observation(
     let realm_id = proof.realm_id.clone();
     let leaves = state
         .projections()
-        .realm_seal_leaves(&realm_id)
+        .realm_seal_basis_leaves(&realm_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("franking Seal frontier lookup failed: {error}"))
         })?;
     let closure = state
         .projections()
-        .seal_closure(&leaves)
+        .seal_basis_closure(&leaves)
         .await
         .map_err(|error| {
             AppError::internal(format!("franking Seal ancestry lookup failed: {error}"))
@@ -957,7 +957,7 @@ async fn materialize_franking_seal_observation(
             else {
                 continue;
             };
-            observation = Some((seal, anchor.clone(), ancestry_events));
+            observation = Some((seal.clone(), anchor.clone(), ancestry_events));
             break;
         }
         if observation.is_some() {
@@ -1582,49 +1582,4 @@ mod report_safety_tests {
         );
     }
 
-    #[test]
-    fn franking_inclusion_is_derived_from_the_frozen_manifest() {
-        let manifest = ['1', '2', '3']
-            .into_iter()
-            .map(|marker| Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap())
-            .collect::<BTreeSet<_>>();
-        let root =
-            arkret_state::event_digest_set_root(&manifest, arkret_canonical::DigestSuite::Sha256)
-                .unwrap();
-        let target = manifest.iter().nth(1).unwrap();
-        let inclusion = frozen_manifest_inclusion(&root, &manifest, target)
-            .unwrap()
-            .expect("manifest contains the franking proof Event");
-        assert!(
-            arkret_state::verify_event_digest_set_inclusion_proof(
-                &inclusion,
-                &root,
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .unwrap()
-        );
-        let absent = Hash::new(format!("sha256:{}", "4".repeat(64))).unwrap();
-        assert!(
-            frozen_manifest_inclusion(&root, &manifest, &absent)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn franking_inclusion_fails_closed_when_the_frozen_manifest_does_not_match_the_seal_root() {
-        let original = [Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let root =
-            arkret_state::event_digest_set_root(&original, arkret_canonical::DigestSuite::Sha256)
-                .unwrap();
-        let drifted = [Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap()]
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let error = frozen_manifest_inclusion(&root, &drifted, drifted.first().unwrap())
-            .expect_err("a changed manifest must not produce an inclusion proof");
-        assert_eq!(error.code, ErrorCode::InternalError);
-        assert!(error.message.contains("frozen leaf manifest"));
-    }
 }

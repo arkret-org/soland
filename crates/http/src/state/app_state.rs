@@ -454,6 +454,7 @@ mod test_construction {
     use std::path::Path;
 
     use async_trait::async_trait;
+    use arkret_identifiers::SealId;
     use bytes::Bytes;
     use futures_util::stream::{self, BoxStream, StreamExt};
     use parking_lot::Mutex;
@@ -656,11 +657,11 @@ mod test_construction {
 
     #[async_trait::async_trait]
     impl EventSealCommitPort for TestEventSealCommitter {
-        async fn commit_if_frontier(
+        async fn commit_if_head(
             &self,
             seal: &arkret_wire::Seal,
             digest_suite: arkret_canonical::DigestSuite,
-            expected_store_frontier: &[arkret_identifiers::SealId],
+            expected_store_head: Option<&SealId>,
             new_ops: &[(
                 arkret_identifiers::CellRef,
                 arkret_state::state_model::ordered_log::IssuedOp,
@@ -669,10 +670,10 @@ mod test_construction {
             governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> arkret_state::state::StoreResult<bool> {
             self.0
-                .commit_if_frontier(
+                .commit_if_head(
                     seal,
                     digest_suite,
-                    expected_store_frontier,
+                    expected_store_head,
                     new_ops,
                     covered,
                     governance_dependencies,

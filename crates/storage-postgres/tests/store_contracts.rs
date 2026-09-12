@@ -1747,7 +1747,7 @@ fn seal_dependency_contract_digest(
 
 fn seal_dependency_contract_seal(
     realm_id: &arkret_identifiers::RealmId,
-    predecessor_refs: Vec<arkret_identifiers::SealId>,
+    predecessor_ref: Option<arkret_identifiers::SealId>,
     delta: arkret_identifiers::Hash,
     covered: &std::collections::BTreeSet<arkret_identifiers::Hash>,
     availability_digest: arkret_identifiers::Hash,
@@ -1760,10 +1760,17 @@ fn seal_dependency_contract_seal(
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
+    let command_result = arkret_wire::CommandResult::committed(
+        delta.clone(),
+        vec![delta.clone()],
+        Vec::new(),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
     let mut seal = arkret_wire::Seal {
         id: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
         realm_id: realm_id.clone(),
-        predecessor_ref: predecessor_refs.into_iter().next(),
+        predecessor_ref,
         delta: vec![delta],
         control_event_set_root: root.clone(),
         state_root,
@@ -1772,17 +1779,27 @@ fn seal_dependency_contract_seal(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::NotarySig::Single(arkret_wire::SealSignature {
-            verification_method: arkret_wire::DidUrl::new(
-                "did:web:seal-dependency-holder.example#notary-key".to_owned(),
-            )
-            .unwrap(),
-            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+        notary_signature: arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            signatures: vec![arkret_wire::SealSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:seal-dependency-holder.example#notary-key".to_owned(),
+                )
                 .unwrap(),
-            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-        }),
+                payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
+            }],
+            view: 0,
+        },
         sealed_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         hlc: arkret_wire::Hlc::new("019f00000000-0000-00000002").unwrap(),
+        configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+            .unwrap(),
+        command_results: vec![command_result],
+        authorization_closures: Vec::new(),
+        existence_anchors: Vec::new(),
+        transaction_records: Vec::new(),
     };
     seal.id = seal
         .derive_id(arkret_canonical::DigestSuite::Sha256)
@@ -1889,7 +1906,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         .collect::<std::collections::BTreeSet<_>>();
     let genesis_seal = seal_dependency_contract_seal(
         &realm_id,
-        Vec::new(),
+        None,
         genesis_digest.clone(),
         &genesis_covered,
         genesis_object_digest.clone(),
@@ -1903,10 +1920,10 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert!(
         stores
             .event_seal_committer
-            .commit_if_frontier(
+            .commit_if_head(
                 &genesis_seal,
                 arkret_canonical::DigestSuite::Sha256,
-                &[],
+                None,
                 &[],
                 &genesis_covered,
                 std::slice::from_ref(&genesis_write),
@@ -1974,10 +1991,10 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert!(
         stores
             .event_seal_committer
-            .commit_if_frontier(
+            .commit_if_head(
                 &genesis_seal,
                 arkret_canonical::DigestSuite::Sha256,
-                &[],
+                None,
                 &[],
                 &genesis_covered,
                 std::slice::from_ref(&genesis_write),
@@ -1991,10 +2008,10 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     let replay_mismatch_digest = seal_dependency_contract_digest(&replay_mismatch);
     let replay_error = stores
         .event_seal_committer
-        .commit_if_frontier(
+        .commit_if_head(
             &genesis_seal,
             arkret_canonical::DigestSuite::Sha256,
-            &[],
+            None,
             &[],
             &genesis_covered,
             &[GovernanceDependencyWrite {
@@ -2042,7 +2059,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             .collect::<std::collections::BTreeSet<_>>();
         let seal = seal_dependency_contract_seal(
             &realm_id,
-            vec![genesis_seal.id.clone()],
+            Some(genesis_seal.id.clone()),
             event_digest.clone(),
             &covered,
             object_digest.clone(),
@@ -2069,10 +2086,10 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         }
         stores
             .event_seal_committer
-            .commit_if_frontier(
+            .commit_if_head(
                 &seal,
                 arkret_canonical::DigestSuite::Sha256,
-                std::slice::from_ref(&genesis_seal.id),
+                Some(&genesis_seal.id),
                 &[],
                 &covered,
                 &[write],
@@ -2131,7 +2148,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         .collect::<std::collections::BTreeSet<_>>();
     let cas_seal = seal_dependency_contract_seal(
         &realm_id,
-        vec![genesis_seal.id.clone()],
+        Some(genesis_seal.id.clone()),
         cas_digest.clone(),
         &cas_covered,
         cas_object_digest.clone(),
@@ -2144,10 +2161,10 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     };
     let stale_basis = stores
         .event_seal_committer
-        .commit_if_frontier(
+        .commit_if_head(
             &cas_seal,
             arkret_canonical::DigestSuite::Sha256,
-            &[],
+            None,
             &[],
             &cas_covered,
             std::slice::from_ref(&cas_write),

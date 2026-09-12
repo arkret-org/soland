@@ -718,7 +718,8 @@ pub(crate) async fn dev_token(state: AppState) -> String {
         device_id,
         &SigningKey::from_bytes(&[21_u8; 32]),
     )
-    .await;
+    .await
+    .unwrap();
     token
 }
 
@@ -759,7 +760,8 @@ pub(crate) async fn verified_dev_token_for_device(
         device_id,
         &SigningKey::from_bytes(&[21_u8; 32]),
     )
-    .await;
+    .await
+    .expect("empty fixture Seal control root");
     token
 }
 
@@ -900,28 +902,42 @@ pub(crate) async fn seed_test_realm(
         state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
-    let (control_event_set_root, completeness_root) = soland_test_support::test_seal_roots(
+    let control_event_set_root = soland_test_support::test_control_event_set_root(
         state,
-        &[],
+        None,
         &[],
         arkret_canonical::DigestSuite::Sha256,
     )
-    .await
-    .unwrap();
-    let bootstrap_seal = arkret_wire::Seal::sign_single_with_roots(
-        RealmId::new(realm_id.clone()).unwrap(),
-        Vec::new(),
-        Vec::new(),
-        control_event_set_root,
-        completeness_root,
-        arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
-        arkret_identifiers::Hlc::new(format!(
-            "{:012x}-0000-aabbccdd",
-            now.timestamp_millis().max(0) as u64
-        ))
-        .unwrap(),
+    .await;
+    let bootstrap_seal = arkret_wire::Seal::sign_with_signers(
+        arkret_wire::UnsignedSeal {
+            realm_id: RealmId::new(realm_id.clone()).unwrap(),
+            predecessor_ref: None,
+            delta: Vec::new(),
+            control_event_set_root,
+            state_root: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            notary_seq: 0,
+            availability_receipt_digests: Vec::new(),
+            covered_event_digests: Vec::new(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            sealed_at: now,
+            hlc: arkret_identifiers::Hlc::new(format!(
+                "{:012x}-0000-aabbccdd",
+                now.timestamp_millis().max(0) as u64
+            ))
+            .unwrap(),
+            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+                .unwrap(),
+            command_results: Vec::new(),
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
+        },
+        0,
         arkret_canonical::DigestSuite::Sha256,
-        &seal_signer,
+        &[&seal_signer],
     )
     .unwrap();
     state
@@ -1381,7 +1397,7 @@ pub(crate) fn signed_message_event_envelope(
         "01904100-0000-7000-8000-a11ce0000001",
         realm_id,
         actor_seq,
-        Vec::new(),
+        None,
         payload,
     )
 }
@@ -2314,7 +2330,6 @@ fn signal_basis_with_joined_members(
     let basis = test_realm_basis(state, realm_id, subject);
     let mut ops = basis.ops;
     let mut delta = basis.seal.delta;
-    let mut listed = basis.listed_control_events;
     let (realm_members, circle_members) = {
         let projection = state.test_projection();
         let projection = projection.lock();
@@ -2344,7 +2359,6 @@ fn signal_basis_with_joined_members(
         append_signal_membership_op(
             &mut ops,
             &mut delta,
-            &mut listed,
             arkret_wire::CellFamilyId::MEMBER_STATE_V1,
             &[actor],
         );
@@ -2353,7 +2367,6 @@ fn signal_basis_with_joined_members(
         append_signal_membership_op(
             &mut ops,
             &mut delta,
-            &mut listed,
             arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1,
             &[circle_id, actor],
         );
@@ -2366,36 +2379,30 @@ fn signal_basis_with_joined_members(
     let control_event_set_root =
         arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
             .unwrap();
-    let completeness_root = arkret_state::control_event_completeness_root_from_listed(
-        &listed,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap();
     let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
         state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
     let realm = RealmId::new(realm_id).unwrap();
-    let seal = arkret_wire::Seal::sign_single_with_roots(
+    let seal = soland_test_support::sign_test_seal(
+        state,
         realm.clone(),
-        Vec::new(),
+        None,
         delta,
         control_event_set_root,
-        completeness_root,
         fixture_sealed_state_root(&realm, &ops),
         arkret_identifiers::Hlc::new("0196419b0001-0000-51c0a1ed").unwrap(),
         arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
-    .unwrap();
+    .await;
     (seal, ops)
 }
 
 fn append_signal_membership_op(
     ops: &mut Vec<SignalBasisOp>,
     delta: &mut Vec<arkret_identifiers::Hash>,
-    listed: &mut Vec<arkret_state::ListedControlEvent>,
     family: &str,
     subject_parts: &[String],
 ) {
@@ -2421,18 +2428,6 @@ fn append_signal_membership_op(
     let move_id =
         arkret_identifiers::Hash::new(format!("sha256:{}", hex::encode(hasher.finalize())))
             .unwrap();
-    let actor_seq = listed
-        .iter()
-        .filter(|event| event.actor_id == actor)
-        .map(|event| event.actor_seq)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1);
-    listed.push(arkret_state::ListedControlEvent {
-        actor_id: actor.clone(),
-        actor_seq,
-        event_digest: move_id.clone(),
-    });
     delta.push(move_id.clone());
     ops.push((
         cell,

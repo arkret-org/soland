@@ -109,7 +109,7 @@ pub(super) async fn recovery_policy_acceptance_basis(
 ) -> Result<LeaseBasisRef, AppError> {
     let mut leaves = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_basis_leaves(realm_id)
         .await
         .map_err(|error| {
             recovery_policy_frontier_unavailable(format!(

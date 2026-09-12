@@ -100,8 +100,6 @@ pub struct ConformanceGrant {
 pub struct ConformanceRealmBasis {
     /// The closed authorization basis Seal cited by Events.
     pub seal: Seal,
-    /// Exact listed-set descriptors committed by the fixture Seal.
-    pub listed_control_events: Vec<arkret_state::ListedControlEvent>,
     pub ops: Vec<(CellRef, IssuedOp)>,
     /// Realm genesis value covered by `ops`. The development adapter mirrors
     /// this value into the application projection cache after the sealed cell
@@ -459,7 +457,7 @@ pub fn build_realm_basis(
         delta.push(notary_move.clone());
     }
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    let (control_event_set_root, listed_control_events) = fixture_seal_roots(&issuer, &delta)?;
+    let control_event_set_root = fixture_seal_root(&delta)?;
     let configuration_ref = arkret_wire::EventId::from_event_digest(if install_notary {
         &notary_move
     } else {
@@ -503,7 +501,6 @@ pub fn build_realm_basis(
 
     Ok(ConformanceRealmBasis {
         seal,
-        listed_control_events,
         ops,
         genesis,
         reducer_profile,
@@ -511,24 +508,12 @@ pub fn build_realm_basis(
     })
 }
 
-fn fixture_seal_roots(
-    issuer: &arkret_wire::ActorId,
-    covered: &[Hash],
-) -> Result<(Hash, Vec<arkret_state::ListedControlEvent>), String> {
+fn fixture_seal_root(covered: &[Hash]) -> Result<Hash, String> {
     let covered_set = covered.iter().cloned().collect::<BTreeSet<_>>();
     let control_event_set_root =
         arkret_state::control_event_set_root(&covered_set, arkret_canonical::DigestSuite::Sha256)
             .map_err(|error| error.to_string())?;
-    let listed = covered
-        .iter()
-        .enumerate()
-        .map(|(index, event_digest)| arkret_state::ListedControlEvent {
-            actor_id: issuer.clone(),
-            actor_seq: u64::try_from(index + 1).expect("fixture delta is bounded"),
-            event_digest: event_digest.clone(),
-        })
-        .collect::<Vec<_>>();
-    Ok((control_event_set_root, listed))
+    Ok(control_event_set_root)
 }
 
 fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Hash, String> {

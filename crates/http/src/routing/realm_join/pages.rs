@@ -121,7 +121,7 @@ pub(super) async fn serve(
             }
             let mut leaves = state
                 .projections()
-                .realm_seal_leaves(&request.realm_id)
+                .realm_seal_basis_leaves(&request.realm_id)
                 .await
                 .map_err(internal)?;
             leaves.sort();
@@ -136,7 +136,7 @@ pub(super) async fn serve(
             seal_basis.validate_protocol_bounds().map_err(validation)?;
             let digest_algorithm = state
                 .projections()
-                .predecessor_digest_suite(&request.realm_id, &seal_basis.leaves)
+                .seal_basis_digest_suite(&request.realm_id, &seal_basis.leaves)
                 .await
                 .map_err(internal)?;
             let encryption_profile = state

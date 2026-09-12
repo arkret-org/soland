@@ -289,7 +289,7 @@ impl RhrkAcquisitionWorker {
                     return Err("seal_cross_realm".to_owned());
                 }
                 if !trusted_base_leaves.contains(&seal.id) {
-                    for predecessor in seal.predecessor_ref.as_slice() {
+                    if let Some(predecessor) = seal.predecessor_ref.as_ref() {
                         if !trusted_base_leaves.contains(predecessor)
                             && !seals.contains_key(predecessor)
                         {

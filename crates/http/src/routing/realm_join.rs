@@ -1033,7 +1033,7 @@ async fn prepare(
     let observed_at = crate::wire::now();
     let mut leaves = state
         .projections()
-        .realm_seal_leaves(&body.realm_id)
+        .realm_seal_basis_leaves(&body.realm_id)
         .await
         .map_err(|_| {
             crate::app_error!(
@@ -1141,7 +1141,7 @@ async fn prepare(
         };
         let digest_algorithm = state
             .projections()
-            .predecessor_digest_suite(&body.realm_id, &seal_basis.leaves)
+            .seal_basis_digest_suite(&body.realm_id, &seal_basis.leaves)
             .await
             .map_err(|_| {
                 crate::app_error!(

@@ -270,7 +270,7 @@ async fn verify_signal_scope_authority(
     let realm = &envelope.realm_id;
     let current_leaves = state
         .projections()
-        .realm_seal_leaves(realm)
+        .realm_seal_basis_leaves(realm)
         .await
         .map_err(|error| {
             signal_rail_unavailable(&format!("resolve current Signal Seal basis: {error}"))

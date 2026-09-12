@@ -6,8 +6,7 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::Value;
 pub use soland_storage::{
-    MultisigPendingRecord, OrganizationRecord, PolicyDocumentRecord, RetentionPolicyRecord,
-    RetentionTombstoneRecord,
+    OrganizationRecord, PolicyDocumentRecord, RetentionPolicyRecord, RetentionTombstoneRecord,
 };
 
 use crate::ServiceResult;
@@ -81,35 +80,6 @@ pub trait GovernanceRecordsPort: Send + Sync {
         &self,
         record: &RetentionTombstoneRecord,
     ) -> ServiceResult<()>;
-    async fn multisig_pending(&self, seal_id: &str)
-    -> ServiceResult<Option<MultisigPendingRecord>>;
-    async fn store_multisig_pending(&self, record: MultisigPendingRecord) -> ServiceResult<()>;
-    async fn multisig_pending_for_realm(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Vec<MultisigPendingRecord>>;
-    async fn multisig_pending_all(&self) -> ServiceResult<Vec<MultisigPendingRecord>>;
-    async fn claim_multisig_pending(
-        &self,
-        seal_id: &str,
-        node_id: &str,
-        now: chrono::DateTime<chrono::Utc>,
-        claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ServiceResult<(bool, i64)>;
-    async fn release_multisig_claim(&self, seal_id: &str, node_id: &str) -> ServiceResult<()>;
-    async fn delete_multisig_with_fence(
-        &self,
-        seal_id: &str,
-        node_id: &str,
-        claim_seq: i64,
-    ) -> ServiceResult<bool>;
-    async fn renew_multisig_claim(
-        &self,
-        seal_id: &str,
-        node_id: &str,
-        claim_seq: i64,
-        new_claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ServiceResult<bool>;
 }
 
 #[derive(Clone)]
@@ -367,67 +337,6 @@ impl GovernanceService {
             .insert(record.event_id.clone(), record.clone());
         Ok(())
     }
-
-    pub async fn multisig_pending(
-        &self,
-        seal_id: &str,
-    ) -> ServiceResult<Option<MultisigPendingRecord>> {
-        self.records.multisig_pending(seal_id).await
-    }
-
-    pub async fn store_multisig_pending(&self, record: MultisigPendingRecord) -> ServiceResult<()> {
-        self.records.store_multisig_pending(record).await
-    }
-
-    pub async fn multisig_pending_for_realm(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Vec<MultisigPendingRecord>> {
-        self.records.multisig_pending_for_realm(realm_id).await
-    }
-
-    pub async fn multisig_pending_all(&self) -> ServiceResult<Vec<MultisigPendingRecord>> {
-        self.records.multisig_pending_all().await
-    }
-
-    pub async fn claim_multisig_pending(
-        &self,
-        seal_id: &str,
-        node_id: &str,
-        now: chrono::DateTime<chrono::Utc>,
-        claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ServiceResult<(bool, i64)> {
-        self.records
-            .claim_multisig_pending(seal_id, node_id, now, claimed_until)
-            .await
-    }
-
-    pub async fn release_multisig_claim(&self, seal_id: &str, node_id: &str) -> ServiceResult<()> {
-        self.records.release_multisig_claim(seal_id, node_id).await
-    }
-
-    pub async fn delete_multisig_with_fence(
-        &self,
-        seal_id: &str,
-        node_id: &str,
-        claim_seq: i64,
-    ) -> ServiceResult<bool> {
-        self.records
-            .delete_multisig_with_fence(seal_id, node_id, claim_seq)
-            .await
-    }
-
-    pub async fn renew_multisig_claim(
-        &self,
-        seal_id: &str,
-        node_id: &str,
-        claim_seq: i64,
-        new_claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ServiceResult<bool> {
-        self.records
-            .renew_multisig_claim(seal_id, node_id, claim_seq, new_claimed_until)
-            .await
-    }
 }
 
 #[cfg(test)]
@@ -532,60 +441,6 @@ mod tests {
             _record: &RetentionTombstoneRecord,
         ) -> ServiceResult<()> {
             Ok(())
-        }
-        async fn multisig_pending(
-            &self,
-            _seal_id: &str,
-        ) -> ServiceResult<Option<MultisigPendingRecord>> {
-            Ok(None)
-        }
-        async fn store_multisig_pending(
-            &self,
-            _record: MultisigPendingRecord,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn multisig_pending_for_realm(
-            &self,
-            _realm_id: &str,
-        ) -> ServiceResult<Vec<MultisigPendingRecord>> {
-            Ok(Vec::new())
-        }
-        async fn multisig_pending_all(&self) -> ServiceResult<Vec<MultisigPendingRecord>> {
-            Ok(Vec::new())
-        }
-        async fn claim_multisig_pending(
-            &self,
-            _seal_id: &str,
-            _node_id: &str,
-            _now: chrono::DateTime<chrono::Utc>,
-            _claimed_until: chrono::DateTime<chrono::Utc>,
-        ) -> ServiceResult<(bool, i64)> {
-            Ok((false, 0))
-        }
-        async fn release_multisig_claim(
-            &self,
-            _seal_id: &str,
-            _node_id: &str,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn delete_multisig_with_fence(
-            &self,
-            _seal_id: &str,
-            _node_id: &str,
-            _claim_seq: i64,
-        ) -> ServiceResult<bool> {
-            Ok(false)
-        }
-        async fn renew_multisig_claim(
-            &self,
-            _seal_id: &str,
-            _node_id: &str,
-            _claim_seq: i64,
-            _new_claimed_until: chrono::DateTime<chrono::Utc>,
-        ) -> ServiceResult<bool> {
-            Ok(false)
         }
     }
 

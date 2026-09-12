@@ -112,7 +112,7 @@ async fn current_history_basis(
 ) -> Result<arkret_wire::SealBasis, AppError> {
     let mut leaves = state
         .projections()
-        .realm_seal_leaves(scope.realm_id())
+        .realm_seal_basis_leaves(scope.realm_id())
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     leaves.sort();
@@ -608,6 +608,7 @@ async fn resolve_self_seals(
             &request.realm_id,
             conclusion_queries,
             &retained_seals,
+            ordinary_visible,
         )
         .await;
     };
@@ -677,6 +678,7 @@ async fn resolve_peer_seals(
             &request.realm_id,
             conclusion_queries,
             &retained_seals,
+            ordinary_visible,
         )
         .await;
     };
@@ -733,6 +735,7 @@ async fn seal_conclusion_outcome(
     realm_id: &arkret_wire::RealmId,
     queries: &[arkret_models_collaboration::SealConclusionQuery],
     retained_seals: &[arkret_wire::Seal],
+    ordinary_visible: bool,
 ) -> JsonResult<SealResolveOutcome> {
     let retained = retained_seals
         .iter()
@@ -750,11 +753,24 @@ async fn seal_conclusion_outcome(
     let mut conclusions = Vec::new();
     let mut missing_conclusion_queries = Vec::new();
     for query in queries {
-        let Some(target) = retained.get(&query.target_seal_ref) else {
+        let target = if let Some(target) = retained.get(&query.target_seal_ref) {
+            Some(target.clone())
+        } else if ordinary_visible {
+            state
+                .projections()
+                .seal_by_id(&query.target_seal_ref)
+                .await
+                .ok()
+                .flatten()
+                .filter(|seal| seal.realm_id == *realm_id)
+        } else {
+            None
+        };
+        let Some(target) = target else {
             missing_conclusion_queries.push(query.clone());
             continue;
         };
-        if &target.realm_id != realm_id
+        if target.realm_id != *realm_id
             || query
                 .known_configuration_ref
                 .as_ref()
@@ -763,7 +779,7 @@ async fn seal_conclusion_outcome(
             missing_conclusion_queries.push(query.clone());
             continue;
         }
-        let Ok(configuration) = worker.notary_value_for_seal(state, target).await else {
+        let Ok(configuration) = worker.notary_value_for_seal(state, &target).await else {
             missing_conclusion_queries.push(query.clone());
             continue;
         };
@@ -774,7 +790,7 @@ async fn seal_conclusion_outcome(
             continue;
         }
         let Ok(Some(results)) =
-            derive_seal_conclusion_results(state, target, &query.selectors).await
+            derive_seal_conclusion_results(state, &target, &query.selectors).await
         else {
             missing_conclusion_queries.push(query.clone());
             continue;
@@ -834,6 +850,8 @@ async fn derive_seal_conclusion_results(
         SealConclusionCommandResult, SealConclusionCommandSelector,
         SealConclusionCommandSelectorKind, SealConclusionResult, SealConclusionTransactionResult,
         SealConclusionTransactionSelector, SealConclusionTransactionSelectorKind,
+        SealConclusionCommandEffectResult, SealConclusionCommandEffectSelector,
+        SealConclusionCommandEffectSelectorKind,
     };
 
     let frozen = state
@@ -895,8 +913,29 @@ async fn derive_seal_conclusion_results(
                         .cloned(),
                 })
             }
-            arkret_models_collaboration::SealConclusionSelector::CommandEffect { .. } => {
-                return Ok(None);
+            arkret_models_collaboration::SealConclusionSelector::CommandEffect {
+                event_digest,
+                cell_id,
+            } => {
+                if !is_security_cell(state, &target.realm_id, cell_id)? {
+                    return Ok(None);
+                }
+                let committed = target.command_results.iter().any(|result| {
+                    result.event_digest == *event_digest
+                        && result.outcome == arkret_wire::CommandOutcome::Committed
+                });
+                SealConclusionResult::CommandEffect(SealConclusionCommandEffectResult {
+                    selector: SealConclusionCommandEffectSelector {
+                        kind: SealConclusionCommandEffectSelectorKind::CommandEffect,
+                        event_digest: event_digest.clone(),
+                        cell_id: cell_id.clone(),
+                    },
+                    state: if committed {
+                        conclusion_cell_state(frozen.get(cell_id))?
+                    } else {
+                        None
+                    },
+                })
             }
             arkret_models_collaboration::SealConclusionSelector::Transaction { record_index } => {
                 SealConclusionResult::Transaction(SealConclusionTransactionResult {
@@ -2503,7 +2542,7 @@ async fn select_history_request_target(
 ) -> Result<arkret_wire::SealBasis, AppError> {
     let mut leaves = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_basis_leaves(realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     leaves.sort();
@@ -2539,7 +2578,7 @@ async fn build_member_history_retention(
     let target_basis = target_basis.clone();
     let target_closure = state
         .projections()
-        .seal_closure(&target_basis.leaves)
+        .seal_basis_closure(&target_basis.leaves)
         .await
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let cut = target_closure.into_iter().collect::<Vec<_>>();
@@ -3423,7 +3462,7 @@ async fn build_history_release_attestation(
     };
     let mut current_leaves = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_basis_leaves(realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     current_leaves.sort();
@@ -3861,13 +3900,13 @@ async fn build_history_recipient_authority_views(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut pcr_leaves = state
         .projections()
-        .realm_seal_leaves(&pcr_realm_id)
+        .realm_seal_basis_leaves(&pcr_realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     pcr_leaves.sort();
     let pcr_closure = state
         .projections()
-        .seal_closure(&pcr_leaves)
+        .seal_basis_closure(&pcr_leaves)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let authorize_is_currently_accepted = state
@@ -3965,7 +4004,7 @@ async fn validate_manifest_current_gate(
     };
     let target_closure = state
         .projections()
-        .seal_closure(&target_basis.leaves)
+        .seal_basis_closure(&target_basis.leaves)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     if trusted_history_base_basis

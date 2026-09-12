@@ -983,24 +983,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    multisig_pending (seal_id) {
-        seal_id -> Text,
-        realm_id -> Text,
-        digest_suite -> Text,
-        threshold_k -> Int4,
-        threshold_n -> Int4,
-        members -> Array<Nullable<Text>>,
-        canonical_b64 -> Text,
-        partials -> Jsonb,
-        claimed_by_node_id -> Nullable<Text>,
-        claimed_until -> Nullable<Timestamptz>,
-        claim_seq -> Int8,
-        expires_at -> Timestamptz,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     notifications (id) {
         id -> Uuid,
         recipient_actor_id -> Text,
@@ -2009,7 +1991,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     mls_welcome_discovery_windows,
     moderation_queue_items,
     moderation_reports,
-    multisig_pending,
     notifications,
     one_time_keys,
     organizations,

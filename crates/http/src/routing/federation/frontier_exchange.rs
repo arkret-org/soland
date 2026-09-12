@@ -568,7 +568,7 @@ impl FrontierExchangeWorker {
                 if seal.realm_id != remote.realm_id {
                     return Err("schema_violation:seal_dependency_realm_mismatch".to_owned());
                 }
-                for predecessor in seal.predecessor_ref.as_slice() {
+                if let Some(predecessor) = seal.predecessor_ref.as_ref() {
                     let is_local = self
                         .state
                         .projections()

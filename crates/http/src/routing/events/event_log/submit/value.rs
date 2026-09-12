@@ -2852,15 +2852,10 @@ mod cas_write_guard_tests {
     fn conflict_bottom(
         cell: &arkret_wire::CellRef,
     ) -> arkret_state::state_model::ResolvedCellState {
-        arkret_state::state_model::ResolvedCellState::Bottom(arkret_wire::Bottom {
-            kind: arkret_wire::BottomKind::Conflict,
-            cell_ids: vec![cell.clone()],
-            move_ids: Vec::new(),
-            seal_view: None,
-            head_ids: Vec::new(),
-            details: None,
-            escalated_at: None,
-        })
+        arkret_state::state_model::ResolvedCellState::Bottom(arkret_wire::Bottom::conflict(
+            vec![cell.clone()],
+            Vec::new(),
+        ))
     }
     use super::*;
 

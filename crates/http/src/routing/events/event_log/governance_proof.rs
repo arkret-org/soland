@@ -12,8 +12,6 @@ use arkret_models_crypto::{
 use arkret_state::mls_governance_proof::{
     MlsGovernanceVerificationCheckpoint, MlsGroupGenesisBinding,
 };
-#[cfg(test)]
-use arkret_state::state::compute_state_root;
 use arkret_state::state::control_event_set_root;
 use arkret_state::state_model::ordered_log::IssuedOp;
 use arkret_state::state_model::{ResolvedCellState, StateWrite};
@@ -89,7 +87,7 @@ async fn materialize_self_governance_frontier(
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let live_digest_suite = state
         .projections()
-        .predecessor_digest_suite(realm_id, &request.seal_basis.leaves)
+        .seal_basis_digest_suite(realm_id, &request.seal_basis.leaves)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let genesis = group_genesis_binding(
@@ -334,23 +332,23 @@ async fn apply_authoritative_event_seal_path(
             continue;
         }
 
-        let mut leaves = state
+        let head = state
             .projections()
-            .realm_seal_leaves(realm_id)
+            .realm_seal_head(realm_id)
             .await
             .map_err(|error| proof_state_error(format!("read Event Seal frontier: {error}")))?;
-        leaves.sort();
-        if seal.predecessor_ref.as_slice() != leaves.as_slice() {
+        let leaves = head.iter().cloned().collect::<Vec<_>>();
+        if seal.predecessor_ref != head {
             return Err(proof_state_error(
                 "authoritative Event Seal predecessors differ from the local frontier",
             ));
         }
-        let current = if leaves.is_empty() {
+        let current = if head.is_none() {
             BTreeSet::new()
         } else {
             state
                 .projections()
-                .predecessor_covered_events(&leaves)
+                .predecessor_covered_events(head.as_ref())
                 .await
                 .map_err(|error| {
                     proof_state_error(format!("read Event Seal predecessor coverage: {error}"))
@@ -458,7 +456,7 @@ async fn apply_authoritative_event_seal_path(
             .collect::<Vec<_>>();
         match state
             .projections()
-            .commit_event_seal_if_frontier(
+            .commit_event_seal_if_head(
                 seal,
                 state
                     .projections()
@@ -466,7 +464,7 @@ async fn apply_authoritative_event_seal_path(
                     .await
                     .map_err(proof_state_error)?
                     .seal_digest_suite,
-                &leaves,
+                head.as_ref(),
                 &new_ops,
                 &target,
                 &[],
@@ -581,11 +579,11 @@ async fn materialize_realm_control_with_transported_seals(
         Vec::new()
     };
     let preserved_generation_coverage = if let Some(requirement) = &generation_fence
-        && !requirement.accepted_frontier_refs.is_empty()
+        && requirement.accepted_head_ref.is_some()
     {
         state
             .projections()
-            .seal_leaf_union_proof(&requirement.accepted_frontier_refs)
+            .seal_leaf_union_proof(requirement.accepted_head_ref.as_slice())
             .await
             .map_err(|error| {
                 crate::app_error!(
@@ -842,13 +840,9 @@ async fn materialize_realm_control_with_transported_seals(
                                 ),
                             ));
                         }
-                        ResolvedCellState::Bottom(_) => {
-                            return Err(crate::app_error!(
-                                StateMismatch,
-                                format!("governance member cell {member_cell} is in Bottom state"),
-                            ));
-                        }
-                        ResolvedCellState::Causal(_) | ResolvedCellState::Value(_) => {
+                        ResolvedCellState::Causal(_)
+                        | ResolvedCellState::Value(_)
+                        | ResolvedCellState::Bottom(_) => {
                             return Err(crate::app_error!(
                                 StateMismatch,
                                 format!(
@@ -909,8 +903,8 @@ async fn materialize_realm_control_with_transported_seals(
             "Realm has no accepted Control Event material",
         ));
     }
-    let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered).await?;
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
+    let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered).await?;
     let state_root = joined.state_root(digest_suite).map_err(|error| {
         crate::app_error!(
             StateMismatch,
@@ -956,7 +950,6 @@ async fn materialize_agent_realm_control(
     realm_id: &RealmId,
     records: &[soland_services::events::AcceptedEvent],
 ) -> Result<MaterializedRealmControl, AppError> {
-    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let mut events = Vec::with_capacity(records.len());
     let mut event_digest_suites = BTreeMap::new();
     for record in records {
@@ -1648,7 +1641,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 "replacement device authorization principal differs from the re-anchor actor",
             ));
         }
-        let predecessor_refs = payload
+        let predecessor_heads = payload
             .pre_fence_seal_frontier
             .clone()
             .map(|basis| basis.leaves)
@@ -1674,8 +1667,18 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 format!("stored re-anchor Realm id is invalid: {error}"),
             )
         })?;
-        let accepted_frontier_refs =
-            crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
+        let predecessor_ref = match predecessor_heads.as_slice() {
+            [] => None,
+            [head] => Some(head.clone()),
+            _ => {
+                return Err(crate::app_error!(
+                    StateMismatch,
+                    "stored pre-fence Seal basis has multiple heads for one Realm",
+                ));
+            }
+        };
+        let accepted_head_ref =
+            crate::routing::identity::device_generation::accepted_device_generation_seal_head(
                 state,
                 principal_id.as_str(),
                 &realm_id,
@@ -1708,8 +1711,8 @@ pub(crate) async fn first_generation_event_seal_requirement(
             payload,
             reanchor_digest,
             replacement_authorize_digest,
-            predecessor_refs,
-            accepted_frontier_refs,
+            predecessor_ref,
+            accepted_head_ref,
             required_delta,
             principal_id: principal_id.clone(),
             replacement_device_id: authorize_payload.device_id.as_str().to_owned(),
@@ -1876,8 +1879,7 @@ pub(crate) fn canonical_event_ops_with_frozen_pre_state(
 /// observed. Replaying the Realm's accepted control history in order is what
 /// makes this the same value every receiver computes. A cell with no
 /// accumulated op is simply absent: the resolver reads an absent cell as the
-/// null pre-state, and a ⊥ cell against that cell family's declared
-/// `bottom_mode`.
+/// null pre-state. Only ordinary causal-register cells may resolve to Bottom.
 fn frozen_governance_pre_state(
     state: &AppState,
     realm_id: &RealmId,
@@ -2162,7 +2164,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn governance_join_preserves_exposed_bottom_without_poisoning_the_realm() {
+    async fn governance_join_resolves_sequenced_selector_without_bottom() {
         let state = test_state();
         let realm_id =
             RealmId::new("ak:realm:AdTN7L96rpQaXNqcIhMcXo5a1ucoPGnWeIyG7qhFPYFy").unwrap();
@@ -2176,33 +2178,22 @@ mod tests {
         ];
         let covered = selector_ops
             .iter()
-            .map(|issued| issued.op.event_id.clone())
+            .map(|issued| issued.op.event_id.event_digest())
             .collect::<BTreeSet<_>>();
         let ops_by_cell = BTreeMap::from([(selector_cell.clone(), selector_ops)]);
 
         let joined = join_control_state_batches(&state, &realm_id, &ops_by_cell, &covered)
             .await
-            .expect("bottom=expose must not make unrelated governance unavailable");
+            .expect("sequenced selector writes resolve in confirmed order");
 
         assert!(matches!(
             joined.cells.get(&selector_cell),
-            Some(ResolvedCellState::Bottom(_))
+            Some(ResolvedCellState::Sequenced(_))
         ));
-        assert_eq!(
-            joined
-                .state_root(arkret_canonical::DigestSuite::Sha256)
-                .unwrap(),
-            compute_state_root(
-                arkret_state::GovernanceView::new(&BTreeMap::new()),
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .unwrap(),
-            "an exposed Bottom on a non-CAS cell is omitted from the state-root leaves"
-        );
     }
 
     #[tokio::test]
-    async fn governance_join_still_fails_closed_for_rejected_bottom() {
+    async fn governance_join_resolves_sequenced_accountability_without_bottom() {
         let state = test_state();
         let realm_id =
             RealmId::new("ak:realm:Abojx_8QbHf40nUbyT3-uQrA2pKjNAbzZskY4Nc35U8S").unwrap();
@@ -2222,16 +2213,18 @@ mod tests {
         ];
         let covered = accountability_ops
             .iter()
-            .map(|issued| issued.op.event_id.clone())
+            .map(|issued| issued.op.event_id.event_digest())
             .collect::<BTreeSet<_>>();
         let ops_by_cell = BTreeMap::from([(accountability_cell.clone(), accountability_ops)]);
 
-        let error = join_control_state_batches(&state, &realm_id, &ops_by_cell, &covered)
+        let joined = join_control_state_batches(&state, &realm_id, &ops_by_cell, &covered)
             .await
-            .expect_err("bottom=reject must remain fail closed");
+            .expect("sequenced accountability writes resolve in confirmed order");
 
-        assert_eq!(error.code, ErrorCode::StateMismatch);
-        assert!(error.to_string().contains(accountability_cell.as_str()));
+        assert!(matches!(
+            joined.cells.get(&accountability_cell),
+            Some(ResolvedCellState::Sequenced(_))
+        ));
     }
 
     fn test_state() -> AppState {

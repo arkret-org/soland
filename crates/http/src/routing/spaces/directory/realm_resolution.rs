@@ -755,7 +755,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     let seal_basis = if let Some(seal_basis) = disclosed_seal_basis {
         seal_basis.clone()
     } else {
-        let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id_typed).await else {
+        let Ok(mut leaves) = state.projections().realm_seal_basis_leaves(&realm_id_typed).await else {
             return Vec::new();
         };
         leaves.sort();
@@ -766,7 +766,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     }
     let Ok(digest_algorithm) = state
         .projections()
-        .predecessor_digest_suite(&realm_id_typed, &seal_basis.leaves)
+        .seal_basis_digest_suite(&realm_id_typed, &seal_basis.leaves)
         .await
     else {
         return Vec::new();

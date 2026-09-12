@@ -103,11 +103,11 @@ pub trait EventSealCommitPort: Send + Sync {
         clippy::too_many_arguments,
         reason = "the atomic frontier CAS boundary keeps every compared and committed component explicit"
     )]
-    async fn commit_if_frontier(
+    async fn commit_if_head(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
+        expected_store_head: Option<&SealId>,
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
@@ -893,12 +893,21 @@ impl ProjectionService {
         }
     }
 
-    pub async fn realm_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
-        self.seal_store().list_leaves(realm_id).await
+    pub async fn realm_seal_head(&self, realm_id: &RealmId) -> StoreResult<Option<SealId>> {
+        self.seal_store().confirmed_head(realm_id).await
     }
 
-    pub async fn seal_predecessors_known(&self, predecessor_refs: &[SealId]) -> StoreResult<bool> {
-        self.seal_store().predecessors_known(predecessor_refs).await
+    /// Return the current Realm head in the plural shape required by
+    /// cross-Realm `SealBasis.leaves` construction.
+    pub async fn realm_seal_basis_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
+        Ok(self.realm_seal_head(realm_id).await?.into_iter().collect())
+    }
+
+    pub async fn seal_predecessor_known(
+        &self,
+        predecessor_ref: Option<&SealId>,
+    ) -> StoreResult<bool> {
+        self.seal_store().predecessor_known(predecessor_ref).await
     }
 
     pub async fn seal_successors(
@@ -1023,9 +1032,9 @@ impl ProjectionService {
 
     pub async fn predecessor_covered_events(
         &self,
-        predecessor_refs: &[SealId],
+        predecessor_ref: Option<&SealId>,
     ) -> Result<std::collections::BTreeSet<Hash>, SealReject> {
-        if let [seal_id] = predecessor_refs {
+        if let Some(seal_id) = predecessor_ref {
             let seal =
                 self.seal_store().get(seal_id).await?.ok_or_else(|| {
                     SealReject::Store(format!("predecessor {seal_id} not in store"))
@@ -1037,7 +1046,18 @@ impl ProjectionService {
                 return Ok(checkpoint.covered_event_digests);
             }
         }
-        arkret_state::union_predecessor_covered_events(predecessor_refs, self.seal_store()).await
+        arkret_state::covered_events_for_seal_basis(
+            predecessor_ref.map(std::slice::from_ref).unwrap_or_default(),
+            self.seal_store(),
+        )
+        .await
+    }
+
+    pub async fn seal_basis_covered_events(
+        &self,
+        basis_leaves: &[SealId],
+    ) -> Result<std::collections::BTreeSet<Hash>, SealReject> {
+        arkret_state::covered_events_for_seal_basis(basis_leaves, self.seal_store()).await
     }
 
     pub async fn seal_dependency_replay_context(
@@ -1124,7 +1144,12 @@ impl ProjectionService {
         leaves: &[SealId],
         realm_id: &RealmId,
     ) -> Result<EffectiveSealView, SealReject> {
-        let digest_suite = self.predecessor_digest_suite(realm_id, leaves).await?;
+        let [head] = leaves else {
+            return Err(SealReject::Structural(
+                "a Realm effective view requires exactly one confirmed head".to_owned(),
+            ));
+        };
+        let digest_suite = self.predecessor_digest_suite(realm_id, head).await?;
         self.effective_seal_view_with_digest_suite(leaves, realm_id, digest_suite)
             .await
     }
@@ -1220,8 +1245,11 @@ impl ProjectionService {
     /// predecessor closure.
     ///
     /// Used by consumers that need the accepted Seal predecessor closure.
-    pub async fn seal_closure(&self, leaves: &[SealId]) -> Result<BTreeSet<SealId>, SealReject> {
-        if let [seal_id] = leaves {
+    pub async fn seal_basis_closure(
+        &self,
+        basis_leaves: &[SealId],
+    ) -> Result<BTreeSet<SealId>, SealReject> {
+        if let [seal_id] = basis_leaves {
             let seal =
                 self.seal_store().get(seal_id).await?.ok_or_else(|| {
                     SealReject::Store(format!("predecessor {seal_id} not in store"))
@@ -1233,7 +1261,13 @@ impl ProjectionService {
                 return Ok(checkpoint.covered_seal_ids);
             }
         }
-        arkret_state::predecessor_seal_closure(leaves, self.seal_store()).await
+        let mut closure = BTreeSet::new();
+        for leaf in basis_leaves {
+            closure.extend(
+                arkret_state::predecessor_seal_closure(Some(leaf), self.seal_store()).await?,
+            );
+        }
+        Ok(closure)
     }
 
     /// The Realm's effective digest suite
@@ -1599,7 +1633,7 @@ impl ProjectionService {
     pub async fn seal_digest_suites(&self, seal: &Seal) -> Result<SealDigestSuites, SealReject> {
         self.seal_digest_suites_for_delta(
             &seal.realm_id,
-            seal.predecessor_ref.as_slice(),
+            seal.predecessor_ref.as_ref(),
             &seal.delta,
         )
         .await
@@ -1608,7 +1642,7 @@ impl ProjectionService {
     pub async fn seal_digest_suites_for_delta(
         &self,
         realm_id: &RealmId,
-        predecessor_refs: &[SealId],
+        predecessor_ref: Option<&SealId>,
         delta: &[Hash],
     ) -> Result<SealDigestSuites, SealReject> {
         let mut delta_events = Vec::with_capacity(delta.len());
@@ -1622,7 +1656,7 @@ impl ProjectionService {
                 })?;
             delta_events.push(event);
         }
-        if predecessor_refs.is_empty() {
+        if predecessor_ref.is_none() {
             let create_events = delta_events
                 .iter()
                 .filter(|event| event.kind == arkret_wire::EventKind::RealmCreate)
@@ -1650,7 +1684,10 @@ impl ProjectionService {
         }
 
         let live_suite = self
-            .predecessor_digest_suite(realm_id, predecessor_refs)
+            .predecessor_digest_suite(
+                realm_id,
+                predecessor_ref.expect("successor digest suite has a predecessor"),
+            )
             .await?;
         let transitions = delta_events
             .iter()
@@ -1682,15 +1719,25 @@ impl ProjectionService {
     pub async fn predecessor_digest_suite(
         &self,
         realm_id: &RealmId,
-        predecessor_refs: &[SealId],
+        predecessor_ref: &SealId,
     ) -> Result<arkret_canonical::DigestSuite, SealReject> {
-        if predecessor_refs.is_empty() {
-            return Err(SealReject::Structural(
-                "Genesis has no predecessor digest-suite state".to_owned(),
-            ));
-        }
-        let predecessor_state = self.effective_state_at(predecessor_refs, realm_id).await?;
+        let predecessor_state = self
+            .effective_state_at(std::slice::from_ref(predecessor_ref), realm_id)
+            .await?;
         arkret_state::live_digest_suite_from_state(&predecessor_state)
+    }
+
+    pub async fn seal_basis_digest_suite(
+        &self,
+        realm_id: &RealmId,
+        basis_leaves: &[SealId],
+    ) -> Result<arkret_canonical::DigestSuite, SealReject> {
+        let [head] = basis_leaves else {
+            return Err(SealReject::Structural(
+                "a single-Realm SealBasis must contain exactly one confirmed head".to_owned(),
+            ));
+        };
+        self.predecessor_digest_suite(realm_id, head).await
     }
 
     #[allow(
@@ -1698,21 +1745,21 @@ impl ProjectionService {
         clippy::too_many_arguments,
         reason = "the atomic frontier CAS intentionally spans the async commit and keeps every compared and committed component explicit; contenders acquire through block_in_place"
     )]
-    pub async fn commit_event_seal_if_frontier(
+    pub async fn commit_event_seal_if_head(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
+        expected_store_head: Option<&SealId>,
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
         self.event_seal_committer()
-            .commit_if_frontier(
+            .commit_if_head(
                 seal,
                 digest_suite,
-                expected_store_frontier,
+                expected_store_head,
                 new_ops,
                 covered,
                 governance_dependencies,
@@ -1731,7 +1778,13 @@ impl ProjectionService {
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
         let _authority_guard = self.history_authority_view_cas_guard();
-        self.seal_store().put(seal, digest_suite).await
+        self.seal_store()
+            .put_if_head(seal, seal.predecessor_ref.as_ref(), digest_suite)
+            .await?
+            .then_some(())
+            .ok_or(StoreError::Conflict(
+                "Realm confirmed Seal head changed".to_owned(),
+            ))
     }
 
     #[doc(hidden)]
@@ -3264,14 +3317,12 @@ impl HistoryAuthorityViewCas for ProjectionService {
         for (realm_id, expected) in expected_bases {
             let realm_id = RealmId::new(realm_id)
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            let mut current = self
+            let current = self
                 .seal_store()
-                .list_leaves(&realm_id)
+                .confirmed_head(&realm_id)
                 .await
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-            current.sort();
-            current.dedup();
-            if current != expected {
+            if current.as_slice() != expected {
                 return Err(PersistenceError::Conflict(
                     "failed_precondition: history authority Seal basis is no longer current"
                         .to_owned(),
@@ -3496,11 +3547,11 @@ mod effective_checkpoint_tests {
 
     #[async_trait::async_trait]
     impl EventSealCommitPort for CheckpointCommitter {
-        async fn commit_if_frontier(
+        async fn commit_if_head(
             &self,
             _seal: &Seal,
             _digest_suite: arkret_canonical::DigestSuite,
-            _expected_store_frontier: &[SealId],
+            _expected_store_head: Option<&SealId>,
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
@@ -3522,13 +3573,11 @@ mod effective_checkpoint_tests {
 
     fn chain_seal(
         realm_id: &RealmId,
-        predecessor_refs: Vec<SealId>,
+        predecessor_ref: Option<SealId>,
         notary_seq: u64,
         control_event_set_root: Hash,
         state_root: Hash,
     ) -> Seal {
-        assert!(predecessor_refs.len() <= 1);
-        let predecessor_ref = predecessor_refs.into_iter().next();
         let mut seal = Seal {
             id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
             realm_id: realm_id.clone(),
@@ -3555,11 +3604,8 @@ mod effective_checkpoint_tests {
                 .unwrap(),
             hlc: arkret_wire::Hlc::new(format!("019f00000000-{:04x}-aabbccdd", notary_seq))
                 .unwrap(),
-            configuration_ref: arkret_wire::EventId::new(format!(
-                "ak:event:A{}",
-                "a".repeat(42)
-            ))
-            .unwrap(),
+            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+                .unwrap(),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
             existence_anchors: Vec::new(),
@@ -3594,17 +3640,21 @@ mod effective_checkpoint_tests {
         let mut leaf = None;
 
         for notary_seq in 1..=SUCCESSORS {
-            let predecessors = leaf.iter().cloned().collect::<Vec<_>>();
+            let predecessor = leaf.clone();
             let seal = chain_seal(
                 &realm_id,
-                predecessors.clone(),
+                predecessor.clone(),
                 notary_seq,
                 control_root.clone(),
                 state_root.clone(),
             );
             assert!(
                 seal_store
-                    .put_if_frontier(&seal, &predecessors, arkret_canonical::DigestSuite::Sha256,)
+                    .put_if_head(
+                        &seal,
+                        predecessor.as_ref(),
+                        arkret_canonical::DigestSuite::Sha256,
+                    )
                     .await
                     .unwrap()
             );
@@ -3641,14 +3691,14 @@ mod effective_checkpoint_tests {
             );
             assert_eq!(
                 service
-                    .predecessor_covered_events(std::slice::from_ref(&leaf))
+                    .predecessor_covered_events(Some(&leaf))
                     .await
                     .unwrap(),
                 covered
             );
             assert_eq!(
                 service
-                    .seal_closure(std::slice::from_ref(&leaf))
+                    .seal_basis_closure(std::slice::from_ref(&leaf))
                     .await
                     .unwrap(),
                 closure
@@ -3671,11 +3721,11 @@ mod control_governance_health_tests {
 
     #[async_trait::async_trait]
     impl EventSealCommitPort for UnusedEventSealCommitter {
-        async fn commit_if_frontier(
+        async fn commit_if_head(
             &self,
             _seal: &Seal,
             _digest_suite: arkret_canonical::DigestSuite,
-            _expected_store_frontier: &[SealId],
+            _expected_store_head: Option<&SealId>,
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
@@ -4196,7 +4246,7 @@ mod transition_registry_tests {
                 binding.model.kind(),
                 arkret_state::state_model::StateModelKind::SequencedState
             );
-            assert_eq!(binding.bottom_mode, None);
+            assert_eq!(binding.bottom_policy, None);
         }
     }
 }

@@ -117,7 +117,7 @@ pub fn server_ops_router() -> Router {
 
 pub fn admin_router() -> Router {
     // Deployment-local operator surface served at the bare `/admin/*`
-    // namespace (notary / seal-DAG / bottom repair / multisig /
+    // namespace (notary / seal-DAG / bottom repair /
     // gc-candidates / moderation). Realm-scoped
     // operations use `/admin/realms/{realm_id}`; Space containers are
     // reserved for `/admin/spaces/*`. Per arkret-spec
@@ -147,15 +147,7 @@ pub fn admin_router() -> Router {
         .push(Router::with_path("realms/{realm_id}/notary").get(seal::admin_get_notary))
         .push(Router::with_path("realms/{realm_id}/bottom").get(seal::admin_list_realm_bottom))
         .push(Router::with_path("bottom").get(seal::admin_list_bottom_global))
-        .push(
-            Router::with_path("realms/{realm_id}/bottom/{cell_id}/repair")
-                .post(seal::admin_repair_bottom),
-        )
-        .push(Router::with_path("realms/{realm_id}/seal-dag").get(seal::admin_get_seal_dag))
-        .push(
-            Router::with_path("realms/{realm_id}/multisig/pending")
-                .get(seal::admin_list_multisig_pending),
-        )
+        .push(Router::with_path("realms/{realm_id}/seal-chain").get(seal::admin_get_seal_chain))
         .push(
             Router::with_path("realms/{realm_id}/gc-candidates")
                 .get(seal::admin_list_gc_candidates),

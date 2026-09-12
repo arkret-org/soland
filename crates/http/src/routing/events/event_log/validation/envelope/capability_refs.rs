@@ -269,7 +269,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
 
     // `refs[role=authorized_by]` is a critical semantic citation, not a
     // capability selector: it never widens the effective set, but an entry that
-    // does not resolve to a live grant at `seal_ref` MUST fail the Event closed
+    // does not resolve to a live grant at the cited authority basis MUST fail the Event closed
     // (`event-and-patch.md` §2.2 — unrecognized critical refs fail closed;
     // `arkret_state::verify_capability_refs` applies the same rule on the
     // control plane).
@@ -518,7 +518,7 @@ async fn validate_current_data_event_admission(
     }
     let leaves = state
         .projections()
-        .realm_seal_leaves(realm)
+        .realm_seal_basis_leaves(realm)
         .await
         .map_err(|error| {
             event_validation_error(

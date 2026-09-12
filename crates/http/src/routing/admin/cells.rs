@@ -166,8 +166,8 @@ async fn admin_get_cell(
         .map_err(|e| crate::app_error!(NotFound, format!("cell family not registered: {e}"),))?;
     let state_model_kind = binding.model.kind().as_wire_str();
     let bottom_policy = binding
-        .bottom_mode
-        .map_or("none", arkret_wire::EventCellBottom::as_str);
+        .bottom_policy
+        .map_or("none", arkret_wire::CausalRegisterBottomPolicy::as_str);
 
     let cell_state_opt = {
         let proj = state.projections().snapshot();
@@ -275,8 +275,8 @@ async fn admin_list_cells(
         };
         let state_model_kind = binding.model.kind().as_wire_str();
         let bottom_policy = binding
-            .bottom_mode
-            .map_or("none", arkret_wire::EventCellBottom::as_str);
+            .bottom_policy
+            .map_or("none", arkret_wire::CausalRegisterBottomPolicy::as_str);
         cells_out.push(state_response_from(
             &cell,
             cell_state.as_ref(),

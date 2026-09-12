@@ -488,7 +488,7 @@ pub(crate) async fn agent_event_seal_head(
     // represent a joined antichain, and choosing one leaf could omit a revoke.
     let leaves = state
         .projections()
-        .realm_seal_leaves(&realm_id)
+        .realm_seal_basis_leaves(&realm_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("Agent PCR frontier lookup failed: {error}"))
