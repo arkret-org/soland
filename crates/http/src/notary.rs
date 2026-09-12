@@ -795,10 +795,9 @@ impl NotaryWorker {
             .collect::<Result<Vec<_>, NotaryError>>()?;
 
         // Step 8: publish the receiver-derived effects, Seal lineage and
-        // sealed Move markers at one durable frontier-CAS boundary.  The
-        // generic SDK apply path deliberately remains backend-agnostic and
-        // cannot make three stores crash-atomic; production PostgreSQL owns
-        // that guarantee in EventSealCommitStore's single transaction.
+        // command decisions at one durable frontier-CAS boundary. Production
+        // PostgreSQL implements this contract in EventSealCommitStore's
+        // single transaction.
         let new_ops = executed.new_security_ops;
         match state
             .projections()
