@@ -2706,8 +2706,8 @@ mod tests {
         // (§6.3.2), not by a Move id: v1 has no Move object.
         let r = RejectedControlEventEntry {
             event_digest: "sha256:00".to_owned(),
-            reason_code: arkret_wire::ControlProposalRejectReason::SchemaViolation,
-            reason: "bad sig".to_owned(),
+            reason_code: arkret_wire::ReasonCode::CallStateTransitionInvalid,
+            reason: "call transition is invalid".to_owned(),
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("event_digest"));
@@ -2715,6 +2715,9 @@ mod tests {
         assert!(s.contains("reason"));
         // The classified reason travels as a value, not as prose an operator
         // (or a client) would have to pattern-match.
-        assert!(s.contains(r#""reason_code":"schema_violation""#), "{s}");
+        assert!(
+            s.contains(r#""reason_code":"call_state_transition_invalid""#),
+            "{s}"
+        );
     }
 }

@@ -147,9 +147,17 @@ fn read_outcome(
             "ak.device.revoke durable snapshot omits its canonical Ack",
         ));
     }
-    // The store excludes quarantined coverage. A proposal may be covered by
-    // concurrent open-set branches; this bounded observation is not a frontier.
-    let accepted_seal_id = snapshot.covering_seals.iter().min().cloned();
+    // Both committed and rejected commands are terminal Seal observations.
+    // Consumers resolve this Seal's command result before applying business effects.
+    let accepted_seal_id = match snapshot.command_decisions.as_slice() {
+        [] => None,
+        [decision] => Some(decision.seal_id.clone()),
+        _ => {
+            return Err(AppError::internal(
+                "control proposal has multiple Seal decisions",
+            ));
+        }
+    };
     if accepted_seal_id.is_some() && terminal_reject.is_some() {
         return Err(AppError::internal(
             "control proposal snapshot has conflicting terminal states",
@@ -269,7 +277,7 @@ pub(super) async fn submit_control_proposal_decision(
             ControlProposalDecisionSubmitStatus::Duplicate,
         )?);
     }
-    if !snapshot.covering_seals.is_empty() {
+    if !snapshot.command_decisions.is_empty() {
         return Err(AppError::conflict("control proposal is already sealed")
             .with_wire_code("duplicate_conflict"));
     }
@@ -352,7 +360,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepted_proposal_result_supports_concurrent_covering_seals() {
+    fn proposal_result_observes_unique_committed_or_rejected_seal() {
         let realm_id =
             RealmId::new("ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI").unwrap();
         let event = arkret_test_kit::raw_event(
@@ -371,16 +379,31 @@ mod tests {
             realm_id,
             proposal_digest: event.event_id.event_digest(),
         };
-        let first = SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap();
-        let second = SealId::new(format!("ak:seal:sha256:{}", "2".repeat(64))).unwrap();
-        // These snapshots start after admission and quarantine filtering.
-        // Verify the result state as coverage appears and is removed.
-        for (coverage, expected) in [
-            (vec![], None),
-            (vec![second.clone()], Some(second.clone())),
-            (vec![second.clone(), first.clone()], Some(first)),
-            (vec![second.clone()], Some(second)),
+        let seal_id = SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap();
+        for command_outcome in [
+            None,
+            Some(arkret_wire::CommandOutcome::Committed),
+            Some(arkret_wire::CommandOutcome::Rejected),
         ] {
+            let expected = command_outcome.map(|_| seal_id.clone());
+            let command_decisions = command_outcome
+                .map(
+                    |outcome| arkret_state::state::store::SealCommandEventDecision {
+                        seal_id: seal_id.clone(),
+                        command_index: 0,
+                        member_index: 0,
+                        outcome,
+                        reason_code: (outcome == arkret_wire::CommandOutcome::Rejected)
+                            .then_some(arkret_wire::ReasonCode::CallStateTransitionInvalid),
+                    },
+                )
+                .into_iter()
+                .collect();
+            let coverage = if command_outcome == Some(arkret_wire::CommandOutcome::Committed) {
+                vec![seal_id.clone()]
+            } else {
+                vec![]
+            };
             let snapshot = ControlProposalSnapshot {
                 event: event.clone(),
                 digest_suite: arkret_canonical::DigestSuite::Sha256,
@@ -396,6 +419,7 @@ mod tests {
                     ),
                 decisions: vec![],
                 covering_seals: coverage,
+                command_decisions,
                 decision_overdue: false,
             };
             let outcome = read_outcome(&request, snapshot, chrono::Utc::now()).unwrap();

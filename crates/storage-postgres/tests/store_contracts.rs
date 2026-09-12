@@ -3802,7 +3802,8 @@ mod control_move_ingress_negatives {
     use soland_storage_postgres::PgEventCommitUnitOfWork;
 
     use super::{
-        DB_GUARD, cleanup_control_schedule_test_actor, control_seal_schedule_row_count, test_pool,
+        DB_GUARD, cleanup_control_schedule_test_actor, control_seal_schedule_row_count,
+        put_pending_control_singleton, test_pool,
     };
 
     #[derive(QueryableByName)]
