@@ -120,6 +120,93 @@ fn seal(events: &[Event], digests: &[Hash], outcome: CommandOutcome) -> Seal {
     seal
 }
 
+// This fixture exercises the persistence transaction only. Its placeholder
+// signatures must never pass source-proof admission or be sent by production.
+fn delivery_fixture(
+    event: &Event,
+    predecessor: &Event,
+    peer: &ActorId,
+) -> (
+    soland_storage::ContactDeliveryIntent,
+    soland_storage::FederationOutboxRecord,
+) {
+    use arkret_models_collaboration::contact_operations::{
+        ContactAcceptedOutcome, ContactCurrentProof, ContactLineage, ContactPeer, ContactScope,
+        PeerContactSubmitRequestBody,
+    };
+    use arkret_models_collaboration::governance::peer_contact::PeerContactAddress;
+    let signature = arkret_wire::ProtocolSignature {
+        verification_method: arkret_wire::DidUrl::new("did:web:station.example#notary").unwrap(),
+        created_at: event.created_at,
+        jws: arkret_wire::Base64UrlString::new("AA").unwrap(),
+    };
+    let peer = ContactPeer::Human {
+        account_id: peer.as_account_id().unwrap().clone(),
+    };
+    let lineage = ContactLineage {
+        contact_round_id: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
+        issuer: ContactPeer::Human {
+            account_id: event.actor_id.as_account_id().unwrap().clone(),
+        },
+        peer: peer.clone(),
+        version: 2,
+        predecessor_event_ref: Some(predecessor.event_id.clone()),
+        event_ref: event.event_id.clone(),
+        granted_to_peer_scopes: vec![ContactScope::DirectMessage],
+        terminal: None,
+        signature: signature.clone(),
+    };
+    let current_proof = ContactCurrentProof {
+        contact_round_id: lineage.contact_round_id.clone(),
+        issuer_id: peer.delivery_station_id().clone(),
+        peer: peer.clone(),
+        terminal: false,
+        head_event_ref: event.event_id.clone(),
+        accepted_frontier: vec![event.event_id.clone()],
+        complete_through: 2,
+        fresh_until: event.created_at + chrono::Duration::minutes(10),
+        signature,
+    };
+    let contact_address = PeerContactAddress {
+        recipient: peer,
+        service_resolution: arkret_models_identity::ServiceResolutionCarrier::ResolutionUrl {
+            resolution_url: "https://station.example/_arkret/open/services/ak%3Adid_core%3Aweb%3Astation.example/resolution".into(),
+        },
+        route_assistance: None,
+    };
+    let idempotency_key =
+        arkret_wire::IdempotencyKey::new(format!("contact:{}", event.event_id)).unwrap();
+    let body = PeerContactSubmitRequestBody::ScopeUpdate {
+        idempotency_key: idempotency_key.clone(),
+        signed_event: event.clone(),
+        lineage: lineage.clone(),
+        current_proof: current_proof.clone(),
+        contact_address: contact_address.clone(),
+    };
+    let intent = soland_storage::ContactDeliveryIntent {
+        event: event.clone(),
+        outcome: ContactAcceptedOutcome::ScopeUpdate {
+            operation_id: arkret_wire::ProtocolOperationId::new("ak:operation:contact-fixture")
+                .unwrap(),
+            lineage,
+            current_proof,
+        },
+        contact_address,
+        introduction_evidence: None,
+        idempotency_key,
+    };
+    let delivery = soland_storage::FederationOutboxRecord::pending(
+        uuid::Uuid::now_v7().to_string(),
+        intent.contact_address.delivery_station_id().clone(),
+        "https://station.example".into(),
+        "/_arkret/peer/contacts".into(),
+        intent.idempotency_key.as_str().into(),
+        String::from_utf8(arkret_canonical::canonical_json_bytes(&body).unwrap()).unwrap(),
+        event.created_at.timestamp(),
+    );
+    (intent, delivery)
+}
+
 #[tokio::test]
 async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_member_order() {
     for (index, outcome) in [CommandOutcome::Committed, CommandOutcome::Rejected]
@@ -196,6 +283,7 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             .await
             .unwrap();
         let initial = contact(alice.clone(), bob.clone(), &request);
+        let (delivery_intent, delivery) = delivery_fixture(&events[1], &request, &bob);
         let holder = alice.as_account_id().unwrap().clone();
         let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.consent.grant.v1:{consent_id}"
@@ -224,6 +312,7 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
                 planned.granted_to_requester_scopes = vec!["invite".into()];
             }
             let contact = (index < 3).then_some(ContactProjectionCommit {
+                delivery_intent: (index == 1).then(|| delivery_intent.clone()),
                 record: planned,
                 expected_updated_at: Some(request.created_at),
                 conflict_code: "stale admission CAS must not decide a Seal".into(),
@@ -262,7 +351,27 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
         let consents = crate::PgConsentCellStore { pool: pool.clone() };
         assert!(contacts.get(&alice, &bob).await.unwrap().is_none());
         assert!(consents.get(&holder, &cell_id).await.unwrap().is_none());
+        assert!(
+            contacts
+                .confirmed_delivery_intents(20)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let seal = seal(&events, &digests, outcome);
+        let premature = soland_storage::ConfirmedContactDeliveryIntent {
+            event_digest: digests[1].clone(),
+            deciding_seal_id: seal.id.clone(),
+            intent: delivery_intent.clone(),
+        };
+        assert!(
+            contacts
+                .finalize_delivery_intent(&premature, &delivery)
+                .await
+                .is_err(),
+            "pending cannot enter outbox"
+        );
+
         if outcome == CommandOutcome::Committed {
             let mut invalid_root = seal.clone();
             invalid_root.state_root = format!("sha256:{}", "f".repeat(64)).parse().unwrap();
@@ -329,6 +438,107 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
                 .await
                 .unwrap()
         );
+        let ready = contacts.confirmed_delivery_intents(20).await.unwrap();
+        if outcome == CommandOutcome::Committed {
+            assert_eq!(ready.len(), 1);
+            assert_eq!(ready[0].deciding_seal_id, seal.id);
+            let mut wrong_seal = ready[0].clone();
+            wrong_seal.deciding_seal_id = format!("ak:seal:sha256:{}", "f".repeat(64))
+                .parse()
+                .unwrap();
+            assert!(
+                contacts
+                    .finalize_delivery_intent(&wrong_seal, &delivery)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                contacts.confirmed_delivery_intents(20).await.unwrap().len(),
+                1
+            );
+            let mut conn = pool.get().await.unwrap();
+            sql_query("CREATE FUNCTION fail_contact_delivery_finalize() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.contact_delivery_outbox_id IS NOT NULL THEN RAISE EXCEPTION 'test finalize failure'; END IF; RETURN NEW; END $$").execute(&mut conn).await.unwrap();
+            sql_query("CREATE TRIGGER fail_contact_delivery_finalize BEFORE UPDATE ON state_control_events FOR EACH ROW EXECUTE FUNCTION fail_contact_delivery_finalize()").execute(&mut conn).await.unwrap();
+            drop(conn);
+            assert!(
+                contacts
+                    .finalize_delivery_intent(&ready[0], &delivery)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                contacts.confirmed_delivery_intents(20).await.unwrap().len(),
+                1
+            );
+            let mut conn = pool.get().await.unwrap();
+            #[derive(diesel::QueryableByName)]
+            struct OutboxCount {
+                #[diesel(sql_type=BigInt)]
+                count: i64,
+            }
+            assert_eq!(
+                sql_query("SELECT count(*)::bigint AS count FROM federation_outbox")
+                    .get_result::<OutboxCount>(&mut conn)
+                    .await
+                    .unwrap()
+                    .count,
+                0,
+                "failed intent consumption rolls back the outbox insert"
+            );
+            sql_query("DROP TRIGGER fail_contact_delivery_finalize ON state_control_events")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sql_query("DROP FUNCTION fail_contact_delivery_finalize()")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            drop(conn);
+            assert!(
+                contacts
+                    .finalize_delivery_intent(&ready[0], &delivery)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                contacts
+                    .confirmed_delivery_intents(20)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                !contacts
+                    .finalize_delivery_intent(&ready[0], &delivery)
+                    .await
+                    .unwrap()
+            );
+            let mut rebound = delivery.clone();
+            rebound.payload_json.push(' ');
+            assert!(
+                contacts
+                    .finalize_delivery_intent(&ready[0], &rebound)
+                    .await
+                    .is_err(),
+                "an existing key fixes exact bytes"
+            );
+        } else {
+            assert!(ready.is_empty());
+            assert!(
+                contacts
+                    .finalize_delivery_intent(&premature, &delivery)
+                    .await
+                    .is_err(),
+                "rejected cannot enter outbox"
+            );
+            let mut conn = pool.get().await.unwrap();
+            #[derive(diesel::QueryableByName)]
+            struct IntentCount {
+                #[diesel(sql_type=BigInt)]
+                count: i64,
+            }
+            assert_eq!(sql_query("SELECT count(*)::bigint AS count FROM state_control_events WHERE contact_delivery_intent IS NOT NULL").get_result::<IntentCount>(&mut conn).await.unwrap().count, 0);
+        }
         let contact = contacts.get(&alice, &bob).await.unwrap();
         let consent = consents.get(&holder, &cell_id).await.unwrap();
         if outcome == CommandOutcome::Committed {

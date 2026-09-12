@@ -2668,6 +2668,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         membership_compensation_evidence: None,
         device_pairing_authorization: None,
         contact_projection: Some(ContactProjectionCommit {
+            delivery_intent: None,
             record: contact_record.clone(),
             expected_updated_at: None,
             conflict_code: "contact_round_conflict".to_owned(),
@@ -2767,6 +2768,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             membership_compensation_evidence: None,
             device_pairing_authorization: None,
             contact_projection: Some(ContactProjectionCommit {
+                delivery_intent: None,
                 record: conflicting_contact,
                 expected_updated_at: Some(now + Duration::seconds(1)),
                 conflict_code: "contact_lineage_conflict".to_owned(),

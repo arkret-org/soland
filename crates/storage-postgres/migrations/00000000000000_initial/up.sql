@@ -775,6 +775,9 @@ CREATE TABLE public.state_control_events (
     proposal_decisions jsonb DEFAULT '[]'::jsonb NOT NULL,
     -- Private admission-derived mirrors; invisible until the exact committed decision.
     pending_domain_effects jsonb,
+    -- Private Contact transport intent; only committed commands may materialize it.
+    contact_delivery_intent jsonb,
+    contact_delivery_outbox_id text,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     is_pending boolean DEFAULT true NOT NULL,
     UNIQUE (event_digest, realm_id),
@@ -782,6 +785,10 @@ CREATE TABLE public.state_control_events (
         CHECK (jsonb_typeof(command_unit_event_digests) = 'array'
             AND jsonb_array_length(command_unit_event_digests) BETWEEN 1 AND 4096)
 );
+
+CREATE INDEX state_control_events_contact_delivery_idx
+    ON public.state_control_events (inserted_at, event_digest)
+    WHERE contact_delivery_intent IS NOT NULL AND NOT is_pending;
 
 CREATE INDEX state_control_events_realm_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest);
 CREATE INDEX state_control_events_pending_order_idx

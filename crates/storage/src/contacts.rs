@@ -32,9 +32,93 @@ pub trait ContactVerifiedMirrorStore: Send + Sync {
     async fn put_verified(&self, record: &ContactVerifiedMirrorRecord) -> PersistenceResult<()>;
 }
 
+/// Private durable planning input, never a federation wire request. Source
+/// confirmation is attached only after the exact command is committed.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactDeliveryIntent {
+    pub event: arkret_wire::Event,
+    pub outcome: arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
+    pub contact_address: arkret_models_collaboration::governance::peer_contact::PeerContactAddress,
+    pub introduction_evidence:
+        Option<arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence>,
+    pub idempotency_key: arkret_wire::IdempotencyKey,
+}
+
+impl ContactDeliveryIntent {
+    pub fn validate_event_binding(&self) -> PersistenceResult<()> {
+        use arkret_models_collaboration::contact_operations::ContactAcceptedOutcome;
+        use arkret_wire::EventKind;
+        let (kind, event_id) = match &self.outcome {
+            ContactAcceptedOutcome::Request {
+                request_acceptance_receipt,
+                ..
+            } => (
+                EventKind::ContactRequested,
+                &request_acceptance_receipt.core.request_event_ref,
+            ),
+            ContactAcceptedOutcome::Response {
+                normal_response_acceptance_receipt,
+                ..
+            } => (
+                EventKind::ContactAccepted,
+                &normal_response_acceptance_receipt.response_event_ref,
+            ),
+            ContactAcceptedOutcome::Reject {
+                reject_acceptance_receipt,
+                ..
+            } => (
+                EventKind::ContactRejected,
+                &reject_acceptance_receipt.reject_event_ref,
+            ),
+            ContactAcceptedOutcome::ScopeUpdate { lineage, .. } => {
+                (EventKind::ContactScopeUpdate, &lineage.event_ref)
+            }
+            ContactAcceptedOutcome::Tombstone { lineage, .. } => {
+                (EventKind::ContactTombstone, &lineage.event_ref)
+            }
+        };
+        if self.event.kind != kind
+            || &self.event.event_id != event_id
+            || (kind == EventKind::ContactRequested) != self.introduction_evidence.is_some()
+        {
+            return Err(crate::PersistenceError::SchemaViolation(
+                "Contact delivery intent outcome does not bind its exact Event branch".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A durable committed decision with an unmaterialized local delivery intent.
+/// This proves local finality only; it is not portable source-confirmation proof.
+#[derive(Clone, Debug)]
+pub struct ConfirmedContactDeliveryIntent {
+    pub event_digest: arkret_wire::Hash,
+    pub deciding_seal_id: arkret_wire::SealId,
+    pub intent: ContactDeliveryIntent,
+}
+
 /// Trait for contact storage operations.
 #[async_trait]
 pub trait ContactStore: Send + Sync {
+    /// Only exact committed commands are eligible. Pending/rejected commands
+    /// never enter the HTTP outbox. Concurrent readers are safe: finalization
+    /// rechecks the durable decision and fixes one immutable payload atomically.
+    async fn confirmed_delivery_intents(
+        &self,
+        limit: u16,
+    ) -> PersistenceResult<Vec<ConfirmedContactDeliveryIntent>>;
+    /// The caller must have constructed the complete protocol confirmation
+    /// before invoking this storage boundary. This method supplies no proof and
+    /// never treats the local decision as a transferable authorization.
+    /// Atomically insert the immutable outbox row and consume its exact intent.
+    async fn finalize_delivery_intent(
+        &self,
+        ready: &ConfirmedContactDeliveryIntent,
+        delivery: &crate::FederationOutboxRecord,
+    ) -> PersistenceResult<bool>;
+
     async fn get(
         &self,
         requester_id: &ActorId,

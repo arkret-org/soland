@@ -4,8 +4,7 @@ use arkret_models_collaboration::contact_operations::{
     ContactPreparedOutcome, ContactResultKind, ContactRound, ContactRoundEvidenceBundle,
     ContactScope, ContactScopeUpdatePayload, ContactScopeUpdateSchema,
     NormalResponseAcceptanceReceipt, OutgoingRequestState, OutgoingSlotAbsenceTranscript,
-    PeerContactSubmitRequestBody, RejectAcceptanceReceipt, RequestAcceptanceReceipt,
-    RequestAcceptanceReceiptCore,
+    RejectAcceptanceReceipt, RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
@@ -1340,7 +1339,7 @@ async fn commit(
         }
         _ => {}
     }
-    let (outcome, contact_projection) =
+    let (outcome, mut contact_projection) =
         plan_contact_commit(state, &reservation, &body.signed_event).await?;
     if matches!(outcome, ContactOperationOutcome::Failed { .. }) {
         persist_final(
@@ -1354,14 +1353,11 @@ async fn commit(
         .await?;
         return json_ok(outcome);
     }
-    let delivery = prepare_contact_federation_delivery(
-        state,
-        &reservation,
-        &body.signed_event,
-        &outcome,
-        contact_projection.as_ref().map(|commit| &commit.record),
-    )
-    .await?;
+    let delivery_intent =
+        prepare_contact_delivery_intent(state, &reservation, &body.signed_event, &outcome).await?;
+    if let Some(commit) = contact_projection.as_mut() {
+        commit.delivery_intent = delivery_intent;
+    }
     let idempotency_created_at = now();
     let contact_idempotency = soland_services::events::IdempotentResponse {
         authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -1393,7 +1389,7 @@ async fn commit(
         contact_projection.ok_or_else(|| {
             AppError::internal("accepted Contact commit is missing its projection mutation")
         })?,
-        delivery.into_iter().collect(),
+        Vec::new(),
         contact_idempotency,
     )
     .await
@@ -1624,6 +1620,7 @@ async fn plan_contact_commit(
                 })
                 .transpose()?;
             projection = Some(soland_services::events::CommitContactProjection {
+                delivery_intent: None,
                 record: ContactRecord {
                     requester_id: holder.clone(),
                     target_id: peer.clone(),
@@ -1790,6 +1787,7 @@ async fn plan_contact_commit(
             });
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             projection = Some(soland_services::events::CommitContactProjection {
+                delivery_intent: None,
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
@@ -1845,6 +1843,7 @@ async fn plan_contact_commit(
             record.response_event_ref = Some(event.event_id.clone());
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             projection = Some(soland_services::events::CommitContactProjection {
+                delivery_intent: None,
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
@@ -1921,6 +1920,7 @@ async fn plan_contact_commit(
                 });
             }
             projection = Some(soland_services::events::CommitContactProjection {
+                delivery_intent: None,
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
@@ -2013,6 +2013,7 @@ async fn plan_contact_commit(
                 None
             };
             projection = Some(soland_services::events::CommitContactProjection {
+                delivery_intent: None,
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
@@ -2175,124 +2176,40 @@ fn imported_contact_continuity_history(
     Ok(tail)
 }
 
-async fn prepare_contact_federation_delivery(
+async fn prepare_contact_delivery_intent(
     state: &AppState,
     reservation: &ContactReservation,
     event: &Event,
     outcome: &ContactOperationOutcome,
-    _planned_record: Option<&ContactRecord>,
-) -> Result<Option<soland_services::federation::FederationDeliveryRecord>, AppError> {
+) -> Result<Option<soland_storage::ContactDeliveryIntent>, AppError> {
     let ContactOperationOutcome::Accepted { outcome } = outcome else {
         return Ok(None);
     };
-    let introduction = match &reservation.branch {
+    let introduction_evidence = match &reservation.branch {
         ContactReservationBranch::Request {
             introduction_evidence,
             ..
-        } => Some(introduction_evidence.as_ref()),
+        } => Some((**introduction_evidence).clone()),
         _ => None,
     };
-    let Some(contact_address) =
-        contact_delivery_address(state, reservation.branch.peer(), introduction).await?
+    let Some(contact_address) = contact_delivery_address(
+        state,
+        reservation.branch.peer(),
+        introduction_evidence.as_ref(),
+    )
+    .await?
     else {
         return Ok(None);
     };
-    let key = IdempotencyKey::new(format!("peer-contact:{}", event.event_id))
+    let idempotency_key = IdempotencyKey::new(format!("peer-contact:{}", event.event_id))
         .map_err(|error| AppError::internal(format!("Contact peer key invalid: {error}")))?;
-    let delivery = match outcome {
-        ContactAcceptedOutcome::Request {
-            request_acceptance_receipt,
-            ..
-        } => {
-            let ContactReservationBranch::Request {
-                introduction_evidence,
-                ..
-            } = &reservation.branch
-            else {
-                return Err(AppError::internal(
-                    "Contact request outcome/branch mismatch",
-                ));
-            };
-            PeerContactSubmitRequestBody::Request {
-                idempotency_key: key,
-                signed_event: event.clone(),
-                request_receipt: request_acceptance_receipt.clone(),
-                contact_address,
-                introduction_evidence: (**introduction_evidence).clone(),
-                current_proof: None,
-            }
-        }
-        ContactAcceptedOutcome::Response {
-            normal_response_acceptance_receipt,
-            current_proof,
-            ..
-        } => PeerContactSubmitRequestBody::Response {
-            idempotency_key: key,
-            signed_event: event.clone(),
-            response_receipt: normal_response_acceptance_receipt.clone(),
-            contact_address,
-            current_proof: Some(current_proof.clone()),
-        },
-        ContactAcceptedOutcome::Reject {
-            reject_acceptance_receipt,
-            ..
-        } => PeerContactSubmitRequestBody::Reject {
-            idempotency_key: key,
-            signed_event: event.clone(),
-            reject_receipt: reject_acceptance_receipt.clone(),
-            contact_address,
-        },
-        ContactAcceptedOutcome::ScopeUpdate {
-            lineage,
-            current_proof,
-            ..
-        } => PeerContactSubmitRequestBody::ScopeUpdate {
-            idempotency_key: key,
-            signed_event: event.clone(),
-            lineage: lineage.clone(),
-            current_proof: current_proof.clone(),
-            contact_address,
-        },
-        ContactAcceptedOutcome::Tombstone {
-            lineage,
-            current_proof,
-            ..
-        } => PeerContactSubmitRequestBody::Tombstone {
-            idempotency_key: key,
-            signed_event: event.clone(),
-            lineage: lineage.clone(),
-            current_proof: current_proof.clone(),
-            contact_address,
-        },
-    };
-    let recipient_id = match &delivery {
-        PeerContactSubmitRequestBody::Request {
-            contact_address, ..
-        }
-        | PeerContactSubmitRequestBody::Response {
-            contact_address, ..
-        }
-        | PeerContactSubmitRequestBody::Reject {
-            contact_address, ..
-        }
-        | PeerContactSubmitRequestBody::ScopeUpdate {
-            contact_address, ..
-        }
-        | PeerContactSubmitRequestBody::Tombstone {
-            contact_address, ..
-        } => contact_address.delivery_station_id().as_str(),
-        PeerContactSubmitRequestBody::ProofRefresh { .. }
-        | PeerContactSubmitRequestBody::GlareFinalize { .. }
-        | PeerContactSubmitRequestBody::ContinuityCheckpoint { .. } => {
-            unreachable!("Contact commit only emits Event carriers")
-        }
-    };
-    crate::routing::identity::contact_federation::prepare_peer_contact_carrier(
-        state,
-        recipient_id,
-        &delivery,
-    )
-    .await
+    Ok(Some(soland_storage::ContactDeliveryIntent {
+        event: event.clone(),
+        outcome: outcome.clone(),
+        contact_address,
+        introduction_evidence,
+        idempotency_key,
+    }))
 }
 
 async fn contact_delivery_address(

@@ -144,6 +144,23 @@ pub(super) async fn stage_domain_effects(
     {
         return Err(invalid("non-consent Event carries consent intent"));
     }
+    let contact_delivery_intent = contact
+        .as_ref()
+        .and_then(|commit| commit.delivery_intent.as_ref());
+    if let Some(intent) = contact_delivery_intent {
+        intent.validate_event_binding()?;
+        if arkret_canonical::canonical_json_bytes(&intent.event).map_err(invalid)?
+            != arkret_canonical::canonical_json_bytes(event).map_err(invalid)?
+        {
+            return Err(invalid(
+                "Contact delivery intent does not bind the exact admitted Event",
+            ));
+        }
+    }
+    let contact_delivery_intent = contact_delivery_intent
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(invalid)?;
     let effects = serde_json::to_value(PendingDomainEffects {
         contact: contact
             .map(|commit| contact_intent(event, commit))
@@ -151,8 +168,8 @@ pub(super) async fn stage_domain_effects(
         consent: consent.is_some(),
     })
     .map_err(invalid)?;
-    let affected = sql_query("UPDATE state_control_events SET pending_domain_effects=$2 WHERE event_digest=$1 AND is_pending AND (pending_domain_effects IS NULL OR pending_domain_effects=$2)")
-        .bind::<Text, _>(digest).bind::<Jsonb, _>(effects).execute(conn).await.map_err(PersistenceError::database)?;
+    let affected = sql_query("UPDATE state_control_events SET pending_domain_effects=$2, contact_delivery_intent=$3 WHERE event_digest=$1 AND is_pending AND (pending_domain_effects IS NULL OR pending_domain_effects=$2) AND (contact_delivery_intent IS NULL OR contact_delivery_intent=$3)")
+        .bind::<Text, _>(digest).bind::<Jsonb, _>(effects).bind::<Nullable<Jsonb>, _>(contact_delivery_intent).execute(conn).await.map_err(PersistenceError::database)?;
     if affected != 1 {
         return Err(invalid(
             "pending domain intent conflicts with registered Event",
@@ -193,6 +210,15 @@ pub(crate) async fn settle_domain_effects(
         }
         sql_query(
             "UPDATE state_control_events SET pending_domain_effects=NULL WHERE event_digest=$1",
+        )
+        .bind::<Text, _>(digest)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    }
+    if outcome == CommandOutcome::Rejected {
+        sql_query(
+            "UPDATE state_control_events SET contact_delivery_intent=NULL WHERE event_digest=$1",
         )
         .bind::<Text, _>(digest)
         .execute(conn)
@@ -329,6 +355,7 @@ async fn apply_contact(
     super::commit_contact_projection(
         conn,
         ContactProjectionCommit {
+            delivery_intent: None,
             record,
             expected_updated_at,
             conflict_code: "locked contact mirror changed".to_owned(),

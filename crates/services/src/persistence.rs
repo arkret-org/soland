@@ -129,6 +129,29 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn confirmed_contact_delivery_intents(
+        &self,
+        limit: u16,
+    ) -> crate::ServiceResult<Vec<soland_storage::ConfirmedContactDeliveryIntent>> {
+        Ok(self
+            .persistence
+            .contacts()
+            .confirmed_delivery_intents(limit)
+            .await?)
+    }
+
+    pub async fn finalize_contact_delivery_intent(
+        &self,
+        ready: &soland_storage::ConfirmedContactDeliveryIntent,
+        delivery: &soland_storage::FederationOutboxRecord,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .persistence
+            .contacts()
+            .finalize_delivery_intent(ready, delivery)
+            .await?)
+    }
+
     pub async fn contact_verified_mirror(
         &self,
         target_holder_principal_id: &str,
