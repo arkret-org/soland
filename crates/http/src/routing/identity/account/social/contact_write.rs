@@ -1132,17 +1132,7 @@ fn signed_lineage(
     scopes: Vec<ContactScope>,
     terminal: bool,
 ) -> Result<ContactLineage, AppError> {
-    let unsigned = json!({
-        "contact_round_id": contact_round_id,
-        "issuer": holder,
-        "peer": peer,
-        "version": version,
-        "predecessor_event_ref": predecessor_event_ref,
-        "event_ref": event_ref,
-        "granted_to_peer_scopes": scopes,
-        "terminal": terminal.then_some(true),
-    });
-    Ok(ContactLineage {
+    let mut lineage = ContactLineage {
         contact_round_id,
         issuer: holder,
         peer,
@@ -1151,8 +1141,27 @@ fn signed_lineage(
         event_ref,
         granted_to_peer_scopes: scopes,
         terminal: terminal.then_some(true),
-        signature: service_signature(state, &unsigned)?,
-    })
+        signature: ProtocolSignature {
+            verification_method: DidUrl::new(
+                crate::routing::federation::federation_service_signature_key_id(
+                    state.service_did().as_str(),
+                ),
+            )
+            .map_err(|error| AppError::internal(format!("service verification method: {error}")))?,
+            created_at: now(),
+            jws: Base64UrlString::new("AA").map_err(|error| {
+                AppError::internal(format!("Contact signature placeholder: {error}"))
+            })?,
+        },
+    };
+    let bytes = lineage
+        .canonical_signing_bytes()
+        .map_err(|error| AppError::internal(format!("Contact lineage transcript: {error}")))?;
+    lineage.signature.jws = Base64UrlString::new(
+        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&bytes).to_bytes()),
+    )
+    .map_err(|error| AppError::internal(format!("Contact lineage signature: {error}")))?;
+    Ok(lineage)
 }
 
 pub(super) fn signed_current_proof(
@@ -2890,12 +2899,13 @@ fn contact_mirror_target_holder_key(holder: &arkret_wire::ActorId) -> String {
 
 #[cfg(test)]
 mod device_authorization_account_tests {
-    use arkret_wire::{AccountId, ActorId, DidCoreId, Hash};
+    use arkret_models_collaboration::contact_operations::{ContactLineage, ContactScope};
+    use arkret_wire::{AccountId, ActorId, DidCoreId, EventId, Hash};
 
     use super::{
-        accept_request_slot_transition, contact_delivery_address, contact_mirror_target_holder_key,
-        device_authorization_matches_contact_account, next_request_slot_coordinates,
-        terminal_contact_predecessor,
+        ContactPeer, accept_request_slot_transition, contact_delivery_address,
+        contact_mirror_target_holder_key, device_authorization_matches_contact_account,
+        next_request_slot_coordinates, terminal_contact_predecessor,
     };
 
     fn account(principal: &str, station: &str) -> ActorId {
@@ -3287,5 +3297,75 @@ mod device_authorization_account_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+    #[test]
+    fn lineage_signatures_cover_exact_wire_presence_for_initial_successor_and_terminal() {
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let holder = ContactPeer::Human {
+            account_id: AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                state.service_core_id(),
+            ),
+        };
+        let peer = ContactPeer::Human {
+            account_id: AccountId::new(
+                DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
+                DidCoreId::new("ak:did_core:web:remote.example").unwrap(),
+            ),
+        };
+        let predecessor = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [1; 32]);
+        let event = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [2; 32]);
+        for (version, previous, terminal) in [
+            (1, None, false),
+            (2, Some(predecessor.clone()), false),
+            (2, Some(predecessor), true),
+        ] {
+            let lineage = super::signed_lineage(
+                &state,
+                holder.clone(),
+                peer.clone(),
+                hash('a'),
+                version,
+                previous.clone(),
+                event.clone(),
+                if terminal {
+                    Vec::new()
+                } else {
+                    vec![ContactScope::DirectMessage]
+                },
+                terminal,
+            )
+            .unwrap();
+            let wire = serde_json::to_value(&lineage).unwrap();
+            assert_eq!(
+                wire.get("predecessor_event_ref").is_some(),
+                previous.is_some()
+            );
+            assert_eq!(wire.get("terminal").is_some(), terminal);
+            let roundtrip: ContactLineage = serde_json::from_value(wire).unwrap();
+            super::verify_contact_service_signature_bytes(
+                &state,
+                state.service_id(),
+                &roundtrip.signature,
+                &roundtrip.canonical_signing_bytes().unwrap(),
+                "test.lineage",
+            )
+            .unwrap();
+            let mut tampered = roundtrip;
+            tampered.granted_to_peer_scopes.push(ContactScope::Presence);
+            assert!(
+                super::verify_contact_service_signature_bytes(
+                    &state,
+                    state.service_id(),
+                    &tampered.signature,
+                    &tampered.canonical_signing_bytes().unwrap(),
+                    "test.lineage",
+                )
+                .is_err()
+            );
+        }
     }
 }
