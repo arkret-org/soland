@@ -230,6 +230,9 @@ impl ContactCompletionIntent {
                 "Contact confirmation time is already fixed".into(),
             ));
         }
+        // Freeze the same instant in the durable plan and signed transcript;
+        // canonical wire timestamps cannot preserve sub-millisecond precision.
+        let at = arkret_canonical::normalize_timestamp_canonical(at);
         if let ContactCompletionAction::Response { absence, .. } = &mut self.plan.action {
             absence.observed_at = at;
         }
