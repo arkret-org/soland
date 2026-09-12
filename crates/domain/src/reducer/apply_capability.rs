@@ -1238,6 +1238,19 @@ impl ProjectionState {
             .into_iter()
             .find(|authority_grant_id| self.effective_engine_grant(authority_grant_id).is_none())
         {
+            let known_removed = Self::capability_grant_cell_ref(&unresolved_grant_id)
+                .and_then(|cell| self.cells.get(&cell))
+                .is_some_and(|state| {
+                    let ResolvedCellState::Sequenced(state) = state else {
+                        return false;
+                    };
+                    state.value.as_array().is_some_and(Vec::is_empty)
+                });
+            if known_removed {
+                return ProjectionEffect::Rejected {
+                    reason: "grant_revoked_upstream".to_owned(),
+                };
+            }
             return self.queue_pending_replay(
                 unresolved_grant_id,
                 operation,
