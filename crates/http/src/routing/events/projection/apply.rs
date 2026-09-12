@@ -1405,6 +1405,10 @@ pub(crate) async fn publish_confirmed_seal_commands(
     {
         return Err("command publication requires the exact durable Seal".into());
     }
+    let _publication = state.projections().confirmed_projection_guard().await;
+    let recovered_metadata = state
+        .recover_confirmed_metadata_projection(&seal.realm_id)
+        .await?;
     let confirmed = state
         .projections()
         .confirmed_command_events(&seal.realm_id)
@@ -1462,6 +1466,32 @@ pub(crate) async fn publish_confirmed_seal_commands(
                     .ok_or_else(|| "Seal command is outside the confirmed prefix".to_owned())
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if !result.unit_event_digests.is_empty()
+            && result
+                .unit_event_digests
+                .iter()
+                .all(|id| recovered_metadata.contains(id))
+        {
+            // These are replayable wake-up hints for durable timeline rows,
+            // not user notifications or evidence of completion. Event identity
+            // makes a repeated hint harmless after an exact retry.
+            for event in &events {
+                if let Some(row) = state
+                    .event_queries()
+                    .projected_event(event.event_id.as_str())
+                    .await
+                    .map_err(|error| error.to_string())?
+                {
+                    let _ =
+                        state.publish_event_notification(crate::state::EventNotification::event(
+                            row.realm_id.clone(),
+                            row.event_id.clone(),
+                            projection_event_json(&row),
+                        ));
+                }
+            }
+            continue;
+        }
         let mut all_published = true;
         for event in &events {
             all_published &= state

@@ -708,39 +708,28 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
         }
     }
 }
-#[async_trait]
-impl ProjectionEventStore for PgProjectionEventStore {
-    async fn append(
-        &self,
-        record: ProjectionEventRecord,
-    ) -> PersistenceResult<ProjectionEventAppendOutcome> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let event_id = ids::parse_event_id(&record.event_id).ok_or_else(|| {
-            PersistenceError::SchemaViolation(format!(
-                "malformed projection Event id: {:?}",
-                record.event_id
-            ))
-        })?;
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-        let realm_pk = crate::realm_identity::ensure_realm_pk(conn, &record.realm_id).await?;
-        sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
-            .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
-        let event_pk =
-            sql_query("SELECT pk FROM accepted_events WHERE id = $1 AND realm_pk = $2")
-                .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
-                .bind::<diesel::sql_types::BigInt, _>(realm_pk)
-                .get_result::<ProjectionEventPkRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(PersistenceError::database)?
-                .ok_or_else(|| PersistenceError::Conflict("event_not_accepted".to_owned()))?
-                .pk;
-        let inserted = sql_query(
+async fn append_projection_event_in_transaction(
+    conn: &mut diesel_async::AsyncPgConnection,
+    record: ProjectionEventRecord,
+) -> PersistenceResult<ProjectionEventAppendOutcome> {
+    let event_id = ids::parse_event_id(&record.event_id)
+        .ok_or_else(|| PersistenceError::SchemaViolation("malformed projection Event id".into()))?;
+    let realm_pk = crate::realm_identity::ensure_realm_pk(conn, &record.realm_id).await?;
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+        .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    let event_pk = sql_query("SELECT pk FROM accepted_events WHERE id = $1 AND realm_pk = $2")
+        .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
+        .bind::<diesel::sql_types::BigInt, _>(realm_pk)
+        .get_result::<ProjectionEventPkRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(|| PersistenceError::Conflict("event_not_accepted".to_owned()))?
+        .pk;
+    let inserted = sql_query(
             "INSERT INTO projection_events \
              (event_pk, realm_pk, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
@@ -764,33 +753,76 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        if inserted == 1 {
-            return Ok(ProjectionEventAppendOutcome::Inserted);
-        }
-        let existing = sql_query(format!(
-            "{PROJECTION_EVENT_SELECT} WHERE projected.event_pk = $1"
+    if inserted == 1 {
+        return Ok(ProjectionEventAppendOutcome::Inserted);
+    }
+    let existing = sql_query(format!(
+        "{PROJECTION_EVENT_SELECT} WHERE projected.event_pk = $1"
+    ))
+    .bind::<diesel::sql_types::BigInt, _>(event_pk)
+    .get_result::<ProjectionEventRow>(&mut *conn)
+    .await
+    .map(ProjectionEventRecord::from)
+    .map_err(PersistenceError::database)?;
+    if existing.event_id == record.event_id
+        && existing.realm_id == record.realm_id
+        && existing.event_kind == record.event_kind
+        && existing.operation_kind == record.operation_kind
+        && existing.operation_id == record.operation_id
+        && existing.sender == record.sender
+        && existing.payload == record.payload
+        && existing.created_at == record.created_at
+        && existing.received_at == record.received_at
+    {
+        Ok(ProjectionEventAppendOutcome::AlreadyExists)
+    } else {
+        Err(PersistenceError::Conflict(
+            "duplicate_conflict: projection differs for Event identity".to_owned(),
         ))
-        .bind::<diesel::sql_types::BigInt, _>(event_pk)
-        .get_result::<ProjectionEventRow>(&mut *conn)
-        .await
-        .map(ProjectionEventRecord::from)
-        .map_err(PersistenceError::database)?;
-        if existing.event_id == record.event_id
-            && existing.realm_id == record.realm_id
-            && existing.event_kind == record.event_kind
-            && existing.operation_kind == record.operation_kind
-            && existing.operation_id == record.operation_id
-            && existing.sender == record.sender
-            && existing.payload == record.payload
-            && existing.created_at == record.created_at
-            && existing.received_at == record.received_at
-        {
-            Ok(ProjectionEventAppendOutcome::AlreadyExists)
-        } else {
-            Err(PersistenceError::Conflict(
-                "duplicate_conflict: projection differs for Event identity".to_owned(),
-            ).into())
-        }
+    }
+}
+
+#[async_trait]
+impl ProjectionEventStore for PgProjectionEventStore {
+    async fn append(
+        &self,
+        record: ProjectionEventRecord,
+    ) -> PersistenceResult<ProjectionEventAppendOutcome> {
+        Ok(self.append_batch(vec![record]).await?.remove(0))
+    }
+
+    async fn append_batch(
+        &self,
+        records: Vec<ProjectionEventRecord>,
+    ) -> PersistenceResult<Vec<ProjectionEventAppendOutcome>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            // Acquire the complete lock set in canonical order before writing.
+            // Member order remains the confirmed command order below.
+            let mut identities = records
+                .iter()
+                .map(|record| {
+                    ids::parse_event_id(&record.event_id).ok_or_else(|| {
+                        PersistenceError::SchemaViolation("malformed projection Event id".into())
+                    })
+                })
+                .collect::<PersistenceResult<Vec<_>>>()?;
+            identities.sort();
+            identities.dedup();
+            for id in identities {
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+                    .bind::<Binary, _>(id.to_vec())
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+            }
+            let mut outcomes = Vec::with_capacity(records.len());
+            for record in records {
+                outcomes.push(append_projection_event_in_transaction(conn, record).await?);
+            }
+            Ok(outcomes)
         })
         .await
         .map_err(PgTransactionError::into_persistence)

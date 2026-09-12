@@ -1515,6 +1515,19 @@ impl AppState {
         &self.projections
     }
 
+    pub(crate) async fn recover_confirmed_metadata_projection(
+        &self,
+        realm: &RealmId,
+    ) -> Result<std::collections::BTreeSet<arkret_wire::Hash>, String> {
+        self.persistence
+            .recover_confirmed_metadata(
+                &self.projections,
+                realm,
+                &RuntimeHydrationProjectionAdapter,
+            )
+            .await
+    }
+
     pub(crate) fn persistence(&self) -> &PersistenceHandle {
         &self.persistence
     }
@@ -1604,6 +1617,14 @@ impl AppState {
             crate::routing::events::event_log::publish_confirmed_realm_bootstrap(self, realm_id)
                 .await
                 .map_err(soland_services::ServiceError::Internal)?;
+        }
+        {
+            let _publication = self.projections.confirmed_projection_guard().await;
+            for realm_id in &hydrated_realm_ids {
+                self.recover_confirmed_metadata_projection(realm_id)
+                    .await
+                    .map_err(soland_services::ServiceError::Internal)?;
+            }
         }
         let mut reconciled_realms = self.realm_directory.snapshot();
         soland_services::hydration::reconcile_hydrated_agent_memberships(
@@ -2314,6 +2335,14 @@ mod membership_hydration_tests {
         store: &dyn PersistenceStore,
         outcome: Option<arkret_wire::CommandOutcome>,
     ) -> ProjectionService {
+        hydration_command_view_with_successor(store, outcome, false).await
+    }
+
+    async fn hydration_command_view_with_successor(
+        store: &dyn PersistenceStore,
+        outcome: Option<arkret_wire::CommandOutcome>,
+        successor: bool,
+    ) -> ProjectionService {
         use arkret_state::state::{ControlEventStore, SealStore};
 
         let controls = Arc::new(arkret_state::state::MemoryControlEventStore::default());
@@ -2355,65 +2384,89 @@ mod membership_hydration_tests {
                     ingress: arkret_state::state::ControlProposalIngress::AckRequired(ack),
                 });
             }
-            let digests = controls
-                .put_pending_unit_with_ingress(&members)
-                .await
-                .unwrap();
-            let Some(outcome) = outcome else {
-                continue;
+            let groups = if successor && members.len() > 1 {
+                vec![&members[..1], &members[1..]]
+            } else {
+                vec![members.as_slice()]
             };
-            let result = match outcome {
-                arkret_wire::CommandOutcome::Committed => {
-                    arkret_wire::SealCommandOutcome::committed(
-                        digests[0].clone(),
-                        digests.clone(),
-                        Vec::new(),
+            let mut predecessor = None;
+            for (sequence, group) in groups.into_iter().enumerate() {
+                let outcome = if successor && sequence == 0 {
+                    Some(arkret_wire::CommandOutcome::Committed)
+                } else {
+                    outcome
+                };
+                let digests = controls.put_pending_unit_with_ingress(group).await.unwrap();
+                let Some(outcome) = outcome else {
+                    continue;
+                };
+                let result = match outcome {
+                    arkret_wire::CommandOutcome::Committed => {
+                        arkret_wire::SealCommandOutcome::committed(
+                            digests[0].clone(),
+                            digests.clone(),
+                            Vec::new(),
+                            suite,
+                        )
+                    }
+                    arkret_wire::CommandOutcome::Rejected => {
+                        arkret_wire::SealCommandOutcome::rejected(
+                            digests[0].clone(),
+                            digests.clone(),
+                            arkret_wire::ReasonCode::ActorSignatureRevoked,
+                            suite,
+                        )
+                    }
+                }
+                .unwrap();
+                let mut delta = if outcome == arkret_wire::CommandOutcome::Committed {
+                    digests.clone()
+                } else {
+                    Vec::new()
+                };
+                delta.sort();
+                let unsigned = arkret_wire::UnsignedSeal {
+                    realm_id: realm.clone(),
+                    predecessor_ref: predecessor.clone(),
+                    delta,
+                    control_event_set_root: arkret_state::control_event_set_root(
+                        &digests.into_iter().collect(),
                         suite,
                     )
-                }
-                arkret_wire::CommandOutcome::Rejected => arkret_wire::SealCommandOutcome::rejected(
-                    digests[0].clone(),
-                    digests.clone(),
-                    arkret_wire::ReasonCode::ActorSignatureRevoked,
-                    suite,
-                ),
+                    .unwrap(),
+                    state_root: arkret_state::compute_state_root(
+                        arkret_state::GovernanceView::new(&BTreeMap::new()),
+                        suite,
+                    )
+                    .unwrap(),
+                    notary_seq: sequence as u64,
+                    availability_receipt_digests: Vec::new(),
+                    covered_event_digests: Vec::new(),
+                    previous_state_root: predecessor.as_ref().map(|_| {
+                        arkret_state::compute_state_root(
+                            arkret_state::GovernanceView::new(&BTreeMap::new()),
+                            suite,
+                        )
+                        .unwrap()
+                    }),
+                    previous_digest_algorithm: None,
+                    sealed_at: records.last().unwrap().received_at,
+                    hlc: arkret_wire::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+                    configuration_ref: members[0].event.event_id.clone(),
+                    command_results: vec![result],
+                    authorization_closures: Vec::new(),
+                    existence_anchors: Vec::new(),
+                };
+                let seal = arkret_wire::Seal::sign_with_signer(unsigned, suite, &signer).unwrap();
+                controls.record_seal_command_results(&seal).await.unwrap();
+                assert!(
+                    seals
+                        .put_if_head(&seal, predecessor.as_ref(), suite)
+                        .await
+                        .unwrap()
+                );
+                predecessor = Some(seal.id.clone());
             }
-            .unwrap();
-            let mut delta = if outcome == arkret_wire::CommandOutcome::Committed {
-                digests.clone()
-            } else {
-                Vec::new()
-            };
-            delta.sort();
-            let unsigned = arkret_wire::UnsignedSeal {
-                realm_id: realm,
-                predecessor_ref: None,
-                delta,
-                control_event_set_root: arkret_state::control_event_set_root(
-                    &digests.into_iter().collect(),
-                    suite,
-                )
-                .unwrap(),
-                state_root: arkret_state::compute_state_root(
-                    arkret_state::GovernanceView::new(&BTreeMap::new()),
-                    suite,
-                )
-                .unwrap(),
-                notary_seq: 0,
-                availability_receipt_digests: Vec::new(),
-                covered_event_digests: Vec::new(),
-                previous_state_root: None,
-                previous_digest_algorithm: None,
-                sealed_at: records.last().unwrap().received_at,
-                hlc: arkret_wire::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
-                configuration_ref: members[0].event.event_id.clone(),
-                command_results: vec![result],
-                authorization_closures: Vec::new(),
-                existence_anchors: Vec::new(),
-            };
-            let seal = arkret_wire::Seal::sign_with_signer(unsigned, suite, &signer).unwrap();
-            controls.record_seal_command_results(&seal).await.unwrap();
-            assert!(seals.put_if_head(&seal, None, suite).await.unwrap());
         }
         ProjectionService::new(
             controls,
@@ -3399,6 +3452,216 @@ mod membership_hydration_tests {
         assert_eq!(
             proj.active_agent_key_authorizations(agent_id),
             vec![(replacement_key_id, replacement_event_id.to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn confirmed_metadata_recovery_rebuilds_after_install_and_restart() {
+        let database = TestDatabase::lease().await;
+        let store = Arc::new(PgPersistenceStore::new(database.pool()));
+        let realm = RealmId::new("ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP").unwrap();
+        let agent =
+            "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
+        let key = format!("{agent}#runtime-1");
+        let replacement = format!("{agent}#runtime-2");
+        for (index, (kind, key_id)) in [
+            (arkret_wire::EventKind::AgentKeyAuthorize, &key),
+            (arkret_wire::EventKind::AgentKeyRevoke, &key),
+            (arkret_wire::EventKind::AgentKeyAuthorize, &replacement),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store
+                .events()
+                .put(canonical_projection_source_event(
+                    realm.as_str(),
+                    agent,
+                    index as u64 + 1,
+                    kind,
+                    serde_json::json!({"agent_id": agent, "key_id": key_id}),
+                    chrono::Utc::now(),
+                ))
+                .await
+                .unwrap();
+        }
+        let persistence = soland_services::persistence::PersistenceHandle::new(store.clone());
+        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
+            let projection =
+                hydration_command_view_with_successor(store.as_ref(), outcome, true).await;
+            let _guard = projection.confirmed_projection_guard().await;
+            assert!(
+                persistence
+                    .recover_confirmed_metadata(
+                        &projection,
+                        &realm,
+                        &RuntimeHydrationProjectionAdapter
+                    )
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                store
+                    .projection_events()
+                    .snapshot_all()
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        for _restart in 0..2 {
+            let projection = hydration_command_view_with_successor(
+                store.as_ref(),
+                Some(arkret_wire::CommandOutcome::Committed),
+                true,
+            )
+            .await;
+            let _guard = projection.confirmed_projection_guard().await;
+            for _retry_after_install in 0..2 {
+                let members = persistence
+                    .recover_confirmed_metadata(
+                        &projection,
+                        &realm,
+                        &RuntimeHydrationProjectionAdapter,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(members.len(), 2);
+                let snapshot = projection.snapshot();
+                let keys = snapshot.active_agent_key_authorizations(agent);
+                assert_eq!(keys.len(), 1);
+                assert_eq!(keys[0].0, replacement);
+                assert_eq!(
+                    store
+                        .projection_events()
+                        .snapshot_all()
+                        .await
+                        .unwrap()
+                        .len(),
+                    2
+                );
+            }
+        }
+        // A registered D member of the same committed unit must not be
+        // detached merely because its sibling is replayable metadata.
+        store
+            .events()
+            .put(canonical_projection_source_event(
+                realm.as_str(),
+                agent,
+                4,
+                arkret_wire::EventKind::AccountDataSet,
+                serde_json::json!({"schema_id":"ak.schema.account_data.v1"}),
+                chrono::Utc::now(),
+            ))
+            .await
+            .unwrap();
+        let mixed = hydration_command_view_with_successor(
+            store.as_ref(),
+            Some(arkret_wire::CommandOutcome::Committed),
+            true,
+        )
+        .await;
+        let _guard = mixed.confirmed_projection_guard().await;
+        assert!(
+            persistence
+                .recover_confirmed_metadata(&mixed, &realm, &RuntimeHydrationProjectionAdapter)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            mixed
+                .snapshot()
+                .active_agent_key_authorizations(agent)
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .projection_events()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_timeline_batch_conflict_rolls_back_every_new_member() {
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
+        let realm = "ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP";
+        let actor = "did:web:alice.example";
+        let mut timeline = Vec::new();
+        for sequence in 1..=2 {
+            let record = canonical_projection_source_event(
+                realm,
+                actor,
+                sequence,
+                arkret_wire::EventKind::AgentKeyAuthorize,
+                serde_json::json!({"agent_id":actor,"key_id":format!("{actor}#key-{sequence}")}),
+                chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
+                    .unwrap(),
+            );
+            let event: arkret_wire::Event =
+                serde_json::from_value(record.envelope.clone()).unwrap();
+            timeline.push(soland_storage::ProjectionEventRecord {
+                event_id: record.event_id.clone(),
+                realm_id: realm.to_owned(),
+                event_kind: event.kind.to_string(),
+                operation_kind: "create".to_owned(),
+                operation_id: None,
+                sender: Some(event.actor_id.to_string()),
+                payload: serde_json::to_value(event.payload).unwrap(),
+                created_at: event.created_at,
+                received_at: record.received_at,
+            });
+            store.events().put(record).await.unwrap();
+        }
+        let mut poisoned = timeline[1].clone();
+        poisoned.payload = serde_json::json!({"different":"immutable output"});
+        store
+            .projection_events()
+            .append(poisoned.clone())
+            .await
+            .unwrap();
+        assert!(
+            store
+                .projection_events()
+                .append_batch(timeline.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .projection_events()
+                .get(&timeline[0].event_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "failure after first insertion must roll it back"
+        );
+        let outcomes = store
+            .projection_events()
+            .append_batch(vec![timeline[0].clone(), poisoned.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            outcomes,
+            vec![
+                soland_storage::ProjectionEventAppendOutcome::Inserted,
+                soland_storage::ProjectionEventAppendOutcome::AlreadyExists
+            ]
+        );
+        assert_eq!(
+            store
+                .projection_events()
+                .append_batch(vec![timeline[0].clone(), poisoned])
+                .await
+                .unwrap(),
+            vec![soland_storage::ProjectionEventAppendOutcome::AlreadyExists; 2]
         );
     }
 

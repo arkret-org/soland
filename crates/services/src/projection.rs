@@ -165,6 +165,7 @@ pub struct ProjectionService {
     cell_registry: Arc<dyn CellStateRegistry>,
     event_seal_committer: Arc<dyn EventSealCommitPort>,
     control_decision_commit_lock: Arc<AsyncMutex<()>>,
+    confirmed_projection_lock: Arc<AsyncMutex<()>>,
     history_authority_view_cas_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
 }
@@ -404,6 +405,7 @@ impl ProjectionService {
             cell_registry,
             event_seal_committer,
             control_decision_commit_lock: Arc::new(AsyncMutex::new(())),
+            confirmed_projection_lock: Arc::new(AsyncMutex::new(())),
             history_authority_view_cas_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }

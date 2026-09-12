@@ -226,6 +226,13 @@ pub enum ProjectionEventAppendOutcome {
 }
 #[async_trait]
 pub trait ProjectionEventStore: Send + Sync {
+    /// Append a complete derived unit atomically. A conflict on any member
+    /// rolls back every insertion; exact retries preserve the original rows.
+    async fn append_batch(
+        &self,
+        records: Vec<ProjectionEventRecord>,
+    ) -> PersistenceResult<Vec<ProjectionEventAppendOutcome>>;
+
     async fn append(
         &self,
         record: ProjectionEventRecord,
