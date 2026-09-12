@@ -483,32 +483,18 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     let control_event_set_root =
         arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
             .unwrap();
-    let listed = delta
-        .iter()
-        .enumerate()
-        .map(|(index, event_digest)| arkret_state::ListedControlEvent {
-            actor_id: notary_op.issuer_id.clone(),
-            actor_seq: u64::try_from(index + 1).unwrap(),
-            event_digest: event_digest.clone(),
-        })
-        .collect::<Vec<_>>();
-    let completeness_root = arkret_state::control_event_completeness_root_from_listed(
-        &listed,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap();
-    let seal = arkret_wire::Seal::sign_single_with_roots(
+    let seal = soland_test_support::sign_test_seal(
+        state,
         realm.clone(),
-        Vec::new(),
+        None,
         delta,
         control_event_set_root,
-        completeness_root,
         state_root,
         arkret_identifiers::Hlc::new("0196419b0000-0000-a11ce001").unwrap(),
         arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
-    .unwrap();
+    .await;
     state
         .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
         .await

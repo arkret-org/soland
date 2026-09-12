@@ -112,7 +112,7 @@ async fn current_history_basis(
 ) -> Result<arkret_wire::SealBasis, AppError> {
     let mut leaves = state
         .projections()
-        .realm_seal_leaves(scope.realm_id())
+        .realm_seal_basis_leaves(scope.realm_id())
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     leaves.sort();
@@ -613,6 +613,7 @@ async fn resolve_self_seals(
             &request.realm_id,
             conclusion_queries,
             &retained_seals,
+            ordinary_visible,
         )
         .await;
     };
@@ -685,6 +686,7 @@ async fn resolve_peer_seals(
             &request.realm_id,
             conclusion_queries,
             &retained_seals,
+            ordinary_visible,
         )
         .await;
     };
@@ -781,6 +783,7 @@ async fn seal_conclusion_outcome(
     realm_id: &arkret_wire::RealmId,
     queries: &[arkret_wire::SealConclusionQuery],
     retained_seals: &[arkret_wire::Seal],
+    ordinary_visible: bool,
 ) -> JsonResult<SealResolveOutcome> {
     let retained = retained_seals
         .iter()
@@ -795,12 +798,12 @@ async fn seal_conclusion_outcome(
         local_descriptor.verification_method.clone(),
     );
     let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-    let active_heads = state
+    let active_head = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_head(realm_id)
         .await
         .map_err(|error| AppError::internal(format!("conclusion authority head: {error}")))?;
-    let authority = if let [head] = active_heads.as_slice() {
+    let authority = if let Some(head) = active_head.as_ref() {
         state
             .projections()
             .seal_by_id(head)
@@ -816,16 +819,31 @@ async fn seal_conclusion_outcome(
             missing_conclusion_queries.push(query.clone());
             continue;
         };
-        let Some(target) = retained.get(&query.target_seal_ref) else {
+        let target = if let Some(target) = retained.get(&query.target_seal_ref) {
+            Some(target.clone())
+        } else if ordinary_visible {
+            state
+                .projections()
+                .seal_by_id(&query.target_seal_ref)
+                .await
+                .ok()
+                .flatten()
+                .filter(|seal| seal.realm_id == *realm_id)
+        } else {
+            None
+        };
+        let Some(target) = target else {
             missing_conclusion_queries.push(query.clone());
             continue;
         };
-        // Retention authorizes the retained Seal's metadata, not arbitrary Cell
+        // Ordinary Seal visibility and retention authorize Seal metadata, not arbitrary Cell
         // values, ranges or unit effects. Those require an operation-derived
         // exact disclosure grant, including for an unwritten Cell. The current
         // retained-cut API does not supply such a grant.
-        if !retained.contains_key(&authority.id)
-            || !retained_conclusion_query_is_disclosable(query, |id| retained.contains_key(id))
+        if (!ordinary_visible && !retained.contains_key(&authority.id))
+            || !retained_conclusion_query_is_disclosable(query, |id| {
+                ordinary_visible || retained.contains_key(id)
+            })
         {
             missing_conclusion_queries.push(query.clone());
             continue;
@@ -869,7 +887,7 @@ async fn seal_conclusion_outcome(
             continue;
         }
         let Ok(Some(results)) =
-            derive_seal_conclusion_results(state, target, &query.selectors).await
+            derive_seal_conclusion_results(state, &target, &query.selectors).await
         else {
             missing_conclusion_queries.push(query.clone());
             continue;
@@ -891,14 +909,7 @@ async fn seal_conclusion_outcome(
             missing_conclusion_queries.push(query.clone());
             continue;
         }
-        if state
-            .projections()
-            .realm_seal_leaves(realm_id)
-            .await
-            .ok()
-            .as_deref()
-            != Some(active_heads.as_slice())
-        {
+        if state.projections().realm_seal_head(realm_id).await.ok() != Some(active_head.clone()) {
             missing_conclusion_queries.push(query.clone());
             continue;
         }
@@ -2567,7 +2578,7 @@ async fn select_history_request_target(
 ) -> Result<arkret_wire::SealBasis, AppError> {
     let mut leaves = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_basis_leaves(realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     leaves.sort();
@@ -2603,7 +2614,7 @@ async fn build_member_history_retention(
     let target_basis = target_basis.clone();
     let target_closure = state
         .projections()
-        .seal_closure(&target_basis.leaves)
+        .seal_basis_closure(&target_basis.leaves)
         .await
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let cut = target_closure.into_iter().collect::<Vec<_>>();
@@ -3487,7 +3498,7 @@ async fn build_history_release_attestation(
     };
     let mut current_leaves = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_basis_leaves(realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     current_leaves.sort();
@@ -3925,13 +3936,13 @@ async fn build_history_recipient_authority_views(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut pcr_leaves = state
         .projections()
-        .realm_seal_leaves(&pcr_realm_id)
+        .realm_seal_basis_leaves(&pcr_realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     pcr_leaves.sort();
     let pcr_closure = state
         .projections()
-        .seal_closure(&pcr_leaves)
+        .seal_basis_closure(&pcr_leaves)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let authorize_is_currently_accepted = state
@@ -4029,7 +4040,7 @@ async fn validate_manifest_current_gate(
     };
     let target_closure = state
         .projections()
-        .seal_closure(&target_basis.leaves)
+        .seal_basis_closure(&target_basis.leaves)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     if trusted_history_base_basis

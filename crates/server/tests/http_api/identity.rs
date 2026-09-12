@@ -335,7 +335,8 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         principal_did.as_str(),
         soland_test_support::cbs_basis::FixtureBasis::shared(&[]),
     )
-    .await;
+    .await
+    .unwrap();
     let basis_seal = state
         .test_seal(&basis_seal_id)
         .await
@@ -462,9 +463,9 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
-    let (control_event_set_root, completeness_root) = soland_test_support::test_seal_roots(
+    let control_event_set_root = soland_test_support::test_control_event_set_root(
         state,
-        std::slice::from_ref(&basis_seal.id),
+        Some(&basis_seal.id),
         &[
             (genesis.clone(), arkret_canonical::DigestSuite::Sha256),
             (authorize.clone(), arkret_canonical::DigestSuite::Sha256),
@@ -472,19 +473,19 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         arkret_canonical::DigestSuite::Sha256,
     )
     .await
-    .unwrap();
-    let audit_seal = arkret_wire::Seal::sign_single_with_roots(
+    .expect("audit Seal control root");
+    let audit_seal = soland_test_support::sign_test_seal(
+        state,
         pcr_realm_id.clone(),
-        vec![basis_seal.id.clone()],
+        Some(basis_seal.id.clone()),
         audit_delta,
         control_event_set_root,
-        completeness_root,
         basis_seal.state_root.clone(),
         arkret_identifiers::Hlc::new("0196419b0000-0001-a11ce001").unwrap(),
         arkret_canonical::DigestSuite::Sha256,
         &audit_signer,
     )
-    .unwrap();
+    .await;
     state
         .test_projections()
         .test_put_seal(&audit_seal, arkret_canonical::DigestSuite::Sha256)

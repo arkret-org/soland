@@ -54,10 +54,9 @@ pub(crate) use soland_storage::{
     MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
     MlsWelcomeStore, ModerationStore, MorphProjectionRecord, MorphProjectionStore,
-    MultisigPendingRecord, MultisigPendingStore, NewSourceAdmission, NotificationStore,
-    OneTimeKeyStore, OrganizationRecord, OrganizationStore, OutboundPushBridgeCacheRecord,
-    PeerClaimTerminalTransition, PeerEventsPageQuery, PeerKeyPackageClaimAttempt,
-    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    NewSourceAdmission, NotificationStore, OneTimeKeyStore, OrganizationRecord, OrganizationStore,
+    OutboundPushBridgeCacheRecord, PeerClaimTerminalTransition, PeerEventsPageQuery,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult,
     PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
     ProjectionEventStore, PublicationEvidenceRecord, PublicationEvidenceStore,
@@ -81,11 +80,11 @@ pub(crate) use soland_storage::{
     decode_session_agent_payload, encode_session_payload, ensure_device_message_id, evaluate_drift,
     fresh_device_message_ack_token, frontier_exchange_failure_record,
     frontier_exchange_success_record, identity_anchor_slot_conflicts, mls_effective_scope_parts,
-    operation_uuid_index, optional_audit_uuid_index, partials_to_jsonb, registration_as_existing,
-    registrations_match, valid_new_service_registration_records,
-    validate_backup_erase_progress_initial, validate_backup_erase_progress_update,
-    validate_control_proposal_ack_binding, validate_security_transaction_step_accept,
-    validate_security_transaction_update, webvh_freshness_on_put,
+    operation_uuid_index, optional_audit_uuid_index, registration_as_existing, registrations_match,
+    valid_new_service_registration_records, validate_backup_erase_progress_initial,
+    validate_backup_erase_progress_update, validate_control_proposal_ack_binding,
+    validate_security_transaction_step_accept, validate_security_transaction_update,
+    webvh_freshness_on_put,
 };
 pub(crate) use uuid::Uuid;
 
@@ -129,7 +128,6 @@ mod mls;
 mod mls_public_state;
 mod mls_welcome_discovery;
 mod moderation;
-mod multisig;
 mod notifications;
 mod organization_registration;
 mod policy;
@@ -183,7 +181,6 @@ pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;
 pub use moderation::*;
-pub use multisig::*;
 pub use notifications::*;
 pub use organization_registration::*;
 pub use policy::*;

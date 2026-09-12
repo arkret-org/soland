@@ -506,9 +506,6 @@ impl soland_storage::EventProjectionStoreRegistry for FaultInjectingStore {
     fn key_backups(&self) -> &dyn soland_storage::KeyBackupStore {
         self.inner.key_backups()
     }
-    fn multisig_pending(&self) -> &dyn soland_storage::MultisigPendingStore {
-        self.inner.multisig_pending()
-    }
     fn space_container_projections(&self) -> &dyn soland_storage::SpaceContainerProjectionStore {
         self.inner.space_container_projections()
     }

@@ -1,14 +1,11 @@
 //! The accepted governance basis an integration-test Event has to cite.
 //!
-//! `event-auth-state-resolution.md` §4(1) makes a data-plane Event a DataEvent
-//! (`seal_ref` + `auth_context`, never `seal_basis`) and §5 makes a
-//! control-plane Event a Control Move (`seal_basis`, never `seal_ref` /
-//! `auth_context`). Both forms name a Seal, and for a DataEvent that Seal is
-//! not a token: §4.1(3) / §4.3(2) make the verifier resolve the actor's whole
-//! effective capability set from the state the Seal covers. soland does exactly
-//! that (`capability_refs.rs::data_event_state_at_seal_ref` →
-//! `arkret_state::effective_state_at`, which joins the cell log filtered by the
-//! Seal's covered Control-Move digests), so an empty Seal authorizes nothing.
+//! `event-auth-state-resolution.md` gives ordinary data-plane Events an
+//! `auth_context.authority_refs` set and gives Control Moves a cross-Realm
+//! `seal_basis`. Authority refs cite already-confirmed security decisions;
+//! they never require a fresh Seal for an ordinary Event. The verifier resolves
+//! the effective capability set at those confirmed decisions, so an empty
+//! authority closure authorizes nothing.
 //!
 //! A fixture Realm that is seeded straight into `AppState` — rather than
 //! bootstrapped through `ak.realm.create` over HTTP — therefore has to be given
@@ -162,7 +159,7 @@ pub fn realm_basis_for_station(
         .clone()
 }
 
-/// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
+/// The confirmed authority Seal a fixture Event cites.
 pub fn realm_basis_seal(
     state: &AppState,
     realm_id: &str,
@@ -176,7 +173,7 @@ pub fn realm_basis_seal(
 ///
 /// Federation disclosure is keyed off the transported Event, not off its actor:
 /// a `cbs_proof_bundles` entry has to be reachable from some transported
-/// `seal_ref` or `seal_basis.leaves` entry. So a fixture that re-authors an
+/// `auth_context.authority_refs` or `seal_basis.leaves` entry. So a fixture that re-authors an
 /// Event after the envelope was built has to disclose the Seal the envelope
 /// still names, whichever fixture family minted it.
 #[must_use]
@@ -325,8 +322,8 @@ pub fn fixture_principal_control_realm_create_for_server(
 
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
-/// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
-/// same Realm (`event-auth-state-resolution.md` §4.3(1)) **and** the governance
+/// Every DataEvent authority ref MUST resolve to a verified security Seal of the
+/// same Realm **and** the governance
 /// state that Seal covers MUST authorize the Event's derived writes, so both
 /// the Seal object and its sealed cell effects have to exist before the Event
 /// is admitted. The cell writes are OR-Set adds under a fixed tag, so repeating

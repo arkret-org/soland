@@ -445,19 +445,22 @@ fn quarantined_generation_event_digests_from_records(
         .collect()
 }
 
-pub async fn accepted_device_generation_seal_leaves(
+pub async fn accepted_device_generation_seal_head(
     state: &AppState,
     principal_id: &str,
     realm_id: &RealmId,
-) -> Result<Vec<SealId>, ServiceError> {
+) -> Result<Option<SealId>, ServiceError> {
     let quarantined = quarantined_generation_event_digests(state, principal_id).await?;
-    let raw_leaves = state
+    let mut head = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_head(realm_id)
         .await
         .map_err(|error| ServiceError::internal(format!("Seal frontier unavailable: {error}")))?;
+    if head.is_none() {
+        return Ok(None);
+    }
     if quarantined.is_empty() {
-        return Ok(raw_leaves);
+        return Ok(head);
     }
     let quarantined = quarantined
         .into_iter()
@@ -466,24 +469,22 @@ pub async fn accepted_device_generation_seal_leaves(
         .map_err(|error| {
             ServiceError::internal(format!("quarantined Event digest is invalid: {error}"))
         })?;
-    let mut accepted = BTreeSet::new();
-    let mut pending = raw_leaves;
     let mut visited = BTreeSet::new();
-    while let Some(seal_id) = pending.pop() {
+    while let Some(seal_id) = head {
         if !visited.insert(seal_id.clone()) {
-            continue;
+            return Err(ServiceError::internal(
+                "Seal predecessor chain contains a cycle",
+            ));
         }
         let coverage = state
             .projections()
-            .seal_leaf_union_proof(std::slice::from_ref(&seal_id))
+            .predecessor_covered_events(Some(&seal_id))
             .await
             .map_err(|error| ServiceError::internal(format!("Seal coverage unavailable: {error}")))?
             .into_iter()
-            .flat_map(|proof| proof.covered_event_digests)
             .collect::<BTreeSet<_>>();
         if coverage.is_disjoint(&quarantined) {
-            accepted.insert(seal_id);
-            continue;
+            return Ok(Some(seal_id));
         }
         let seal = state
             .projections()
@@ -491,37 +492,9 @@ pub async fn accepted_device_generation_seal_leaves(
             .await
             .map_err(|error| ServiceError::internal(format!("Seal lookup unavailable: {error}")))?
             .ok_or_else(|| ServiceError::internal(format!("Seal {seal_id} is missing")))?;
-        pending.extend(seal.predecessor_ref);
+        head = seal.predecessor_ref;
     }
-    let accepted_snapshot = accepted.iter().cloned().collect::<Vec<_>>();
-    for seal_id in accepted_snapshot {
-        let mut ancestors = state
-            .projections()
-            .seal_by_id(&seal_id)
-            .await
-            .map_err(|error| ServiceError::internal(format!("Seal lookup unavailable: {error}")))?
-            .map(|seal| seal.predecessor_ref)
-            .unwrap_or_default();
-        let mut seen = BTreeSet::new();
-        while let Some(ancestor) = ancestors.take() {
-            if !seen.insert(ancestor.clone()) {
-                continue;
-            }
-            accepted.remove(&ancestor);
-            if let Some(seal) =
-                state
-                    .projections()
-                    .seal_by_id(&ancestor)
-                    .await
-                    .map_err(|error| {
-                        ServiceError::internal(format!("Seal lookup unavailable: {error}"))
-                    })?
-            {
-                ancestors = seal.predecessor_ref;
-            }
-        }
-    }
-    Ok(accepted.into_iter().collect())
+    Ok(None)
 }
 
 #[cfg(test)]

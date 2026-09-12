@@ -224,7 +224,7 @@ async fn bind_pair_authorize_predecessor(
     .expect("fixture principal control Realm");
     let leaves = state
         .test_projections()
-        .realm_seal_leaves(&realm_id)
+        .realm_seal_basis_leaves(&realm_id)
         .await
         .expect("fixture principal control Realm frontier");
     body["authorize_event"]["event"]["prev_refs"] = serde_json::json!([predecessor]);

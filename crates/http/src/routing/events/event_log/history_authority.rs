@@ -56,7 +56,7 @@ pub(super) async fn read(
     // The accepted stores own this traversal. No closure is sent to a client.
     let closure = state
         .projections()
-        .seal_closure(&query.seal_basis.leaves)
+        .seal_basis_closure(&query.seal_basis.leaves)
         .await
         .map_err(unavailable)?;
     let mut event_digests = BTreeSet::new();

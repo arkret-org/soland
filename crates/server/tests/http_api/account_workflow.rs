@@ -93,26 +93,26 @@ async fn seal_accepted_invite_create(
         event.created_at.timestamp_millis().max(0) as u64 + 1
     ))
     .expect("invite successor HLC");
-    let (control_event_set_root, completeness_root) = soland_test_support::test_seal_roots(
+    let control_event_set_root = soland_test_support::test_control_event_set_root(
         state,
-        &predecessor_basis.leaves,
+        predecessor_basis.leaves.first(),
         &[(event.clone(), record.digest_suite)],
         arkret_canonical::DigestSuite::Sha256,
     )
     .await
     .expect("accepted invite successor Seal roots");
-    let seal = arkret_wire::Seal::sign_single_with_roots(
+    let seal = soland_test_support::sign_test_seal(
+        state,
         event.realm_id.clone(),
-        predecessor_basis.leaves.clone(),
+        predecessor_basis.leaves.first().cloned(),
         vec![move_id],
         control_event_set_root,
-        completeness_root,
         state_root,
         hlc,
         arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
-    .expect("accepted invite successor Seal");
+    .await;
     state
         .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
         .await

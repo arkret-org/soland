@@ -115,7 +115,7 @@ pub async fn seal_accepted_capability_grant(
     );
     let control_event_set_root = crate::test_control_event_set_root(
         state,
-        &predecessors,
+        predecessors.first(),
         &[(event.clone(), record.digest_suite)],
         arkret_canonical::DigestSuite::Sha256,
     )

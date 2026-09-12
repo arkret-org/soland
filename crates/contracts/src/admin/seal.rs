@@ -43,32 +43,11 @@ impl AdminNotaryValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct SubmitControlMoveOutcome {
-    pub control_move_id: String,
-    #[serde(default)]
-    pub accepted: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seal_id: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub status: String,
-    #[serde(default, skip_serializing_if = "Value::is_null")]
-    pub control_move_body: Value,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct BottomCandidateHead {
     pub event_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuer_id: Option<arkret_wire::DidCoreId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hlc: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -78,46 +57,12 @@ pub struct BottomEntry {
     pub cell_id: String,
     pub kind: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub event_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detected_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_heads: Vec<BottomCandidateHead>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-#[serde(tag = "strategy", rename_all = "snake_case")]
-pub enum BottomRepairStrategy {
-    HeadInWinner {
-        head: BottomCandidateHead,
-        recovery_capability_ref: String,
-        state_witness_ref: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        state_witness_inclusion_proof_ref: Option<String>,
-    },
-}
-
-impl BottomRepairStrategy {
-    pub fn label(&self) -> &'static str {
-        match self {
-            BottomRepairStrategy::HeadInWinner { .. } => "head_in_winner",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct BottomRepairRequestBody {
-    #[serde(flatten)]
-    pub strategy: BottomRepairStrategy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct SealLeaf {
+pub struct SealHead {
     pub seal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
@@ -133,55 +78,16 @@ pub struct SealLeaf {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct SealDagSnapshot {
+pub struct SealChainSnapshot {
     pub realm_id: String,
-    pub leaves: Vec<SealLeaf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<SealHead>,
     #[serde(default)]
     pub covered_event_digests: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_compaction_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct MultisigPendingEntry {
-    pub seal_id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub realm_id: String,
-    pub threshold_k: u32,
-    pub threshold_n: u32,
-    pub collected_partials: u32,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub signers: Vec<String>,
-    pub missing_signers: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state_root: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub admin_can_sign: bool,
-}
-
-impl MultisigPendingEntry {
-    pub fn remaining(&self) -> u32 {
-        self.threshold_k.saturating_sub(self.collected_partials)
-    }
-
-    pub fn is_threshold_met(&self) -> bool {
-        self.collected_partials >= self.threshold_k
-    }
-
-    pub fn threshold_label(&self) -> String {
-        format!("{} of {}", self.threshold_k, self.threshold_n)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct MultisigPendingOutcome {
-    pub entries: Vec<MultisigPendingEntry>,
 }
 
 pub trait BottomKindExt {

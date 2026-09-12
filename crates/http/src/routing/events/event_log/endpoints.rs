@@ -44,7 +44,7 @@ pub(crate) async fn realm_seal_frontier_observation_coordinate(
     )
 }
 
-/// Materialize the serving service's durable current accepted Seal antichain
+/// Materialize the serving service's durable current accepted Seal head
 /// for an already-authorized caller. Visibility checks stay at the self/peer
 /// transport boundary.
 pub(crate) async fn load_realm_seal_frontier(
@@ -52,26 +52,25 @@ pub(crate) async fn load_realm_seal_frontier(
     realm_id: &RealmId,
 ) -> Result<arkret_models_collaboration::event_sync::RealmSealFrontierView, AppError> {
     // The durable accepted Seal store is written by the admission/commit path.
-    // Discovery reuses that result; it does not replay all canonical Events or
-    // collapse an open-set antichain to an arbitrarily selected single head.
-    let leaves = state
+    // Discovery reuses that result; it does not replay all canonical Events.
+    let head = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_head(realm_id)
         .await
         .map_err(|error| AppError::internal(format!("accepted frontier unavailable: {error}")))?;
-    if leaves.is_empty() {
+    let Some(head) = head else {
         return Err(crate::app_error!(
             FrontierUnavailable,
             "Realm has no accepted Seal"
         ));
-    }
-    let seal_basis = arkret_wire::SealBasis { leaves };
+    };
+    let seal_basis = arkret_wire::SealBasis { leaves: vec![head] };
     seal_basis
         .validate_protocol_bounds()
         .map_err(|error| AppError::internal(format!("invalid accepted frontier: {error}")))?;
     let live_digest_suite = state
         .projections()
-        .predecessor_digest_suite(realm_id, &seal_basis.leaves)
+        .seal_basis_digest_suite(realm_id, &seal_basis.leaves)
         .await
         .map_err(|error| {
             AppError::internal(format!(
@@ -323,7 +322,7 @@ async fn pcr_pending_control(
     require_pcr_controller(state, &actor, &request.realm_id).await?;
     let mut before = state
         .projections()
-        .realm_seal_leaves(&request.realm_id)
+        .realm_seal_basis_leaves(&request.realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     before.sort();
@@ -347,7 +346,7 @@ async fn pcr_pending_control(
     event_digests.sort();
     let mut after = state
         .projections()
-        .realm_seal_leaves(&request.realm_id)
+        .realm_seal_basis_leaves(&request.realm_id)
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     after.sort();
@@ -464,7 +463,7 @@ async fn prepare_pcr_seal(
 
     let mut current = state
         .projections()
-        .realm_seal_leaves(&request.realm_id)
+        .realm_seal_basis_leaves(&request.realm_id)
         .await
         .map_err(|error| AppError::internal(format!("Seal frontier unavailable: {error}")))?;
     current.sort();
@@ -476,7 +475,7 @@ async fn prepare_pcr_seal(
     }
     let predecessor_covered = state
         .projections()
-        .predecessor_covered_events(std::slice::from_ref(&request.predecessor_ref))
+        .predecessor_covered_events(Some(&request.predecessor_ref))
         .await
         .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let mut events = Vec::with_capacity(request.event_digests.len());
@@ -510,7 +509,7 @@ async fn prepare_pcr_seal(
         .projections()
         .seal_digest_suites_for_delta(
             &request.realm_id,
-            std::slice::from_ref(&request.predecessor_ref),
+            Some(&request.predecessor_ref),
             &request.event_digests,
         )
         .await
@@ -526,7 +525,7 @@ async fn prepare_pcr_seal(
         .issue_availability_dependencies(
             state,
             &request.realm_id,
-            std::slice::from_ref(&request.predecessor_ref),
+            Some(&request.predecessor_ref),
             &predecessor_state,
             &predecessor_covered.iter().cloned().collect::<Vec<_>>(),
             &events,
@@ -562,7 +561,6 @@ async fn prepare_pcr_seal(
         .collect::<Vec<_>>();
     availability_receipt_digests.sort();
     let outcome = SealPrepareOutcome {
-        view: 0,
         seal_body: worker
             .prepare_pcr_seal_body(
                 state,
@@ -573,6 +571,7 @@ async fn prepare_pcr_seal(
             )
             .await
             .map_err(|error| crate::app_error!(StateMismatch, error.to_string()))?,
+        view: 0,
     };
     outcome.validate_for_request(&request).map_err(|error| {
         AppError::internal(format!(
@@ -1534,7 +1533,7 @@ async fn seals_frontier(
             realm_seal_frontier_observation_coordinate(state, &realm_id).await?;
         let live_digest_suite = state
             .projections()
-            .predecessor_digest_suite(&realm_id, std::slice::from_ref(&seal.id))
+            .predecessor_digest_suite(&realm_id, &seal.id)
             .await
             .map_err(|error| {
                 AppError::internal(format!(

@@ -18,8 +18,8 @@ use soland_test_support::AppStateTestExt as _;
 /// The data-plane actions this suite's DataEvents exercise.
 ///
 /// `capability_refs.rs::validate_data_event_capability_refs` decides coverage
-/// per receiver-derived cell over the effective grants the governance basis at
-/// `seal_ref` yields for the actor, so the fixture basis has to name every
+/// per receiver-derived cell over the effective grants referenced by
+/// `auth_context.authority_refs`, so the fixture basis has to name every
 /// data-plane kind this suite submits and nothing beyond it. None of them are
 /// reachable from the owner bootstrap grant: `ak.realm.admin`'s registry
 /// `target_event_kinds` are Realm-facet Control Moves only.
@@ -786,9 +786,9 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     // bootstrapping it through `ak.realm.create`, so the Realm owns no sealed
     // governance state of its own. Every reducer-input Event still has to be a
     // DataEvent or a Control Move (`event-auth-state-resolution.md` §5), and a
-    // DataEvent's `seal_ref` has to resolve to a Seal whose covered state
-    // authorizes the receiver-derived writes — so the genesis unit is sealed
-    // here, per author, before the envelope names it.
+    // DataEvent's `auth_context.authority_refs` have to resolve to governance
+    // state that authorizes the receiver-derived writes, so the genesis unit
+    // is sealed here per author before the envelope names it.
     let fixture_basis =
         soland_test_support::cbs_basis::FixtureBasis::shared(&DATA_PLANE_GRANT_ACTIONS);
     soland_test_support::cbs_basis::seed_realm_basis(state, realm_id, actor_id, fixture_basis)

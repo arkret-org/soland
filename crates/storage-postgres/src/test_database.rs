@@ -358,8 +358,8 @@ fn configured_max_slots() -> u32 {
 /// honour the storage contracts, share one database, and each claims fresh
 /// identifiers instead of leasing a slot. Four copies of this function used to
 /// live in `store_contracts.rs`, `durable_plane_restart.rs`, `account_status.rs`
-/// and `multisig.rs`, and all four read `DATABASE_URL` alone -- so running the
-/// suite the way this module documents (`SOLAND_TEST_DATABASE_URL`, which
+/// and the former threshold-signature store tests, and all four read `DATABASE_URL` alone -- so
+/// running the suite the way this module documents (`SOLAND_TEST_DATABASE_URL`, which
 /// [`configured_url`] prefers) produced 48 hard failures whose message told you
 /// to set the other variable. One resolver, both variables, one message.
 ///

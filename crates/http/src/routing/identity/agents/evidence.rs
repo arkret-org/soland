@@ -12,7 +12,7 @@ use arkret_models_collaboration::governance_dependencies::{
 use arkret_models_identity::AuthenticatedSignerResolutionEvidence;
 use arkret_models_identity::agent_signer_evidence::{
     AGENT_KEY_COMPONENT, AGENT_STATUS_COMPONENT, AgentAdmissionEvidence, AgentAuthorityState,
-    AgentAuthorityStateEvidence, AgentAuthorityStateLease, AgentAuthorizationEvidence,
+    AgentAuthorityStateAttestation, AgentAuthorityStateEvidence, AgentAuthorizationEvidence,
     AgentAuthorizationStateWitness, AgentAuthorizationStatus, AgentDetachedJws, AgentKeyCellEntry,
     AgentLifecycleProvenance, AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence,
     ControllerAccountGateAttestation, ControllerAccountGateAttestationIssueOutcome,
@@ -284,22 +284,6 @@ async fn assemble_current_agent_signer_evidence(
             tracing::warn!(?reason, "Agent current evidence state assembly failed");
             reason
         })
-}
-
-pub(crate) async fn freeze_current_agent_signer_evidence(
-    state: &AppState,
-    selector: &AgentSignerEvidenceQuerySelector,
-) -> Result<(arkret_wire::SignerEvidenceRef, Hash), AppError> {
-    let (root, _dependencies) = current_authenticated_agent_signer_evidence(state, selector)
-        .await
-        .map_err(|reason| AppError::internal(format!("{reason:?}")))?;
-    let digest = root
-        .canonical_sha256_digest()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let reference = root
-        .evidence_ref()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok((reference, digest))
 }
 
 pub(crate) fn current_agent_evidence_delivery(
@@ -925,117 +909,6 @@ pub(crate) async fn fetch_service_signer_evidence(
 
 /// Classify the actual signing principal from its retained producer evidence, including
 /// Agent execution on another actor's behalf.
-pub(crate) async fn event_has_agent_signer(
-    state: &AppState,
-    event: &Event,
-) -> Result<bool, String> {
-    let [producer] = event.proofs.as_slice() else {
-        return Err("accepted Event does not contain exactly one producer proof".to_owned());
-    };
-    let reference = producer
-        .signer_resolution_evidence_ref
-        .as_ref()
-        .ok_or_else(|| {
-            "ordinary Event producer proof has no signer evidence reference".to_owned()
-        })?;
-    let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-        content_digest: reference
-            .content_digest()
-            .map_err(|error| error.to_string())?,
-    };
-    let dependency = retained_signer_dependency(state, event, &selector).await?;
-    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        authenticated_signer_resolution_evidence: root,
-        ..
-    } = dependency
-    else {
-        return Err("producer signer dependency has wrong kind".to_owned());
-    };
-    if root.evidence_ref().map_err(|error| error.to_string())? != *reference
-        || root.verification_method() != &producer.verification_method
-        || root.signer_id()
-            != event
-                .executed_by
-                .as_ref()
-                .unwrap_or(&event.actor_id)
-                .signing_principal_id()
-    {
-        return Err("retained producer signer identity mismatch".to_owned());
-    }
-    if !matches!(*root, AuthenticatedSignerResolutionEvidence::Agent { .. }) {
-        return Ok(false);
-    }
-    let mut pending = arkret_models_collaboration::governance_dependencies::governance_attester_evidence_selectors(
-        std::slice::from_ref(root.as_ref()),
-    ).map_err(|error| error.to_string())?;
-    let mut seen = std::collections::BTreeSet::new();
-    while let Some(selector) = pending.pop() {
-        let GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest } =
-            &selector
-        else {
-            return Err("Agent signer dependency has wrong selector kind".to_owned());
-        };
-        if !seen.insert(content_digest.clone()) {
-            continue;
-        }
-        if seen.len() > 64 {
-            return Err("Agent signer dependency closure exceeds its limit".to_owned());
-        }
-        let dependency = retained_signer_dependency(state, event, &selector).await?;
-        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-            authenticated_signer_resolution_evidence: leaf,
-            ..
-        } = dependency
-        else {
-            return Err("Agent signer dependency has wrong kind".to_owned());
-        };
-        pending.extend(arkret_models_collaboration::governance_dependencies::governance_attester_evidence_selectors(
-            std::slice::from_ref(leaf.as_ref()),
-        ).map_err(|error| error.to_string())?);
-    }
-    Ok(true)
-}
-
-async fn retained_signer_dependency(
-    state: &AppState,
-    event: &Event,
-    selector: &GovernanceDependencySelector,
-) -> Result<GovernanceDependency, String> {
-    let store = state.persistence().governance_dependency_store();
-    if let Some(item) = store
-        .get_unscoped_signer_evidence(selector)
-        .await
-        .map_err(|error| error.to_string())?
-    {
-        return Ok(item);
-    }
-    let item = store
-        .get(&event.realm_id, selector)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "retained producer signer evidence is missing".to_owned())?;
-    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        selector: actual_selector,
-        authenticated_signer_resolution_evidence: evidence,
-    } = &item
-    else {
-        return Err("retained signer dependency has wrong kind".to_owned());
-    };
-    let expected = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-        content_digest: evidence
-            .canonical_sha256_digest()
-            .map_err(|error| error.to_string())?,
-    };
-    if actual_selector != selector || expected != *selector {
-        return Err("retained signer dependency digest mismatch".to_owned());
-    }
-    store
-        .put_unscoped_signer_evidence_exact(item.clone())
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(item)
-}
-
 async fn persist_agent_signer_evidence_closure(
     state: &AppState,
     root: &AuthenticatedSignerResolutionEvidence,
@@ -1336,7 +1209,7 @@ async fn produce_current_agent_signer_evidence(
 
     let closure = state
         .projections()
-        .seal_closure(std::slice::from_ref(&frontier.id))
+        .seal_basis_closure(std::slice::from_ref(&frontier.id))
         .await
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     if !closure.contains(&key_seal.id) || !closure.contains(&lifecycle_seal.id) {
@@ -1438,7 +1311,7 @@ async fn produce_current_agent_signer_evidence(
     let mut authority_state_evidence = AgentAuthorityStateEvidence {
         state: core,
         state_digest: state_digest.clone(),
-        lease: AgentAuthorityStateLease {
+        attestation: AgentAuthorityStateAttestation {
             authority_kind: non_empty("agent_authority")?,
             authority_id: service_id.clone(),
             verification_method: authority_method.clone(),
@@ -1449,25 +1322,25 @@ async fn produce_current_agent_signer_evidence(
         },
     };
     {
-        let mut leases = state.agent_evidence_cache.state_leases.lock();
-        leases.retain(|_, lease| lease.expires_at > now);
+        let mut attestations = state.agent_evidence_cache.state_attestations.lock();
+        attestations.retain(|_, attestation| attestation.expires_at > now);
         let key = (state_digest.clone(), authority_method.clone());
-        if let Some(lease) = leases.get(&key)
-            && lease.issued_at <= now
-            && now < lease.expires_at
-            && lease.expires_at <= expires_at
+        if let Some(attestation) = attestations.get(&key)
+            && attestation.issued_at <= now
+            && now < attestation.expires_at
+            && attestation.expires_at <= expires_at
         {
-            authority_state_evidence.lease = lease.clone();
+            authority_state_evidence.attestation = attestation.clone();
         } else {
-            arkret_signatures::agent_evidence::sign_agent_authority_state_lease(
-                &mut authority_state_evidence.lease,
+            arkret_signatures::agent_evidence::sign_agent_authority_state_attestation(
+                &mut authority_state_evidence.attestation,
                 state.notary_signing_key().as_ref(),
             )
             .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-            if leases.len() >= 4096 {
-                leases.pop_first();
+            if attestations.len() >= 4096 {
+                attestations.pop_first();
             }
-            leases.insert(key, authority_state_evidence.lease.clone());
+            attestations.insert(key, authority_state_evidence.attestation.clone());
         }
     }
     let admission_evidence_digest =

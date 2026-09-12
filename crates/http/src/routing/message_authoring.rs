@@ -191,7 +191,7 @@ async fn prepare(
     .await?;
     let mut leaves = state
         .projections()
-        .realm_seal_leaves(&body.realm_id)
+        .realm_seal_basis_leaves(&body.realm_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
     leaves.sort();
@@ -258,7 +258,7 @@ async fn prepare(
     let mut failure = None;
     let suite = state
         .projections()
-        .predecessor_digest_suite(&body.realm_id, std::slice::from_ref(authority_ref))
+        .predecessor_digest_suite(&body.realm_id, authority_ref)
         .await
         .map_err(|e| AppError::new(ErrorCode::FrontierUnavailable, e.to_string()))?;
     for authority in &authorities {

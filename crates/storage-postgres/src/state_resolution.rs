@@ -109,11 +109,11 @@ pub trait EventSealCommitStore: Send + Sync {
         clippy::too_many_arguments,
         reason = "the transaction boundary keeps every frontier precondition and durable write explicit"
     )]
-    async fn commit_if_frontier(
+    async fn commit_if_head(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
+        expected_store_head: Option<&SealId>,
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
@@ -1665,72 +1665,13 @@ impl SealStore for PgSealStore {
         })
     }
 
-    async fn put(
+    async fn put_if_head(
         &self,
         seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        seal.validate_id(digest_suite)
-            .map_err(|error| StoreError::Conflict(error.to_string()))?;
-        let pool = self.pool.clone();
-        let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
-        let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
-            StoreError::Backend(format!("Seal ID canonical encoding failed: {error}"))
-        })?;
-        let accepted_seal_bytes =
-            arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
-                StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
-            })?;
-        let predecessor_ref = seal_predecessor_ref_value(seal);
-        let id = seal.id.as_str().to_owned();
-        let error_id = id.clone();
-        let realm_id = seal.realm_id.as_str().to_owned();
-        let is_genesis = seal.predecessor_ref.is_none();
-        let outcome = await_store!(async move {
-            let mut conn = pg_conn(&pool).await?;
-            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
-                lock_seal_identity(conn, &id).await?;
-                let insert = StateSealInsert {
-                    id: &id,
-                    digest_suite,
-                    realm_id: &realm_id,
-                    seal_id_preimage_bytes: &seal_id_preimage_bytes,
-                    accepted_seal_bytes: &accepted_seal_bytes,
-                    seal_json: &seal_json,
-                    predecessor_ref: predecessor_ref.as_deref(),
-                    is_genesis,
-                };
-                let outcome = preflight_state_seal(conn, &insert).await?;
-                if outcome == SealInsertOutcome::Inserted {
-                    lock_seal_realm(conn, &realm_id).await?;
-                    if realm_has_seal_collision(conn, &realm_id).await? {
-                        return Err(StoreError::Conflict(format!(
-                            "seal_collision_quarantine: Realm {realm_id} is blocked"
-                        ))
-                        .into());
-                    }
-                    insert_new_state_seal(conn, &insert).await?;
-                }
-                Ok(outcome)
-            })
-            .await
-            .map_err(EventSealCommitError::into_store)
-        })?;
-        if outcome == SealInsertOutcome::Collision {
-            return Err(StoreError::Conflict(format!(
-                "seal_hash_collision: Seal {error_id} is quarantined"
-            )));
-        }
-        Ok(())
-    }
-
-    async fn put_if_frontier(
-        &self,
-        seal: &Seal,
-        expected_leaves: &[SealId],
+        expected_head: Option<&SealId>,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<bool> {
-        if seal.predecessor_ref.as_slice() != expected_leaves {
+        if seal.predecessor_ref.as_ref() != expected_head {
             return Err(StoreError::Conflict(
                 "Seal predecessor_ref does not match the expected accepted Seal".to_owned(),
             ));
@@ -1751,10 +1692,7 @@ impl SealStore for PgSealStore {
         let error_id = id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
         let is_genesis = seal.predecessor_ref.is_none();
-        let expected = expected_leaves
-            .iter()
-            .map(|leaf| leaf.as_str().to_owned())
-            .collect::<BTreeSet<_>>();
+        let expected = expected_head.map(|head| head.as_str().to_owned());
         let outcome = await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
@@ -1798,10 +1736,16 @@ impl SealStore for PgSealStore {
                 .bind::<Text, _>(&realm_id)
                 .load::<TextRow>(&mut *conn)
                 .await?;
-                let actual = rows
-                    .into_iter()
-                    .map(|row| row.value)
-                    .collect::<BTreeSet<_>>();
+                let actual = match rows.as_slice() {
+                    [] => None,
+                    [row] => Some(row.value.clone()),
+                    _ => {
+                        return Err(StoreError::Conflict(format!(
+                            "seal_chain_fork: Realm {realm_id} has multiple confirmed heads"
+                        ))
+                        .into());
+                    }
+                };
                 if actual != expected {
                     return Ok(SealInsertOutcome::FrontierMismatch);
                 }
@@ -1868,7 +1812,7 @@ impl SealStore for PgSealStore {
         })
     }
 
-    async fn list_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
+    async fn confirmed_head(&self, realm_id: &RealmId) -> StoreResult<Option<SealId>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         await_store!(async move {
@@ -1900,38 +1844,37 @@ impl SealStore for PgSealStore {
             .load::<TextRow>(&mut *conn)
             .await
             .map_err(diesel_to_store)?;
-            rows.into_iter()
-                .map(|row| {
-                    SealId::new(row.value).map_err(|error| StoreError::Backend(error.to_string()))
-                })
-                .collect()
+            match rows.as_slice() {
+                [] => Ok(None),
+                [row] => SealId::new(row.value.clone())
+                    .map(Some)
+                    .map_err(|error| StoreError::Backend(error.to_string())),
+                _ => Err(StoreError::Conflict(format!(
+                    "seal_chain_fork: Realm {realm_id} has multiple confirmed heads"
+                ))),
+            }
         })
     }
 
-    async fn predecessors_known(&self, refs: &[SealId]) -> StoreResult<bool> {
-        if refs.is_empty() {
+    async fn predecessor_known(&self, predecessor_ref: Option<&SealId>) -> StoreResult<bool> {
+        let Some(predecessor_ref) = predecessor_ref else {
             return Ok(true);
-        }
+        };
         let pool = self.pool.clone();
-        let refs: Vec<String> = refs.iter().map(|id| id.as_str().to_owned()).collect();
+        let id = predecessor_ref.as_str().to_owned();
         await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
-            for id in refs {
-                let count = sql_query(
-                    "SELECT COUNT(*) AS value FROM state_seals s WHERE s.id = $1 \
-                     AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
-                                     WHERE q.seal_id = s.id)",
-                )
-                .bind::<Text, _>(&id)
-                .get_result::<CountRow>(&mut *conn)
-                .await
-                .map_err(diesel_to_store)?
-                .value;
-                if count == 0 {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
+            let count = sql_query(
+                "SELECT COUNT(*) AS value FROM state_seals s WHERE s.id = $1 \
+                 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                 WHERE q.seal_id = s.id)",
+            )
+            .bind::<Text, _>(&id)
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .map_err(diesel_to_store)?
+            .value;
+            Ok(count == 1)
         })
     }
 
@@ -1991,16 +1934,16 @@ impl SealStore for PgSealStore {
 
 #[async_trait]
 impl EventSealCommitStore for PgEventSealCommitStore {
-    async fn commit_if_frontier(
+    async fn commit_if_head(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
+        expected_store_head: Option<&SealId>,
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
-        if seal.predecessor_ref.as_slice() != expected_store_frontier {
+        if seal.predecessor_ref.as_ref() != expected_store_head {
             return Err(StoreError::Conflict(
                 "Seal predecessor_ref does not match the expected accepted Seal".to_owned(),
             ));
@@ -2054,10 +1997,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         let sealed_at = seal.sealed_at;
         let declared_state_root = seal.state_root.clone();
         let is_genesis = seal.predecessor_ref.is_none();
-        let expected = expected_store_frontier
-            .iter()
-            .map(|leaf| leaf.as_str().to_owned())
-            .collect::<BTreeSet<_>>();
+        let expected = expected_store_head.map(|head| head.as_str().to_owned());
         let covered = covered
             .iter()
             .map(|digest| digest.as_str().to_owned())
@@ -2171,7 +2111,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     ))
                     .into());
                 }
-                let leaves = sql_query(
+                let heads = sql_query(
                     "SELECT parent.id AS value \
                      FROM state_seals parent \
                      WHERE parent.realm_id = $1 \
@@ -2191,8 +2131,18 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 .await?
                 .into_iter()
                 .map(|row| row.value)
-                .collect::<BTreeSet<_>>();
-                if leaves != expected {
+                .collect::<Vec<_>>();
+                let actual = match heads.as_slice() {
+                    [] => None,
+                    [head] => Some(head.clone()),
+                    _ => {
+                        return Err(StoreError::Conflict(format!(
+                            "seal_chain_fork: Realm {realm_id} has multiple confirmed heads"
+                        ))
+                        .into());
+                    }
+                };
+                if actual != expected {
                     return Ok(SealInsertOutcome::FrontierMismatch);
                 }
                 let existing_ops = sql_query(
@@ -2469,17 +2419,17 @@ impl EventSealCommitStore for PgEventSealCommitStore {
 
 #[async_trait]
 impl EventSealCommitStore for MemoryEventSealCommitStore {
-    async fn commit_if_frontier(
+    async fn commit_if_head(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
+        expected_store_head: Option<&SealId>,
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock().await;
-        if seal.predecessor_ref.as_slice() != expected_store_frontier {
+        if seal.predecessor_ref.as_ref() != expected_store_head {
             return Err(StoreError::Conflict(
                 "Seal predecessor_ref does not match the expected accepted Seal".to_owned(),
             ));
@@ -2518,23 +2468,14 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             }
             return Ok(true);
         }
-        let actual = self
-            .seal_store
-            .list_leaves(&seal.realm_id)
-            .await?
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let expected = expected_store_frontier
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if actual != expected {
+        let actual = self.seal_store.confirmed_head(&seal.realm_id).await?;
+        if actual.as_ref() != expected_store_head {
             return Ok(false);
         }
         let mut checkpoint_seals = BTreeSet::from([seal.id.clone()]);
         {
             let checkpoints = self.effective_state_checkpoints.lock();
-            for predecessor in seal.predecessor_ref.as_slice() {
+            if let Some(predecessor) = seal.predecessor_ref.as_ref() {
                 let checkpoint = checkpoints.get(predecessor).ok_or_else(|| {
                     StoreError::Conflict(format!(
                         "predecessor {predecessor} has no effective-state checkpoint"
@@ -2570,7 +2511,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             .await?;
         match self
             .seal_store
-            .put_if_frontier(seal, expected_store_frontier, digest_suite)
+            .put_if_head(seal, expected_store_head, digest_suite)
             .await
         {
             Ok(true) => {
@@ -2945,7 +2886,7 @@ mod event_seal_commit_tests {
     use arkret_state::SealStore;
     use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
     use arkret_state::state_model::ResolvedCellState;
-    use arkret_wire::{LatticeOpType, NotarySig, SealSignature};
+    use arkret_wire::{LatticeOpType, SealSignature};
     use chrono::Utc;
     use serde_json::json;
     use tokio::sync::Barrier;
@@ -3082,6 +3023,13 @@ mod event_seal_commit_tests {
         )
         .unwrap();
         let placeholder_hash = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        let command_result = arkret_wire::SealCommandOutcome::committed(
+            event_id.clone(),
+            vec![event_id.clone()],
+            Vec::new(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let mut seal = Seal {
             id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
             realm_id: realm.clone(),
@@ -3094,14 +3042,26 @@ mod event_seal_commit_tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(SealSignature {
-                verification_method: arkret_wire::DidUrl::new("did:key:z6MkFixture#z6MkFixture")
+            notary_signature: arkret_wire::MultiSignature {
+                kind: arkret_wire::MultiSigKind::MultiSig,
+                signatures: vec![SealSignature {
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:key:z6MkFixture#z6MkFixture",
+                    )
                     .unwrap(),
-                payload_digest: placeholder_hash,
-                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-            }),
+                    payload_digest: placeholder_hash,
+                    jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
+                }],
+                view: 0,
+            },
             sealed_at: Utc::now(),
             hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
+            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+                .unwrap(),
+            command_results: vec![command_result],
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
         };
         seal.id = seal
             .derive_id(arkret_canonical::DigestSuite::Sha256)
@@ -3232,10 +3192,10 @@ mod event_seal_commit_tests {
         assert!(
             stores
                 .event_seal_committer
-                .commit_if_frontier(
+                .commit_if_head(
                     &seal,
                     arkret_canonical::DigestSuite::Sha256,
-                    &[],
+                    None,
                     &ops,
                     &covered,
                     &[],
@@ -3255,10 +3215,10 @@ mod event_seal_commit_tests {
         assert!(
             restarted
                 .event_seal_committer
-                .commit_if_frontier(
+                .commit_if_head(
                     &seal,
                     arkret_canonical::DigestSuite::Sha256,
-                    &[],
+                    None,
                     &ops,
                     &covered,
                     &[],
@@ -3285,10 +3245,10 @@ mod event_seal_commit_tests {
         assert!(
             !restarted
                 .event_seal_committer
-                .commit_if_frontier(
+                .commit_if_head(
                     &out_of_order,
                     arkret_canonical::DigestSuite::Sha256,
-                    &[missing_predecessor],
+                    Some(&missing_predecessor),
                     &out_of_order_ops,
                     &out_of_order_covered,
                     &[],
@@ -3364,10 +3324,10 @@ mod event_seal_commit_tests {
             tokio::spawn(async move {
                 barrier.wait().await;
                 let accepted = committer
-                    .commit_if_frontier(
+                    .commit_if_head(
                         &candidate.0,
                         arkret_canonical::DigestSuite::Sha256,
-                        &[],
+                        None,
                         &candidate.1,
                         &candidate.2,
                         &[],
@@ -3427,10 +3387,10 @@ mod event_seal_commit_tests {
         );
         assert!(
             committer
-                .commit_if_frontier(
+                .commit_if_head(
                     &winner.0,
                     arkret_canonical::DigestSuite::Sha256,
-                    &[],
+                    None,
                     &winner.1,
                     &std::iter::once(winner.1[0].1.op.event_id.event_digest()).collect(),
                     &[],

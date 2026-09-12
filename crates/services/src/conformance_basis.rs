@@ -100,7 +100,6 @@ pub struct ConformanceGrant {
 pub struct ConformanceRealmBasis {
     /// The closed authorization basis Seal cited by Events.
     pub seal: Seal,
-    /// Exact listed-set descriptors committed by the fixture Seal.
     pub ops: Vec<(CellRef, IssuedOp)>,
     /// Realm genesis value covered by `ops`. The development adapter mirrors
     /// this value into the application projection cache after the sealed cell
@@ -511,8 +510,10 @@ pub fn build_realm_basis(
 
 fn fixture_seal_root(covered: &[Hash]) -> Result<Hash, String> {
     let covered_set = covered.iter().cloned().collect::<BTreeSet<_>>();
-    arkret_state::control_event_set_root(&covered_set, arkret_canonical::DigestSuite::Sha256)
-        .map_err(|error| error.to_string())
+    let control_event_set_root =
+        arkret_state::control_event_set_root(&covered_set, arkret_canonical::DigestSuite::Sha256)
+            .map_err(|error| error.to_string())?;
+    Ok(control_event_set_root)
 }
 
 fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Hash, String> {

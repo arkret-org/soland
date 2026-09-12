@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{EventId, Hash, RealmId};
+use arkret_identifiers::{EventId, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
     FrankingProof, FrankingSealObservationOutcome, FrankingSealObservationRequest,
 };
@@ -902,14 +902,14 @@ async fn materialize_franking_seal_observation(
     let realm_id = proof.realm_id.clone();
     let leaves = state
         .projections()
-        .realm_seal_leaves(&realm_id)
+        .realm_seal_basis_leaves(&realm_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("franking Seal frontier lookup failed: {error}"))
         })?;
     let closure = state
         .projections()
-        .seal_closure(&leaves)
+        .seal_basis_closure(&leaves)
         .await
         .map_err(|error| {
             AppError::internal(format!("franking Seal ancestry lookup failed: {error}"))

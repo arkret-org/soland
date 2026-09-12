@@ -461,20 +461,20 @@ struct PostgresFixtureEventSealCommitter(Arc<dyn soland_storage_postgres::EventS
 
 #[async_trait]
 impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
-    async fn commit_if_frontier(
+    async fn commit_if_head(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
+        expected_store_head: Option<&SealId>,
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         self.0
-            .commit_if_frontier(
+            .commit_if_head(
                 seal,
                 digest_suite,
-                expected_store_frontier,
+                expected_store_head,
                 new_ops,
                 covered,
                 governance_dependencies,
@@ -574,7 +574,7 @@ pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceS
 /// Recompute the cumulative Control Event set root for fixture signing.
 pub async fn test_control_event_set_root(
     state: &AppState,
-    predecessor_refs: &[SealId],
+    predecessor_ref: Option<&SealId>,
     delta_events: &[(arkret_wire::Event, arkret_canonical::DigestSuite)],
     root_digest_suite: arkret_canonical::DigestSuite,
 ) -> StoreResult<Hash> {
@@ -583,10 +583,23 @@ pub async fn test_control_event_set_root(
         .get(&app_state_key(state))
         .and_then(|resources| resources.seal_store.clone())
         .expect("AppState was not constructed by soland-test-support");
-    let mut covered =
-        arkret_state::union_predecessor_covered_events(predecessor_refs, seal_store.as_ref())
-            .await
-            .map_err(|error| StoreError::Backend(error.to_string()))?;
+    let mut covered = BTreeSet::new();
+    let mut cursor = predecessor_ref.cloned();
+    let mut visited = BTreeSet::new();
+    while let Some(seal_id) = cursor {
+        if !visited.insert(seal_id.clone()) {
+            return Err(StoreError::Conflict(
+                "fixture Seal predecessor chain contains a cycle".to_owned(),
+            ));
+        }
+        let seal = seal_store
+            .get(&seal_id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(format!("fixture predecessor {seal_id}")))?;
+        covered.extend(seal.covered_event_digests);
+        covered.extend(seal.delta);
+        cursor = seal.predecessor_ref;
+    }
     for (event, digest_suite) in delta_events {
         let digest = Hash::new(
             event
@@ -598,6 +611,85 @@ pub async fn test_control_event_set_root(
     }
     arkret_state::control_event_set_root(&covered, root_digest_suite)
         .map_err(|error| StoreError::Backend(error.to_string()))
+}
+
+pub async fn sign_test_seal(
+    state: &AppState,
+    realm_id: RealmId,
+    predecessor_ref: Option<SealId>,
+    delta: Vec<Hash>,
+    control_event_set_root: Hash,
+    state_root: Hash,
+    hlc: arkret_wire::Hlc,
+    digest_suite: arkret_canonical::DigestSuite,
+    signer: &dyn arkret_wire::PayloadSigner,
+) -> arkret_wire::Seal {
+    let (notary_seq, configuration_ref) = match predecessor_ref.as_ref() {
+        None => (
+            0,
+            arkret_wire::EventId::from_event_digest(&delta[0])
+                .expect("fixture genesis command forms a configuration Event id"),
+        ),
+        Some(predecessor_ref) => {
+            let predecessor = state
+                .projections()
+                .seal_by_id(predecessor_ref)
+                .await
+                .expect("fixture predecessor lookup")
+                .expect("fixture predecessor Seal");
+            (predecessor.notary_seq + 1, predecessor.configuration_ref)
+        }
+    };
+    let command_results = if predecessor_ref.is_none() {
+        vec![
+            arkret_wire::SealCommandOutcome::committed(
+                delta[0].clone(),
+                delta.clone(),
+                Vec::new(),
+                digest_suite,
+            )
+            .expect("fixture genesis command result"),
+        ]
+    } else {
+        delta
+            .iter()
+            .cloned()
+            .map(|digest| {
+                arkret_wire::SealCommandOutcome::committed(
+                    digest.clone(),
+                    vec![digest],
+                    Vec::new(),
+                    digest_suite,
+                )
+                .expect("fixture command result")
+            })
+            .collect()
+    };
+    arkret_wire::Seal::sign_with_signers(
+        arkret_wire::UnsignedSeal {
+            realm_id,
+            predecessor_ref,
+            delta,
+            control_event_set_root,
+            state_root,
+            notary_seq,
+            availability_receipt_digests: Vec::new(),
+            covered_event_digests: Vec::new(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            sealed_at: chrono::Utc::now(),
+            hlc,
+            configuration_ref,
+            command_results,
+            authorization_closures: Vec::new(),
+            existence_anchors: Vec::new(),
+            transaction_records: Vec::new(),
+        },
+        0,
+        digest_suite,
+        &[signer],
+    )
+    .expect("sign fixture Seal")
 }
 
 #[async_trait::async_trait]
@@ -636,7 +728,11 @@ impl AppStateTestExt for AppState {
             .get(&app_state_key(self))
             .and_then(|resources| resources.seal_store.clone())
             .expect("test Seal store is unavailable for this AppState");
-        store.put(seal, digest_suite).await
+        store
+            .put_if_head(seal, seal.predecessor_ref.as_ref(), digest_suite)
+            .await?
+            .then_some(())
+            .ok_or_else(|| StoreError::Conflict("Realm confirmed Seal head changed".to_owned()))
     }
 
     async fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
@@ -654,7 +750,7 @@ impl AppStateTestExt for AppState {
             .get(&app_state_key(self))
             .and_then(|resources| resources.seal_store.clone())
             .expect("test Seal store is unavailable for this AppState");
-        store.list_leaves(realm_id).await
+        Ok(store.confirmed_head(realm_id).await?.into_iter().collect())
     }
 
     async fn test_put_pending_control_event_with_ack(
@@ -708,7 +804,7 @@ impl AppStateTestExt for AppState {
             .expect("test atomic Seal committer unavailable");
         let covered = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
         if !committer
-            .commit_if_frontier(seal, digest_suite, &[], ops, &covered, &[])
+            .commit_if_head(seal, digest_suite, None, ops, &covered, &[])
             .await?
         {
             return Err(StoreError::Conflict(
@@ -1009,11 +1105,11 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         clippy::await_holding_lock,
         reason = "the test-only memory adapter serializes the complete multi-store frontier commit to model production transaction visibility"
     )]
-    async fn commit_if_frontier(
+    async fn commit_if_head(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
+        expected_store_head: Option<&SealId>,
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
@@ -1032,17 +1128,8 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             }
             return Ok(true);
         }
-        let actual = self
-            .seal_store
-            .list_leaves(&seal.realm_id)
-            .await?
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let expected = expected_store_frontier
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if actual != expected {
+        let actual = self.seal_store.confirmed_head(&seal.realm_id).await?;
+        if actual.as_ref() != expected_store_head {
             return Ok(false);
         }
         let post_state = effective_state_with_new_ops(
@@ -1067,7 +1154,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             .await?;
         match self
             .seal_store
-            .put_if_frontier(seal, expected_store_frontier, digest_suite)
+            .put_if_head(seal, expected_store_head, digest_suite)
             .await
         {
             Ok(true) => {

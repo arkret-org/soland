@@ -653,14 +653,6 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 todo: "unify push registration behind the same session-grant presentation used by ordinary requests.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
-                name: "admin_bottom_manual_repair".to_owned(),
-                method: "POST".to_owned(),
-                path: "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair".to_owned(),
-                contract: "arkret.rest.admin.bottom_repair.v1".to_owned(),
-                stability: "unsupported_signing_path".to_owned(),
-                todo: "manual effects are scope-validated only and are not submitted as signed Moves.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
                 name: "member_identity_update".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/self/events".to_owned(),

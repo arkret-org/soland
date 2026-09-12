@@ -151,7 +151,6 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
     let scopes = vec![
         NOTARY_RECONFIGURE.to_owned(),
         SEAL_COMPACT.to_owned(),
-        BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];
     let principal_id =

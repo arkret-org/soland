@@ -47,7 +47,6 @@ pub struct PgPersistenceStore {
     history_response_streams: PgHistoryResponseStreamStore,
     pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore,
     push_bridge_cache: PgPushBridgeCacheStore,
-    multisig_pending: PgMultisigPendingStore,
     audit: PgAuditStore,
     push_devices: PgPushDeviceStore,
     events: PgEventStore,
@@ -133,7 +132,6 @@ impl PgPersistenceStore {
             history_response_streams: PgHistoryResponseStreamStore { pool: pool.clone() },
             pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
-            multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
             push_devices: PgPushDeviceStore { pool: pool.clone() },
             events: PgEventStore { pool: pool.clone() },
@@ -421,10 +419,6 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
 
     fn key_backups(&self) -> &dyn KeyBackupStore {
         &self.key_backups
-    }
-
-    fn multisig_pending(&self) -> &dyn MultisigPendingStore {
-        &self.multisig_pending
     }
 
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore {

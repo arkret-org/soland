@@ -11,10 +11,6 @@ fn inactive(reason: &str) -> Value {
     serde_json::json!({"status":"value","value":{"status":"inactive","reason":reason}})
 }
 
-fn bottom() -> Value {
-    serde_json::json!({"status":"unavailable","reason":"bottom"})
-}
-
 fn overlap<T: Clone + PartialEq>(left: &Option<T>, right: &Option<T>) -> Option<Option<T>> {
     match (left, right) {
         (Some(a), Some(b)) if a != b => None,
@@ -126,8 +122,7 @@ pub(super) fn fold(
         return Err(invalid("Agent key has no exact accepted lifecycle origin"));
     };
     match lifecycle {
-        ResolvedCellState::Bottom(_) => return Ok((bottom(), None)),
-        ResolvedCellState::Value(value) if value.as_str() == Some("active") => {}
+        ResolvedCellState::Sequenced(state) if state.value.as_str() == Some("active") => {}
         _ => return Ok((inactive("lifecycle_inactive"), None)),
     }
     let mut scope = first.agent_key_scope.clone();
@@ -140,7 +135,7 @@ pub(super) fn fold(
             || first.public_key != next.public_key
             || first.accountable_principal_id != next.accountable_principal_id
         {
-            return Ok((bottom(), None));
+            return Ok((inactive("conflicting_authorization"), None));
         }
         scope = intersect_scope(&scope, &next.agent_key_scope)?;
         audience.retain(|value| next.audience.contains(value));
@@ -202,7 +197,13 @@ pub(super) mod tests {
             .with_timezone(&Utc);
         let lifecycle = BTreeMap::from([(
             "ak:did_core:web:agent.example".into(),
-            ResolvedCellState::Value(Value::String("active".into())),
+            ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
+                revision_event_id: arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0; 32],
+                ),
+                value: Value::String("active".into()),
+            }),
         )]);
         let value = serde_json::json!([
             authorization(1, "2026-09-10T00:05:00.000Z", &["a", "b"], &["one", "two"]),
@@ -232,7 +233,10 @@ pub(super) mod tests {
         let mut conflict = value.clone();
         conflict[1]["value"]["verification_method"] =
             Value::String("did:web:agent.example#other".into());
-        assert_eq!(fold(&conflict, &lifecycle, now).unwrap().0, bottom());
+        assert_eq!(
+            fold(&conflict, &lifecycle, now).unwrap().0,
+            inactive("conflicting_authorization")
+        );
         let mut revoked = value.clone();
         revoked.as_array_mut().unwrap().push(serde_json::json!({"tag":"unused","value":{
             "agent_id":"ak:did_core:web:agent.example","key_id":"runtime-key",

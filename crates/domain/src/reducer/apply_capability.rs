@@ -18,7 +18,7 @@
 //! - `bottom` is **inert** for or_set: we never produce a Bottom cell here.
 //!
 //! Acceptance / fail-closed: the envelope-level CBS discipline is enforced at
-//! event ingest: DataEvents use `seal_ref`/`auth_context`, while reducer-input
+//! event ingest: DataEvents use `auth_context.authority_refs`, while reducer-input
 //! Control Moves with effects must carry `seal_basis.leaves`. The reducer
 //! trusts that gate and does the *structural* acceptance checks reachable at
 //! the `Operation` boundary — a present

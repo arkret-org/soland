@@ -251,7 +251,7 @@ async fn reducer_cell_items(
         |error: &dyn std::fmt::Display| soland_http::error::AppError::internal(error.to_string());
     let leaves = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_basis_leaves(realm_id)
         .await
         .map_err(|error| internal(&error))?;
     if leaves.is_empty() {

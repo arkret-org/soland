@@ -731,7 +731,6 @@ async fn seed_agent_grant_session_with_suite(
     for digest in [
         &availability.seal_body.control_event_set_root,
         &availability.seal_body.state_root,
-        &availability.seal_body.completeness_root,
     ]
     .into_iter()
     .chain(availability.seal_body.availability_receipt_digests.iter())
@@ -1269,7 +1268,7 @@ async fn events_describe_and_single_event_submit_work_body() {
     let token = dev_token(state.clone()).await;
     authorize_test_plaintext_message_service(&state, "did:web:alice.example", demo_realm_id())
         .await;
-    // `signed_event_envelope` authors a DataEvent whose `seal_ref` is the demo
+    // `signed_event_envelope` authors a DataEvent whose authority reference is the demo
     // Realm's basis Seal, so the genesis unit that Seal covers has to be
     // accepted before the submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;

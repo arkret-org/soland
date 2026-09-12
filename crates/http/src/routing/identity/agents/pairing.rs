@@ -427,7 +427,7 @@ pub(super) async fn accepted_agent_key_authorization_snapshot(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let leaves = state
         .projections()
-        .realm_seal_leaves(&realm)
+        .realm_seal_basis_leaves(&realm)
         .await
         .map_err(|error| AppError::internal(format!("Agent frontier unavailable: {error}")))?;
     if leaves.is_empty() {
@@ -476,7 +476,7 @@ pub(super) async fn accepted_agent_key_authorization_snapshot(
         }
         let covered = state
             .projections()
-            .predecessor_covered_events(std::slice::from_ref(leaf))
+            .predecessor_covered_events(Some(leaf))
             .await
             .map_err(|error| {
                 AppError::internal(format!("Agent frontier coverage unavailable: {error}"))
@@ -771,7 +771,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         accepted_agent_key_authorization_snapshot(state, &agent_record).await?;
     let covered = state
         .projections()
-        .predecessor_covered_events(&expected_accepted_basis.leaves)
+        .seal_basis_covered_events(&expected_accepted_basis.leaves)
         .await
         .map_err(|error| {
             AppError::internal(format!("Agent accepted coverage unavailable: {error}"))

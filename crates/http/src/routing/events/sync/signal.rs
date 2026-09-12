@@ -240,7 +240,7 @@ async fn admit_signal(
 
     // (2, continued) + (3) — evaluate membership/scope and class action from
     // signed Seal state at both the declared historical basis and the complete
-    // current accepted antichain. A current projection row or pending-removal
+    // current accepted head. A current projection row or pending-removal
     // flag is not a substitute for either signed view.
     verify_signal_scope_authority(state, envelope, &actor).await?;
 
@@ -268,23 +268,23 @@ async fn verify_signal_scope_authority(
     actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
     let realm = &envelope.realm_id;
-    let current_leaves = state
+    let current_head = state
         .projections()
-        .realm_seal_leaves(realm)
+        .realm_seal_head(realm)
         .await
         .map_err(|error| {
             signal_rail_unavailable(&format!("resolve current Signal Seal basis: {error}"))
         })?;
-    if current_leaves.is_empty() {
+    let Some(current_head) = current_head else {
         return Err(signal_invalid(
             "signal Realm has no current signed Seal basis",
         ));
-    }
+    };
     let historical = arkret_wire::SealBasis {
         leaves: vec![envelope.seal_ref.clone()],
     };
     let current = arkret_wire::SealBasis {
-        leaves: current_leaves,
+        leaves: vec![current_head],
     };
     for (label, basis) in [("declared", historical), ("current", current)] {
         let view = state

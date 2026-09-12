@@ -5363,6 +5363,13 @@ fn contract_covering_seal(
     sealed_at: chrono::DateTime<Utc>,
 ) -> arkret_wire::Seal {
     let placeholder = Hash::new(format!("sha256:{}", "0".repeat(64))).expect("placeholder hash");
+    let command_result = arkret_wire::SealCommandOutcome::committed(
+        delta.clone(),
+        vec![delta.clone()],
+        Vec::new(),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture command result");
     let mut seal = arkret_wire::Seal {
         id: arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64)))
             .expect("placeholder Seal id"),
@@ -5376,14 +5383,24 @@ fn contract_covering_seal(
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::NotarySig::Single(arkret_wire::SealSignature {
-            verification_method: DidUrl::new("did:key:z6MkFixture#z6MkFixture")
-                .expect("fixture verification method"),
-            payload_digest: placeholder,
-            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-        }),
+        notary_signature: arkret_wire::MultiSignature {
+            kind: arkret_wire::MultiSigKind::MultiSig,
+            signatures: vec![arkret_wire::SealSignature {
+                verification_method: DidUrl::new("did:key:z6MkFixture#z6MkFixture")
+                    .expect("fixture verification method"),
+                payload_digest: placeholder,
+                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
+            }],
+            view: 0,
+        },
         sealed_at,
         hlc: arkret_wire::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).expect("fixture HLC"),
+        configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
+            .unwrap(),
+        command_results: vec![command_result],
+        authorization_closures: Vec::new(),
+        existence_anchors: Vec::new(),
+        transaction_records: Vec::new(),
     };
     seal.id = seal
         .derive_id(arkret_canonical::DigestSuite::Sha256)

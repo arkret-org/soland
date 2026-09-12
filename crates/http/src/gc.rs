@@ -59,12 +59,12 @@ pub async fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcC
 
     // 2) Union of current leaf-Seal coverage. Control Moves still covered by live leaves are also
     //    out of scope for GC.
-    let leaves = projections
-        .realm_seal_leaves(realm_id)
+    let head = projections
+        .realm_seal_head(realm_id)
         .await
         .unwrap_or_default();
     let mut live_coverage: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if let Ok(covered) = projections.predecessor_covered_events(&leaves).await {
+    if let Ok(covered) = projections.predecessor_covered_events(head.as_ref()).await {
         live_coverage.extend(covered.into_iter().map(|digest| digest.to_string()));
     }
 

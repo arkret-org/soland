@@ -2484,7 +2484,7 @@ async fn accept_federated_seal_prerequisite(
                 "federated Seal prerequisite belongs to another Realm",
             ));
         }
-        for predecessor in seal.predecessor_ref.as_slice() {
+        if let Some(predecessor) = seal.predecessor_ref.as_ref() {
             if relevant
                 .iter()
                 .any(|candidate| &candidate.id == predecessor)

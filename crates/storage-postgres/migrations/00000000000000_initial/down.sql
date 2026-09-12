@@ -155,7 +155,6 @@ DROP TABLE IF EXISTS soland_schema_contract CASCADE;
 DROP TABLE IF EXISTS realm_owning_organizations CASCADE;
 DROP TABLE IF EXISTS retention_policies CASCADE;
 DROP TABLE IF EXISTS retention_tombstones CASCADE;
-DROP TABLE IF EXISTS multisig_pending CASCADE;
 DROP TABLE IF EXISTS notifications CASCADE;
 DROP SEQUENCE IF EXISTS notification_projection_position_seq CASCADE;
 DROP TABLE IF EXISTS policy_documents CASCADE;
