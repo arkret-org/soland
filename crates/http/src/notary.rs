@@ -1147,6 +1147,33 @@ impl NotaryWorker {
         availability_receipt_digests: Vec<Hash>,
     ) -> Result<arkret_wire::UnsignedSeal, NotaryError> {
         let realm_id = &request.realm_id;
+        let sequence = self
+            .next_notary_seq(state, Some(&request.predecessor_ref))
+            .await?;
+        let reserved = state.projections().signing_body(realm_id, sequence).await?;
+        if let Some(body) = &reserved {
+            if body.predecessor_ref.as_ref() != Some(&request.predecessor_ref)
+                || body.hlc != request.hlc
+                || body.command_results.len() != 1
+                || body.command_results[0].unit_event_digests != request.event_digests
+            {
+                return Err(NotaryError::Construction(
+                    "PCR signing position belongs to a different signed request".into(),
+                ));
+            }
+        }
+        // Recover the original signing bytes if the process stopped before
+        // recording its HTTP preparation response. The command effects below
+        // are still independently recomputed for this exact request.
+        let sealed_at = reserved
+            .as_ref()
+            .map(|body| body.sealed_at)
+            .unwrap_or(sealed_at);
+        let availability_receipt_digests = reserved
+            .as_ref()
+            .map(|body| body.availability_receipt_digests.clone())
+            .unwrap_or(availability_receipt_digests);
+
         let pre_state = self
             .read_effective_state(state, realm_id, Some(&request.predecessor_ref))
             .await?;
