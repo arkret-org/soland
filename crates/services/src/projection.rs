@@ -2074,7 +2074,7 @@ impl ProjectionService {
             .into_iter()
             .filter(|command| command.kind == arkret_wire::EventKind::AgentActionApprove)
         {
-            let approval: arkret_models_collaboration::events_payloads::AgentActionApprovePayload =
+            let approval: arkret_models_collaboration::events_payloads::agent::AgentActionApprovePayload =
                 serde_json::from_value(
                     serde_json::to_value(&command.payload).map_err(|_| "dependency_missing")?,
                 )
