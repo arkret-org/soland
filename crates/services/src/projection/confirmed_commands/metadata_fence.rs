@@ -120,7 +120,7 @@ mod tests {
             authorization_closures: vec![],
             existence_anchors: vec![],
         };
-        seal.id = seal.compute_id(DigestSuite::Sha256).unwrap();
+        seal.id = seal.derive_id(DigestSuite::Sha256).unwrap();
         seal
     }
 
@@ -254,7 +254,7 @@ mod tests {
         let mut old_head = seal(&event, false);
         old_head.delta.clear();
         old_head.command_results.clear();
-        old_head.id = old_head.compute_id(DigestSuite::Sha256).unwrap();
+        old_head.id = old_head.derive_id(DigestSuite::Sha256).unwrap();
         seals
             .put_if_head(&old_head, None, DigestSuite::Sha256)
             .await
@@ -312,7 +312,7 @@ mod tests {
         successor.predecessor_ref = Some(old_head.id.clone());
         successor.previous_state_root = Some(old_head.state_root.clone());
         successor.notary_seq = old_head.notary_seq + 1;
-        successor.id = successor.compute_id(DigestSuite::Sha256).unwrap();
+        successor.id = successor.derive_id(DigestSuite::Sha256).unwrap();
         assert!(
             service
                 .commit_event_seal_if_head(
