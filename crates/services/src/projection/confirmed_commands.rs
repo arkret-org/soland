@@ -20,9 +20,8 @@ impl ProjectionService {
                 | ProjectionEffect::PendingReplayQueued { reason, .. } => {
                     return Err(reason.clone());
                 }
-                ProjectionEffect::Ignored => {
-                    return Err("committed command projection was ignored".into());
-                }
+                // Registered safety cells without an inline domain mirror use
+                // Ignored here; their effects are already in the Seal store.
                 _ => {}
             }
             effects.push(effect.into());

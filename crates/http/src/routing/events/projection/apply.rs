@@ -1346,6 +1346,32 @@ pub(crate) async fn publish_confirmed_seal_commands(
         .into_iter()
         .map(|event| (event.event_id.event_digest(), event))
         .collect::<std::collections::BTreeMap<_, _>>();
+    // Validate the whole committed selection before touching runtime caches.
+    // Contacts are queried directly through their durable port; only Consent
+    // has a cached current cell map to reload after the transaction commits.
+    let committed_events = seal
+        .command_results
+        .iter()
+        .filter(|result| result.outcome == arkret_wire::CommandOutcome::Committed)
+        .flat_map(|result| &result.unit_event_digests)
+        .map(|digest| {
+            confirmed
+                .get(digest)
+                .ok_or_else(|| "Seal command is outside the confirmed prefix".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if committed_events.iter().any(|event| {
+        matches!(
+            event.kind,
+            arkret_wire::EventKind::ConsentGrant | arkret_wire::EventKind::ConsentRevoke
+        )
+    }) {
+        state
+            .consents()
+            .hydrate_runtime()
+            .await
+            .map_err(|error| format!("reload confirmed consent cells: {error}"))?;
+    }
     for result in &seal.command_results {
         if result.outcome != arkret_wire::CommandOutcome::Committed {
             continue;

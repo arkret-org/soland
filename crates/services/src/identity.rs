@@ -383,8 +383,8 @@ pub struct AccountDataService {
 
 /// Read side of the durable holder-private consent projection.
 ///
-/// Consent cells are only ever written inside the Event commit unit of work
-/// that accepts their `ak.consent.grant` / `ak.consent.revoke` Control Move,
+/// Consent cells are written only in the exact Seal transaction that commits
+/// their `ak.consent.grant` / `ak.consent.revoke` command unit,
 /// so this port carries no writer: a second write path would be a second
 /// source of truth for replicated cell state.
 #[async_trait]
@@ -403,6 +403,7 @@ pub struct ConsentService {
     consent_cells: Arc<dyn ConsentCellPort>,
     mimi_correlations: Arc<dyn MimiConsentCorrelationPort>,
     runtime_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+    runtime_reload: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[async_trait]
@@ -652,6 +653,7 @@ impl ConsentService {
             consent_cells,
             mimi_correlations,
             runtime_cells: Arc::new(Mutex::new(BTreeMap::new())),
+            runtime_reload: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -670,6 +672,9 @@ impl ConsentService {
     }
 
     pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
+        // Serialize the fetch as well as installation: a slow older fetch must
+        // never overwrite a newer confirmed revocation after it is installed.
+        let _reload = self.runtime_reload.lock().await;
         self.replace_runtime_cells(self.consent_cells.cells().await?);
         Ok(())
     }
@@ -682,7 +687,7 @@ impl ConsentService {
     }
 
     /// Publish one durably committed consent cell into the runtime
-    /// projection. The Event commit already succeeded, so this only refreshes
+    /// projection. Its exact Seal command already committed, so this only refreshes
     /// the working view a restart would rebuild from `hydrate_runtime`.
     pub fn install_committed_cell(&self, cell: ConsentCellRecord) {
         let key = consent_cell_key(&cell.holder_account_id, &cell.cell_id);
@@ -3700,5 +3705,95 @@ mod tests {
                 current: 2
             }
         ));
+    }
+}
+
+#[cfg(test)]
+mod consent_reload_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    struct DelayedConsentRows {
+        cell: ConsentCellRecord,
+        reads: AtomicUsize,
+        started: tokio::sync::Notify,
+        release: tokio::sync::Semaphore,
+    }
+    #[async_trait]
+    impl ConsentCellPort for DelayedConsentRows {
+        async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
+            let index = self.reads.fetch_add(1, Ordering::SeqCst);
+            let mut cell = self.cell.clone();
+            if index == 0 {
+                self.started.notify_one();
+                self.release.acquire().await.unwrap().forget();
+            } else {
+                cell.revoked_dots.extend(cell.grant_dots.keys().cloned());
+            }
+            Ok(vec![(
+                consent_cell_key(&cell.holder_account_id, &cell.cell_id),
+                cell,
+            )])
+        }
+    }
+    struct NoCorrelations;
+    #[async_trait]
+    impl MimiConsentCorrelationPort for NoCorrelations {
+        async fn save_correlation(&self, _: MimiConsentCorrelation) -> ServiceResult<()> {
+            Ok(())
+        }
+        async fn correlation(&self, _: &str) -> ServiceResult<Option<MimiConsentCorrelation>> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn delayed_consent_reload_cannot_overwrite_newer_revocation() {
+        let holder = AccountId::new(
+            "ak:did_core:web:holder.example".parse().unwrap(),
+            "ak:did_core:web:station.example".parse().unwrap(),
+        );
+        let now = Utc::now();
+        let rows = Arc::new(DelayedConsentRows {
+            cell: ConsentCellRecord {
+                cell_id: "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-000000000041".parse().unwrap(),
+                holder_account_id: holder.clone(),
+                peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor { actor_id: arkret_wire::ActorId::account(holder.clone()) },
+                consent_scope: "messages".into(),
+                grant_dots: BTreeMap::from([("grant".into(), ConsentGrantDot { dot:"grant".into(), not_before:None, expires_at:None, granted_at:now })]),
+                revoked_dots: Default::default(), updated_at:now,
+            },
+            reads:AtomicUsize::new(0), started:tokio::sync::Notify::new(), release:tokio::sync::Semaphore::new(0),
+        });
+        let service = ConsentService::new(rows.clone(), Arc::new(NoCorrelations));
+        let first_service = service.clone();
+        let first = tokio::spawn(async move {
+            first_service.hydrate_runtime().await.unwrap();
+        });
+        rows.started.notified().await;
+        let second_service = service.clone();
+        let mut second = tokio::spawn(async move {
+            second_service.hydrate_runtime().await.unwrap();
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut second)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            rows.reads.load(Ordering::SeqCst),
+            1,
+            "newer fetch must wait until the older result is installed"
+        );
+        rows.release.add_permits(1);
+        first.await.unwrap();
+        second.await.unwrap();
+        assert!(
+            !service
+                .holder_cell(&holder, rows.cell.cell_id.as_str())
+                .unwrap()
+                .has_active_grant_at(now)
+        );
     }
 }
