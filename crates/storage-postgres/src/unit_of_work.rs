@@ -690,6 +690,7 @@ async fn preflight_event_batch(
                 }
                 commit_mls_frontier_input(conn, stored.pk, item, true).await?;
                 commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
+                crate::events::approval_publications::commit(conn, stored.pk, item, true).await?;
                 continue;
             }
             if stored.state == "quarantined" {
@@ -697,6 +698,7 @@ async fn preflight_event_batch(
             }
             commit_mls_frontier_input(conn, stored.pk, item, true).await?;
             commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
+            crate::events::approval_publications::commit(conn, stored.pk, item, true).await?;
             continue;
         }
         if let Some(previous) = incoming.get(&item.event.event_id) {
@@ -1180,6 +1182,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 ) {
                     return Ok(CommitTransactionOutcome::Collision);
                 }
+                if let CanonicalInsertOutcome::Replay(event_pk) = outcome {
+                    crate::events::approval_publications::commit(conn, event_pk, &request, true).await?;
+                }
                 continue;
             }
             if let Some(selector) = request.device_revocation_gate.as_ref() {
@@ -1234,6 +1239,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             event_inserted = true;
             commit_mls_frontier_input(conn, event_pk, &request, false).await?;
             commit_membership_compensation_evidence(conn, event_pk, &request, false).await?;
+            crate::events::approval_publications::commit(conn, event_pk, &request, false).await?;
 
             let typed_event = serde_json::from_value::<arkret_wire::Event>(
                 request.event.envelope.clone(),

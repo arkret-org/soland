@@ -215,6 +215,13 @@ pub trait MessageStore: Send + Sync {
 /// collisions and must be handled by producer proof validation.
 #[async_trait]
 pub trait EventStore: Send + Sync {
+    /// Exact unexecuted publication retained beside its pending approval.
+    /// This lookup does not establish approval finality or publication eligibility.
+    async fn publication_event_for_approval(
+        &self,
+        approval_event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<arkret_wire::Event>>;
+
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()>;
     /// Full forensic evidence for an Event identity that was quarantined after
     /// two distinct canonical byte strings claimed the same full hash.

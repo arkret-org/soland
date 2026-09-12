@@ -3972,3 +3972,10 @@ CREATE TABLE key_backup_unlock_attempt_windows (
  last_attempt_at TIMESTAMPTZ NOT NULL,
  PRIMARY KEY(authority_id,window_start)
 );
+
+-- Unexecuted exact bytes; approval finality and business publication are separate.
+CREATE TABLE public.agent_approval_publications (
+    approval_event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk),
+    publication_event_id bytea NOT NULL CHECK (octet_length(publication_event_id) = 33),
+    canonical_bytes bytea NOT NULL
+);

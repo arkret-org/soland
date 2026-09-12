@@ -1,3 +1,5 @@
+pub(super) mod approval_publications;
+
 mod transaction_locks;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1040,6 +1042,14 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
 
 #[async_trait]
 impl EventStore for PgEventStore {
+    async fn publication_event_for_approval(
+        &self,
+        approval_event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<arkret_wire::Event>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        approval_publications::load(&mut conn, approval_event_id).await
+    }
+
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await

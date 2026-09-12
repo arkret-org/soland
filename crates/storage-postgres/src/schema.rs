@@ -2060,3 +2060,11 @@ diesel::allow_tables_to_appear_in_same_query!(
     webvh_documents,
     webvh_log_events,
 );
+
+diesel::table! {
+    agent_approval_publications (approval_event_pk) {
+        approval_event_pk -> Int8,
+        publication_event_id -> Bytea,
+        canonical_bytes -> Bytea,
+    }
+}
