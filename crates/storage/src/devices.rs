@@ -120,7 +120,11 @@ pub trait DeviceMessageStore: Send + Sync {
 /// Long-term device key bundles (one per `(actor, device_id)`).
 #[async_trait]
 pub trait DeviceKeyStore: Send + Sync {
-    async fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()>;
+    async fn put(
+        &self,
+        authorization: &DeviceRevocationGateSelector,
+        payload: Value,
+    ) -> PersistenceResult<()>;
     async fn get(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
 }
 /// One-time prekey pool. Calls to `claim` pop a single key.
@@ -128,8 +132,7 @@ pub trait DeviceKeyStore: Send + Sync {
 pub trait OneTimeKeyStore: Send + Sync {
     async fn put(
         &self,
-        actor: String,
-        device_id: String,
+        authorization: &DeviceRevocationGateSelector,
         keys: Vec<Value>,
     ) -> PersistenceResult<()>;
     async fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;

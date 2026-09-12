@@ -131,9 +131,6 @@ mod tests {
         )
         .unwrap();
         publication.auth_context = Some(arkret_wire::AuthContext {
-            key_id: arkret_wire::OpaqueLocalId::new("device-1").unwrap(),
-            key_epoch: 1,
-            credential_epoch: None,
             authority_refs: vec![
                 format!("ak:seal:sha256:{}", "a".repeat(64))
                     .parse()
@@ -249,6 +246,7 @@ mod tests {
             ),
             device_revocation_transition: None,
             device_revocation_gate: None,
+            historical_producer: None,
             projections: vec![],
             idempotency: None,
             outbox: vec![],

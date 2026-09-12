@@ -400,6 +400,7 @@ async fn prepare_ghost_event(
         control_proposal_ingress: control_proposal_ack.map(ControlProposalIngress::AckRequired),
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {

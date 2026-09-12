@@ -1562,6 +1562,7 @@ fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequ
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(control_proposal_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),
@@ -2364,6 +2365,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: realm_id.clone(),
@@ -2514,6 +2516,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(pairing_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: vec![ProjectionEventRecord {
             event_id: pairing_event_id.clone(),
             realm_id: realm_id.clone(),
@@ -2685,6 +2688,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event: contact_event,
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: Vec::new(),
         idempotency: Some(IdempotencyRecord {
             authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
@@ -2785,6 +2789,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             event: failed_contact_event,
             device_revocation_transition: None,
             device_revocation_gate: None,
+            historical_producer: None,
             projections: Vec::new(),
             idempotency: None,
             outbox: vec![FederationOutboxRecord::pending(
@@ -2846,6 +2851,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),
             realm_id: "not-a-typed-realm-id".to_owned(),
@@ -4945,16 +4951,20 @@ pub async fn assert_message_store_contract(store: &dyn MessageStore, namespace: 
     );
 }
 
-pub async fn assert_device_key_store_contract(store: &dyn DeviceKeyStore, namespace: &str) {
-    let actor = format!("did:web:{namespace}.example");
-    let device_id = format!("ak:device:{namespace}");
+pub async fn assert_device_key_store_contract(
+    store: &dyn DeviceKeyStore,
+    namespace: &str,
+    authorization: &DeviceRevocationGateSelector,
+) {
+    let actor = authorization.principal_id.to_string();
+    let device_id = authorization.device_id.clone();
     let bundle = serde_json::json!({
         "device_id": device_id,
         "one_time_keys": {"curve25519:aaa": {"key": "aaa"}},
         "fallback_keys": {},
     });
     store
-        .put(actor.clone(), device_id.clone(), bundle.clone())
+        .put(authorization, bundle.clone())
         .await
         .expect("write device key bundle");
     assert_eq!(
@@ -4966,7 +4976,7 @@ pub async fn assert_device_key_store_contract(store: &dyn DeviceKeyStore, namesp
     );
     assert_eq!(
         store
-            .get(&actor, &format!("ak:device:{namespace}-missing"))
+            .get(&actor, "ak:device:01904100-0000-7000-8000-000000000099")
             .await
             .expect("read missing device key bundle"),
         None
@@ -4974,7 +4984,7 @@ pub async fn assert_device_key_store_contract(store: &dyn DeviceKeyStore, namesp
 
     let rotated = serde_json::json!({"device_id": device_id, "rotated": true});
     store
-        .put(actor.clone(), device_id.clone(), rotated.clone())
+        .put(authorization, rotated.clone())
         .await
         .expect("overwrite device key bundle");
     assert_eq!(
@@ -4987,17 +4997,17 @@ pub async fn assert_device_key_store_contract(store: &dyn DeviceKeyStore, namesp
     );
 }
 
-pub async fn assert_one_time_key_store_contract(store: &dyn OneTimeKeyStore, namespace: &str) {
-    let actor = format!("did:web:{namespace}.example");
-    let device_id = format!("ak:device:{namespace}");
+pub async fn assert_one_time_key_store_contract(
+    store: &dyn OneTimeKeyStore,
+    namespace: &str,
+    authorization: &DeviceRevocationGateSelector,
+) {
+    let actor = authorization.principal_id.to_string();
+    let device_id = authorization.device_id.clone();
     let key_a = serde_json::json!({"key_id": format!("curve25519:{namespace}-a"), "key": "a"});
     let key_b = serde_json::json!({"key_id": format!("curve25519:{namespace}-b"), "key": "b"});
     store
-        .put(
-            actor.clone(),
-            device_id.clone(),
-            vec![key_a.clone(), key_b.clone()],
-        )
+        .put(authorization, vec![key_a.clone(), key_b.clone()])
         .await
         .expect("seed one-time key pool");
     assert_eq!(
@@ -5026,7 +5036,7 @@ pub async fn assert_one_time_key_store_contract(store: &dyn OneTimeKeyStore, nam
 
     let key_c = serde_json::json!({"key_id": format!("curve25519:{namespace}-c"), "key": "c"});
     store
-        .put(actor.clone(), device_id.clone(), vec![key_c.clone()])
+        .put(authorization, vec![key_c.clone()])
         .await
         .expect("replace one-time key pool");
     assert_eq!(
@@ -5246,6 +5256,7 @@ fn contract_device_revoke_fixture(
             control_proposal_ingress: Some(ingress.clone()),
             device_revocation_transition: Some(transition),
             device_revocation_gate: None,
+            historical_producer: None,
             projections: Vec::new(),
             idempotency: None,
             outbox: Vec::new(),
@@ -5556,6 +5567,7 @@ fn consent_commit_request(
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),

@@ -3394,6 +3394,7 @@ CREATE INDEX messages_thread_idx ON public.messages USING btree (thread_id, pk);
 CREATE TABLE public.device_keys (
     actor_id text NOT NULL,
     device_id text NOT NULL,
+    device_authorization jsonb NOT NULL,
     payload jsonb NOT NULL,
     updated_at timestamp with time zone NOT NULL DEFAULT now(),
     PRIMARY KEY (actor_id, device_id)
@@ -3404,6 +3405,7 @@ CREATE TABLE public.device_keys (
 CREATE TABLE public.one_time_keys (
     actor_id text NOT NULL,
     device_id text NOT NULL,
+    device_authorization jsonb NOT NULL,
     position integer NOT NULL,
     key jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL DEFAULT now(),

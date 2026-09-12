@@ -1082,6 +1082,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             )
             .await?;
             for request in request.events {
+            crate::device_revocations::validate_event_producer_binding(&request)?;
             if let Some(commit) = request.device_pairing_authorization.as_ref() {
                 if commit.authorized_event_ref != request.event.event_id {
                     return Err(PersistenceError::Conflict(
@@ -1182,9 +1183,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 }
                 continue;
             }
-            if let Some(selector) = request.device_revocation_gate.as_ref() {
-                crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
-            }
+            crate::device_revocations::enforce_event_gate(conn, &request).await?;
             ensure_applet_admission_in_transaction(conn, &request).await?;
             let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
                 PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())

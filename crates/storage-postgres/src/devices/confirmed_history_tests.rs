@@ -125,6 +125,19 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
         .await
         .unwrap()
         .unwrap();
+    let key_bundles = PgDeviceKeyStore { pool: pool.clone() };
+    let prekeys = PgOneTimeKeyStore { pool: pool.clone() };
+    key_bundles
+        .put(&session_binding, serde_json::json!({"instance":"original"}))
+        .await
+        .unwrap();
+    prekeys
+        .put(
+            &session_binding,
+            vec![serde_json::json!({"key":"original"})],
+        )
+        .await
+        .unwrap();
     let gates = crate::device_revocations::PgDeviceRevocationStore { pool: pool.clone() };
     assert_eq!(
         gates.gate_status(&session_binding).await.unwrap(),
@@ -212,6 +225,66 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
         gates.gate_status(&session_binding).await.unwrap(),
         DeviceRevocationGateStatus::AuthorityMismatch,
         "the same DeviceId does not inherit its previous session authorization"
+    );
+    assert_eq!(
+        key_bundles
+            .get(
+                source.account.principal_id.as_str(),
+                fixture::device(2).as_str()
+            )
+            .await
+            .unwrap(),
+        None,
+        "a replacement device cannot read the old authorization's bundle before physical cleanup"
+    );
+    assert_eq!(
+        prekeys
+            .claim(
+                source.account.principal_id.as_str(),
+                fixture::device(2).as_str()
+            )
+            .await
+            .unwrap(),
+        None,
+        "a replacement device cannot consume the old authorization's prekeys"
+    );
+    assert!(
+        key_bundles
+            .put(&session_binding, serde_json::json!({"late":"old"}))
+            .await
+            .is_err()
+    );
+    assert!(
+        prekeys
+            .put(&session_binding, vec![serde_json::json!({"late":"old"})])
+            .await
+            .is_err()
+    );
+    let mut successor_binding = session_binding.clone();
+    successor_binding.target_device_authorize_event_id = successor_id.to_string();
+    key_bundles
+        .put(
+            &successor_binding,
+            serde_json::json!({"instance":"successor"}),
+        )
+        .await
+        .unwrap();
+    prekeys
+        .put(
+            &successor_binding,
+            vec![serde_json::json!({"key":"successor"})],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        prekeys
+            .claim(
+                source.account.principal_id.as_str(),
+                fixture::device(2).as_str()
+            )
+            .await
+            .unwrap(),
+        Some(serde_json::json!({"key":"successor"}))
     );
     let mut different_holder = session.clone();
     different_holder.device_id = fixture::device(1).to_string();

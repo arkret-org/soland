@@ -420,6 +420,7 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
             control_proposal_ingress: None,
             device_revocation_transition: None,
             device_revocation_gate: None,
+            historical_producer: None,
             projections: vec![],
             idempotency: None,
             outbox: vec![],

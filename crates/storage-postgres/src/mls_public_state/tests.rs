@@ -105,6 +105,7 @@ fn genesis_with_group() -> (EventCommitRequest, arkret_mls::ArkretMlsGroup) {
         control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: vec![],
         idempotency: None,
         outbox: vec![],

@@ -128,6 +128,9 @@ pub struct EventCommitRequest {
     pub device_revocation_transition: Option<DeviceRevocationTransition>,
     /// Exact author-device generation rechecked inside the Event transaction.
     pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
+    /// SDK-verified original producer. Live ingress checks the original grant
+    /// window and receiver-known revocations without a local device mirror.
+    pub historical_producer: Option<arkret::historical_producer::VerifiedHistoricalEventProducer>,
     pub projections: Vec<ProjectionEventRecord>,
     pub idempotency: Option<IdempotencyRecord>,
     pub outbox: Vec<FederationOutboxRecord>,

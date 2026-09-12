@@ -479,14 +479,10 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
 impl crate::identity::DeviceKeyPort for PersistenceDeviceKeys {
     async fn save_bundle(
         &self,
-        actor_id: String,
-        device_id: String,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
         payload: Value,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .device_keys()
-            .put(actor_id, device_id, payload)
-            .await?;
+        self.0.device_keys().put(authorization, payload).await?;
         Ok(())
     }
 
@@ -499,14 +495,10 @@ impl crate::identity::DeviceKeyPort for PersistenceDeviceKeys {
 impl crate::identity::OneTimeKeyPort for PersistenceOneTimeKeys {
     async fn save_keys(
         &self,
-        actor_id: String,
-        device_id: String,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
         keys: Vec<Value>,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .one_time_keys()
-            .put(actor_id, device_id, keys)
-            .await?;
+        self.0.one_time_keys().put(authorization, keys).await?;
         Ok(())
     }
 

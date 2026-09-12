@@ -26,6 +26,52 @@ use soland_storage_postgres::{
     PgOneTimeKeyStore, PgPool, PgRealmMetaStore,
 };
 
+#[path = "../../test-support/src/device_authorization_history.rs"]
+mod device_history_fixture;
+
+/// Seed the confirmed-storage boundary using genuinely verified history.
+/// Direct Seal insertion here does not stand in for HTTP admission coverage.
+async fn device_authority(pool: &PgPool) -> soland_storage::DeviceRevocationGateSelector {
+    use diesel::sql_query;
+    use diesel::sql_types::{Binary, Bool, Jsonb, Nullable, Text};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::DeviceInventoryStore;
+    #[derive(diesel::QueryableByName)]
+    struct Station {
+        #[diesel(sql_type=Text)]
+        station_id: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,'ak:did_core:web:device-restart.example') ON CONFLICT DO NOTHING").execute(&mut *conn).await.unwrap();
+    let station = sql_query("SELECT station_id FROM device_inventory_station WHERE singleton")
+        .get_result::<Station>(&mut *conn)
+        .await
+        .unwrap();
+    let source =
+        device_history_fixture::DeviceHistoryFixture::new(station.station_id.parse().unwrap());
+    let history = source.verify().unwrap();
+    for seal in &source.seals {
+        sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_ref,is_genesis) VALUES($1,'sha256',$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
+            .bind::<Text,_>(seal.id.as_str()).bind::<Text,_>(seal.realm_id.as_str())
+            .bind::<Binary,_>(seal.canonical_bytes_for_id().unwrap()).bind::<Binary,_>(arkret_wire::seal::seal_canonical_bytes(seal).unwrap())
+            .bind::<Jsonb,_>(serde_json::to_value(seal).unwrap()).bind::<Nullable<Text>,_>(seal.predecessor_ref.as_ref().map(|id|id.as_str()))
+            .bind::<Bool,_>(seal.predecessor_ref.is_none()).execute(&mut *conn).await.unwrap();
+    }
+    drop(conn);
+    soland_storage_postgres::PgDeviceInventoryStore { pool: pool.clone() }
+        .install_confirmed_history(&history)
+        .await
+        .unwrap();
+    let authorization = history.authorizations().first().unwrap();
+    soland_storage::DeviceRevocationGateSelector {
+        principal_id: source.account.principal_id,
+        station_id: source.account.station_id,
+        device_id: authorization.device_id().to_string(),
+        target_device_authorize_event_id: authorization.authorization_event_id().to_string(),
+        target_device_generation_ref: authorization.authorized_generation_ref(),
+    }
+}
+
 /// Build a fresh pool against the configured database. Migrations are
 /// idempotent, so a second `Db::connect` behaves like a restarted process
 /// attaching to the same database.
@@ -148,15 +194,16 @@ async fn postgres_device_keys_survive_restart() {
     let pool = fresh_pool().await;
     let store = PgDeviceKeyStore { pool: pool.clone() };
     let namespace = format!("postgres-device-keys-{}", uuid::Uuid::now_v7());
-    assert_device_key_store_contract(&store, &namespace).await;
+    let authorization = device_authority(&pool).await;
+    assert_device_key_store_contract(&store, &namespace, &authorization).await;
     drop(pool);
 
     let restarted_pool = fresh_pool().await;
     let restarted = PgDeviceKeyStore {
         pool: restarted_pool,
     };
-    let actor = format!("did:web:{namespace}.example");
-    let device_id = format!("ak:device:{namespace}");
+    let actor = authorization.principal_id.to_string();
+    let device_id = authorization.device_id.clone();
     let bundle = restarted
         .get(&actor, &device_id)
         .await
@@ -171,14 +218,15 @@ async fn postgres_one_time_keys_claim_survives_restart() {
     let pool = fresh_pool().await;
     let store = PgOneTimeKeyStore { pool: pool.clone() };
     let namespace = format!("postgres-one-time-keys-{}", uuid::Uuid::now_v7());
-    assert_one_time_key_store_contract(&store, &namespace).await;
+    let authorization = device_authority(&pool).await;
+    assert_one_time_key_store_contract(&store, &namespace, &authorization).await;
 
-    let actor = format!("did:web:{namespace}-restart.example");
-    let device_id = format!("ak:device:{namespace}-restart");
+    let actor = authorization.principal_id.to_string();
+    let device_id = authorization.device_id.clone();
     let pooled =
         serde_json::json!({"key_id": format!("curve25519:{namespace}-restart"), "key": "restart"});
     store
-        .put(actor.clone(), device_id.clone(), vec![pooled.clone()])
+        .put(&authorization, vec![pooled.clone()])
         .await
         .expect("pool one-time key before restart");
     drop(pool);

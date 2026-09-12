@@ -41,6 +41,12 @@ pub struct PgMlsCommitStore {
 #[async_trait]
 impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
+        match (&record.device_id, &record.device_authorize_event_id, &record.agent_key_authorize_event_id) {
+            (Some(_), Some(_), None) | (None, None, Some(_)) | (None, None, None) => {}
+            _ => return Err(PersistenceError::SchemaViolation(
+                "KeyPackage producer must bind one human device authorization or a non-device endpoint".into(),
+            )),
+        }
         record.lifecycle().map_err(|error| {
             PersistenceError::SchemaViolation(format!(
                 "invalid MLS KeyPackage lifecycle before insert: {error}"
@@ -49,6 +55,28 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        conn.transaction::<_,PgTransactionError,_>(async move |conn| {
+        // An exact existing id cannot publish new material. Do not relabel it
+        // with a successor authorization merely because a retry arrived later.
+        if sql_query("SELECT to_jsonb(id) AS payload FROM mls_key_packages WHERE id=$1")
+            .bind::<Text,_>(&record.id).get_result::<super::JsonPayloadRow>(&mut *conn).await.optional()?.is_some() {
+            return Ok(false);
+        }
+        if let Some(original_authorize) = &record.device_authorize_event_id {
+            let device = record.device_id.as_deref().ok_or_else(||PersistenceError::SchemaViolation("human KeyPackage omits device".into()))?;
+            let binding = crate::device_revocations::local_device_binding_in_transaction(conn,&record.actor_id,device).await?
+                .ok_or_else(||PersistenceError::Conflict("device_unauthorized".into()))?;
+            if binding.target_device_authorize_event_id != *original_authorize {
+                return Err(PersistenceError::Conflict("device authorization changed since upload verification".into()).into());
+            }
+            #[derive(QueryableByName)]
+            struct Owner { #[diesel(sql_type=Text)] principal_id: String, #[diesel(sql_type=Text)] station_id: String }
+            let owner=sql_query("SELECT principal_id,station_id FROM accounts WHERE pk=$1").bind::<BigInt,_>(record.owner_account_pk.get()).get_result::<Owner>(&mut *conn).await?;
+            if owner.principal_id != binding.principal_id.as_str() || owner.station_id != binding.station_id.as_str() {
+                return Err(PersistenceError::Conflict("KeyPackage account differs from its original device authorization".into()).into());
+            }
+            crate::ensure_gate_allowed_in_transaction(conn,&binding).await?;
+        }
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
              (id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, key_package_bytes, \
@@ -88,6 +116,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .execute(&mut *conn)
         .await.map_err(PersistenceError::database)?;
         Ok(inserted > 0)
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 
     async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>> {

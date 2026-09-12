@@ -1,3 +1,6 @@
+mod historical;
+pub(crate) use historical::{enforce_event_gate, validate_event_producer_binding};
+
 use super::*;
 
 #[derive(QueryableByName)]
@@ -291,7 +294,7 @@ pub(crate) async fn current_device_binding_in_transaction(
     device_id: &str,
 ) -> PersistenceResult<Option<DeviceRevocationGateSelector>> {
     ensure_head_locked(conn, principal_id.as_str(), station_id.as_str(), device_id).await?;
-    let row = sql_query("SELECT payload,(verification_state='verified' AND revoked_at IS NULL) AS active FROM devices WHERE actor_id=$1 AND station_id=$2 AND device_id=$3 FOR SHARE")
+    let row = sql_query("SELECT d.payload,(d.verification_state='verified' AND d.revoked_at IS NULL AND EXISTS (SELECT 1 FROM device_history_projections p JOIN state_seals h ON h.id=p.confirmed_head WHERE p.principal_id=$1 AND p.station_id=$2 AND h.realm_id=p.realm_id AND NOT EXISTS(SELECT 1 FROM state_seal_quarantine_realms q WHERE q.realm_id=p.realm_id) AND NOT EXISTS(SELECT 1 FROM state_seals c WHERE c.realm_id=p.realm_id AND c.predecessor_ref=h.id) AND NOT EXISTS(SELECT 1 FROM state_seals other_head WHERE other_head.realm_id=p.realm_id AND other_head.id<>h.id AND NOT EXISTS(SELECT 1 FROM state_seals child WHERE child.realm_id=p.realm_id AND child.predecessor_ref=other_head.id)))) AS active FROM devices d WHERE d.actor_id=$1 AND d.station_id=$2 AND d.device_id=$3 FOR SHARE OF d")
         .bind::<Text,_>(principal_id.as_str()).bind::<Text,_>(station_id.as_str()).bind::<Text,_>(device_id)
         .get_result::<CurrentDeviceBindingRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
     let Some(row) = row.filter(|row| row.active) else {
@@ -324,6 +327,30 @@ pub(crate) async fn current_device_binding_in_transaction(
         target_device_authorize_event_id: event.into(),
         target_device_generation_ref: generation,
     }))
+}
+
+#[derive(QueryableByName)]
+struct LocalStationRow {
+    #[diesel(sql_type = Text)]
+    station_id: arkret_wire::DidCoreId,
+}
+
+pub(crate) async fn local_device_binding_in_transaction(
+    conn: &mut AsyncPgConnection,
+    principal: &str,
+    device_id: &str,
+) -> PersistenceResult<Option<DeviceRevocationGateSelector>> {
+    let station = sql_query("SELECT station_id FROM device_inventory_station WHERE singleton")
+        .get_result::<LocalStationRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+    let Some(station) = station else {
+        return Ok(None);
+    };
+    let principal = arkret_wire::DidCoreId::new(principal.to_owned())
+        .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+    current_device_binding_in_transaction(conn, &principal, &station.station_id, device_id).await
 }
 
 pub(crate) async fn gate_status_in_transaction(

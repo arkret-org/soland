@@ -119,6 +119,7 @@ fn persistence_event_commit_request(
         control_proposal_ingress: command.control_proposal_ingress,
         device_revocation_transition: command.device_revocation_transition,
         device_revocation_gate: command.device_revocation_gate,
+        historical_producer: command.historical_producer,
         projections: command
             .projections
             .into_iter()

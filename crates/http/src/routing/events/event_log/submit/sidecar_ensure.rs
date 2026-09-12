@@ -179,6 +179,7 @@ async fn validate_and_prepare(
         control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
+        historical_producer: None,
         projections: vec![projected_event.clone()],
         idempotency: None,
         deliveries: Vec::new(),

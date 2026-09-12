@@ -98,6 +98,26 @@ async fn keys_upload(
         &body.device_signature,
     )?;
 
+    let original_device = current_device
+        .as_ref()
+        .ok_or_else(|| AppError::capability_denied("device authorization unavailable"))?;
+    let (authorization_event_id, generation) =
+        super::device_generation::verified_device_authorization_binding(original_device)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| AppError::capability_denied("device authorization unavailable"))?;
+    // Freeze the same instance whose key verified this upload. Storage compares
+    // this original tuple under its device lock; it never substitutes a successor.
+    let authorization = soland_storage::DeviceRevocationGateSelector {
+        principal_id: session
+            .actor
+            .parse()
+            .map_err(|error| AppError::internal(format!("invalid session actor: {error}")))?,
+        station_id: state.service_core_id().clone(),
+        device_id: device_id.clone(),
+        target_device_authorize_event_id: authorization_event_id.to_string(),
+        target_device_generation_ref: generation,
+    };
+
     let one_time_key_count = body.one_time_keys.len() as u64;
     let mut one_time_key_alg_counts = BTreeMap::new();
     for key_id in body.one_time_keys.keys() {
@@ -119,64 +139,18 @@ async fn keys_upload(
         "device_signature": body.device_signature.clone(),
         "updated_at": now(),
     });
-    if let Err(error) = state
+    state
         .key_material()
-        .save_bundle(
-            session.actor.clone(),
-            device_id.clone(),
-            key_payload.clone(),
-        )
+        .save_bundle(&authorization, key_payload)
         .await
-    {
-        tracing::error!(%error, "failed to persist device keys");
-    }
+        .map_err(|error| AppError::internal(format!("persist device keys: {error}")))?;
 
     let updated_at = now();
-    let previous_payload = current_device
-        .as_ref()
-        .map(|device| device.payload.clone())
-        .unwrap_or_else(|| json!({"device_id": device_id.clone()}));
-    let mut device_payload = previous_payload.clone();
-    if let Some(map) = device_payload.as_object_mut() {
-        map.insert("device_id".to_owned(), Value::String(device_id.clone()));
-        map.insert(
-            "display_name".to_owned(),
-            current_device
-                .as_ref()
-                .and_then(|device| device.display_name.clone())
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        );
-        map.insert(
-            "verification".to_owned(),
-            Value::String(
-                current_device
-                    .as_ref()
-                    .map(|device| device.verification_state.clone())
-                    .unwrap_or_else(|| "unverified".to_owned()),
-            ),
-        );
-        map.insert("last_key_upload_at".to_owned(), json!(updated_at));
-        map.insert("inventory".to_owned(), previous_payload.clone());
+    let mut device = original_device.clone();
+    device.updated_at = updated_at;
+    if let Some(payload) = device.payload.as_object_mut() {
+        payload.insert("last_key_upload_at".into(), json!(updated_at));
     }
-    let device = DeviceIdentity {
-        actor_id: session.actor.clone(),
-        device_id: device_id.clone(),
-        display_name: current_device
-            .as_ref()
-            .and_then(|device| device.display_name.clone()),
-        verification_state: current_device
-            .as_ref()
-            .map(|device| device.verification_state.clone())
-            .unwrap_or_else(|| "unverified".to_owned()),
-        payload: device_payload,
-        created_at: current_device
-            .as_ref()
-            .map(|device| device.created_at)
-            .unwrap_or(updated_at),
-        updated_at,
-        revoked_at: None,
-    };
     state
         .identities()
         .save_device(SaveDeviceCommand {
@@ -188,11 +162,10 @@ async fn keys_upload(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
-    if let Err(error) = state
+    state
         .key_material()
         .save_one_time_keys(
-            session.actor,
-            device_id,
+            &authorization,
             one_time_keys
                 .into_values()
                 .map(serde_json::to_value)
@@ -200,9 +173,7 @@ async fn keys_upload(
                 .map_err(|error| AppError::internal(format!("serialize one-time key: {error}")))?,
         )
         .await
-    {
-        tracing::error!(%error, "failed to persist one-time keys");
-    }
+        .map_err(|error| AppError::internal(format!("persist one-time keys: {error}")))?;
 
     one_time_key_alg_counts.insert(
         arkret_wire::NonEmptyString::new("total").expect("total is non-empty"),

@@ -502,18 +502,17 @@ diesel::table! {
     device_keys (actor_id, device_id) {
         actor_id -> Text,
         device_id -> Text,
+        device_authorization -> Jsonb,
         payload -> Jsonb,
         updated_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    device_revocation_linearization_heads (principal_id, station_id, device_id, target_device_authorize_event_id, target_device_generation_ref) {
+    device_revocation_linearization_heads (principal_id, station_id, device_id) {
         principal_id -> Text,
         station_id -> Text,
         device_id -> Text,
-        target_device_authorize_event_id -> Text,
-        target_device_generation_ref -> Int8,
         last_seq -> Int8,
         updated_at -> Timestamptz,
     }
@@ -1020,6 +1019,7 @@ diesel::table! {
     one_time_keys (actor_id, device_id, position) {
         actor_id -> Text,
         device_id -> Text,
+        device_authorization -> Jsonb,
         position -> Int4,
         key -> Jsonb,
         created_at -> Timestamptz,

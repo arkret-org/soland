@@ -863,8 +863,7 @@ pub struct DeviceIdentity {
 pub trait DeviceKeyPort: Send + Sync {
     async fn save_bundle(
         &self,
-        actor_id: String,
-        device_id: String,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
         payload: Value,
     ) -> ServiceResult<()>;
     async fn bundle(&self, actor_id: &str, device_id: &str) -> ServiceResult<Option<Value>>;
@@ -874,8 +873,7 @@ pub trait DeviceKeyPort: Send + Sync {
 pub trait OneTimeKeyPort: Send + Sync {
     async fn save_keys(
         &self,
-        actor_id: String,
-        device_id: String,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
         keys: Vec<Value>,
     ) -> ServiceResult<()>;
     async fn claim_key(&self, actor_id: &str, device_id: &str) -> ServiceResult<Option<Value>>;
@@ -900,13 +898,10 @@ impl KeyMaterialService {
 
     pub async fn save_bundle(
         &self,
-        actor_id: String,
-        device_id: String,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
         payload: Value,
     ) -> ServiceResult<()> {
-        self.device_keys
-            .save_bundle(actor_id, device_id, payload)
-            .await
+        self.device_keys.save_bundle(authorization, payload).await
     }
 
     pub async fn bundle(&self, actor_id: &str, device_id: &str) -> ServiceResult<Option<Value>> {
@@ -915,13 +910,10 @@ impl KeyMaterialService {
 
     pub async fn save_one_time_keys(
         &self,
-        actor_id: String,
-        device_id: String,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
         keys: Vec<Value>,
     ) -> ServiceResult<()> {
-        self.one_time_keys
-            .save_keys(actor_id, device_id, keys)
-            .await
+        self.one_time_keys.save_keys(authorization, keys).await
     }
 
     pub async fn claim_one_time_key(

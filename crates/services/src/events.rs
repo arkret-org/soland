@@ -783,6 +783,8 @@ pub struct CommitAcceptedEventCommand {
     pub control_proposal_ingress: Option<arkret_state::state::store::ControlProposalIngress>,
     pub device_revocation_transition: Option<soland_storage::DeviceRevocationTransition>,
     pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
+    /// Complete SDK-verified original producer; only receiver-known revocations apply.
+    pub historical_producer: Option<arkret::historical_producer::VerifiedHistoricalEventProducer>,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDeliveryRecord>,
@@ -2467,6 +2469,7 @@ mod tests {
                 control_proposal_ingress: None,
                 device_revocation_transition: None,
                 device_revocation_gate: None,
+                historical_producer: None,
                 projections: vec![ProjectedEvent {
                     event_id,
                     realm_id,

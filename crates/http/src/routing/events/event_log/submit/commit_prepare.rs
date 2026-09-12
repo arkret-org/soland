@@ -17,6 +17,7 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
     pub(super) device_revoke_target_device_id: Option<&'a str>,
     pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
     pub(super) local_device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
+    pub(super) historical_producer: Option<arkret::historical_producer::VerifiedHistoricalEventProducer>,
     pub(super) membership_compensation_evidence:
         Option<&'a arkret_wire::MembershipCompensationSubmissionEvidence>,
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
@@ -50,6 +51,7 @@ pub(super) async fn prepare_accepted_event_command(
         device_revoke_target_device_id,
         control_proposal_ack,
         local_device_revocation_gate,
+        historical_producer,
         mls_frontier_leaves,
         membership_compensation_evidence,
         internal_admission,
@@ -314,6 +316,7 @@ pub(super) async fn prepare_accepted_event_command(
         },
         device_revocation_transition,
         device_revocation_gate: local_device_revocation_gate,
+        historical_producer,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {
