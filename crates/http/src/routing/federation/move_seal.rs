@@ -794,9 +794,9 @@ fn validate_bootstrap_first_seal(
     if covered_required == required.len() {
         return Ok(false);
     }
-    if !required.is_subset(target) {
+    if target != &required {
         return Err(seal_admission_error(
-            "first principal-control Seal target omits the bootstrap unit",
+            "first principal-control Seal target must equal the bootstrap unit",
         ));
     }
     Ok(true)
@@ -847,6 +847,20 @@ fn first_seal_signer_matches(
     required_public_key: &str,
 ) -> bool {
     signer_device_id == required_device_id && signer_public_key == required_public_key
+}
+
+fn bootstrap_first_seal_signature_matches(
+    principal_id: &str,
+    bootstrap_device_id: &str,
+    bootstrap_device_public_key: &str,
+    verification_method: &str,
+) -> bool {
+    device_verification_method_matches(
+        principal_id,
+        bootstrap_device_id,
+        bootstrap_device_public_key,
+        verification_method,
+    )
 }
 
 fn verify_device_seal_signature(
@@ -1126,87 +1140,104 @@ async fn try_apply_device_generation_event_seal(
     };
 
     let signature = &seal.notary_signature;
-    let devices = state
-        .identities()
-        .devices_for_actor(context.principal_id.as_str())
-        .await
-        .map_err(|error| {
-            crate::app_error!(
-                InternalError,
-                format!("device inventory unavailable: {error}"),
-            )
-        })?;
-    let signer = devices
-        .iter()
-        .find(|device| {
-            let Some(public_key) = device
-                .payload
-                .get("device_public_key_did")
-                .and_then(serde_json::Value::as_str)
-            else {
-                return false;
-            };
-            device_verification_method_matches(
-                context.principal_id.as_str(),
-                &device.device_id,
-                public_key,
-                &signature.verification_method,
-            )
-        })
-        .ok_or_else(|| {
-            device_generation_fenced("B-model Event Seal signer is not an authorized device")
-        })?;
-    let signer_public_key = signer
-        .payload
-        .get("device_public_key_did")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| device_generation_fenced("B-model Event Seal signer key is missing"))?;
-    if signer.revoked_at.is_some()
-        || signer.verification_state != "verified"
-        || context
-            .current_generation_ref
-            .as_ref()
-            .is_some_and(|generation| {
-                signer
-                    .payload
-                    .get("authorized_generation_ref")
-                    .and_then(serde_json::Value::as_u64)
-                    != Some(*generation)
-            })
-    {
-        return Err(device_generation_fenced(
-            "B-model Event Seal signer does not belong to the active device generation",
-        ));
-    }
-    if recovery_first {
-        let requirement = context
-            .generation_fence
-            .as_ref()
-            .expect("recovery-first Seal has a generation fence");
-        if !first_seal_signer_matches(
-            &signer.device_id,
-            signer_public_key,
-            &requirement.replacement_device_id,
-            &requirement.replacement_device_public_key,
-        ) {
-            return Err(device_generation_fenced(
-                "first new-generation Seal must be signed by the replacement recovery device",
-            ));
-        }
-    }
-    if bootstrap_first
-        && !first_seal_signer_matches(
-            &signer.device_id,
-            signer_public_key,
+    let devices = if bootstrap_first {
+        None
+    } else {
+        Some(
+            state
+                .identities()
+                .devices_for_actor(context.principal_id.as_str())
+                .await
+                .map_err(|error| {
+                    crate::app_error!(
+                        InternalError,
+                        format!("device inventory unavailable: {error}"),
+                    )
+                })?,
+        )
+    };
+    let signer_public_key = if bootstrap_first {
+        // The accepted identity-anchor native unit is the authority bootstrap:
+        // its root-bound founding authorize is already validated atomically, but
+        // deliberately has not manufactured a `verified` device-inventory row.
+        // Only the first Seal that covers that exact two-Event unit may use the
+        // frozen founding key directly. Every later Seal remains inventory- and
+        // generation-gated below.
+        if !bootstrap_first_seal_signature_matches(
+            context.principal_id.as_str(),
             &context.bootstrap_device_id,
             &context.bootstrap_device_public_key,
-        )
-    {
-        return Err(device_generation_fenced(
-            "first principal-control Seal must be signed by the bootstrap device",
-        ));
-    }
-    verify_device_seal_signature(seal, signer_public_key, digest_suites.seal_digest_suite)?;
+            signature.verification_method.as_str(),
+        ) {
+            return Err(device_generation_fenced(
+                "first principal-control Seal must be signed by the bootstrap device",
+            ));
+        }
+        context.bootstrap_device_public_key.clone()
+    } else {
+        let signer = devices
+            .as_ref()
+            .expect("non-bootstrap Seal loaded device inventory")
+            .iter()
+            .find(|device| {
+                let Some(public_key) = device
+                    .payload
+                    .get("device_public_key_did")
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    return false;
+                };
+                device_verification_method_matches(
+                    context.principal_id.as_str(),
+                    &device.device_id,
+                    public_key,
+                    signature.verification_method.as_str(),
+                )
+            })
+            .ok_or_else(|| {
+                device_generation_fenced("B-model Event Seal signer is not an authorized device")
+            })?;
+        let signer_public_key = signer
+            .payload
+            .get("device_public_key_did")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| device_generation_fenced("B-model Event Seal signer key is missing"))?;
+        if signer.revoked_at.is_some()
+            || signer.verification_state != "verified"
+            || context
+                .current_generation_ref
+                .as_ref()
+                .is_some_and(|generation| {
+                    signer
+                        .payload
+                        .get("authorized_generation_ref")
+                        .and_then(serde_json::Value::as_u64)
+                        != Some(*generation)
+                })
+        {
+            return Err(device_generation_fenced(
+                "B-model Event Seal signer does not belong to the active device generation",
+            ));
+        }
+        if recovery_first {
+            let requirement = context
+                .generation_fence
+                .as_ref()
+                .expect("recovery-first Seal has a generation fence");
+            if !first_seal_signer_matches(
+                &signer.device_id,
+                signer_public_key,
+                &requirement.replacement_device_id,
+                &requirement.replacement_device_public_key,
+            ) {
+                return Err(device_generation_fenced(
+                    "first new-generation Seal must be signed by the replacement recovery device",
+                ));
+            }
+        }
+        signer_public_key.to_owned()
+    };
+    verify_device_seal_signature(seal, &signer_public_key, digest_suites.seal_digest_suite)?;
 
     let admitted_generation_ref = context.current_generation_ref;
     let admitted_head_ref = context.accepted_head_ref.clone();
@@ -1324,6 +1355,8 @@ async fn try_apply_device_generation_event_seal(
                 )
             })?;
             let event_device = devices
+                .as_ref()
+                .expect("non-anchor Event delta loaded device inventory")
                 .iter()
                 .find(|device| device.device_id == device_id)
                 .ok_or_else(|| {
@@ -2648,6 +2681,7 @@ mod seal_delta_tests {
     fn bootstrap_first_seal_rejects_missing_and_partial_anchor_units() {
         let create = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
         let authorize = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let unrelated = Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap();
         let required = vec![create.clone(), authorize.clone()];
         assert!(
             validate_bootstrap_first_seal(
@@ -2659,8 +2693,16 @@ mod seal_delta_tests {
         );
         assert!(
             validate_bootstrap_first_seal(
-                &std::iter::once(create).collect(),
-                &std::iter::once(authorize).collect(),
+                &std::iter::once(create.clone()).collect(),
+                &std::iter::once(authorize.clone()).collect(),
+                &required,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_bootstrap_first_seal(
+                &BTreeSet::new(),
+                &[create, authorize, unrelated].into_iter().collect(),
                 &required,
             )
             .is_err()
@@ -2680,6 +2722,29 @@ mod seal_delta_tests {
             "did:key:z6MkOther",
             "ak:device:recovery",
             "did:key:z6MkRecovery",
+        ));
+    }
+
+    #[test]
+    fn bootstrap_first_seal_uses_only_the_frozen_founding_key() {
+        let public_key = "did:key:z6MkFounding";
+        assert!(bootstrap_first_seal_signature_matches(
+            "ak:did_core:web:alice.example",
+            "ak:device:founding",
+            public_key,
+            "did:key:z6MkFounding#z6MkFounding",
+        ));
+        assert!(!bootstrap_first_seal_signature_matches(
+            "ak:did_core:web:alice.example",
+            "ak:device:founding",
+            public_key,
+            "did:key:z6MkOther#z6MkOther",
+        ));
+        assert!(!bootstrap_first_seal_signature_matches(
+            "ak:did_core:web:alice.example",
+            "ak:device:founding",
+            public_key,
+            "did:web:alice.example#ak:device:other",
         ));
     }
 
