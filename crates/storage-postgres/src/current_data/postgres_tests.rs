@@ -61,7 +61,7 @@ fn source(
 }
 
 #[tokio::test]
-async fn concurrent_causal_sources_keep_distinct_full_heads_and_failed_patch_is_atomic() {
+async fn concurrent_causal_sources_choose_one_winner_and_failed_patch_is_atomic() {
     let database = crate::test_database::TestDatabase::lease().await;
     let pool = database.pool();
     let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
@@ -116,17 +116,14 @@ async fn concurrent_causal_sources_keep_distinct_full_heads_and_failed_patch_is_
         .await
         .unwrap()
         .payload;
-    let heads = current["result"]["heads"].as_array().unwrap();
-    assert_eq!(heads.len(), 2);
-    assert!(
-        heads
-            .iter()
-            .any(|head| head["value"]["metadata"] == json!({"title":"left","summary":"original"}))
-    );
-    assert!(
-        heads
-            .iter()
-            .any(|head| head["value"]["metadata"] == json!({"title":"base","summary":"right"}))
+    let expected_winner = if left.event_id.token_bytes() > right.event_id.token_bytes() {
+        &left
+    } else {
+        &right
+    };
+    assert_eq!(
+        current["result"]["source"]["event_id"],
+        expected_winner.event_id.as_str()
     );
     let invalid = source(
         "ak.strand.update",
@@ -153,13 +150,15 @@ async fn concurrent_causal_sources_keep_distinct_full_heads_and_failed_patch_is_
         count, 0,
         "rejected source must roll back accepted insertion"
     );
-    let selected = heads
-        .iter()
-        .find(|head| head["event_id"] == left.event_id.as_str())
-        .unwrap();
-    let selected_digest = arkret_canonical::sha256_digest(
-        arkret_canonical::canonical_json_bytes(&selected["value"]).unwrap(),
-    );
+    let selected =
+        sql_query("SELECT source_value AS payload FROM current_data_sources WHERE event_id=$1")
+            .bind::<Binary, _>(left.event_id.token_bytes().to_vec())
+            .get_result::<Payload>(&mut *conn)
+            .await
+            .unwrap()
+            .payload;
+    let selected_digest =
+        arkret_canonical::sha256_digest(arkret_canonical::canonical_json_bytes(&selected).unwrap());
     let merged = source(
         "ak.strand.update",
         &realm,
@@ -177,11 +176,7 @@ async fn concurrent_causal_sources_keep_distinct_full_heads_and_failed_patch_is_
         .unwrap()
         .payload;
     assert_eq!(
-        merged_current["result"]["heads"].as_array().unwrap().len(),
-        1
-    );
-    assert_eq!(
-        merged_current["result"]["heads"][0]["value"]["metadata"],
+        merged_current["result"]["value"]["metadata"],
         json!({"title":"left","summary":"right"})
     );
     let absent = source(
@@ -259,6 +254,35 @@ async fn concurrent_causal_sources_keep_distinct_full_heads_and_failed_patch_is_
         unavailable, 1,
         "withdrawing a base invalidates its derived post-state"
     );
+    conn.transaction::<(), crate::PgTransactionError, _>(async |conn| {
+        assert_eq!(
+            rebuild_pending_causal_registers(conn, realm.as_str(), 4096).await?,
+            1
+        );
+        Ok(())
+    })
+    .await
+    .map_err(crate::PgTransactionError::into_persistence)
+    .unwrap();
+    let fallback = sql_query("SELECT payload FROM current_result_heads WHERE realm_id=$1")
+        .bind::<Text, _>(realm.as_str())
+        .get_result::<Payload>(&mut *conn)
+        .await
+        .unwrap()
+        .payload;
+    assert_eq!(
+        fallback["result"]["source"]["event_id"],
+        right.event_id.as_str()
+    );
+    assert_eq!(fallback["result"]["source"]["depth"], 1);
+    let preserved_depth =
+        sql_query("SELECT causal_depth AS revision FROM current_data_sources WHERE event_id=$1")
+            .bind::<Binary, _>(right.event_id.token_bytes().to_vec())
+            .get_result::<Count>(&mut *conn)
+            .await
+            .unwrap()
+            .revision;
+    assert_eq!(preserved_depth, 1, "reselection must not recompute depth");
 }
 
 #[derive(QueryableByName)]

@@ -12,7 +12,9 @@ use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector,
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
+use arkret_state::state::{
+    SealEffect, SealReject, StoreError, control_event_set_root, event_digest_set_root,
+};
 use arkret_wire::{ActorId, DidCoreId, Event, Seal};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -1865,6 +1867,7 @@ pub(crate) async fn apply_inbound_seal(
         .map_err(|error| {
             crate::app_error!(SchemaViolation, format!("seal replay_window: {error}"),)
         })?;
+    validate_inbound_data_publication(state, seal).await?;
     if let Some(effect) = try_apply_device_generation_event_seal(state, seal).await? {
         return Ok(effect);
     }
@@ -1967,6 +1970,210 @@ pub(crate) async fn apply_inbound_seal(
             format!("commit inbound Seal atomically: {error}"),
         )),
     }
+}
+
+/// Verify that every data identity published by an inbound Seal resolves to a
+/// durable, authenticated ordinary Event in this Realm and that every closure
+/// commits the exact published subset for its data basis. The shared state
+/// reducer validates lineage, timing, cumulative roots, and monotonicity; this
+/// receiver-owned check supplies the Event material that a Seal intentionally
+/// does not embed.
+async fn validate_inbound_data_publication(state: &AppState, seal: &Seal) -> Result<(), AppError> {
+    let digest_suite = state
+        .projections()
+        .seal_digest_suites(seal)
+        .await
+        .map_err(app_error_from_seal_reject)?
+        .seal_digest_suite;
+    let mut confirmed_prefix = BTreeSet::new();
+    let mut published = BTreeSet::new();
+    let mut announced_bases = BTreeSet::new();
+    let mut closed_bases = BTreeSet::new();
+    let mut cursor = seal.predecessor_ref.clone();
+    while let Some(seal_id) = cursor {
+        let predecessor = state
+            .projections()
+            .seal_by_id(&seal_id)
+            .await
+            .map_err(|error| {
+                crate::app_error!(
+                    FrontierUnavailable,
+                    format!("load data-publication predecessor {seal_id}: {error}"),
+                )
+            })?
+            .ok_or_else(|| seal_admission_error("data-publication predecessor is missing"))?;
+        confirmed_prefix.insert(predecessor.id.clone());
+        published.extend(predecessor.data_delta.iter().cloned());
+        announced_bases.extend(
+            predecessor
+                .data_closure_announcements
+                .iter()
+                .map(|announcement| announcement.data_basis.clone()),
+        );
+        closed_bases.extend(
+            predecessor
+                .data_closures
+                .iter()
+                .map(|closure| closure.data_basis.clone()),
+        );
+        cursor = predecessor.predecessor_ref.clone();
+    }
+
+    if seal
+        .data_delta
+        .iter()
+        .any(|digest| published.contains(digest))
+    {
+        return Err(seal_admission_error(
+            "Seal.data_delta repeats a data Event from the predecessor prefix",
+        ));
+    }
+    published.extend(seal.data_delta.iter().cloned());
+    let expected_data_root =
+        event_digest_set_root(&published, digest_suite).map_err(app_error_from_seal_reject)?;
+    if seal.data_event_set_root != expected_data_root {
+        return Err(seal_admission_error(
+            "Seal data_event_set_root does not match its cumulative data identities",
+        ));
+    }
+
+    let records = state
+        .event_queries()
+        .realm_events_newest_first(seal.realm_id.as_str())
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                FrontierUnavailable,
+                format!("data-publication Event material unavailable: {error}"),
+            )
+        })?;
+    let mut data_basis_by_digest = BTreeMap::<Hash, SealId>::new();
+    for record in records {
+        let stored_digest = Hash::new(record.canonical_digest.clone()).map_err(|error| {
+            seal_admission_error(format!("stored ordinary Event digest is invalid: {error}"))
+        })?;
+        if !published.contains(&stored_digest) {
+            continue;
+        }
+        let event = serde_json::from_value::<Event>(record.envelope).map_err(|error| {
+            seal_admission_error(format!(
+                "published ordinary Event {} is invalid: {error}",
+                record.event_id
+            ))
+        })?;
+        let recomputed = event
+            .event_digest_with_digest_suite(record.digest_suite)
+            .map_err(|error| {
+                seal_admission_error(format!(
+                    "published ordinary Event {} digest failed: {error}",
+                    record.event_id
+                ))
+            })?;
+        if recomputed != record.canonical_digest
+            || event.realm_id != seal.realm_id
+            || !event.kind.is_data_plane()
+        {
+            return Err(seal_admission_error(
+                "Seal data identity does not resolve to a canonical same-Realm data Event",
+            ));
+        }
+        let basis = event.data_basis.ok_or_else(|| {
+            seal_admission_error("published ordinary Event has no signed data_basis")
+        })?;
+        if !confirmed_prefix.contains(&basis) {
+            return Err(seal_admission_error(
+                "published ordinary Event data_basis is outside the confirmed predecessor prefix",
+            ));
+        }
+        if data_basis_by_digest.insert(stored_digest, basis).is_some() {
+            return Err(seal_admission_error(
+                "ordinary Event history contains a duplicate canonical digest",
+            ));
+        }
+    }
+    validate_data_identity_set(
+        &seal.data_delta,
+        &seal.data_closure_announcements,
+        &seal.data_closures,
+        &confirmed_prefix,
+        &announced_bases,
+        &closed_bases,
+        &published,
+        &data_basis_by_digest,
+        digest_suite,
+    )
+    .map_err(seal_admission_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_data_identity_set(
+    data_delta: &[Hash],
+    announcements: &[arkret_wire::DataClosureAnnouncement],
+    closures: &[arkret_wire::DataClosure],
+    confirmed_prefix: &BTreeSet<SealId>,
+    announced_bases: &BTreeSet<SealId>,
+    closed_bases: &BTreeSet<SealId>,
+    published: &BTreeSet<Hash>,
+    data_basis_by_digest: &BTreeMap<Hash, SealId>,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<(), String> {
+    let missing = published
+        .iter()
+        .filter(|digest| !data_basis_by_digest.contains_key(*digest))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "Seal data identities lack authenticated Event material: {}",
+            missing.join(",")
+        ));
+    }
+    let newly_announced = announcements
+        .iter()
+        .map(|announcement| announcement.data_basis.clone())
+        .collect::<BTreeSet<_>>();
+    for digest in data_delta {
+        let basis = data_basis_by_digest
+            .get(digest)
+            .ok_or_else(|| "new data identity has no authenticated Event material".to_owned())?;
+        if !confirmed_prefix.contains(basis) {
+            return Err(
+                "published ordinary Event data_basis is outside the confirmed predecessor prefix"
+                    .to_owned(),
+            );
+        }
+        if closed_bases.contains(basis) {
+            return Err(
+                "Seal publishes a data Event after its signed data_basis closed".to_owned(),
+            );
+        }
+        if !announced_bases.contains(basis) && !newly_announced.contains(basis) {
+            return Err(
+                "each newly published data basis requires a confirmed or co-signed closure announcement"
+                    .to_owned(),
+            );
+        }
+    }
+
+    for closure in closures {
+        let members = published
+            .iter()
+            .filter(|digest| data_basis_by_digest.get(*digest) == Some(&closure.data_basis))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let expected_root =
+            event_digest_set_root(&members, digest_suite).map_err(|error| error.to_string())?;
+        if closure.allowed_event_set.root != expected_root
+            || closure.allowed_event_set.member_count
+                != u64::try_from(members.len()).unwrap_or(u64::MAX)
+        {
+            return Err(
+                "data closure allowed_event_set does not match the exact published basis subset"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), AppError> {
@@ -2335,6 +2542,106 @@ mod seal_delta_tests {
     fn seal_delta_accepts_sha256() {
         let entries = vec![format!("sha256:{}", "a".repeat(64))];
         validate_seal_delta_entries(&entries).unwrap();
+    }
+
+    #[test]
+    fn data_identity_set_requires_material_open_basis_announcement_and_exact_closure() {
+        let basis = SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap();
+        let announcement_ref = SealId::new(format!("ak:seal:sha256:{}", "2".repeat(64))).unwrap();
+        let digest = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let published = BTreeSet::from([digest.clone()]);
+        let material = BTreeMap::from([(digest.clone(), basis.clone())]);
+        let root =
+            event_digest_set_root(&published, arkret_canonical::DigestSuite::Sha256).unwrap();
+        let announcement = arkret_wire::DataClosureAnnouncement {
+            data_basis: basis.clone(),
+            not_before: chrono::Utc::now(),
+        };
+        let closure = arkret_wire::DataClosure {
+            data_basis: basis.clone(),
+            announcement_ref,
+            allowed_event_set: arkret_wire::DataSetCommitment {
+                root,
+                member_count: 1,
+            },
+        };
+        let prefix = BTreeSet::from([basis.clone()]);
+
+        validate_data_identity_set(
+            std::slice::from_ref(&digest),
+            std::slice::from_ref(&announcement),
+            std::slice::from_ref(&closure),
+            &prefix,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &published,
+            &material,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+
+        assert!(
+            validate_data_identity_set(
+                std::slice::from_ref(&digest),
+                &[],
+                &[],
+                &prefix,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                &published,
+                &material,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap_err()
+            .contains("announcement")
+        );
+        assert!(
+            validate_data_identity_set(
+                std::slice::from_ref(&digest),
+                std::slice::from_ref(&announcement),
+                &[],
+                &prefix,
+                &BTreeSet::new(),
+                &BTreeSet::from([basis.clone()]),
+                &published,
+                &material,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap_err()
+            .contains("closed")
+        );
+        let mut wrong_closure = closure;
+        wrong_closure.allowed_event_set.member_count = 0;
+        assert!(
+            validate_data_identity_set(
+                &[],
+                &[],
+                &[wrong_closure],
+                &prefix,
+                &BTreeSet::from([basis]),
+                &BTreeSet::new(),
+                &published,
+                &material,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap_err()
+            .contains("exact published basis subset")
+        );
+        assert!(
+            validate_data_identity_set(
+                &[],
+                &[],
+                &[],
+                &prefix,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                &published,
+                &BTreeMap::new(),
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap_err()
+            .contains("lack authenticated Event material")
+        );
     }
 
     #[test]

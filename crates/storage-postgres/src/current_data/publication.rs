@@ -18,7 +18,7 @@ struct HeadRow {
     available: bool,
 }
 
-pub(super) async fn materialized_current(
+pub(crate) async fn materialized_current(
     conn: &mut AsyncPgConnection,
     selector: CurrentSelector,
     revision: u64,
@@ -27,27 +27,7 @@ pub(super) async fn materialized_current(
     let descriptor = current_family_descriptor(cell.component())
         .map_err(projection_error)?
         .ok_or_else(|| projection_error("current family is not registered"))?;
-    let target = match descriptor.target_derivation.as_str() {
-        "enclosing_realm" => CurrentTarget::Realm,
-        "registered_subject_strand" => CurrentTarget::Strand {
-            strand_id: cell.subject().parse().map_err(projection_error)?,
-        },
-        "registered_position_subject_strand" => CurrentTarget::Strand {
-            strand_id: cell.strand_position_target().map_err(projection_error)?,
-        },
-        "message_create_event_from_registered_subject" => CurrentTarget::Event {
-            event_id: cell
-                .subject()
-                .parse::<arkret_wire::MessageId>()
-                .map_err(projection_error)?
-                .event_id(),
-        },
-        _ => {
-            return Err(projection_error(
-                "Data MV family has an unsupported target derivation",
-            ));
-        }
-    };
+    let target = current_target(&cell, &descriptor)?;
     let realm = match &selector.scope_ref {
         arkret_wire::ScopeRef::Realm { realm_id }
         | arkret_wire::ScopeRef::Circle { realm_id, .. } => realm_id,
@@ -97,4 +77,49 @@ pub(super) async fn materialized_current(
         raw["result"] = serde_json::json!({"status":"unavailable","reason":"limit_exceeded"});
     }
     CurrentResultEntry::try_from_json(raw).map_err(projection_error)
+}
+
+fn current_target(
+    cell: &arkret_wire::CellId,
+    descriptor: &arkret_models_collaboration::sync_frames::current_results::CurrentFamilyDescriptor,
+) -> PersistenceResult<CurrentTarget> {
+    Ok(match descriptor.target_derivation.as_str() {
+        "enclosing_realm" => CurrentTarget::Realm,
+        "registered_subject_strand" => CurrentTarget::Strand {
+            strand_id: cell.subject().parse().map_err(projection_error)?,
+        },
+        "registered_position_subject_strand" => CurrentTarget::Strand {
+            strand_id: cell.strand_position_target().map_err(projection_error)?,
+        },
+        "message_create_event_from_registered_subject" => CurrentTarget::Event {
+            event_id: cell
+                .subject()
+                .parse::<arkret_wire::MessageId>()
+                .map_err(projection_error)?
+                .event_id(),
+        },
+        _ => {
+            return Err(projection_error(
+                "Data MV family has an unsupported target derivation",
+            ));
+        }
+    })
+}
+
+pub(crate) fn removed_current(
+    selector: CurrentSelector,
+    revision: u64,
+) -> PersistenceResult<CurrentResultEntry> {
+    let cell = arkret_wire::CellId::from_ref(&selector.cell_id).map_err(projection_error)?;
+    let descriptor = current_family_descriptor(cell.component())
+        .map_err(projection_error)?
+        .ok_or_else(|| projection_error("current family is not registered"))?;
+    let target = current_target(&cell, &descriptor)?;
+    CurrentResultEntry::try_from_json(serde_json::json!({
+        "selector": selector,
+        "target": target,
+        "revision": revision,
+        "result": {"status": "removed"}
+    }))
+    .map_err(projection_error)
 }

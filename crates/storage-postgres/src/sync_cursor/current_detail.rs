@@ -138,6 +138,7 @@ pub(super) async fn page(
             retention::check(conn,Some(progress.retained_revision),None).await?;
         } else { retention::lock(conn,true).await?; }
         crate::state_resolution::refresh_current_if_expired(conn,request.realm_id.as_str(),registry).await?;
+        crate::current_data::rebuild_pending_causal_registers(conn,request.realm_id.as_str(),4096).await?;
         let cut=if progress.is_some() {
             sql_query("SELECT revision FROM account_summary_clock WHERE singleton FOR SHARE")
                 .get_result::<SummaryWatermarkRow>(&mut *conn).await?.revision

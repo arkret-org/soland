@@ -22,6 +22,94 @@ struct SourceRow {
     causal_depth: i64,
 }
 
+#[derive(QueryableByName)]
+struct PendingCausalCell {
+    #[diesel(sql_type = Text)]
+    scope_key: String,
+    #[diesel(sql_type = Text)]
+    cell_id: String,
+}
+
+#[derive(QueryableByName)]
+struct WinnerEvent {
+    #[diesel(sql_type = Binary)]
+    event_id: Vec<u8>,
+}
+
+/// Re-select causal-register winners after source eligibility changes. Causal
+/// depth is immutable source evidence; rebuilding only filters eligibility and
+/// reapplies the registered `(depth, full EventId bytes)` order.
+pub(crate) async fn rebuild_pending_causal_registers(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    limit: i64,
+) -> PersistenceResult<usize> {
+    let rows = sql_query(
+        "SELECT scope_key,cell_id FROM current_data_pending WHERE realm_id=$1 ORDER BY scope_key,cell_id LIMIT $2 FOR UPDATE SKIP LOCKED",
+    )
+    .bind::<Text, _>(realm_id)
+    .bind::<diesel::sql_types::BigInt, _>(limit.clamp(1, 4096))
+    .load::<PendingCausalCell>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .into_iter()
+    .filter(|row| arkret_wire::is_registered_causal_register_cell(&row.cell_id))
+    .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let revision = crate::current_results::next_revision(conn).await?;
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let lock = format!("current-data:{realm_id}:{}:{}", row.scope_key, row.cell_id);
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind::<Text, _>(&lock)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+
+        let winner = sql_query(
+            "SELECT s.event_id FROM current_data_sources s JOIN canonical_events c ON c.id=s.event_id WHERE s.realm_id=$1 AND s.scope_key=$2 AND s.cell_id=$3 AND s.available AND c.state='accepted' AND EXISTS(SELECT 1 FROM accepted_events a WHERE a.id=s.event_id) ORDER BY s.causal_depth DESC,s.event_id DESC LIMIT 1",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(&row.scope_key)
+        .bind::<Text, _>(&row.cell_id)
+        .get_result::<WinnerEvent>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+
+        let selector = arkret_models_collaboration::sync_frames::current_results::CurrentSelector {
+            scope_ref: serde_json::from_str(&row.scope_key).map_err(projection_error)?,
+            cell_id: arkret_wire::CellRef::new(row.cell_id.clone()).map_err(projection_error)?,
+        };
+        if let Some(winner) = winner {
+            sql_query("INSERT INTO current_data_winners(realm_id,scope_key,cell_id,event_id) VALUES($1,$2,$3,$4) ON CONFLICT(realm_id,scope_key,cell_id) DO UPDATE SET event_id=EXCLUDED.event_id")
+                .bind::<Text,_>(realm_id).bind::<Text,_>(&row.scope_key).bind::<Text,_>(&row.cell_id)
+                .bind::<Binary,_>(winner.event_id).execute(&mut *conn).await
+                .map_err(PersistenceError::database)?;
+            entries.push(publication::materialized_current(conn, selector, revision).await?);
+        } else {
+            sql_query("DELETE FROM current_data_winners WHERE realm_id=$1 AND scope_key=$2 AND cell_id=$3")
+                .bind::<Text,_>(realm_id).bind::<Text,_>(&row.scope_key).bind::<Text,_>(&row.cell_id)
+                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            entries.push(publication::removed_current(selector, revision)?);
+        }
+        sql_query(
+            "DELETE FROM current_data_pending WHERE realm_id=$1 AND scope_key=$2 AND cell_id=$3",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(&row.scope_key)
+        .bind::<Text, _>(&row.cell_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    }
+    crate::current_results::publish_entries(conn, &entries).await?;
+    Ok(rows.len())
+}
+
 /// Publishes current Data sources in the ordinary Event transaction or the
 /// exact committed command-unit transaction. Pending and rejected units cannot
 /// publish even when a member has only Data writes.

@@ -392,6 +392,16 @@ struct EffectiveStateCheckpointRow {
 }
 
 #[derive(QueryableByName)]
+struct DataClosureCandidateRow {
+    #[diesel(sql_type = Binary)]
+    id: Vec<u8>,
+    #[diesel(sql_type = diesel::sql_types::SmallInt)]
+    digest_suite: i16,
+    #[diesel(sql_type = Binary)]
+    digest: Vec<u8>,
+}
+
+#[derive(QueryableByName)]
 struct StoredSealRow {
     #[diesel(sql_type = Text)]
     digest_suite: String,
@@ -683,6 +693,62 @@ async fn lock_seal_realm(
         .execute(conn)
         .await
         .map(|_| ())
+}
+
+/// Apply authenticated data-basis non-membership while holding the same Realm
+/// lock as ordinary Event admission. This closes the race between accepting a
+/// late Event and freezing the Seal's allowed identity set.
+async fn apply_data_closures(
+    conn: &mut AsyncPgConnection,
+    seal: &Seal,
+) -> Result<(), EventSealCommitError> {
+    if seal.data_closures.is_empty() {
+        return Ok(());
+    }
+    let bases = seal
+        .data_closures
+        .iter()
+        .map(|closure| closure.data_basis.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let mut published = seal.data_delta.iter().cloned().collect::<BTreeSet<_>>();
+    let lineage = sql_query("SELECT seal_json AS value FROM state_seals s WHERE s.realm_id=$1 AND s.id<>$2 AND NOT EXISTS(SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=s.id)")
+        .bind::<Text,_>(seal.realm_id.as_str()).bind::<Text,_>(seal.id.as_str())
+        .load::<JsonRow>(&mut *conn).await?;
+    for row in lineage {
+        let predecessor: Seal = serde_json::from_value(row.value).map_err(serde_to_store)?;
+        published.extend(predecessor.data_delta);
+    }
+
+    let candidates = sql_query("SELECT id,digest_suite,digest FROM canonical_events WHERE realm_id=$1 AND state='accepted' AND envelope->>'data_basis'=ANY($2) FOR UPDATE")
+        .bind::<Text,_>(seal.realm_id.as_str()).bind::<Array<Text>,_>(&bases)
+        .load::<DataClosureCandidateRow>(&mut *conn).await?;
+    let mut excluded = Vec::new();
+    for row in candidates {
+        let digest: [u8; 32] = row.digest.try_into().map_err(|_| {
+            StoreError::Backend("stored data Event digest has invalid length".to_owned())
+        })?;
+        let suite = u8::try_from(row.digest_suite).map_err(|_| {
+            StoreError::Backend("stored data Event digest suite is invalid".to_owned())
+        })?;
+        let formatted = crate::ids::format_event_digest(suite, &digest).ok_or_else(|| {
+            StoreError::Backend("stored data Event digest suite is unsupported".to_owned())
+        })?;
+        let identity =
+            Hash::new(formatted).map_err(|error| StoreError::Backend(error.to_string()))?;
+        if !published.contains(&identity) {
+            excluded.push(row.id);
+        }
+    }
+    if excluded.is_empty() {
+        return Ok(());
+    }
+    sql_query("UPDATE canonical_events SET state='quarantined' WHERE realm_id=$1 AND id=ANY($2) AND state='accepted'")
+        .bind::<Text,_>(seal.realm_id.as_str()).bind::<Array<Binary>,_>(&excluded)
+        .execute(&mut *conn).await?;
+    crate::current_data::rebuild_pending_causal_registers(conn, seal.realm_id.as_str(), 4096)
+        .await
+        .map_err(persistence_to_store)?;
+    Ok(())
 }
 
 /// Refresh expired or unavailable derived results inside the caller's transaction.
@@ -2188,6 +2254,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         }
         let pool = self.pool.clone();
         let cell_registry = self.cell_registry.clone();
+        let data_closure_seal = seal.clone();
         let rule_context = CheckpointRuleContext::capture(cell_registry.as_ref(), &seal.realm_id)?;
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
         let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
@@ -2382,6 +2449,10 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 if actual != expected {
                     return Ok(SealInsertOutcome::FrontierMismatch);
                 }
+                // Close ordinary-data bases before publishing derived state.
+                // Ordinary Event admission uses this same Realm advisory lock,
+                // so exactly one side of the closure race commits first.
+                apply_data_closures(conn, &data_closure_seal).await?;
                 let existing_ops = sql_query(
                     "SELECT COUNT(*) AS value FROM state_cell_ops WHERE seal_id = $1",
                 )

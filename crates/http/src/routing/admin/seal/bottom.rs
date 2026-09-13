@@ -14,7 +14,7 @@ use crate::{JsonResult, app_error, json_ok};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Preserve the SDK's closed causal-register Bottom diagnostic in the admin response.
+/// Preserve the SDK's closed cross-Cell domain diagnostic in the admin response.
 pub(super) fn bottom_entry_from(
     realm_id: &RealmId,
     cell_id: &CellRef,
@@ -53,7 +53,7 @@ async fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> V
         let Ok(binding) = state.projections().resolve_cell(&realm, &cell) else {
             continue;
         };
-        if binding.state_model != arkret_state::state_model::StateModelKind::CausalRegister {
+        if binding.state_model == arkret_state::state_model::StateModelKind::CausalRegister {
             continue;
         }
         let Some(cell_state) = proj.cell(&cell) else {

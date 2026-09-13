@@ -118,6 +118,27 @@ struct DataPublicationMaterial {
     closures: Vec<DataClosure>,
 }
 
+fn data_publication_is_due(
+    oldest_unpublished: Option<chrono::DateTime<chrono::Utc>>,
+    sealed_at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let target_period = chrono::Duration::milliseconds(
+        i64::try_from(arkret_wire::seal::DATA_PUBLICATION_TARGET_PERIOD_MS)
+            .expect("data publication period fits i64"),
+    );
+    oldest_unpublished.is_some_and(|received_at| sealed_at >= received_at + target_period)
+}
+
+fn data_closure_not_before(
+    sealed_at: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    let grace = chrono::Duration::milliseconds(
+        i64::try_from(arkret_wire::seal::DATA_CLOSURE_GRACE_PERIOD_MS)
+            .expect("data closure grace period fits i64"),
+    );
+    sealed_at + grace
+}
+
 #[derive(Clone, Debug)]
 pub struct MaterializedEventSealView {
     pub trust_anchor_seal_id: SealId,
@@ -619,12 +640,7 @@ impl NotaryWorker {
             .filter(|(digest, _)| !published.contains(digest))
             .map(|(_, received_at)| *received_at)
             .min();
-        let target_period = chrono::Duration::milliseconds(
-            i64::try_from(arkret_wire::seal::DATA_PUBLICATION_TARGET_PERIOD_MS)
-                .expect("data publication period fits i64"),
-        );
-        let publish_due =
-            oldest_unpublished.is_some_and(|received_at| sealed_at >= received_at + target_period);
+        let publish_due = data_publication_is_due(oldest_unpublished, sealed_at);
         let mut candidates = accepted_by_basis
             .iter()
             .flat_map(|(basis, entries)| {
@@ -647,10 +663,6 @@ impl NotaryWorker {
         let data_event_set_root = event_digest_set_root(&cumulative, digest_suite)
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
 
-        let grace = chrono::Duration::milliseconds(
-            i64::try_from(arkret_wire::seal::DATA_CLOSURE_GRACE_PERIOD_MS)
-                .expect("data closure grace period fits i64"),
-        );
         let mut new_announcements = candidates
             .iter()
             .map(|(_, basis)| basis)
@@ -660,7 +672,7 @@ impl NotaryWorker {
             .into_iter()
             .map(|data_basis| DataClosureAnnouncement {
                 data_basis,
-                not_before: sealed_at + grace,
+                not_before: data_closure_not_before(sealed_at),
             })
             .collect::<Vec<_>>();
         new_announcements.sort_by(|left, right| left.data_basis.cmp(&right.data_basis));
@@ -2572,6 +2584,26 @@ mod tests {
 
         let predecessor = SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
         assert!(!availability_authority_is_genesis(Some(&predecessor)));
+    }
+
+    #[test]
+    fn data_publication_period_and_closure_grace_use_exact_five_minute_boundaries() {
+        let received_at = chrono::DateTime::parse_from_rfc3339("2026-09-13T00:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let one_millisecond_early = received_at + chrono::Duration::milliseconds(299_999);
+        let exact_period = received_at + chrono::Duration::milliseconds(300_000);
+
+        assert!(!data_publication_is_due(
+            Some(received_at),
+            one_millisecond_early
+        ));
+        assert!(data_publication_is_due(Some(received_at), exact_period));
+        assert!(!data_publication_is_due(None, exact_period));
+        assert_eq!(
+            data_closure_not_before(received_at),
+            received_at + chrono::Duration::milliseconds(300_000)
+        );
     }
 
     fn test_signer_descriptor(did: &str, seed: u8) -> arkret_wire::NotarySignerDescriptor {
