@@ -998,12 +998,6 @@ async fn preflight_controller_gate(
         request_id: request_id.clone(),
         principal_id: principal_id.clone(),
         agent_authority_id: source_id.clone(),
-        agent_authority_resolution:
-            crate::routing::system::service_resolution::current_authenticated_service_resolution(
-                state,
-            )
-            .await
-            .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?,
     };
     let body = arkret_canonical::canonical_json_bytes(&request)
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
@@ -1014,16 +1008,42 @@ async fn preflight_controller_gate(
         Duration::from_secs(10),
     )
     .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+    // `service-http-binding.md` §2.2.3 registers this operation on the
+    // deployment-internal authenticated channel, and the Agent same-server
+    // invariant means it has no external calling branch. The channel credential
+    // is the complete authentication contract: it replaces the RFC 9421 request
+    // signature, and the request carries no service-resolution carrier.
+    //
+    // Registering the channel is the operator's assertion that this link has no
+    // untrusted intermediate point; with no channel registered the call fails
+    // closed here rather than falling back to an unauthenticated or
+    // self-asserted identity.
+    //
+    // The service-identity and operation headers travel only as redundant
+    // inputs the Account Authority compares verbatim against the identity it
+    // authenticated from the credential — they are not an identity source on
+    // either side. §2.5.1 forbids the `Content-Digest` that existed only for the
+    // signature now that nothing signs the shell.
+    //
+    // The *response* attestation is unaffected: it keeps its own signature, its
+    // DID assertion authorization and its TTL, and is verified below, because it
+    // leaves this relationship and enters the external Agent evidence chain.
+    let channel = crate::routing::events::peer::registered_internal_authority_channel(state)
+        .await
+        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
     );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "content-digest",
-        &crate::routing::federation::outbox::content_digest_header_value(&body),
-    );
+    let authorization =
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {}", channel.credential()))
+            .map(|mut value| {
+                value.set_sensitive(true);
+                value
+            })
+            .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+    headers.insert(reqwest::header::AUTHORIZATION, authorization);
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "source-service-id",
@@ -1034,23 +1054,19 @@ async fn preflight_controller_gate(
         "destination-service-id",
         destination_id.as_str(),
     );
+    // The trust domain this channel is registered in, sent in the same
+    // redundant-input position the Account Authority uses on the inbound half
+    // of this edge. Like the service ids it is a value the receiver may compare
+    // against what it already authenticated; it is not an identity source.
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
-        "arkret-operation-id",
-        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
+        "source-trust-domain",
+        channel.trust_domain.as_str(),
     );
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "arkret-operation",
         arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "arkret-request-id",
-        request_id.as_str(),
-    );
-    let headers = crate::routing::federation::outbox::rfc9421_sign_controller_gate_request(
-        state, headers, &target,
     );
     let response = client
         .post(url)

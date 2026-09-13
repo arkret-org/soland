@@ -1,18 +1,14 @@
 use arkret_wire::{
     AcceptedDevicePossessionProof, DeviceRevocationGateActionClass,
     DeviceRevocationGateCheckOutcome, DeviceRevocationGateCheckRequestBody,
-    DeviceRevocationGateDecision, DeviceRevocationGateDecisionReceipt, Hash, PayloadProof, SealId,
-    UnsignedDeviceRevocationGateDecisionReceipt,
+    DeviceRevocationGateDecision, DeviceRevocationGateDecisionReceipt, Hash, SealId,
 };
 use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceErrorKind;
 
-use super::peer::{
-    cross_domain_replay, schema_violation, source_id_from_request, trusted_account_authority_id,
-    validate_peer_request,
-};
+use super::peer::{cross_domain_replay, schema_violation};
 use crate::state::AppState;
 
 /// Admit the origin-derived selector, or classify why it could not be derived.
@@ -28,7 +24,7 @@ use crate::state::AppState;
 /// * a projection row that claims current / active / verified while omitting its schema-required
 ///   authorization Event id or generation ref is a projection integrity failure, not an ordinary
 ///   "unauthorized" answer. It MUST surface as an internal availability fault and MUST NOT be
-///   signed as `allow`.
+///   returned as `allow`.
 fn admit_origin_current_selector(
     derived: Result<soland_storage::DeviceRevocationGateSelector, soland_services::ServiceError>,
 ) -> Result<Option<soland_storage::DeviceRevocationGateSelector>, AppError> {
@@ -109,7 +105,7 @@ fn accepted_device_proof_requires_verification(
 ) -> bool {
     // Device authorization derivation is a partial function. An unknown,
     // foreign, or never-authorized device must reach this authenticated peer
-    // surface as the same signed `authority_mismatch` decision, not fail while
+    // surface as the same `authority_mismatch` decision, not fail while
     // resolving the proof key and become an account/device enumeration oracle.
     origin_current_selector.is_some()
 }
@@ -125,16 +121,29 @@ pub(super) async fn check_device_revocation_gate(
 ) -> JsonResult<DeviceRevocationGateCheckOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
 
-    // Authentication and transport binding precede every principal/device
-    // lookup. A caller must not use this operation as an account oracle.
-    validate_peer_request(state, req, true).await?;
-    let source_id = source_id_from_request(req)?;
-    let configured_authority = trusted_account_authority_id(state).await?;
-    if source_id != configured_authority.as_str() {
-        return Err(AppError::capability_denied(
-            "device revocation gate caller is not the configured Account Authority",
-        ));
-    }
+    // Authentication precedes every principal/device lookup. A caller must not
+    // use this operation as an account oracle.
+    //
+    // `service-http-binding.md` §2.2.3 registers this operation on the
+    // deployment-internal authenticated channel, and the only admitted caller
+    // relationship is "the Account Authority bound to this exact account → this
+    // origin Station". There is no external calling branch: a request that did
+    // not arrive over that registered channel is rejected here, before any
+    // device-private state is read, and there is no fallback to a service
+    // signature, to a self-reported `Source-Service-ID`, or to an anonymous
+    // call. When no channel is registered the operation fails closed.
+    //
+    // The channel is also what carries the receipt's authenticity: §2.2.3 makes
+    // registering it the operator's assertion that this link has no untrusted
+    // intermediate point, which is why the `decision_receipt` built below may be
+    // closed — no detached proof, no `verification_method` — and why neither
+    // direction signs the transport shell.
+    let channel = crate::routing::events::peer::authenticate_internal_channel_request(
+        state,
+        req,
+        arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+    )
+    .await?;
 
     let request = req
         .parse_json::<DeviceRevocationGateCheckRequestBody>()
@@ -158,9 +167,9 @@ pub(super) async fn check_device_revocation_gate(
         ));
     }
 
-    let local_station = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("local service id is invalid: {error}")))?;
-    if request.account_id.station_id != local_station {
+    // The target Station is the channel's configured target service identity,
+    // not anything the request named.
+    if request.account_id.station_id != channel.destination_service_id {
         return Err(cross_domain_replay(
             "device revocation gate request is routed to the wrong Station",
         ));
@@ -355,11 +364,18 @@ pub(super) async fn check_device_revocation_gate(
         ),
         None => (None, None),
     };
-    let (_, verification_method) = state
-        .current_service_receipt_binding()
-        .await
-        .map_err(AppError::internal)?;
-    let unsigned_receipt = UnsignedDeviceRevocationGateDecisionReceipt {
+    // `device-lifecycle.md` §2.2 / `service-http-binding.md` §2.2.3: the receipt
+    // is delivered only on the registered deployment-internal channel between
+    // the Account Authority bound to this exact account and this origin Station,
+    // and that channel — not a detached signature — carries its authenticity and
+    // integrity. The receipt is therefore closed: it MUST NOT carry `proof` or
+    // `verification_method`, so nothing here reads a signing key or mints a JWS.
+    // The durable decision record written above is untouched: it still binds the
+    // immutable `intent_digest` for exact replay, and the receipt still carries
+    // the accepted-device possession proof digest, the 30s `expires_at` fence,
+    // the `linearization_seq`, the complete AccountId and the origin-derived
+    // selector under the closed decision rules.
+    let receipt = DeviceRevocationGateDecisionReceipt {
         account_id: request.account_id.clone(),
         device_id: request.device_id.clone(),
         target_device_authorize_event_id,
@@ -373,25 +389,7 @@ pub(super) async fn check_device_revocation_gate(
         expires_at: linearization.expires_at,
         blocking_proposal_digest,
         covering_seal_id,
-        verification_method,
     };
-    let proof_metadata = unsigned_receipt
-        .proof_metadata()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let signing_bytes = unsigned_receipt
-        .proof_signing_bytes(&proof_metadata)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let jws = arkret_signatures::jws::sign_jws_ed25519(
-        &signing_bytes,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    let proof: PayloadProof = proof_metadata
-        .finalize(jws)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let receipt: DeviceRevocationGateDecisionReceipt = unsigned_receipt
-        .attach_proof(proof)
-        .map_err(|error| AppError::internal(error.to_string()))?;
     let outcome = DeviceRevocationGateCheckOutcome {
         decision_receipt: receipt,
     };
@@ -420,6 +418,66 @@ mod tests {
             device_id: DEVICE.to_owned(),
             target_device_authorize_event_id: AUTHORIZE_EVENT.to_owned(),
             target_device_generation_ref: 1,
+        }
+    }
+
+    fn allow_receipt() -> DeviceRevocationGateDecisionReceipt {
+        let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        DeviceRevocationGateDecisionReceipt {
+            account_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
+                arkret_wire::DidCoreId::new(STATION).unwrap(),
+            ),
+            device_id: arkret_wire::DeviceId::new(DEVICE).unwrap(),
+            target_device_authorize_event_id: Some(
+                arkret_wire::EventId::new(AUTHORIZE_EVENT).unwrap(),
+            ),
+            target_device_generation_ref: Some(1),
+            action_class: DeviceRevocationGateActionClass::SessionGrantRefresh,
+            intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            accepted_device_possession_proof_digest: Some(
+                Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
+            ),
+            decision: DeviceRevocationGateDecision::Allow,
+            linearization_seq: 9,
+            linearized_at: now,
+            expires_at: now + chrono::Duration::seconds(30),
+            blocking_proposal_digest: None,
+            covering_seal_id: None,
+        }
+    }
+
+    /// `device-lifecycle.md` §2.2 closes this receipt in both directions: the
+    /// deployment-internal channel of `service-http-binding.md` §2.2.3 carries
+    /// its authenticity, so the emitted receipt carries neither `proof` nor
+    /// `verification_method`, and a receipt that presents either member is
+    /// rejected whole rather than verified "if present".
+    #[test]
+    fn decision_receipt_is_closed_against_detached_proof_members() {
+        let receipt = allow_receipt();
+        let encoded = serde_json::to_value(&receipt).expect("receipt serializes");
+        let members = encoded.as_object().expect("receipt is a JSON object");
+        assert!(!members.contains_key("proof"));
+        assert!(!members.contains_key("verification_method"));
+        // The intent binding, the accepted-device proof digest, the 30s fence
+        // and the origin-derived selector are all still on the receipt: this
+        // ruling pruned the detached signature, not the decision content.
+        assert!(members.contains_key("intent_digest"));
+        assert!(members.contains_key("accepted_device_possession_proof_digest"));
+        assert!(members.contains_key("linearization_seq"));
+        assert!(members.contains_key("expires_at"));
+        assert!(members.contains_key("target_device_authorize_event_id"));
+
+        for member in ["proof", "verification_method"] {
+            let mut forged = encoded.clone();
+            forged[member] = serde_json::json!({
+                "kind": "detached_jws",
+                "verification_method": "did:web:soland.example#notary-key",
+            });
+            assert!(
+                serde_json::from_value::<DeviceRevocationGateDecisionReceipt>(forged).is_err(),
+                "a receipt carrying `{member}` must be rejected whole"
+            );
         }
     }
 
@@ -467,9 +525,9 @@ mod tests {
 
     /// An unknown / never-authorized / foreign device leaves the derivation
     /// undefined (`NotFound`). On this authenticated peer surface that is the
-    /// anti-enumeration case: a signed `authority_mismatch` receipt with no
-    /// derived binding and no revocation evidence, never an HTTP error that
-    /// would distinguish the four causes.
+    /// anti-enumeration case: an `authority_mismatch` receipt with no derived
+    /// binding and no revocation evidence, never an HTTP error that would
+    /// distinguish the four causes.
     #[test]
     fn undefined_derivation_becomes_a_bindingless_authority_mismatch() {
         let admitted = admit_origin_current_selector(Err(ServiceError::NotFound(
@@ -496,6 +554,10 @@ mod tests {
     /// schema-required authorization Event id or generation ref is a projection
     /// integrity failure. It MUST become an internal availability fault, and it
     /// MUST NOT be laundered into the `authority_mismatch` receipt.
+    ///
+    /// The receipt itself is closed (no `proof`, no `verification_method`), so
+    /// this is the only remaining way an unusable projection could have been
+    /// published as a decision.
     #[test]
     fn malformed_verified_projection_is_an_internal_fault_not_a_decision() {
         let error = admit_origin_current_selector(Err(ServiceError::SchemaViolation(

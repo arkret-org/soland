@@ -827,7 +827,6 @@ pub(super) fn agent_key_state_from_record(
         active_authorizations,
         signer_resolution_evidence_ref,
         current_signer_evidence,
-        runtime_verifier_material: None,
     })
 }
 

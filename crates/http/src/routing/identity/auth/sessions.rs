@@ -662,7 +662,14 @@ async fn enforce_agent_session_authority(
     })
 }
 
-fn request_requires_fresh_introspection(req: &Request) -> bool {
+/// The strictest introspection freshness this request will need.
+///
+/// `api-conventions.md` §3.3: the request first determines the strictest
+/// freshness any of its consumers requires, and only then takes its one
+/// authoritative result. Both the RFC 9421 PoP hoop and the credential gate
+/// read this same predicate, so they agree on that single freshness and the
+/// hoop's result is reusable by the gate.
+pub(in crate::routing::identity) fn request_requires_fresh_introspection(req: &Request) -> bool {
     method_path_requires_fresh_introspection(req.method(), req.uri().path())
 }
 

@@ -66,6 +66,22 @@ pub async fn verify_session_pop(
     }
 }
 
+/// Keep the credential pipeline's own classification when its rejection is
+/// rendered here.
+///
+/// `api-conventions.md` §3.3: a dependency that is unreachable or answers
+/// incompletely MUST fail closed as `temporarily_unavailable`; it MUST NOT be
+/// reported as the user's grant having failed authentication. Flattening every
+/// rejection to `unauthenticated` did exactly that.
+fn auth_rejection(rejection: (StatusCode, &'static str, &'static str)) -> AppError {
+    let (status, code, message) = rejection;
+    match soland_http::error::ErrorCode::from_wire(code) {
+        Some(code) => AppError::from_rejection(code, message),
+        None if status.is_server_error() => AppError::internal(message).with_internal_reason(code),
+        None => AppError::unauthenticated(message).with_internal_reason(code),
+    }
+}
+
 async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), AppError> {
     let presented = req.headers().contains_key("signature-input");
     if !presented {
@@ -82,13 +98,7 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
     }
 
     // A signature is present: it MUST verify against the session signing key.
-    let token = if super::auth_grant_dpop::is_grant_dpop_presentation(req) {
-        dpop_token(req)
-    } else {
-        bearer_token(req)
-    }
-    .ok_or_else(|| AppError::unauthenticated("PoP presentation requires a session token"))?;
-    let jwk = session_signing_key_jwk(state, req, token).await?;
+    let jwk = session_signing_key_jwk(state, req).await?;
     let (public_key, explicit_kid, thumbprint) = parse_session_jwk(&jwk)?;
 
     soland_http::http_signature::reject_content_encoding(req, || {
@@ -218,22 +228,38 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
 ///
 /// - **② grant + DPoP** (`DPoP` header present): the session is request-scoped and is NEVER
 ///   persisted as a local bearer, so the bound signing key is read from the grant's
-///   `session_public_key` via session-grant introspection (cached ≤120s). The grant binds the same
-///   Ed25519 device key as both the DPoP `cnf.jkt` and the 9421 `session_public_key`, so DPoP
-///   supplies the per-request sender-constraint while this 9421 layer adds body integrity.
+///   `session_public_key`. The grant binds the same Ed25519 device key as both the DPoP `cnf.jkt`
+///   and the 9421 `session_public_key`, so DPoP supplies the per-request sender-constraint while
+///   this 9421 layer adds body integrity.
 /// - **dev-login bearer**: the key comes from the persisted `SessionRecord`.
-async fn session_signing_key_jwk(
-    state: &AppState,
-    req: &Request,
-    token: &str,
-) -> Result<String, AppError> {
+///
+/// This hoop runs before the handler's own credential validation, so it is the
+/// place that takes the request's **single** authoritative introspection result
+/// (`api-conventions.md` §3.3). It takes it at the strictest freshness this
+/// operation will need — the same predicate the handler uses — and memoizes it
+/// on the request, so the later credential gate reuses this exact result
+/// instead of introspecting a second time, and the `session_public_key` this
+/// signature verifies against comes from that same result.
+async fn session_signing_key_jwk(state: &AppState, req: &mut Request) -> Result<String, AppError> {
     if super::auth_grant_dpop::is_grant_dpop_presentation(req) {
-        let grant = super::auth_grant_dpop::introspect_session_grant_cached(state, token, false)
-            .await
-            .map_err(|(_, _, message)| AppError::unauthenticated(message))?;
+        let token = dpop_token(req)
+            .ok_or_else(|| AppError::unauthenticated("PoP presentation requires a session token"))?
+            .to_owned();
+        let force_fresh = super::auth::request_requires_fresh_introspection(req);
+        let grant = super::auth_grant_dpop::take_request_authoritative_grant(
+            state,
+            req,
+            &token,
+            force_fresh,
+        )
+        .await
+        .map_err(auth_rejection)?;
         return Ok(grant.session_public_key.into_string());
     }
-    let token_hash = session_credential_hash(token, state.service_id());
+    let token = bearer_token(req)
+        .ok_or_else(|| AppError::unauthenticated("PoP presentation requires a session token"))?
+        .to_owned();
+    let token_hash = session_credential_hash(&token, state.service_id());
     let session = state
         .sessions()
         .session(&token_hash)

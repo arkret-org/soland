@@ -25,7 +25,7 @@ use crate::wire::{
     AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
     DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus, KeysClaimOutcome,
     KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody, KeysUploadOutcome,
-    KeysUploadRequestBody, KeysUploadUnsignedRequest, QueryDeviceRecord,
+    KeysUploadRequestBody, KeysUploadUnsignedRequest, PeerQueryDeviceRecord, QueryDeviceRecord,
 };
 
 pub(crate) fn peer_router() -> Router {
@@ -193,7 +193,15 @@ async fn keys_upload(
 /// cache from outliving a device revocation the caller has not re-fetched.
 const DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 300;
 
-/// Build one complete, origin-Station-attested `keys/query` row.
+/// Build one complete, origin-Station-attested device row.
+///
+/// This is the **origin** shape of `device-lifecycle.md` §8.2: the signed
+/// `device_projection_attestation` plus the `signer_evidence_ref` that locates
+/// the immutable `account_device` evidence retaining it. It is what the
+/// Station-to-Station surface (§8.2.1) returns verbatim and what
+/// `current_signer_evidence` carries; it is **never** handed to a client. The
+/// client-facing row is produced from a *verified* attestation by
+/// [`PeerQueryDeviceRecord::project_verified_row`].
 ///
 /// Returns `None` when the device is not currently usable. §8.2 makes that the
 /// only two outcomes: the surface returns a fully attested row, or it returns
@@ -206,7 +214,7 @@ pub(crate) async fn attested_device_record(
     device_id: &arkret_wire::DeviceId,
     facet: crate::routing::identity::device_signing::DeviceSigningDirectoryFacet,
     algorithms: arkret_models_crypto::AlgorithmKeyRecords,
-) -> Result<Option<QueryDeviceRecord>, AppError> {
+) -> Result<Option<PeerQueryDeviceRecord>, AppError> {
     if !matches!(facet.status, DeviceStatus::Active) {
         return Ok(None);
     }
@@ -334,7 +342,7 @@ pub(crate) async fn attested_device_record(
             },
         ).await.map_err(|error| AppError::internal(error.to_string()))?;
     }
-    let record = QueryDeviceRecord {
+    let record = PeerQueryDeviceRecord {
         signer_evidence_ref,
         algorithms,
         trust_algorithms,
@@ -348,6 +356,61 @@ pub(crate) async fn attested_device_record(
             ))
         })?;
     Ok(Some(record))
+}
+
+/// `device-lifecycle.md` §8.2 check 3 / check 4 applied to one attested row
+/// against the `device_generations` entry that travels in the same response.
+///
+/// Kept separate from the proof check so both the local-origin and the remote
+/// path run byte-identical generation and status rules.
+fn attested_row_is_current(
+    record: &PeerQueryDeviceRecord,
+    generation: &arkret_models_crypto::AccountDeviceGenerationEntry,
+) -> bool {
+    let attested = &record.device_projection_attestation.attestation;
+    attested.device_status == DeviceStatus::Active
+        && generation.generation_state.device_generation_status
+            == arkret_models_crypto::keys::DeviceGenerationStatus::Active
+        && attested.authorized_generation_ref
+            == generation.generation_state.current_device_generation_ref
+}
+
+/// Verify one **remote** origin row, then project it onto the client-facing
+/// shape.
+///
+/// `device-lifecycle.md` §8.2: this Station MUST verify the origin
+/// attestation's proof, its issuer/assertion authority, the complete AccountId
+/// and device map key, the generation and the validity window *before* the row
+/// may become a client result, and it MUST NOT turn an unverified peer row into
+/// a verified one by dropping its proof. Only after all of that does
+/// `project_verified_row` copy the already-signed values verbatim — `expires_at`
+/// included, never extended — and forward the very same `signer_evidence_ref`.
+async fn verified_remote_device_projection(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+    device_id: &arkret_wire::DeviceId,
+    record: &PeerQueryDeviceRecord,
+    generation: &arkret_models_crypto::AccountDeviceGenerationEntry,
+) -> Option<QueryDeviceRecord> {
+    if record
+        .validate_attestation_binding(account_id, device_id)
+        .is_err()
+        || !attested_row_is_current(record, generation)
+    {
+        return None;
+    }
+    let attestation = &record.device_projection_attestation;
+    let document =
+        super::current_signer_evidence::current_device_projection_document(state, attestation)
+            .await
+            .ok()?;
+    super::current_signer_evidence::verify_current_device_projection(
+        attestation,
+        &document,
+        chrono::Utc::now(),
+    )
+    .ok()?;
+    record.project_verified_row(account_id, device_id).ok()
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.keys.read.lookup", tags("identity"))]
@@ -407,15 +470,14 @@ async fn keys_query(
         ) {
             continue;
         }
-        if let Some(generation) =
+        let generation_entry =
             crate::routing::identity::device_generation::current_device_generation(
                 state,
                 actor_core.as_str(),
             )
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
-        {
-            device_generations.push(arkret_models_crypto::AccountDeviceGenerationEntry {
+            .map(|generation| arkret_models_crypto::AccountDeviceGenerationEntry {
                 account_id: account_id.clone(),
                 generation_state: arkret_models_crypto::keys::DeviceGenerationState {
                     current_device_generation_ref: generation.current_ref,
@@ -429,6 +491,8 @@ async fn keys_query(
                     },
                 },
             });
+        if let Some(entry) = generation_entry.clone() {
+            device_generations.push(entry);
         }
         let mut actor_keys = BTreeMap::new();
         for device_id in devices {
@@ -481,7 +545,26 @@ async fn keys_query(
             else {
                 continue;
             };
-            actor_keys.insert(device_id, record);
+            // Local accounts take the same "verified, then projected" path as
+            // remote ones, so the self surface has exactly one row type. Here
+            // this Station *is* the origin: the attested values were derived
+            // from its own durable device projection inside this request and
+            // signed above, so the verification step is the origin derivation
+            // itself plus the §8.2 generation / status rules — it deliberately
+            // does not re-resolve its own DID Document to check a signature it
+            // just produced. The projection itself is the same verbatim copy
+            // the remote path performs; the attestation and its proof stay on
+            // the origin side and never reach the client.
+            let Some(generation) = generation_entry.as_ref() else {
+                continue;
+            };
+            if !attested_row_is_current(&record, generation) {
+                continue;
+            }
+            let Ok(projected) = record.project_verified_row(&account_id, &device_id) else {
+                continue;
+            };
+            actor_keys.insert(device_id, projected);
         }
         result.push(arkret_models_crypto::QueryAccountDeviceEntry {
             account_id,
@@ -543,31 +626,19 @@ async fn keys_query(
                         };
                         let mut verified = BTreeMap::new();
                         for (device_id, record) in entry.device_keys {
-                            let valid = record
-                                .validate_attestation_binding(&entry.account_id, &device_id)
-                                .is_ok()
-                                && record
-                                    .device_projection_attestation
-                                    .attestation
-                                    .authorized_generation_ref
-                                    == generation.generation_state.current_device_generation_ref
-                                && generation.generation_state.device_generation_status
-                                    == arkret_models_crypto::keys::DeviceGenerationStatus::Active
-                                && record
-                                    .device_projection_attestation
-                                    .attestation
-                                    .device_status
-                                    == DeviceStatus::Active;
-                            let verified_origin = if valid {
-                                match super::current_signer_evidence::current_device_projection_document(state, &record.device_projection_attestation).await {
-                                    Ok(document) => super::current_signer_evidence::verify_current_device_projection(&record.device_projection_attestation, &document, chrono::Utc::now()).is_ok(),
-                                    Err(_) => false,
-                                }
-                            } else {
-                                false
-                            };
-                            if verified_origin {
-                                verified.insert(device_id, record);
+                            // §8.2: verify the origin attestation first, then
+                            // hand the client the pruned projection. The peer
+                            // row — attestation and proof included — stops here.
+                            let projected = verified_remote_device_projection(
+                                state,
+                                &entry.account_id,
+                                &device_id,
+                                &record,
+                                generation,
+                            )
+                            .await;
+                            if let Some(projected) = projected {
+                                verified.insert(device_id, projected);
                             } else {
                                 failures.push(arkret_models_crypto::QueryFailure {
                                     account_id: Some(entry.account_id.clone()),
@@ -723,6 +794,10 @@ async fn proxy_peer_keys_query(
     Ok(outcome)
 }
 
+/// `device-lifecycle.md` §8.2.1 — the Station-to-Station surface. It returns
+/// the origin-signed `peer_query_device_record`, never the client-facing
+/// projection: the requesting Station is the party that verifies the
+/// attestation, and it is the one that prunes the row afterwards.
 #[salvo::oapi::endpoint(operation_id = "ak.peer.keys.read.lookup", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.keys.read.lookup.v1"))]
 async fn peer_keys_query(
@@ -821,7 +896,7 @@ async fn peer_keys_query(
             }
         }
         if !rows.is_empty() {
-            device_keys.push(arkret_models_crypto::QueryAccountDeviceEntry {
+            device_keys.push(arkret_models_crypto::PeerQueryAccountDeviceEntry {
                 account_id: selector.account_id.clone(),
                 device_keys: rows,
             });

@@ -68,6 +68,7 @@ pub use revocation::{
     active_delegated_sessions_for_actor, is_device_revoked, revoke_devices_for_actor,
     revoke_sessions_for_actor, session_credential_hash, token_for,
 };
+pub(super) use sessions::request_requires_fresh_introspection;
 pub(crate) use sessions::revalidate_stream_session;
 pub use sessions::{auth_or_render, authenticated_session};
 

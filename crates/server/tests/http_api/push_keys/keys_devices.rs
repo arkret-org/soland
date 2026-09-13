@@ -196,10 +196,10 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         upload["fallback_keys"]["signed_curve25519:fallback"]["key"],
         "fallback-key"
     );
-    let alice_attestation = &alice_desktop["device_projection_attestation"]["attestation"];
-    assert_eq!(alice_attestation["device_status"], "active");
+    let alice_projection = &alice_desktop["device_projection"];
+    assert_eq!(alice_projection["device_status"], "active");
     assert_eq!(
-        alice_attestation["device_signing_key_did"],
+        alice_projection["device_signing_key_did"],
         format!("did:key:{alice_device_public}")
     );
 
@@ -826,12 +826,12 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
         .await
         .unwrap();
     let entry = &account_device_rows(&query, "device_keys", &state, &alice_core)[alice_device];
-    let attestation = &entry["device_projection_attestation"]["attestation"];
+    let projection = &entry["device_projection"];
     assert_eq!(
-        attestation["device_signing_key_did"], expected_principal_id_key,
+        projection["device_signing_key_did"], expected_principal_id_key,
         "expected authoritative did:key, got {entry}"
     );
-    assert_eq!(attestation["device_status"], "active");
+    assert_eq!(projection["device_status"], "active");
 
     // Revoke member A's device, then re-query: the whole entry disappears.
     // `device-lifecycle.md` §8.2 — a returned row is complete and attested, so a
@@ -946,13 +946,10 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
         .await
         .unwrap();
     let entry = &account_device_rows(&query, "device_keys", &state, &bob_core)[bob_device];
-    let attestation = &entry["device_projection_attestation"]["attestation"];
+    let projection = &entry["device_projection"];
+    assert_eq!(projection["device_status"], "active", "query body: {query}");
     assert_eq!(
-        attestation["device_status"], "active",
-        "query body: {query}"
-    );
-    assert_eq!(
-        attestation["device_signing_key_did"],
+        projection["device_signing_key_did"],
         expected_principal_id_key
     );
     assert!(
@@ -1136,28 +1133,41 @@ async fn keys_query_exposes_accepted_device_anchor_body() {
         .await
         .unwrap();
     let entry = &account_device_rows(&query, "device_keys", &state, &alice_core)[alice_device];
-    // The row is complete and attested, and the attestation covers this exact
-    // projection — that signature is the whole verification closure of this
-    // cross-principal surface (§8.2).
-    let attestation = &entry["device_projection_attestation"];
+    // §8.2: the client-facing row is the verified projection this Station
+    // produced after it checked the origin attestation. The values are the
+    // signed ones, copied verbatim.
+    let projection = &entry["device_projection"];
+    assert_eq!(projection["device_status"], "active", "entry: {query}");
     assert_eq!(
-        attestation["attestation"]["device_status"], "active",
-        "entry: {query}"
-    );
-    assert_eq!(
-        attestation["attestation"]["device_signing_key_did"],
+        projection["device_signing_key_did"],
         format!("did:key:{multibase}")
     );
     assert_eq!(
-        attestation["attestation"]["device_authorize_event_id"],
+        projection["device_authorize_event_id"],
         expected_authorize_event_id
     );
-    assert_eq!(
-        attestation["proof"]["created_at"],
-        attestation["attestation"]["attested_at"]
+    // The origin proof shell is exactly what this ruling prunes from the
+    // client surface: neither the attestation nor the wrapper that only
+    // existed to verify it may appear, and the row must not be readable as a
+    // portable attested object.
+    let members = entry.as_object().expect("row is a JSON object");
+    assert!(!members.contains_key("device_projection_attestation"));
+    assert!(!members.contains_key("proof"));
+    assert!(
+        !projection
+            .as_object()
+            .expect("projection is a JSON object")
+            .contains_key("proof")
     );
-    serde_json::from_value::<arkret_models_crypto::QueryDeviceRecord>(entry.clone())
-        .expect("keys/query row decodes as a complete attested record");
+    assert!(
+        serde_json::from_value::<arkret_models_crypto::PeerQueryDeviceRecord>(entry.clone())
+            .is_err(),
+        "a pruned self row must not decode as the attested Station-to-Station row"
+    );
+    let row = serde_json::from_value::<arkret_models_crypto::QueryDeviceRecord>(entry.clone())
+        .expect("keys/query row decodes as a verified projection");
+    row.validate_projection()
+        .expect("projected row satisfies its own row-local invariants");
 }
 
 #[test]
@@ -1204,9 +1214,9 @@ async fn keys_query_authorization_window_body() {
     };
     let baseline = query().await;
     let row = &account_device_rows(&baseline, "device_keys", &state, &alice_core)[device_id];
-    let attestation: arkret_models_crypto::QueryDeviceRecord =
+    let projected: arkret_models_crypto::QueryDeviceRecord =
         serde_json::from_value(row.clone()).unwrap();
-    let core = &attestation.device_projection_attestation.attestation;
+    let core = &projected.device_projection;
     assert_eq!((core.expires_at - core.attested_at).num_seconds(), 300);
     let current_time = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let expiry = current_time + chrono::Duration::seconds(60);
@@ -1221,15 +1231,9 @@ async fn keys_query_authorization_window_body() {
     .await;
     let bounded = query().await;
     let row = &account_device_rows(&bounded, "device_keys", &state, &alice_core)[device_id];
-    let attestation: arkret_models_crypto::QueryDeviceRecord =
+    let projected: arkret_models_crypto::QueryDeviceRecord =
         serde_json::from_value(row.clone()).unwrap();
-    assert_eq!(
-        attestation
-            .device_projection_attestation
-            .attestation
-            .expires_at,
-        expiry
-    );
+    assert_eq!(projected.device_projection.expires_at, expiry);
     for (not_before, expires_at) in [
         (current_time + chrono::Duration::minutes(1), None),
         (

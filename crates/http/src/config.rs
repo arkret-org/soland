@@ -220,6 +220,53 @@ fn validate_persistence_key_store(
     Ok(())
 }
 
+/// The four registered facts plus the credential of one deployment-internal
+/// authenticated channel (`sync/service-http-binding.md` §2.2.3).
+///
+/// Three of the four facts are this Station's own already-configured identity
+/// and are resolved where the channel is used, not duplicated here: the calling
+/// service identity is the Account Authority named by `account_authority_url`
+/// (a split Account Authority signs as this Station, so it is this Station's
+/// own service `did_core_id`), the target service identity is this Station, and
+/// the trust domain is this Station's configured `trust_domain`. What this
+/// struct adds is the fourth fact and the credential: the closed set of
+/// operations the channel may carry, and the shared per-edge secret that
+/// authenticates it.
+///
+/// The operation set is a closed compile-time constant
+/// (`routing::events::peer::INTERNAL_CHANNEL_OPERATIONS`) rather than an
+/// operator-editable list. §2.2.3 registers exactly which operations exist on
+/// the internal channel, and an operator MUST NOT be able to add one — in
+/// particular MUST NOT be able to turn a whole path group such as
+/// `/_arkret/peer/*` into a deployment-bearer surface.
+#[derive(Clone)]
+pub struct InternalAuthorityChannelConfig {
+    /// Shared per-edge credential, byte-identical to the Account Authority's
+    /// `stations[].session_grant_introspection_bearer` for this Station. The
+    /// same secret authenticates both directions of this one edge; it is not a
+    /// general deployment bearer and grants nothing outside the registered
+    /// operations.
+    credential: String,
+}
+
+impl InternalAuthorityChannelConfig {
+    /// The shared credential. Kept behind an accessor so it is never printed:
+    /// [`std::fmt::Debug`] is implemented by hand to redact it.
+    #[must_use]
+    pub fn credential(&self) -> &str {
+        &self.credential
+    }
+}
+
+impl std::fmt::Debug for InternalAuthorityChannelConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InternalAuthorityChannelConfig")
+            .field("credential", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub bind: SocketAddr,
@@ -289,6 +336,28 @@ pub struct AppConfig {
     /// another by string substitution.
     pub auth_session_logout_url: Option<String>,
     pub session_grant_introspection_bearer: Option<String>,
+    /// The registered deployment-internal authenticated channel between this
+    /// Station and its Account Authority (`sync/service-http-binding.md`
+    /// §2.2.3), or `None` when no such channel is registered.
+    ///
+    /// **Configuring this channel is the operator's assertion that the link has
+    /// no untrusted intermediate point** — mTLS terminates directly in the
+    /// business process, every decrypting/forwarding proxy belongs to the same
+    /// registered TCB, or the two processes talk directly with no proxy at all.
+    /// §2.2.3 makes that a precondition, not a preference: where it does not
+    /// hold, the signature the internal contract replaces MUST be kept, so the
+    /// deployment MUST NOT register the channel. "Every hop is TLS" does not
+    /// satisfy it.
+    ///
+    /// That assertion is what carries the integrity the pruned carriers no
+    /// longer carry themselves: `ak.peer.device_revocations.command.check.v1`
+    /// answers with a `decision_receipt` that has no detached proof and no
+    /// `verification_method` (`crypto-media/device-lifecycle.md` §2.2), and no
+    /// signature covers the transport shell in either direction.
+    ///
+    /// It is deliberately a single declaration. A second "integrity" switch
+    /// beside it would only produce half-configured deployments.
+    pub internal_authority_channel: Option<InternalAuthorityChannelConfig>,
     pub did_resolver_allow_methods: Vec<String>,
     /// Enable soland's built-in `did:webvh` provider. This is intended for
     /// ordinary self-hosted deployments and tests: coauth can discover it via
@@ -874,6 +943,7 @@ impl AppConfig {
             session_grant_introspection_url: None,
             auth_session_logout_url: None,
             session_grant_introspection_bearer: None,
+            internal_authority_channel: None,
             // Test fixtures intentionally allow bare `did:web` — the spec
             // conformance vectors use it. The production default
             // (`default_did_resolver_allow_methods`) is webvh-only.
@@ -1009,6 +1079,32 @@ impl AppConfig {
         }
         let session_grant_introspection_bearer =
             env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
+        // `service-http-binding.md` §2.2.3 — register the deployment-internal
+        // authenticated channel to this Station's Account Authority.
+        //
+        // Both inputs are required and neither is guessed: the Account
+        // Authority endpoint names the peer this channel is registered with,
+        // and the shared credential is what authenticates it. Either one
+        // missing leaves the channel unregistered, and the operations that
+        // travel on it then fail closed rather than falling back to an
+        // anonymous or relaxed path. There is deliberately no fallback to
+        // `describe`, to a first configured peer, or to an unauthenticated
+        // call.
+        //
+        // The credential is the same per-edge secret the Account Authority
+        // holds as `stations[].session_grant_introspection_bearer`; both
+        // directions of this one edge use it, exactly as coauth does. See
+        // `AppConfig::internal_authority_channel` for what registering the
+        // channel asserts about the link.
+        let internal_authority_channel = match (
+            account_authority_url.as_deref(),
+            session_grant_introspection_bearer.as_deref(),
+        ) {
+            (Some(_), Some(credential)) => Some(InternalAuthorityChannelConfig {
+                credential: credential.to_owned(),
+            }),
+            _ => None,
+        };
         let did_resolver_allow_methods = env_csv(values, "SOLAND_DID_RESOLVER_ALLOW_METHODS")
             .unwrap_or_else(default_did_resolver_allow_methods);
         let embedded_webvh_provider_enabled =
@@ -1244,6 +1340,7 @@ impl AppConfig {
             session_grant_introspection_url,
             auth_session_logout_url,
             session_grant_introspection_bearer,
+            internal_authority_channel,
             did_resolver_allow_methods,
             embedded_webvh_provider_enabled,
             embedded_webvh_registration_bearer,

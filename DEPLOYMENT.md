@@ -580,7 +580,21 @@ pre-upgrade backup if you need to roll back.
 - `SOLAND_SESSION_GRANT_INTROSPECTION_URL` points at coauth's
   `/_arkret/gate/account/session-grants/introspect`, and
   `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared
-  server-to-server secret configured there.
+  server-to-server secret configured there (coauth's
+  `stations[].session_grant_introspection_bearer` for this Station).
+- Setting that bearer together with `SOLAND_ACCOUNT_AUTHORITY_URL` registers the
+  `service-http-binding.md` §2.2.3 deployment-internal authenticated channel
+  between this Station and that Account Authority. The channel carries exactly
+  two registered operations — `ak.peer.device_revocations.command.check.v1`
+  inbound and `ak.gate.account.command.issue_controller_gate_attestation.v1`
+  outbound — and nothing else on `/_arkret/peer/*` accepts it; every other peer
+  operation keeps its RFC 9421 service signature.
+  **Registering the channel is your assertion that this link has no untrusted
+  intermediate point**: mTLS terminates directly in the business process, every
+  decrypting or forwarding proxy belongs to the same registered TCB, or the two
+  processes talk directly with no proxy at all. "Every hop is TLS" does not
+  satisfy it. Where it does not hold, do not configure this pair — the gate
+  check then fails closed instead of trusting an unprotected hop.
 - `SOLAND_AUTH_SESSION_LOGOUT_URL` independently points at coauth's exact
   `/_arkret/gate/account/auth-sessions/logout` S2S operation; it is never
   inferred from the introspection URL.

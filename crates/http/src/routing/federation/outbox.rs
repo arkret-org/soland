@@ -221,64 +221,6 @@ fn operation_for_canonical_http_request(
     arkret_wire::ServiceOperationId::from_http_request(method, url.path())
 }
 
-pub(crate) fn rfc9421_sign_controller_gate_request(
-    state: &AppState,
-    mut headers: reqwest::header::HeaderMap,
-    target_url: &str,
-) -> reqwest::header::HeaderMap {
-    let created = now_unix_secs();
-    let expires = created + 300;
-    let keyid = super::federation_service_signature_key_id(state.service_did().as_str());
-    let covered = vec![
-        Component::Method,
-        Component::TargetUri,
-        Component::Authority,
-        Component::Path,
-        Component::Header("content-digest".to_owned()),
-        Component::Header("source-service-id".to_owned()),
-        Component::Header("destination-service-id".to_owned()),
-        Component::Header("arkret-operation".to_owned()),
-        Component::Header("arkret-operation-id".to_owned()),
-        Component::Header("arkret-request-id".to_owned()),
-    ];
-    let signature_input = format!(
-        "{};created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
-        format_signature_input_component_list("sig1", &covered)
-            .expect("controller gate signature component profile is valid")
-    );
-    let parsed_signature_input =
-        parse_signature_input(&signature_input).expect("generated Signature-Input is valid");
-    let path = reqwest::Url::parse(target_url)
-        .map(|url| url.path().to_owned())
-        .unwrap_or_default();
-    let request = SignedRequestParts {
-        method: "POST".to_owned(),
-        target_uri: target_url.to_owned(),
-        authority: authority_from_target_url(target_url),
-        path,
-        headers: headers
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.as_str().to_owned(), value.to_owned()))
-            })
-            .collect(),
-        body_digest: header_value(&headers, "content-digest"),
-    };
-    let signature_base = canonical_message(&request, &parsed_signature_input)
-        .expect("generated controller gate signature components are present");
-    let signature = arkret_signatures::http_signature::sign_message(
-        &signature_base,
-        &state.notary_signing_key(),
-    );
-    let signature_header = format!("sig1=:{signature}:");
-    insert_header_if_valid(&mut headers, "signature-input", &signature_input);
-    insert_header_if_valid(&mut headers, "signature", &signature_header);
-    headers
-}
-
 fn rfc9421_sign_with_window(
     state: &AppState,
     mut headers: reqwest::header::HeaderMap,

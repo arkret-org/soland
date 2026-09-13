@@ -35,8 +35,27 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use crate::state::AppState;
 
+/// Maximum staleness of the administrative / status-query view.
+///
+/// `api-conventions.md` §3.3 keeps this deliberately stricter than the ≤120s
+/// self-path bound, and the two surfaces MUST NOT be merged onto the looser
+/// one. This cache, its key, its credential and its scope rules are separate
+/// from the self path's for exactly that reason.
 const INTROSPECTION_CACHE_TTL: Duration = Duration::from_secs(30);
 const INTROSPECTION_CACHE_MAX_ENTRIES: usize = 1024;
+
+/// Cache key of one admin introspection result.
+///
+/// `session.token_hash` is already `sha256(exact token ‖ this service id)`, so
+/// it isolates the exact credential and the expected `audience_id`. §3.3 also
+/// requires the authority configuration context, so a retargeted Account
+/// Authority cannot answer out of the previous one's entries.
+fn admin_cache_key(state: &AppState, token_hash: &str) -> String {
+    format!(
+        "{token_hash}\n{}",
+        crate::routing::identity::auth_grant_dpop::introspection_authority_context(state)
+    )
+}
 
 struct CacheEntry {
     grant: SessionGrantIntrospection,
@@ -195,9 +214,9 @@ pub(crate) async fn introspect_admin_scopes(
         ));
     };
 
-    // Cache hit — short-circuit the network call. The token_hash is
-    // already a sha256-derived opaque id so it's a stable cache key.
-    if let Some(grant) = read_cached(&session.token_hash) {
+    // Cache hit — short-circuit the network call.
+    let cache_key = admin_cache_key(state, &session.token_hash);
+    if let Some(grant) = read_cached(&cache_key) {
         return Ok(grant);
     }
 
@@ -282,7 +301,7 @@ pub(crate) async fn introspect_admin_scopes(
         ));
     }
 
-    cache_grant(session.token_hash.clone(), grant.clone());
+    cache_grant(cache_key, grant.clone());
     Ok(grant)
 }
 

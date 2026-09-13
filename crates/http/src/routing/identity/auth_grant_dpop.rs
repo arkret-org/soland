@@ -7,6 +7,20 @@
 //! `DPoP` proof. soland validates and serves; the resulting `SessionRecord` is
 //! request-scoped and is NEVER persisted as a local bearer.
 //!
+//! `api-conventions.md` §3.1/§3.3 makes this an **exact-token introspection
+//! authority**: the complete token bytes plus this Station's own `audience_id`
+//! go to the issuer ledger over the deployment-internal channel, and the
+//! returned metadata is the authority. This Station MUST NOT verify the grant
+//! JWT's signature locally, replay the issuer DID history, or recompute the
+//! issuance preimage / suite-tagged id / `jti` as a basis for admission — and
+//! it does none of those.
+//!
+//! One HTTP request takes **one** authoritative result, at the strictest
+//! freshness any of its consumers needs, and passes it to every later gate
+//! (§3.3 ruling 5). The per-request memo below is that carrier; the RFC 9421
+//! `session_public_key` is read from the same result rather than from a second
+//! independent introspection.
+//!
 //! Validation pipeline (any failure → `unauthenticated`, fail closed):
 //!   1. grant active via session-grant introspection at coauth, with a small TTL (≤120s) cache
 //!      keyed by the presented grant; sensitive operations bypass the cache and force a fresh
@@ -118,14 +132,43 @@ struct CachedIntrospectionHttpClient {
 static INTROSPECTION_HTTP_CLIENTS: LazyLock<Mutex<HashMap<String, CachedIntrospectionHttpClient>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn introspection_cache_key(grant_jwt: &str, audience: &str) -> String {
+/// `api-conventions.md` §3.3: the cache key MUST isolate at least the exact
+/// token, the expected `audience_id` and the authority configuration context.
+/// It MUST NOT be the `jti` or the grant id — neither identifies the exact
+/// credential that the ledger matched.
+fn introspection_cache_key(grant_jwt: &str, audience: &str, authority_context: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(audience.as_bytes());
+    hasher.update(b":");
+    hasher.update(authority_context.as_bytes());
     hasher.update(b":");
     hasher.update(grant_jwt.as_bytes());
     format!(
         "grant-introspect:{}",
         URL_SAFE_NO_PAD.encode(hasher.finalize())
+    )
+}
+
+/// The configured introspection authority this result came from. A retargeted
+/// or reconfigured Account Authority is a different authority context, so its
+/// answers never collide with the previous one's in the cache.
+pub(crate) fn introspection_authority_context(state: &AppState) -> String {
+    format!(
+        "url={}\nprivate_networks={}",
+        state
+            .config()
+            .session_grant_introspection_url
+            .as_deref()
+            .unwrap_or_default(),
+        crate::security::private_networks_allowed(state.config().development_mode),
+    )
+}
+
+fn introspection_cache_key_for(state: &AppState, grant_jwt: &str) -> String {
+    introspection_cache_key(
+        grant_jwt,
+        state.service_id(),
+        &introspection_authority_context(state),
     )
 }
 
@@ -231,7 +274,7 @@ fn invalidate_introspection_http_client(raw_url: &str, development_mode: bool) {
 /// next introspection of that grant goes to coauth and observes `active=false`
 /// (account-lifecycle.md §4.1 step 3 — the local-side invalidation).
 pub(crate) fn invalidate_cached_grant(state: &AppState, grant_jwt: &str) {
-    let key = introspection_cache_key(grant_jwt, state.service_id());
+    let key = introspection_cache_key_for(state, grant_jwt);
     {
         let mut cache = INTROSPECTION_CACHE.lock();
         cache.remove(&key);
@@ -250,7 +293,7 @@ pub(crate) async fn introspect_session_grant_cached(
     grant_jwt: &str,
     force_fresh: bool,
 ) -> Result<SessionGrantIntrospectGrant, AuthError> {
-    let key = introspection_cache_key(grant_jwt, state.service_id());
+    let key = introspection_cache_key_for(state, grant_jwt);
     if !force_fresh && let Some(grant) = cache_lookup(&key) {
         // Cached grants can still expire between introspection and use.
         if grant.expires_at <= crate::wire::now() {
@@ -266,6 +309,79 @@ pub(crate) async fn introspect_session_grant_cached(
     let grant = introspect_session_grant_remote(state, grant_jwt).await?;
     cache_store(key, grant.clone());
     Ok(grant)
+}
+
+// ── One authoritative result per request ─────────────────────────────────────
+
+/// The single authoritative introspection result of one inbound HTTP request.
+///
+/// `api-conventions.md` §3.3: a request MUST determine the strictest freshness
+/// any of its consumers needs, take **one** authoritative result at that
+/// freshness, and hand that same result to every later gate. It MUST NOT
+/// introspect a second, independent time — in particular the high-security
+/// RFC 9421 `session_public_key` MUST come from this result rather than from
+/// its own lookup.
+///
+/// The memo is request-scoped by construction: it lives in the request's own
+/// extension map and dies with the request, so nothing here can turn into a
+/// cross-request "already verified" flag.
+#[derive(Clone)]
+struct RequestAuthoritativeGrant {
+    /// The exact presented token these metadata belong to.
+    grant_jwt: String,
+    /// Whether the result was taken with the cache bypassed. A memo taken
+    /// fresh also satisfies a later consumer that only needs the cached
+    /// freshness; the reverse is not true and re-introspects.
+    taken_fresh: bool,
+    grant: SessionGrantIntrospectGrant,
+}
+
+/// Record this request's single authoritative result. Called from the one place
+/// that holds `&mut Request` before any handler runs (the RFC 9421 PoP hoop).
+pub(crate) async fn take_request_authoritative_grant(
+    state: &AppState,
+    req: &mut Request,
+    grant_jwt: &str,
+    force_fresh: bool,
+) -> Result<SessionGrantIntrospectGrant, AuthError> {
+    if let Some(grant) = memoized_grant(req, grant_jwt, force_fresh) {
+        return Ok(grant);
+    }
+    let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
+    req.extensions_mut().insert(RequestAuthoritativeGrant {
+        grant_jwt: grant_jwt.to_owned(),
+        taken_fresh: force_fresh,
+        grant: grant.clone(),
+    });
+    Ok(grant)
+}
+
+/// Reuse this request's authoritative result when one was already taken at a
+/// freshness at least as strict as the caller needs; otherwise introspect.
+async fn request_authoritative_grant(
+    state: &AppState,
+    req: &Request,
+    grant_jwt: &str,
+    force_fresh: bool,
+) -> Result<SessionGrantIntrospectGrant, AuthError> {
+    if let Some(grant) = memoized_grant(req, grant_jwt, force_fresh) {
+        return Ok(grant);
+    }
+    introspect_session_grant_cached(state, grant_jwt, force_fresh).await
+}
+
+fn memoized_grant(
+    req: &Request,
+    grant_jwt: &str,
+    force_fresh: bool,
+) -> Option<SessionGrantIntrospectGrant> {
+    let memo = req.extensions().get::<RequestAuthoritativeGrant>()?;
+    // The memo belongs to the exact token it was taken for. A request that
+    // somehow presents a different credential gets its own authoritative read.
+    if memo.grant_jwt != grant_jwt || (force_fresh && !memo.taken_fresh) {
+        return None;
+    }
+    Some(memo.grant.clone())
 }
 
 /// Raw coauth introspection (no cache). Reads `cnf_jkt`, `session_public_key`,
@@ -311,7 +427,7 @@ async fn introspect_session_grant_remote(
                 |_| {
                     (
                         StatusCode::SERVICE_UNAVAILABLE,
-                        "auth_unavailable",
+                        "temporarily_unavailable",
                         "session grant introspection service unavailable",
                     )
                 },
@@ -338,7 +454,7 @@ async fn introspect_session_grant_remote(
             Err(_) => {
                 return Err((
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_unavailable",
+                    "temporarily_unavailable",
                     "session grant introspection request failed",
                 ));
             }
@@ -346,7 +462,7 @@ async fn introspect_session_grant_remote(
     }
     let response = response.ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
-        "auth_unavailable",
+        "temporarily_unavailable",
         "session grant introspection request failed",
     ))?;
     require_successful_introspection(response.status().as_u16())?;
@@ -356,7 +472,7 @@ async fn introspect_session_grant_remote(
         .map_err(|_| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
+                "temporarily_unavailable",
                 "session grant introspection response was invalid",
             )
         })?;
@@ -365,7 +481,7 @@ async fn introspect_session_grant_remote(
     }
     outcome.grant.ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
-        "auth_unavailable",
+        "temporarily_unavailable",
         "session grant introspection omitted grant metadata",
     ))
 }
@@ -378,7 +494,7 @@ fn require_successful_introspection(
     } else {
         Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            "auth_unavailable",
+            "temporarily_unavailable",
             "session grant introspection service did not return an authoritative outcome",
         ))
     }
@@ -644,7 +760,7 @@ pub(crate) fn verify_grant_dpop_request_at_base(
         DpopReplayRegistration::Full => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
+                "temporarily_unavailable",
                 "DPoP replay cache is at capacity",
             ));
         }
@@ -665,7 +781,11 @@ pub(crate) async fn grant_dpop_session(
 ) -> Result<SessionRecord, AuthError> {
     // 1. grant active (cached ≤120s; sensitive ops force fresh). Reads cnf_jkt, session_public_key,
     //    scopes, subject, device_id, expiry.
-    let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
+    //
+    //    This is the request's single authoritative result: when the RFC 9421
+    //    PoP hoop already took one for this request at this freshness or
+    //    stricter, that exact result is reused instead of introspecting again.
+    let grant = request_authoritative_grant(state, req, grant_jwt, force_fresh).await?;
 
     // 5. audience == this service's service_id.
     if grant.audience_id.as_str() != state.service_id() {
@@ -843,16 +963,63 @@ mod tests {
         for status in [400, 401, 403, 404, 429, 500, 502, 503, 504] {
             let error = require_successful_introspection(status).unwrap_err();
             assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
-            assert_eq!(error.1, "auth_unavailable");
+            assert_eq!(error.1, "temporarily_unavailable");
         }
         assert!(require_successful_introspection(200).is_ok());
     }
 
     #[test]
-    fn introspection_cache_key_is_audience_bound() {
-        let a = introspection_cache_key("grant", "did:web:a");
-        let b = introspection_cache_key("grant", "did:web:b");
-        assert_ne!(a, b);
+    fn introspection_cache_key_isolates_token_audience_and_authority_context() {
+        let base = introspection_cache_key("grant", "did:web:a", "url=https://aa.example");
+        // Expected audience.
+        assert_ne!(
+            base,
+            introspection_cache_key("grant", "did:web:b", "url=https://aa.example")
+        );
+        // Exact token bytes: a grant that shares a `jti` or a grant id but not
+        // the exact credential must never reuse this entry.
+        assert_ne!(
+            base,
+            introspection_cache_key("grant2", "did:web:a", "url=https://aa.example")
+        );
+        // Authority configuration context.
+        assert_ne!(
+            base,
+            introspection_cache_key("grant", "did:web:a", "url=https://other.example")
+        );
+    }
+
+    /// `api-conventions.md` §3.3: one request takes one authoritative result at
+    /// the strictest freshness it needs and passes that result on. The memo
+    /// must therefore be reusable only for the exact token it was taken for,
+    /// and only when it is at least as fresh as the later consumer requires —
+    /// a cached result never satisfies a force-fresh consumer.
+    #[test]
+    fn request_memo_reuses_only_the_same_token_at_sufficient_freshness() {
+        let grant = test_introspection_grant();
+        let mut cached = Request::default();
+        cached.extensions_mut().insert(RequestAuthoritativeGrant {
+            grant_jwt: "token-a".to_owned(),
+            taken_fresh: false,
+            grant: grant.clone(),
+        });
+        assert!(memoized_grant(&cached, "token-a", false).is_some());
+        assert!(
+            memoized_grant(&cached, "token-a", true).is_none(),
+            "a cached result must not be reused for a force-fresh consumer",
+        );
+        assert!(memoized_grant(&cached, "token-b", false).is_none());
+
+        let mut fresh = Request::default();
+        fresh.extensions_mut().insert(RequestAuthoritativeGrant {
+            grant_jwt: "token-a".to_owned(),
+            taken_fresh: true,
+            grant,
+        });
+        assert!(memoized_grant(&fresh, "token-a", true).is_some());
+        assert!(memoized_grant(&fresh, "token-a", false).is_some());
+        assert!(memoized_grant(&fresh, "token-b", true).is_none());
+        assert!(memoized_grant(&Request::default(), "token-a", false).is_none());
     }
 
     #[test]

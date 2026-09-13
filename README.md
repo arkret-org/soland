@@ -239,7 +239,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
 | `SOLAND_AUTH_SESSION_LOGOUT_URL` | unset | exact Account Authority process S2S `/_arkret/gate/account/auth-sessions/logout` endpoint; never derived from the introspection URL |
-| `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
+| `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Shared per-edge credential for this Station ↔ its Account Authority. Sent to the session-grant introspection endpoint, and — together with `SOLAND_ACCOUNT_AUTHORITY_URL` — registers the `service-http-binding.md` §2.2.3 deployment-internal authenticated channel that carries the device-revocation gate check (inbound) and the controller-gate attestation issue (outbound). Registering it asserts the link has no untrusted intermediate point; leave the pair unset otherwise |
 | `DATABASE_URL` | unset | Required for runtime startup; enables PostgreSQL and runs migrations. In-memory persistence is test-only, and a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `filesystem`/`local` |

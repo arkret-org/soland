@@ -471,6 +471,184 @@ pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<Did
         .map(|(service_id, _)| service_id)
 }
 
+/// Every operation this deployment may carry on the internal channel
+/// (`sync/service-http-binding.md` §2.2.3).
+///
+/// Closed and compile-time on purpose. §2.2.3 allows exactly one authorization
+/// granularity — per-registered-operation — and explicitly forbids turning
+/// `/_arkret/peer/*`, `/_arkret/gate/*`, `/_arkret/root/*` or `/_arkret/self/*`
+/// into deployment-bearer path groups. An operator-editable list would be a way
+/// to do exactly that, so there is none: the two entries below are the
+/// operations soland takes part in (one inbound, one outbound), and every other
+/// `/_arkret/peer/*` operation keeps the §2.2 RFC 9421 service signature
+/// untouched.
+pub(crate) const INTERNAL_CHANNEL_OPERATIONS: [&str; 2] = [
+    arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
+];
+
+/// One resolved registered deployment-internal authenticated channel.
+///
+/// Built only from explicit deployment configuration plus this Station's own
+/// verified identity. Nothing in it comes from the request.
+pub(crate) struct RegisteredInternalChannel {
+    /// The configured calling service identity admitted on this channel. A
+    /// split Account Authority signs as this Station, so this is this Station's
+    /// own service `did_core_id`; it is read from configuration, never from a
+    /// header or a response body.
+    pub(crate) caller_service_id: DidCoreId,
+    /// This Station — the configured target service identity.
+    pub(crate) destination_service_id: DidCoreId,
+    /// The configured trust domain both ends are registered in.
+    pub(crate) trust_domain: arkret_identifiers::TrustDomainId,
+    credential: String,
+}
+
+impl RegisteredInternalChannel {
+    /// The shared credential, for the outbound half of this same edge.
+    ///
+    /// Deliberately not public beyond `crate::routing`: it authenticates only
+    /// the registered operations of this one channel and is never a general
+    /// deployment bearer.
+    pub(in crate::routing) fn credential(&self) -> &str {
+        &self.credential
+    }
+}
+
+/// Resolve the registered channel, or fail closed.
+///
+/// A missing Account Authority endpoint or a missing shared credential means
+/// no channel is registered. The registered operations then fail — they do not
+/// degrade to an anonymous call, to a self-reported identity, or to any weaker
+/// contract.
+pub(crate) async fn registered_internal_authority_channel(
+    state: &AppState,
+) -> Result<RegisteredInternalChannel, AppError> {
+    let caller_service_id = trusted_account_authority_id(state).await?;
+    let credential = state
+        .config()
+        .internal_authority_channel
+        .as_ref()
+        .map(|channel| channel.credential().to_owned())
+        .ok_or_else(|| {
+            AppError::capability_denied(
+                "no deployment-internal authenticated channel is registered for this Account Authority",
+            )
+        })?;
+    Ok(RegisteredInternalChannel {
+        caller_service_id,
+        destination_service_id: state.service_core_id(),
+        trust_domain: state.config().trust_domain.clone(),
+        credential,
+    })
+}
+
+fn constant_time_credential_eq(expected: &str, presented: &str) -> bool {
+    use subtle::ConstantTimeEq as _;
+
+    expected.len() == presented.len() && bool::from(expected.as_bytes().ct_eq(presented.as_bytes()))
+}
+
+/// Authenticate one inbound call on the registered deployment-internal channel
+/// (`sync/service-http-binding.md` §2.2.3) and return the verified caller.
+///
+/// The credential is the whole authentication contract for a registered
+/// operation; it replaces the RFC 9421 service signature that §2.2 would
+/// otherwise require. The identity it yields comes from verifying that
+/// credential against deployment configuration — never from `Source-Service-ID`,
+/// `Destination-Service-ID`, `Arkret-Operation`, a path segment, a body field
+/// or any self-reported `internal` marker. Those transport inputs are compared
+/// verbatim against the already-authenticated facts when they are present, and
+/// any disagreement is a rejection.
+///
+/// Registering the channel is the operator's assertion that this link has no
+/// untrusted intermediate point (see
+/// [`crate::config::AppConfig::internal_authority_channel`]). That assertion is
+/// what supplies the authenticity and integrity the payloads no longer carry
+/// themselves: the gate `decision_receipt` has no detached proof and no
+/// `verification_method`, and no signature covers the transport shell in either
+/// direction. Where the assertion does not hold the channel MUST NOT be
+/// registered, and this operation then fails closed above.
+pub(in crate::routing) async fn authenticate_internal_channel_request(
+    state: &AppState,
+    req: &Request,
+    operation: &str,
+) -> Result<RegisteredInternalChannel, AppError> {
+    debug_assert!(
+        INTERNAL_CHANNEL_OPERATIONS.contains(&operation),
+        "`{operation}` is not a §2.2.3 registered internal-channel operation",
+    );
+    let rejected = || {
+        AppError::unauthenticated(
+            "caller is not authenticated on the registered deployment-internal channel",
+        )
+    };
+    let channel = registered_internal_authority_channel(state).await?;
+    if !internal_channel_request_is_authentic(&channel, operation, req.headers()) {
+        return Err(rejected());
+    }
+    Ok(channel)
+}
+
+/// The credential and transport-input half of the §2.2.3 check, separated from
+/// configuration resolution so both halves are directly testable.
+fn internal_channel_request_is_authentic(
+    channel: &RegisteredInternalChannel,
+    operation: &str,
+    headers: &salvo::http::HeaderMap,
+) -> bool {
+    let presented = headers
+        .get(salvo::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(presented) = presented else {
+        return false;
+    };
+    if !constant_time_credential_eq(&channel.credential, presented) {
+        return false;
+    }
+    // §2.5.1: with no signature covering the transport shell, the request MUST
+    // NOT carry a `Content-Digest` that exists only for an HTTP signature, and
+    // the receiver MUST NOT treat shell digests or whole-body byte equality as
+    // an authentication means. Reject rather than silently ignore, so there is
+    // never a second, weaker-looking acceptance path beside the channel.
+    if headers.contains_key("content-digest") {
+        return false;
+    }
+    // The trust domain this channel is registered in is a configured fact and
+    // is bound by `RegisteredInternalChannel::trust_domain`; it is deliberately
+    // *not* compared against the `*-Trust-Domain` headers. The Account
+    // Authority derives the value it sends from its own public hostname when no
+    // explicit trust domain is configured, and sends that one value for both
+    // the source and the destination position — so the headers carry the
+    // caller's own view, not a claim about this Station, and comparing them
+    // would reject a correctly registered channel. Nothing is lost: the headers
+    // were never an identity source, and the configured trust domain still
+    // bounds the channel.
+    let redundant = [
+        (HEADER_SOURCE_SERVICE_ID, channel.caller_service_id.as_str()),
+        (
+            HEADER_DESTINATION_SERVICE_ID,
+            channel.destination_service_id.as_str(),
+        ),
+        ("arkret-operation", operation),
+    ];
+    redundant.into_iter().all(|(header, expected)| {
+        headers
+            .get(header)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none_or(|observed| observed == expected)
+    })
+}
+
 #[salvo::oapi::endpoint(operation_id = "ak.peer.account_status.command.submit", tags("events"))]
 async fn peer_account_status_submit(
     depot: &mut Depot,
@@ -2651,6 +2829,156 @@ pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> App
 
 fn render_app_error(res: &mut Response, error: AppError) {
     render_error(res, error.http_status(), error.wire_code(), &error.message);
+}
+
+#[cfg(test)]
+mod internal_channel_tests {
+    use salvo::http::{HeaderMap, HeaderName, HeaderValue};
+
+    use super::*;
+
+    const CALLER: &str = "ak:did_core:web:soland.example";
+    const TRUST_DOMAIN: &str = "ak:trust_domain:soland.example";
+    const CREDENTIAL: &str = "shared-internal-channel-credential";
+
+    fn channel() -> RegisteredInternalChannel {
+        RegisteredInternalChannel {
+            caller_service_id: DidCoreId::new(CALLER).unwrap(),
+            destination_service_id: DidCoreId::new(CALLER).unwrap(),
+            trust_domain: arkret_identifiers::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
+            credential: CREDENTIAL.to_owned(),
+        }
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(
+                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        headers
+    }
+
+    fn authentic_pairs() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("authorization", "Bearer shared-internal-channel-credential"),
+            ("source-service-id", CALLER),
+            ("destination-service-id", CALLER),
+            ("source-trust-domain", TRUST_DOMAIN),
+            ("destination-trust-domain", TRUST_DOMAIN),
+            (
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+            ),
+        ]
+    }
+
+    fn authentic(pairs: &[(&str, &str)]) -> bool {
+        internal_channel_request_is_authentic(
+            &channel(),
+            arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+            &headers(pairs),
+        )
+    }
+
+    #[test]
+    fn registered_operation_set_stays_closed() {
+        // §2.2.3 allows only per-operation registration. Anything else on
+        // `/_arkret/peer/*` keeps the §2.2 RFC 9421 service signature, so it
+        // must not appear here.
+        assert_eq!(INTERNAL_CHANNEL_OPERATIONS.len(), 2);
+        assert!(
+            INTERNAL_CHANNEL_OPERATIONS.contains(
+                &arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1
+            )
+        );
+        assert!(INTERNAL_CHANNEL_OPERATIONS.contains(
+            &arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1
+        ));
+        for unregistered in [
+            arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
+            arkret_wire::ServiceOperationId::PEER_KEYS_READ_LOOKUP_V1,
+        ] {
+            assert!(
+                !INTERNAL_CHANNEL_OPERATIONS.contains(&unregistered),
+                "{unregistered} must keep its service signature",
+            );
+        }
+    }
+
+    #[test]
+    fn channel_admits_only_the_configured_credential() {
+        assert!(authentic(&authentic_pairs()));
+
+        // No credential at all, a blank one, the wrong scheme and a wrong
+        // secret are all the same rejection: the credential is the whole
+        // authentication contract, so there is nothing else to fall back to.
+        let mut without = authentic_pairs();
+        without.retain(|(name, _)| *name != "authorization");
+        assert!(!authentic(&without));
+
+        for bad in [
+            "Bearer ",
+            "Bearer not-the-configured-credential",
+            "Basic shared-internal-channel-credential",
+            "shared-internal-channel-credential",
+        ] {
+            let mut pairs = authentic_pairs();
+            pairs[0] = ("authorization", bad);
+            assert!(!authentic(&pairs), "`{bad}` must not authenticate");
+        }
+    }
+
+    /// The transport inputs are never an identity source. Omitting them changes
+    /// nothing — the credential already decided the caller — but presenting one
+    /// that disagrees with the authenticated facts is a rejection.
+    #[test]
+    fn transport_inputs_are_redundant_and_must_agree_when_present() {
+        for optional in [
+            "source-service-id",
+            "destination-service-id",
+            "arkret-operation",
+        ] {
+            let mut pairs = authentic_pairs();
+            pairs.retain(|(name, _)| *name != optional);
+            assert!(
+                authentic(&pairs),
+                "{optional} is redundant, not an identity source",
+            );
+        }
+
+        for (header, conflicting) in [
+            ("source-service-id", "ak:did_core:web:attacker.example"),
+            ("destination-service-id", "ak:did_core:web:other.example"),
+            (
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
+            ),
+        ] {
+            let mut pairs = authentic_pairs();
+            for pair in &mut pairs {
+                if pair.0 == header {
+                    pair.1 = conflicting;
+                }
+            }
+            assert!(
+                !authentic(&pairs),
+                "a conflicting {header} must be rejected",
+            );
+        }
+    }
+
+    /// `service-http-binding.md` §2.5.1 — no signature covers this shell, so
+    /// the request must not carry the digest that exists only for one, and the
+    /// receiver must not accept it as an authentication means.
+    #[test]
+    fn shell_content_digest_is_rejected_not_verified() {
+        let mut pairs = authentic_pairs();
+        pairs.push(("content-digest", "sha-256=:UjNhZGU=:"));
+        assert!(!authentic(&pairs));
+    }
 }
 
 #[cfg(test)]

@@ -992,33 +992,11 @@ pub(super) async fn get_agent(
         chrono::Utc::now(),
     )
     .await?;
-    // The service-authorized caller is the Account Authority verifier, not a
-    // public/runtime projection. It needs the authoritative pairing code to
-    // reconstruct the runtime proof transcript during final approval. The
-    // controller-facing pending approval projection remains secret-free.
+    // This Station owns the pairing candidate and verifies its raw possession
+    // proof here. The Account Authority consumes the authenticated exact
+    // outcome and never reads verifier-only raw material through this
+    // operation, so no response carries it.
     let mut view = agent_view_from_record(state, &record).await?;
-    if service_authorized {
-        if let (
-            Some(key_state),
-            Some(candidate),
-            Some(approval_request_id),
-            Some(proof_verified_at),
-        ) = (
-            view.key_state.as_mut(),
-            record.runtime_key_request.as_ref(),
-            record.approval_request_id.clone(),
-            record.runtime_proof_verified_at,
-        ) {
-            key_state.runtime_verifier_material = Some(
-                arkret_models_collaboration::agent_operations::AgentRuntimeVerifierMaterial {
-                    proof_verified_at,
-                    approval_request_id: approval_request_id.clone(),
-                    candidate: runtime_key_request_for_controller(candidate, approval_request_id),
-                    proof_of_possession: candidate.proof_of_possession.clone(),
-                },
-            );
-        }
-    }
 
     // Surface every durable, unrevoked grant so terminal deactivation can
     // author complete revocation coverage. The effective authz index supplies
