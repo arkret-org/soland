@@ -457,27 +457,9 @@ pub(super) async fn submit_identity_anchor_batch(
         .map(|record| record.ingress_receipt.clone())
         .collect::<Vec<_>>();
     let (accepted_create_event, accepted_create_envelope, _, create_dependency) =
-        super::value::accepted_event_envelope(
-            state,
-            session,
-            envelopes[0].clone(),
-            typed_create.clone(),
-            &first,
-            None,
-            received_at,
-        )
-        .await?;
+        super::value::accepted_identity_anchor_native_event_envelope(typed_create.clone())?;
     let (accepted_authorize_event, accepted_authorize_envelope, _, authorize_dependency) =
-        super::value::accepted_event_envelope(
-            state,
-            session,
-            envelopes[1].clone(),
-            typed_authorize.clone(),
-            &second,
-            None,
-            received_at,
-        )
-        .await?;
+        super::value::accepted_identity_anchor_native_event_envelope(typed_authorize.clone())?;
     let accepted_envelopes = [accepted_create_envelope, accepted_authorize_envelope];
     let governance_dependencies = [create_dependency, authorize_dependency]
         .into_iter()
@@ -2174,6 +2156,43 @@ mod tests {
             context.identity_anchor_event_id.as_deref(),
             Some(create.event_id.as_str())
         );
+    }
+
+    #[test]
+    fn verified_native_unit_events_keep_their_omitted_signer_evidence_shape() {
+        for envelope in sdk_canonical_self_principal_bootstrap_unit() {
+            let event: arkret_wire::Event = serde_json::from_value(envelope).unwrap();
+            let expected_bytes = arkret_canonical::canonical_json_bytes(
+                &event.digest_payload().expect("native Event digest payload"),
+            )
+            .unwrap();
+            let (stored, stored_envelope, stored_bytes, dependencies) =
+                super::value::accepted_identity_anchor_native_event_envelope(event.clone())
+                    .expect("dedicated verifier output remains persistable");
+            assert_eq!(stored, event);
+            assert_eq!(stored_envelope, serde_json::to_value(&event).unwrap());
+            assert_eq!(stored_bytes, expected_bytes);
+            assert!(dependencies.is_empty());
+        }
+    }
+
+    #[test]
+    fn native_unit_persistence_rejects_ordinary_signer_evidence_shape() {
+        let mut event: arkret_wire::Event =
+            serde_json::from_value(sdk_canonical_self_principal_bootstrap_unit().remove(0))
+                .unwrap();
+        event.proofs[0].signer_resolution_evidence_ref = Some(
+            arkret_wire::SignerEvidenceRef::new(format!(
+                "ak:signer_evidence:sha256:{}",
+                "1".repeat(64)
+            ))
+            .unwrap(),
+        );
+        let error = super::value::accepted_identity_anchor_native_event_envelope(event)
+            .expect_err("native unit must not smuggle an ordinary signer dependency");
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(error.code(), "param_invalid");
+        assert!(error.message().contains("must omit signer evidence"));
     }
 
     #[test]

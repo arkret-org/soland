@@ -1581,6 +1581,59 @@ pub(super) async fn accepted_event_envelope(
     Ok((event, envelope, canonical_bytes, governance_dependency))
 }
 
+/// Prepare an Event from one of the two closed identity-anchor native units
+/// for durable storage after the dedicated unit verifier has authenticated its
+/// root/candidate overlay.
+///
+/// These slots intentionally have no pre-existing signer-resolution evidence:
+/// the root create and founding/replacement authorize establish that authority
+/// atomically. Keep this adapter private to the identity-anchor submit module,
+/// require the native omission shape again at the persistence boundary, and
+/// never manufacture an ordinary governance-dependency edge.
+pub(super) fn accepted_identity_anchor_native_event_envelope(
+    event: Event,
+) -> Result<
+    (
+        Event,
+        Value,
+        Vec<u8>,
+        Vec<soland_storage::GovernanceDependencyWrite>,
+    ),
+    SubmitOneError,
+> {
+    let [producer] = event.proofs.as_slice() else {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "identity-anchor native Event must carry exactly one producer proof",
+        ));
+    };
+    if producer.signer_resolution_evidence_ref.is_some() {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "identity-anchor native Event proof must omit signer evidence",
+        ));
+    }
+    let canonical_bytes =
+        canonical::canonical_json_bytes(&event.digest_payload().map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?;
+    let envelope = typed_event_to_canonical_value(event.clone())?;
+    Ok((event, envelope, canonical_bytes, Vec::new()))
+}
+
 pub(super) fn validate_producer_submission_shape(
     _state: &AppState,
     session: &SessionRecord,
