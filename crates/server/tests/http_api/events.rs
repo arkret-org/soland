@@ -234,9 +234,7 @@ async fn seed_agent_grant_session_with_suite(
         "http://{}/_arkret/admin/session-grants/introspect",
         authority_address
     ));
-    config.register_test_internal_authority_channel_mtls_direct(format!(
-        "introspection-bearer-{slug}"
-    ));
+    config.register_test_internal_authority_channel(format!("introspection-bearer-{slug}"));
     let state = soland_test_support::app_state(config);
 
     let controller = "did:web:alice.example";

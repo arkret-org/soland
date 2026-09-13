@@ -1008,16 +1008,13 @@ async fn preflight_controller_gate(
     // is the complete authentication contract: it replaces the RFC 9421 request
     // signature, and the request carries no service-resolution carrier.
     //
-    // Registering the channel is the operator's assertion that this link has no
-    // untrusted intermediate point; with no channel registered the call fails
-    // closed here rather than falling back to an unauthenticated or
-    // self-asserted identity.
+    // Every plaintext proxy on this link is part of the trusted deployment TCB;
+    // with no peer registered the call fails closed rather than falling back to
+    // an unauthenticated or self-asserted identity.
     //
-    // The service-identity and operation headers travel only as redundant
-    // inputs the Account Authority compares verbatim against the identity it
-    // authenticated from the credential — they are not an identity source on
-    // either side. §2.5.1 forbids the `Content-Digest` that existed only for the
-    // signature now that nothing signs the shell.
+    // The fixed call site supplies the operation and destination. No redundant
+    // service-identity or trust-domain headers are sent. §2.5.1 forbids the
+    // `Content-Digest` that existed only for the removed request signature.
     //
     // The *response* attestation is unaffected: it keeps its own signature, its
     // DID assertion authorization and its TTL, and is verified below, because it
@@ -1035,30 +1032,6 @@ async fn preflight_controller_gate(
             })
             .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     headers.insert(reqwest::header::AUTHORIZATION, authorization);
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "source-service-id",
-        source_id.as_str(),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "destination-service-id",
-        destination_id.as_str(),
-    );
-    // The trust domain this channel is registered in, sent in the same
-    // redundant-input position the Account Authority uses on the inbound half
-    // of this edge. Like the service ids it is a value the receiver may compare
-    // against what it already authenticated; it is not an identity source.
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "source-trust-domain",
-        channel.destination_trust_domain.as_str(),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "destination-trust-domain",
-        channel.source_trust_domain.as_str(),
-    );
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "arkret-operation",

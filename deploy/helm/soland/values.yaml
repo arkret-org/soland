@@ -45,10 +45,6 @@ env:
   SOLAND_SERVICE_IDENTITY_BUNDLE_DIR: /var/lib/soland/identity-bundle
   SOLAND_ACCOUNT_AUTHORITY_URL: https://coauth.example
   SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN: ak:trust_domain:coauth.example
-  # Choose only after verifying the real transport topology. For registered_tcb,
-  # list every decrypting/forwarding proxy below. Ordinary hop TLS is insufficient.
-  SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE: ""
-  SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES: ""
   SOLAND_OBJECT_STORAGE_BACKEND: s3-compatible
   SOLAND_OBJECT_STORAGE_S3_BUCKET: soland
   SOLAND_OBJECT_STORAGE_S3_REGION: us-east-1

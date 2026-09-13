@@ -114,8 +114,6 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
 SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
 SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example
-SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE=registered_tcb
-SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES=soland-edge,coauth-edge
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
 SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
@@ -291,8 +289,6 @@ docker run --name soland --restart=always -d \
   -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example \
-  -e SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE=registered_tcb \
-  -e SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES=soland-edge,coauth-edge \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
@@ -597,8 +593,7 @@ pre-upgrade backup if you need to roll back.
   fragment are forbidden. The controller-gate target is derived as its exact
   path on that same origin. Any conflict aborts startup before the bearer can be
   sent.
-- Setting that bearer together with the Authority URL/trust domain and a valid
-  `SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE` registers the
+- Setting that bearer together with the Authority URL/trust domain registers the
   `service-http-binding.md` §2.2.3 deployment-internal authenticated channel
   between this Station and that Account Authority. The channel carries exactly
   four registered operations: exact-token introspection, Auth-side logout and
@@ -606,14 +601,8 @@ pre-upgrade backup if you need to roll back.
   `ak.peer.device_revocations.command.check.v1` inbound. Nothing else on
   `/_arkret/peer/*` accepts it; every other peer operation keeps its RFC 9421
   service signature.
-  `mtls_direct_process` means mTLS terminates directly in both business
-  processes; ordinary TLS termination at a proxy does not qualify.
-  `registered_tcb` requires
-  `SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES` to list every
-  decrypting/forwarding proxy in the same TCB, with non-empty unique entries.
-  "Every hop is TLS" does not satisfy it. Missing, invalid or incomplete
-  integrity configuration leaves the unsigned channel unregistered and its
-  operations fail closed.
+  Every plaintext proxy on this internal link is a trusted member of the same
+  deployment TCB; Soland does not model or inspect the proxy chain.
 - `SOLAND_AUTH_SESSION_LOGOUT_URL` independently points at coauth's exact
   `/_arkret/gate/account/auth-sessions/logout` S2S operation; it is never
   inferred from the introspection URL.

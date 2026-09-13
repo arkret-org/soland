@@ -227,7 +227,7 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
         "http://{}",
         listener.local_addr().expect("recovery mock address")
     ));
-    config.register_test_internal_authority_channel_mtls_direct(RECOVERY_INTROSPECTION_BEARER);
+    config.register_test_internal_authority_channel(RECOVERY_INTROSPECTION_BEARER);
     let audience = soland_test_support::fixture_service_identity(config)
         .identity()
         .expect("recovery fixture serving identity")

@@ -242,7 +242,6 @@ pub(crate) async fn introspect_admin_scopes(
         .config()
         .internal_authority_channel
         .as_ref()
-        .filter(|channel| channel.integrity().permits_unsigned_transport())
         .ok_or_else(|| {
             crate::app_error!(
                 InternalError,
@@ -265,13 +264,6 @@ pub(crate) async fn introspect_admin_scopes(
         arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
     )
     .bearer_auth(channel.credential())
-    .header("source-service-id", state.service_id().as_str())
-    .header("destination-service-id", state.service_id().as_str())
-    .header("source-trust-domain", state.config().trust_domain.as_str())
-    .header(
-        "destination-trust-domain",
-        channel.account_authority_trust_domain().as_str(),
-    )
     .json(&request)
     .send()
     .await

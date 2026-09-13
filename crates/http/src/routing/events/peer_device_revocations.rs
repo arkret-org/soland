@@ -133,12 +133,10 @@ pub(super) async fn check_device_revocation_gate(
     // signature, to a self-reported `Source-Service-ID`, or to an anonymous
     // call. When no channel is registered the operation fails closed.
     //
-    // The channel is also what carries the receipt's authenticity: §2.2.3 makes
-    // registering it the operator's assertion that this link has no untrusted
-    // intermediate point, which is why the `decision_receipt` built below may be
-    // closed — no detached proof, no `verification_method` — and why neither
-    // direction signs the transport shell.
-    let channel = crate::routing::events::peer::authenticate_internal_channel_request(
+    // Every plaintext proxy on the channel is part of the trusted deployment
+    // TCB, which is why the receipt below has no detached proof or
+    // `verification_method` and neither direction signs the transport shell.
+    crate::routing::events::peer::authenticate_internal_channel_request(
         state,
         req,
         arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
@@ -167,9 +165,9 @@ pub(super) async fn check_device_revocation_gate(
         ));
     }
 
-    // The target Station is the channel's configured target service identity,
-    // not anything the request named.
-    if request.account_id.station_id != channel.destination_service_id {
+    // The target Station is the local fixed-route receiver, not an identity
+    // repeated in channel headers.
+    if request.account_id.station_id != state.service_core_id() {
         return Err(cross_domain_replay(
             "device revocation gate request is routed to the wrong Station",
         ));

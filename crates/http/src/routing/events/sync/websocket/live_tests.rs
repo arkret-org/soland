@@ -504,7 +504,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
     config.session_grant_introspection_url =
         Some(format!("http://{introspection_addr}/introspect"));
     config.account_authority_url = Some(format!("http://{introspection_addr}"));
-    config.register_test_internal_authority_channel_mtls_direct("test-service-bearer");
+    config.register_test_internal_authority_channel("test-service-bearer");
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     // Derived, never copied: the demo Realm id is `retype(genesis.event_id)`
     // and the genesis freezes this deployment's own notary signer descriptor.

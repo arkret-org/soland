@@ -397,12 +397,7 @@ async fn introspect_session_grant_remote(
             "session grant introspection URL is not configured",
         ));
     };
-    let Some(channel) = state
-        .config()
-        .internal_authority_channel
-        .as_ref()
-        .filter(|channel| channel.integrity().permits_unsigned_transport())
-    else {
+    let Some(channel) = state.config().internal_authority_channel.as_ref() else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_misconfigured",
@@ -442,13 +437,6 @@ async fn introspect_session_grant_remote(
             arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
         )
         .bearer_auth(channel.credential())
-        .header("source-service-id", state.service_id().as_str())
-        .header("destination-service-id", state.service_id().as_str())
-        .header("source-trust-domain", state.config().trust_domain.as_str())
-        .header(
-            "destination-trust-domain",
-            channel.account_authority_trust_domain().as_str(),
-        )
         .json(&request)
         .send()
         .await
