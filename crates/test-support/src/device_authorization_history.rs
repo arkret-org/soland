@@ -317,6 +317,9 @@ impl DeviceHistoryFixture {
             realm_id: events[0].realm_id.clone(),
             predecessor_ref: self.seals.last().map(|seal| seal.id.clone()),
             delta: batch.committed_event_digests,
+            data_delta: vec![],
+            data_event_set_root: arkret_wire::empty_data_event_set_root(DigestSuite::Sha256)
+                .unwrap(),
             control_event_set_root: arkret_state::control_event_set_root(
                 &self.covered,
                 DigestSuite::Sha256,
@@ -341,6 +344,8 @@ impl DeviceHistoryFixture {
                 .unwrap_or_else(|| events[0].event_id.clone()),
             command_results: batch.command_results,
             authorization_closures: vec![],
+            data_closure_announcements: vec![],
+            data_closures: vec![],
             existence_anchors: vec![],
         };
         let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(

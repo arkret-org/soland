@@ -12,7 +12,7 @@ DROP TABLE IF EXISTS current_selector_origins;
 DROP TABLE IF EXISTS current_result_versions;
 DROP TABLE IF EXISTS current_result_heads;
 DROP FUNCTION IF EXISTS invalidate_current_data_sources() CASCADE;
-DROP TABLE IF EXISTS current_data_heads;
+DROP TABLE IF EXISTS current_data_winners;
 DROP TABLE IF EXISTS current_data_pending;
 DROP TABLE IF EXISTS current_data_dependencies;
 DROP TABLE IF EXISTS current_data_sources;

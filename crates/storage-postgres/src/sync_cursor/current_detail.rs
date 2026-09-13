@@ -236,7 +236,7 @@ pub(super) async fn page(
                 #[derive(QueryableByName)]
                 struct Sources { #[diesel(sql_type=sql_types::Bool)] valid:bool }
                 let scope=String::from_utf8(arkret_canonical::canonical_json_bytes(&entry.selector().scope_ref).map_err(error)?).map_err(error)?;
-                let source_ids=match entry.result() { CurrentOutcome::Heads{heads}=>heads.iter().map(|head|head.event_id.token_bytes().to_vec()).collect::<Vec<_>>(),_=>vec![] };
+                let source_ids=match entry.result() { CurrentOutcome::Value{source:Some(source),..}=>vec![source.event_id.token_bytes().to_vec()],_=>vec![] };
                 let sources=sql_query("SELECT NOT EXISTS(SELECT 1 FROM current_data_sources s WHERE s.realm_id=$1 AND s.scope_key=$2 AND s.cell_id=$3 AND s.event_id=ANY($4) AND (NOT s.available OR NOT EXISTS(SELECT 1 FROM accepted_events e WHERE e.id=s.event_id))) AS valid")
                     .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(&scope).bind::<Text,_>(entry.selector().cell_id.as_str()).bind::<sql_types::Array<sql_types::Binary>,_>(&source_ids)
                     .get_result::<Sources>(&mut *conn).await?;

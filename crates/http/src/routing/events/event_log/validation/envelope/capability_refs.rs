@@ -103,6 +103,7 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    validate_open_data_basis(state, &realm, object).await?;
     if derived_cells.is_empty() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -462,6 +463,96 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
         &used_grant_ids,
     )
     .await
+}
+
+async fn validate_open_data_basis(
+    state: &AppState,
+    realm: &arkret_identifiers::RealmId,
+    object: &serde_json::Map<String, Value>,
+) -> Result<arkret_identifiers::SealId, EventValidationError> {
+    let data_basis = object
+        .get("data_basis")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "ordinary Event requires data_basis",
+            )
+        })?;
+    let data_basis = arkret_identifiers::SealId::new(data_basis.to_owned()).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "ordinary Event data_basis is not a valid ak:seal id",
+        )
+    })?;
+    let mut next = state
+        .projections()
+        .realm_seal_head(realm)
+        .await
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "data_basis_unavailable",
+                format!("ordinary Event data basis head lookup failed: {error}"),
+            )
+        })?;
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(seal_id) = next {
+        if !visited.insert(seal_id.clone()) {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "data_basis_unavailable",
+                "ordinary Event data basis lineage is cyclic",
+            ));
+        }
+        let seal = state
+            .projections()
+            .seal_by_id(&seal_id)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "data_basis_unavailable",
+                    format!("ordinary Event data basis lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "data_basis_unavailable",
+                    "ordinary Event data basis lineage is incomplete",
+                )
+            })?;
+        if seal.realm_id != *realm {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "data_basis_unavailable",
+                "ordinary Event data basis belongs to another Realm",
+            ));
+        }
+        if seal
+            .data_closures
+            .iter()
+            .any(|closure| closure.data_basis == data_basis)
+        {
+            return Err(event_validation_error(
+                StatusCode::CONFLICT,
+                "data_basis_closed",
+                "ordinary Event data basis grace interval has closed",
+            ));
+        }
+        if seal.id == data_basis {
+            return Ok(data_basis);
+        }
+        next = seal.predecessor_ref;
+    }
+    Err(event_validation_error(
+        StatusCode::FORBIDDEN,
+        "data_basis_unavailable",
+        "ordinary Event data basis is not in the confirmed Realm lineage",
+    ))
 }
 
 /// `refs[]` entries carrying `role=authorized_by`.

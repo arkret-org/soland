@@ -39,9 +39,7 @@ fn validate_canonical_transition_exact_closure(
     let realm = RealmId::new("ak:realm:AS6APqej-Rh7QFhSceTHVNyMDqcQte46AfERL21Hkt5_".to_owned())
         .map_err(|error| ContractRegistryError::Invalid(error.to_string()))?;
     let mut binding_families = BTreeSet::new();
-    for (family, execution, model, value_shape, bottom_policy) in
-        state_model_bindings_for_sdk_registry()
-    {
+    for (family, execution, model, value_shape) in state_model_bindings_for_sdk_registry() {
         let cell = CellRef::new(format!("ak:cell:{family}:startup-probe"))
             .map_err(|error| ContractRegistryError::Invalid(error.to_string()))?;
         let binding = arkret_state::state::CellStateRegistry::resolve(registry, &realm, &cell)
@@ -54,7 +52,6 @@ fn validate_canonical_transition_exact_closure(
             || binding.model.kind() != model
             || binding.execution != execution
             || binding.value_shape != value_shape
-            || binding.bottom_policy != bottom_policy
         {
             return Err(ContractRegistryError::Invalid(format!(
                 "registered family {family} differs from its canonical binding"

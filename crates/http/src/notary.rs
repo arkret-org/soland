@@ -24,12 +24,16 @@ use arkret_models_collaboration::objects::realm::{
 use arkret_state::state::{
     CommandEventResult, ControlMoveFailureDisposition, OrderedControlBatchAbort,
     OrderedControlUnit, OrderedControlUnitEvent, StoreError, classify_control_move_reject,
-    compute_state_root, control_event_set_root, execute_ordered_control_units,
+    compute_state_root, control_event_set_root, event_digest_set_root,
+    execute_ordered_control_units,
 };
 use arkret_state::state_model::ordered_log::IssuedOp;
 use arkret_state::state_model::{ResolvedCellState, StateWrite};
 use arkret_wire::cell::CellId;
-use arkret_wire::{AvailabilityReceipt, Event, PayloadProof, Seal};
+use arkret_wire::{
+    AvailabilityReceipt, DataClosure, DataClosureAnnouncement, DataSetCommitment, Event,
+    PayloadProof, Seal,
+};
 use tokio::sync::Mutex;
 
 use crate::routing::federation::move_seal::select_jws_verifier;
@@ -107,6 +111,13 @@ struct PreparedNotaryBatch {
     event_digest_suite: arkret_canonical::DigestSuite,
 }
 
+struct DataPublicationMaterial {
+    data_delta: Vec<Hash>,
+    data_event_set_root: Hash,
+    announcements: Vec<DataClosureAnnouncement>,
+    closures: Vec<DataClosure>,
+}
+
 #[derive(Clone, Debug)]
 pub struct MaterializedEventSealView {
     pub trust_anchor_seal_id: SealId,
@@ -137,11 +148,22 @@ impl From<StoreError> for NotaryError {
 /// acceptance checks still read the durable state per call.
 pub struct NotaryWorker {
     pending_page: Option<Vec<arkret_state::state::PendingControlUnitRecord>>,
+    allow_data_only: bool,
 }
 
 impl NotaryWorker {
     pub fn for_service(_service_id: impl Into<String>) -> Self {
-        Self { pending_page: None }
+        Self {
+            pending_page: None,
+            allow_data_only: false,
+        }
+    }
+
+    pub(crate) fn for_data_publication(_service_id: impl Into<String>) -> Self {
+        Self {
+            pending_page: None,
+            allow_data_only: true,
+        }
     }
 
     pub(crate) fn with_pending_page(
@@ -243,7 +265,14 @@ impl NotaryWorker {
         let pending_units = self
             .pending_units(state, realm_id, max_control_moves)
             .await?;
-        if pending_units.is_empty() {
+        if pending_units.is_empty()
+            && (!self.allow_data_only
+                || state
+                    .projections()
+                    .realm_seal_head(realm_id)
+                    .await?
+                    .is_none())
+        {
             return Ok(SigningLeaseSlotResolution::NoPendingMoves);
         }
         let pending = pending_units
@@ -399,7 +428,23 @@ impl NotaryWorker {
             .pending_units(state, realm_id, max_control_moves)
             .await?;
         if pending_units.is_empty() {
-            return Ok(None);
+            if !self.allow_data_only {
+                return Ok(None);
+            }
+            let predecessor_ref = state.projections().realm_seal_head(realm_id).await?;
+            let Some(predecessor) = predecessor_ref.as_ref() else {
+                return Ok(None);
+            };
+            let event_digest_suite = state
+                .projections()
+                .predecessor_digest_suite(realm_id, predecessor)
+                .await
+                .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
+            return Ok(Some(PreparedNotaryBatch {
+                units: Vec::new(),
+                predecessor_ref,
+                event_digest_suite,
+            }));
         }
         let predecessor_ref = state.projections().realm_seal_head(realm_id).await?;
         if predecessor_ref.is_some()
@@ -478,6 +523,187 @@ impl NotaryWorker {
             units,
             predecessor_ref,
             event_digest_suite,
+        }))
+    }
+
+    async fn data_publication_material(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        predecessor_ref: &SealId,
+        digest_suite: arkret_canonical::DigestSuite,
+        sealed_at: chrono::DateTime<chrono::Utc>,
+        publish_early: bool,
+    ) -> Result<Option<DataPublicationMaterial>, NotaryError> {
+        let mut published = BTreeSet::new();
+        let mut announcements = BTreeMap::<SealId, (SealId, chrono::DateTime<chrono::Utc>)>::new();
+        let mut closed = BTreeSet::new();
+        let mut confirmed_prefix = BTreeSet::new();
+        let mut cursor = Some(predecessor_ref.clone());
+        while let Some(seal_id) = cursor {
+            let seal = state
+                .projections()
+                .seal_by_id(&seal_id)
+                .await?
+                .ok_or_else(|| {
+                    NotaryError::Construction(format!(
+                        "data publication Seal ancestor {seal_id} is unavailable"
+                    ))
+                })?;
+            confirmed_prefix.insert(seal.id.clone());
+            published.extend(seal.data_delta.iter().cloned());
+            for announcement in &seal.data_closure_announcements {
+                match announcements.insert(
+                    announcement.data_basis.clone(),
+                    (seal.id.clone(), announcement.not_before),
+                ) {
+                    Some(_) => {
+                        return Err(NotaryError::Construction(
+                            "data basis has more than one closure announcement".to_owned(),
+                        ));
+                    }
+                    None => {}
+                }
+            }
+            closed.extend(
+                seal.data_closures
+                    .iter()
+                    .map(|closure| closure.data_basis.clone()),
+            );
+            cursor = seal.predecessor_ref.clone();
+        }
+
+        let records = state
+            .event_queries()
+            .realm_events_newest_first(realm_id.as_str())
+            .await
+            .map_err(|error| NotaryError::Store(error.to_string()))?;
+        let mut accepted_by_basis =
+            BTreeMap::<SealId, Vec<(Hash, chrono::DateTime<chrono::Utc>)>>::new();
+        for record in records {
+            let event = serde_json::from_value::<Event>(record.envelope).map_err(|error| {
+                NotaryError::Store(format!("accepted Event cannot be decoded: {error}"))
+            })?;
+            if !event.kind.is_data_plane() {
+                continue;
+            }
+            let basis = event.data_basis.ok_or_else(|| {
+                NotaryError::Store("accepted data Event has no data_basis".to_owned())
+            })?;
+            if !confirmed_prefix.contains(&basis) {
+                return Err(NotaryError::Store(
+                    "accepted data Event basis is outside the confirmed Seal lineage".to_owned(),
+                ));
+            }
+            let digest = Hash::new(record.canonical_digest)
+                .map_err(|error| NotaryError::Store(error.to_string()))?;
+            if closed.contains(&basis) && !published.contains(&digest) {
+                return Err(NotaryError::Store(
+                    "accepted data Event was omitted before its basis closed".to_owned(),
+                ));
+            }
+            accepted_by_basis
+                .entry(basis)
+                .or_default()
+                .push((digest, record.received_at));
+        }
+
+        let due_bases = announcements
+            .iter()
+            .filter(|(basis, (_, not_before))| !closed.contains(*basis) && sealed_at >= *not_before)
+            .map(|(basis, _)| basis.clone())
+            .collect::<BTreeSet<_>>();
+        let oldest_unpublished = accepted_by_basis
+            .values()
+            .flatten()
+            .filter(|(digest, _)| !published.contains(digest))
+            .map(|(_, received_at)| *received_at)
+            .min();
+        let target_period = chrono::Duration::milliseconds(
+            i64::try_from(arkret_wire::seal::DATA_PUBLICATION_TARGET_PERIOD_MS)
+                .expect("data publication period fits i64"),
+        );
+        let publish_due =
+            oldest_unpublished.is_some_and(|received_at| sealed_at >= received_at + target_period);
+        let mut candidates = accepted_by_basis
+            .iter()
+            .flat_map(|(basis, entries)| {
+                entries
+                    .iter()
+                    .filter(|(digest, _)| !published.contains(digest))
+                    .filter(|_| publish_early || publish_due || due_bases.contains(basis))
+                    .map(|(digest, _)| (digest.clone(), basis.clone()))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.0.cmp(&right.0));
+        candidates.truncate(arkret_wire::seal::MAX_SEAL_DELTA);
+        let data_delta = candidates
+            .iter()
+            .map(|(digest, _)| digest.clone())
+            .collect::<Vec<_>>();
+        let selected = data_delta.iter().cloned().collect::<BTreeSet<_>>();
+        let mut cumulative = published.clone();
+        cumulative.extend(selected.iter().cloned());
+        let data_event_set_root = event_digest_set_root(&cumulative, digest_suite)
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+
+        let grace = chrono::Duration::milliseconds(
+            i64::try_from(arkret_wire::seal::DATA_CLOSURE_GRACE_PERIOD_MS)
+                .expect("data closure grace period fits i64"),
+        );
+        let mut new_announcements = candidates
+            .iter()
+            .map(|(_, basis)| basis)
+            .filter(|basis| !announcements.contains_key(*basis) && !closed.contains(*basis))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|data_basis| DataClosureAnnouncement {
+                data_basis,
+                not_before: sealed_at + grace,
+            })
+            .collect::<Vec<_>>();
+        new_announcements.sort_by(|left, right| left.data_basis.cmp(&right.data_basis));
+
+        let mut closures = Vec::new();
+        for basis in due_bases {
+            let all_for_basis = accepted_by_basis
+                .get(&basis)
+                .into_iter()
+                .flatten()
+                .map(|(digest, _)| digest.clone())
+                .collect::<BTreeSet<_>>();
+            if !all_for_basis.is_subset(&cumulative) {
+                continue;
+            }
+            let (announcement_ref, _) = announcements
+                .get(&basis)
+                .expect("due basis came from the announcement map");
+            let root = event_digest_set_root(&all_for_basis, digest_suite)
+                .map_err(|error| NotaryError::Construction(error.to_string()))?;
+            closures.push(DataClosure {
+                data_basis: basis,
+                announcement_ref: announcement_ref.clone(),
+                allowed_event_set: DataSetCommitment {
+                    root,
+                    member_count: u64::try_from(all_for_basis.len()).map_err(|_| {
+                        NotaryError::Construction(
+                            "data closure member count exceeds u64".to_owned(),
+                        )
+                    })?,
+                },
+            });
+        }
+        closures.sort_by(|left, right| left.data_basis.cmp(&right.data_basis));
+
+        if data_delta.is_empty() && new_announcements.is_empty() && closures.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(DataPublicationMaterial {
+            data_delta,
+            data_event_set_root,
+            announcements: new_announcements,
+            closures,
         }))
     }
 
@@ -775,10 +1001,60 @@ impl NotaryWorker {
             },
             realm_id,
         )?;
+        let data_material = if let Some(body) = reserved_body.as_ref() {
+            Some(DataPublicationMaterial {
+                data_delta: body.data_delta.clone(),
+                data_event_set_root: body.data_event_set_root.clone(),
+                announcements: body.data_closure_announcements.clone(),
+                closures: body.data_closures.clone(),
+            })
+        } else if let Some(predecessor_id) = predecessor_ref.as_ref() {
+            self.data_publication_material(
+                state,
+                realm_id,
+                predecessor_id,
+                digest_suites.seal_digest_suite,
+                sealed_at,
+                !units.is_empty(),
+            )
+            .await?
+        } else {
+            None
+        };
+        if units.is_empty() && data_material.is_none() {
+            return Ok(None);
+        }
+        let predecessor_data_root = if let Some(predecessor_id) = predecessor_ref.as_ref() {
+            state
+                .projections()
+                .seal_by_id(predecessor_id)
+                .await?
+                .ok_or_else(|| {
+                    NotaryError::Construction("predecessor Seal is unavailable".to_owned())
+                })?
+                .data_event_set_root
+        } else {
+            arkret_wire::empty_data_event_set_root(digest_suites.seal_digest_suite)
+                .map_err(|error| NotaryError::Construction(error.to_string()))?
+        };
+        let (data_delta, data_event_set_root, data_closure_announcements, data_closures) =
+            data_material.map_or_else(
+                || (Vec::new(), predecessor_data_root, Vec::new(), Vec::new()),
+                |material| {
+                    (
+                        material.data_delta,
+                        material.data_event_set_root,
+                        material.announcements,
+                        material.closures,
+                    )
+                },
+            );
         let unsigned = arkret_wire::UnsignedSeal {
             realm_id: realm_id.clone(),
             predecessor_ref: predecessor_ref.clone(),
             delta,
+            data_delta,
+            data_event_set_root,
             control_event_set_root: control_event_set_root.clone(),
             state_root: predicted_state_root.clone(),
             notary_seq,
@@ -802,6 +1078,8 @@ impl NotaryWorker {
             configuration_ref,
             command_results: executed.command_results,
             authorization_closures: Vec::new(),
+            data_closure_announcements,
+            data_closures,
             existence_anchors: Vec::new(),
         };
         let canonical_body = arkret_canonical::canonical_json_bytes(&unsigned)
@@ -1286,6 +1564,8 @@ impl NotaryWorker {
             realm_id: realm_id.clone(),
             predecessor_ref: Some(request.predecessor_ref.clone()),
             delta: executed.committed_event_digests,
+            data_delta: Vec::new(),
+            data_event_set_root: predecessor.data_event_set_root.clone(),
             control_event_set_root,
             state_root,
             notary_seq: self
@@ -1300,6 +1580,8 @@ impl NotaryWorker {
             configuration_ref: notary_configuration_ref(&pre_state, realm_id)?,
             command_results: executed.command_results,
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         };
         let fixed = state

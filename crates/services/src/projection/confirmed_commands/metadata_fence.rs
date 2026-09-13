@@ -100,6 +100,9 @@ mod tests {
             realm_id: event.realm_id.clone(),
             predecessor_ref: None,
             delta: if rejected { vec![] } else { vec![digest] },
+            data_delta: vec![],
+            data_event_set_root: arkret_wire::empty_data_event_set_root(DigestSuite::Sha256)
+                .unwrap(),
             control_event_set_root: hash(),
             state_root: hash(),
             notary_seq: 0,
@@ -118,6 +121,8 @@ mod tests {
             configuration_ref: event.event_id.clone(),
             command_results: vec![outcome],
             authorization_closures: vec![],
+            data_closure_announcements: vec![],
+            data_closures: vec![],
             existence_anchors: vec![],
         };
         seal.id = seal.derive_id(DigestSuite::Sha256).unwrap();

@@ -474,6 +474,11 @@ pub fn build_realm_basis(
             realm_id: realm.clone(),
             predecessor_ref: None,
             delta,
+            data_delta: Vec::new(),
+            data_event_set_root: arkret_wire::empty_data_event_set_root(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .map_err(|error| error.to_string())?,
             control_event_set_root,
             state_root: sealed_state_root(&realm, &ops)?,
             notary_seq: 0,
@@ -486,6 +491,8 @@ pub fn build_realm_basis(
             configuration_ref,
             command_results,
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         },
         arkret_canonical::DigestSuite::Sha256,

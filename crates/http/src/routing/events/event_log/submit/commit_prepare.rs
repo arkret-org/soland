@@ -17,7 +17,8 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
     pub(super) device_revoke_target_device_id: Option<&'a str>,
     pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
     pub(super) local_device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
-    pub(super) historical_producer: Option<arkret::historical_producer::VerifiedHistoricalEventProducer>,
+    pub(super) historical_producer:
+        Option<arkret::historical_producer::VerifiedHistoricalEventProducer>,
     pub(super) membership_compensation_evidence:
         Option<&'a arkret_wire::MembershipCompensationSubmissionEvidence>,
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,

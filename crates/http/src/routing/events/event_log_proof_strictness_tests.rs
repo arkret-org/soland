@@ -1396,6 +1396,11 @@ async fn insert_ordinary_event_seal_with(
         realm_id: realm,
         predecessor_ref,
         delta,
+        data_delta: Vec::new(),
+        data_event_set_root: arkret_wire::empty_data_event_set_root(
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap(),
         control_event_set_root: ordinary_event_hash(0x22),
         state_root: ordinary_event_hash(0x77),
         notary_seq,
@@ -1410,6 +1415,8 @@ async fn insert_ordinary_event_seal_with(
             .unwrap(),
         command_results,
         authorization_closures: Vec::new(),
+        data_closure_announcements: Vec::new(),
+        data_closures: Vec::new(),
         existence_anchors: Vec::new(),
     };
     seal.id = seal
@@ -1571,6 +1578,11 @@ async fn insert_ordinary_event_revocation_successor(
         realm_id: realm.clone(),
         predecessor_ref: Some(predecessor),
         delta: vec![move_id.clone()],
+        data_delta: Vec::new(),
+        data_event_set_root: arkret_wire::empty_data_event_set_root(
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap(),
         control_event_set_root: ordinary_event_hash(0x23),
         state_root: ordinary_event_hash(0x78),
         notary_seq: 2,
@@ -1593,6 +1605,8 @@ async fn insert_ordinary_event_revocation_successor(
             .unwrap(),
         ],
         authorization_closures: Vec::new(),
+        data_closure_announcements: Vec::new(),
+        data_closures: Vec::new(),
         existence_anchors: Vec::new(),
     };
     successor.id = successor

@@ -17,61 +17,48 @@ mod pg_tests;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct CurrentCausalHead {
+pub(super) struct CurrentCausalWinner {
     event_id: arkret_wire::EventId,
+    depth: u64,
     value: Value,
 }
 
-pub(super) type CurrentCausalHeads = BTreeMap<CellRef, Vec<CurrentCausalHead>>;
+pub(super) type CurrentCausalWinners = BTreeMap<CellRef, CurrentCausalWinner>;
 
-/// A head disappears only when another frozen parent view covers its write
-/// but has already replaced it. Concurrent parent heads remain distinct.
-pub(super) fn merge_causal_views(
-    views: &[(CurrentCausalHeads, BTreeSet<String>)],
-) -> StoreResult<CurrentCausalHeads> {
-    let mut result = BTreeMap::<CellRef, BTreeMap<arkret_wire::EventId, CurrentCausalHead>>::new();
-    for (heads, _) in views {
-        for (cell, candidates) in heads {
-            for candidate in candidates {
-                let digest = candidate.event_id.event_digest().to_string();
-                let superseded = views.iter().any(|(other, covered)| {
-                    covered.contains(&digest)
-                        && !other.get(cell).is_some_and(|heads| {
-                            heads.iter().any(|head| head.event_id == candidate.event_id)
-                        })
-                });
-                if !superseded {
-                    let heads = result.entry(cell.clone()).or_default();
-                    if heads
-                        .get(&candidate.event_id)
-                        .is_some_and(|old| old.value != candidate.value)
-                    {
-                        return Err(StoreError::Backend(
-                            "same MV source has inconsistent materialized values".into(),
-                        ));
-                    }
-                    heads.insert(candidate.event_id.clone(), candidate.clone());
+/// Merge deterministic winners from parent views under one eligibility context.
+pub(super) fn merge_causal_winner_views(
+    views: &[(CurrentCausalWinners, BTreeSet<String>)],
+) -> StoreResult<CurrentCausalWinners> {
+    let mut result = CurrentCausalWinners::new();
+    for (winners, _) in views {
+        for (cell, candidate) in winners {
+            if let Some(old) = result.get(cell) {
+                if old.event_id == candidate.event_id
+                    && (old.value != candidate.value || old.depth != candidate.depth)
+                {
+                    return Err(StoreError::Backend(
+                        "same causal source has inconsistent value or depth".into(),
+                    ));
+                }
+                if (old.depth, old.event_id.token_bytes())
+                    >= (candidate.depth, candidate.event_id.token_bytes())
+                {
+                    continue;
                 }
             }
+            result.insert(cell.clone(), candidate.clone());
         }
     }
-    Ok(result
-        .into_iter()
-        .map(|(cell, heads)| {
-            let mut heads = heads.into_values().collect::<Vec<_>>();
-            heads.sort_by_key(|head| head.event_id.token_bytes());
-            (cell, heads)
-        })
-        .collect())
+    Ok(result)
 }
 
-pub(super) async fn advance_causal_heads(
+pub(super) async fn advance_causal_winners(
     conn: &mut AsyncPgConnection,
     realm: &str,
     predecessors: &[String],
     new_rows: &[(i64, String, String, Value)],
     rule_context: &CheckpointRuleContext,
-) -> Result<(CurrentCausalHeads, bool), EventSealCommitError> {
+) -> Result<(CurrentCausalWinners, bool), EventSealCommitError> {
     let mut views = Vec::new();
     let mut ready = true;
     for predecessor in predecessors {
@@ -87,9 +74,9 @@ pub(super) async fn advance_causal_heads(
             continue;
         }
         let heads = if view.rule_context.reusable_with(rule_context) && view.causal_ready {
-            view.causal_heads
+            view.causal_winners
         } else {
-            let Some(heads) = rebuild_causal_heads(
+            let Some(heads) = rebuild_causal_winners(
                 conn,
                 realm,
                 &row.covered_seal_ids,
@@ -105,8 +92,8 @@ pub(super) async fn advance_causal_heads(
         };
         views.push((heads, row.covered_event_digests.into_iter().collect()));
     }
-    let mut heads = merge_causal_views(&views)?;
-    let mut updates = CurrentCausalHeads::new();
+    let mut winners = merge_causal_winner_views(&views)?;
+    let mut updates = BTreeMap::<CellRef, Vec<arkret_state::StateWrite>>::new();
     for (_, cell, _, value) in new_rows {
         let cell = CellRef::new(cell.clone()).map_err(invalid)?;
         let parsed = CellId::from_ref(&cell).map_err(invalid)?;
@@ -117,22 +104,37 @@ pub(super) async fn advance_causal_heads(
             continue;
         }
         let issued = sealed_op_from_value(value.clone())?;
-        let Some(value) = issued.op.op.value else {
-            ready = false;
-            continue;
-        };
-        let event_id = issued.op.event_id.clone();
-        updates
-            .entry(cell)
-            .or_default()
-            .push(CurrentCausalHead { event_id, value });
+        updates.entry(cell).or_default().push(issued.op);
     }
-    for (cell, mut values) in updates {
-        values.sort_by_key(|head| head.event_id.token_bytes());
-        values.dedup_by(|a, b| a.event_id == b.event_id && a.value == b.value);
-        heads.insert(cell, values);
+    for (cell, mut writes) in updates {
+        if let Some(current) = winners.get(&cell) {
+            writes.push(
+                arkret_state::StateWrite::new(
+                    current.event_id.clone(),
+                    arkret_wire::LatticeOp {
+                        op_type: arkret_wire::LatticeOpType::Set,
+                        value: Some(current.value.clone()),
+                        ..arkret_wire::LatticeOp::empty()
+                    },
+                )
+                .with_fixed_depth(current.depth),
+            );
+        }
+        match arkret_state::causal_register_state(&writes) {
+            Ok(state) => {
+                winners.insert(
+                    cell,
+                    CurrentCausalWinner {
+                        event_id: state.winner.event_id,
+                        depth: state.winner.depth,
+                        value: state.winner.value,
+                    },
+                );
+            }
+            Err(_) => ready = false,
+        }
     }
-    Ok((heads, ready))
+    Ok((winners, ready))
 }
 
 #[derive(QueryableByName)]
@@ -145,16 +147,15 @@ struct CausalRebuildSeal {
     parents: Vec<String>,
 }
 
-/// Reconstruct provenance from accepted effects and Seal ancestry, never from
-/// arrival order or an incompatible joined-value cache. Same-Seal writes stay
-/// siblings; only writes in a strict successor Seal supersede a source.
-pub(super) async fn rebuild_causal_heads(
+/// Reconstruct fixed same-Cell depths from signed causal predecessors, never
+/// from Seal ancestry, arrival order, or a previously projected winner.
+pub(super) async fn rebuild_causal_winners(
     conn: &mut AsyncPgConnection,
     realm: &str,
     closure: &[String],
     covered: &[String],
     context: &CheckpointRuleContext,
-) -> Result<Option<CurrentCausalHeads>, EventSealCommitError> {
+) -> Result<Option<CurrentCausalWinners>, EventSealCommitError> {
     if !matches!(context, CheckpointRuleContext::Stable { .. }) {
         return Ok(None);
     }
@@ -202,7 +203,7 @@ pub(super) async fn rebuild_causal_heads(
     }
     let rows = sql_query("SELECT cell_id,seal_id,op_json FROM state_cell_ops WHERE realm_id=$1 AND seal_id=ANY($2) AND move_id=ANY($3) ORDER BY cell_id,seq")
         .bind::<Text,_>(realm).bind::<Array<Text>,_>(closure).bind::<Array<Text>,_>(covered).load::<EventCellOpRow>(&mut *conn).await?;
-    let mut writes = BTreeMap::<CellRef, Vec<(String, CurrentCausalHead)>>::new();
+    let mut writes = BTreeMap::<CellRef, Vec<arkret_state::StateWrite>>::new();
     for row in rows {
         let cell = CellRef::new(row.cell_id).map_err(invalid)?;
         if !current_family_descriptor(CellId::from_ref(&cell).map_err(invalid)?.component())
@@ -212,39 +213,22 @@ pub(super) async fn rebuild_causal_heads(
             continue;
         }
         let issued = sealed_op_from_value(row.op_json)?;
-        let Some(value) = issued.op.op.value else {
-            return Ok(None);
-        };
-        let event_id = issued.op.event_id.clone();
-        writes
-            .entry(cell)
-            .or_default()
-            .push((row.seal_id, CurrentCausalHead { event_id, value }));
+        writes.entry(cell).or_default().push(issued.op);
     }
-    let mut result = CurrentCausalHeads::new();
+    let mut result = CurrentCausalWinners::new();
     for (cell, candidates) in writes {
-        let mut surviving = BTreeMap::new();
-        for (seal, head) in &candidates {
-            if candidates
-                .iter()
-                .any(|(other, _)| other != seal && lineage[other].contains(seal))
-            {
-                continue;
-            }
-            if surviving
-                .get(&head.event_id)
-                .is_some_and(|old| old != &head.value)
-            {
-                return Err(invalid("same MV source has inconsistent accepted effects"));
-            }
-            surviving.insert(head.event_id.clone(), head.value.clone());
-        }
-        let mut heads = surviving
-            .into_iter()
-            .map(|(event_id, value)| CurrentCausalHead { event_id, value })
-            .collect::<Vec<_>>();
-        heads.sort_by_key(|head| head.event_id.token_bytes());
-        result.insert(cell, heads);
+        let state = match arkret_state::causal_register_state(&candidates) {
+            Ok(state) => state,
+            Err(_) => return Ok(None),
+        };
+        result.insert(
+            cell,
+            CurrentCausalWinner {
+                event_id: state.winner.event_id,
+                depth: state.winner.depth,
+                value: state.winner.value,
+            },
+        );
     }
     Ok(Some(result))
 }
@@ -487,7 +471,7 @@ pub(super) async fn publish(
     realm: &str,
     cells: &BTreeMap<CellRef, ResolvedCellState>,
     revision: i64,
-    causal_heads: &CurrentCausalHeads,
+    causal_winners: &CurrentCausalWinners,
     causal_ready: bool,
 ) -> Result<(), EventSealCommitError> {
     let mut origins = sql_query("SELECT FALSE AS unwritten,cell_id,selector,target,source_event_id FROM current_selector_origins WHERE realm_id=$1 ORDER BY scope_key,cell_id")
@@ -543,12 +527,7 @@ pub(super) async fn publish(
         };
         let cell_id = CellRef::new(origin.cell_id).map_err(invalid)?;
         let result = match cells.get(&cell_id) {
-            None if origin.unwritten
-                && matches!(
-                    descriptor.state_model.as_str(),
-                    "causal_register" | "sequenced_state"
-                ) =>
-            {
+            None if origin.unwritten && descriptor.state_model == "sequenced_state" => {
                 serde_json::json!({"status":"value","value":null})
             }
             None if origin.unwritten
@@ -561,37 +540,29 @@ pub(super) async fn publish(
                 continue;
             }
             None => serde_json::json!({"status":"removed"}),
-            Some(ResolvedCellState::Bottom(_)) if descriptor.state_model == "causal_register" => {
-                serde_json::json!({"status":"unavailable","reason":"bottom"})
-            }
             Some(_) if descriptor.state_model == "causal_register" => {
-                let Some(heads) = causal_heads.get(&cell_id).filter(|heads| !heads.is_empty())
-                else {
+                let Some(winner) = causal_winners.get(&cell_id) else {
                     ready = false;
                     continue;
                 };
-                let mut result_heads = Vec::new();
-                for head in heads {
-                    let mut value = head.value.clone();
-                    if let Some(object) = value.as_object_mut() {
-                        for field in &descriptor.projection_omitted_fields {
-                            object.remove(field);
-                        }
-                        if descriptor.materialized_id_from_subject {
-                            object.insert(
-                                "id".into(),
-                                Value::String(
-                                    CellId::from_ref(&cell_id)
-                                        .map_err(invalid)?
-                                        .subject()
-                                        .to_owned(),
-                                ),
-                            );
-                        }
+                let mut value = winner.value.clone();
+                if let Some(object) = value.as_object_mut() {
+                    for field in &descriptor.projection_omitted_fields {
+                        object.remove(field);
                     }
-                    result_heads.push(serde_json::json!({"event_id":head.event_id,"value":value}));
+                    if descriptor.materialized_id_from_subject {
+                        object.insert(
+                            "id".into(),
+                            Value::String(
+                                CellId::from_ref(&cell_id)
+                                    .map_err(invalid)?
+                                    .subject()
+                                    .to_owned(),
+                            ),
+                        );
+                    }
                 }
-                serde_json::json!({"status":"heads","heads":result_heads})
+                serde_json::json!({"status":"value","value":value,"source":{"event_id":winner.event_id,"depth":winner.depth}})
             }
             Some(state) if family == arkret_wire::CellFamilyId::AGENT_KEY_V1 => {
                 let Some(value) = state.settled_value() else {
@@ -670,33 +641,34 @@ pub(super) async fn publish(
 mod tests {
     use super::*;
 
-    fn head(byte: u8) -> CurrentCausalHead {
-        CurrentCausalHead {
+    fn head(byte: u8) -> CurrentCausalWinner {
+        CurrentCausalWinner {
             event_id: arkret_wire::EventId::from_digest(
                 arkret_canonical::DigestSuite::Sha256,
                 [byte; 32],
             ),
+            depth: 0,
             value: serde_json::json!({"source":byte}),
         }
     }
 
     #[test]
-    fn causal_views_keep_concurrent_heads_and_drop_only_observed_replacements() {
+    fn causal_views_select_the_highest_fixed_rank() {
         let cell =
             CellRef::new("ak:cell:ak.component.agent.selector_claim.v1:claim".to_owned()).unwrap();
         let a = head(1);
         let b = head(2);
-        let view = |head: &CurrentCausalHead, covered: Vec<String>| {
+        let view = |head: &CurrentCausalWinner, covered: Vec<String>| {
             (
-                BTreeMap::from([(cell.clone(), vec![head.clone()])]),
+                BTreeMap::from([(cell.clone(), head.clone())]),
                 covered.into_iter().collect(),
             )
         };
         let first = view(&a, vec![a.event_id.event_digest().to_string()]);
         let concurrent = view(&b, vec![b.event_id.event_digest().to_string()]);
         assert_eq!(
-            merge_causal_views(&[first.clone(), concurrent]).unwrap()[&cell].len(),
-            2
+            merge_causal_winner_views(&[first.clone(), concurrent]).unwrap()[&cell].event_id,
+            b.event_id
         );
         let replacement = view(
             &b,
@@ -705,14 +677,17 @@ mod tests {
                 b.event_id.event_digest().to_string(),
             ],
         );
-        let merged = merge_causal_views(&[first.clone(), replacement]).unwrap();
-        assert_eq!(merged[&cell][0].event_id, b.event_id);
-        assert_eq!(merged[&cell].len(), 1);
+        let merged = merge_causal_winner_views(&[first.clone(), replacement]).unwrap();
+        assert_eq!(merged[&cell].event_id, b.event_id);
         let removed = (
-            CurrentCausalHeads::new(),
+            CurrentCausalWinners::new(),
             BTreeSet::from([a.event_id.event_digest().to_string()]),
         );
-        assert!(merge_causal_views(&[first, removed]).unwrap().is_empty());
+        assert!(
+            merge_causal_winner_views(&[first, removed])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -722,12 +697,8 @@ mod tests {
         let a = head(1);
         let mut bad = a.clone();
         bad.value = serde_json::json!({"source":99});
-        let view = |head: CurrentCausalHead| {
-            (
-                BTreeMap::from([(cell.clone(), vec![head])]),
-                BTreeSet::new(),
-            )
-        };
-        assert!(merge_causal_views(&[view(a), view(bad)]).is_err());
+        let view =
+            |head: CurrentCausalWinner| (BTreeMap::from([(cell.clone(), head)]), BTreeSet::new());
+        assert!(merge_causal_winner_views(&[view(a), view(bad)]).is_err());
     }
 }

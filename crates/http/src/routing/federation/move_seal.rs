@@ -2416,6 +2416,11 @@ mod seal_delta_tests {
             .unwrap(),
             predecessor_ref: None,
             delta: Vec::new(),
+            data_delta: Vec::new(),
+            data_event_set_root: arkret_wire::empty_data_event_set_root(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
             control_event_set_root: empty_root.clone(),
             state_root: empty_root.clone(),
             notary_seq: 0,
@@ -2439,6 +2444,8 @@ mod seal_delta_tests {
             ),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         };
         let canonical_bytes = seal.canonical_bytes_for_id().unwrap();

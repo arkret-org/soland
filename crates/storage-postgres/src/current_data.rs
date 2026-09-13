@@ -18,6 +18,8 @@ use soland_storage::{PersistenceError, PersistenceResult};
 struct SourceRow {
     #[diesel(sql_type = Jsonb)]
     source_value: Value,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    causal_depth: i64,
 }
 
 /// Publishes current Data sources in the ordinary Event transaction or the
@@ -115,6 +117,12 @@ pub(crate) async fn commit_sources(
         let (target_kind, target_key) = match family.target_derivation.as_str() {
             "enclosing_realm" => ("realm", String::new()),
             "registered_subject_strand" => ("strand", cell.subject().to_owned()),
+            "registered_position_subject_strand" => (
+                "strand",
+                cell.strand_position_target()
+                    .map_err(projection_error)?
+                    .to_string(),
+            ),
             "message_create_event_from_registered_subject" => (
                 "event",
                 cell.subject()
@@ -177,13 +185,27 @@ pub(crate) async fn commit_sources(
                 "current selector target association changed",
             ));
         }
-        let bases = sql_query("SELECT s.source_value FROM canonical_events e JOIN current_data_sources s ON e.id=s.event_id WHERE e.state='accepted' AND EXISTS(SELECT 1 FROM accepted_events accepted WHERE accepted.id=e.id) AND s.realm_id=$1 AND s.scope_key=$2 AND s.cell_id=$3 AND s.available AND s.event_digest=ANY($4) ORDER BY s.event_id FOR SHARE OF e,s")
+        let bases = sql_query("SELECT s.source_value,s.causal_depth FROM canonical_events e JOIN current_data_sources s ON e.id=s.event_id WHERE e.state='accepted' AND EXISTS(SELECT 1 FROM accepted_events accepted WHERE accepted.id=e.id) AND s.realm_id=$1 AND s.scope_key=$2 AND s.cell_id=$3 AND s.available AND s.event_digest=ANY($4) ORDER BY s.event_id FOR SHARE OF e,s")
             .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
             .bind::<Text,_>(write.cell_id.as_str()).bind::<Array<Text>,_>(&causal)
             .load::<SourceRow>(&mut *conn).await.map_err(PersistenceError::database)?;
-        if bases.is_empty() && matches!(&write.op, ProjectedOp::ApplyPatch { .. }) {
+        #[derive(QueryableByName)]
+        struct ExistingCount {
+            #[diesel(sql_type=diesel::sql_types::BigInt)]
+            count: i64,
+        }
+        let existing_count = sql_query("SELECT count(*)::bigint AS count FROM current_data_sources WHERE realm_id=$1 AND scope_key=$2 AND cell_id=$3")
+            .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
+            .bind::<Text,_>(write.cell_id.as_str()).get_result::<ExistingCount>(&mut *conn).await
+            .map_err(PersistenceError::database)?.count;
+        if *is_causal_register
+            && bases.is_empty()
+            && (existing_count > 0 || matches!(&write.op, ProjectedOp::ApplyPatch { .. }))
+        {
             if causal.is_empty() {
-                return Err(projection_error("patch declares no causal source"));
+                return Err(projection_error(
+                    "non-initial causal-register write declares no same-Cell source",
+                ));
             }
             #[derive(QueryableByName)]
             struct Known {
@@ -207,6 +229,19 @@ pub(crate) async fn commit_sources(
                 "dependency_missing: exact accepted patch source is not materialized".into(),
             ));
         }
+        let causal_depth = if bases.is_empty() {
+            0
+        } else {
+            bases
+                .iter()
+                .map(|row| row.causal_depth)
+                .max()
+                .and_then(|depth| depth.checked_add(1))
+                .filter(|depth| *depth <= 9_007_199_254_740_991)
+                .ok_or_else(|| {
+                    projection_error("causal depth exceeds the JSON-safe integer range")
+                })?
+        };
         let mut value = materialize_source(
             &write,
             &bases
@@ -224,17 +259,14 @@ pub(crate) async fn commit_sources(
                 object.remove(omitted);
             }
         }
-        sql_query("INSERT INTO current_data_sources(realm_id,scope_key,cell_id,event_id,event_digest,source_value,causal_bases,target_kind,target_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+        sql_query("INSERT INTO current_data_sources(target_kind,target_key,realm_id,scope_key,cell_id,event_id,event_digest,source_value,causal_bases,causal_depth) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+            .bind::<Text,_>(target_kind).bind::<Text,_>(&target_key)
             .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
             .bind::<Text,_>(write.cell_id.as_str()).bind::<Binary,_>(event.event_id.token_bytes().to_vec())
-            .bind::<Text,_>(&digest).bind::<Jsonb,_>(value).bind::<Array<Text>,_>(&causal).bind::<Text,_>(target_kind).bind::<Text,_>(&target_key)
+            .bind::<Text,_>(&digest).bind::<Jsonb,_>(value).bind::<Array<Text>,_>(&causal).bind::<diesel::sql_types::BigInt,_>(causal_depth)
             .execute(&mut *conn).await.map_err(PersistenceError::database)?;
         if *is_causal_register {
-            sql_query("DELETE FROM current_data_heads h USING current_data_sources s WHERE h.realm_id=$1 AND h.scope_key=$2 AND h.cell_id=$3 AND s.realm_id=h.realm_id AND s.scope_key=h.scope_key AND s.cell_id=h.cell_id AND s.event_id=h.event_id AND s.event_digest=ANY($4)")
-                .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
-                .bind::<Text,_>(write.cell_id.as_str()).bind::<Array<Text>,_>(&causal)
-                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            sql_query("INSERT INTO current_data_heads(realm_id,scope_key,cell_id,event_id) VALUES($1,$2,$3,$4)")
+            sql_query("INSERT INTO current_data_winners(realm_id,scope_key,cell_id,event_id) VALUES($1,$2,$3,$4) ON CONFLICT(realm_id,scope_key,cell_id) DO UPDATE SET event_id=EXCLUDED.event_id WHERE EXISTS(SELECT 1 FROM current_data_sources candidate,current_data_sources incumbent WHERE candidate.realm_id=EXCLUDED.realm_id AND candidate.scope_key=EXCLUDED.scope_key AND candidate.cell_id=EXCLUDED.cell_id AND candidate.event_id=EXCLUDED.event_id AND incumbent.realm_id=current_data_winners.realm_id AND incumbent.scope_key=current_data_winners.scope_key AND incumbent.cell_id=current_data_winners.cell_id AND incumbent.event_id=current_data_winners.event_id AND (candidate.causal_depth>incumbent.causal_depth OR (candidate.causal_depth=incumbent.causal_depth AND candidate.event_id>incumbent.event_id)))")
                 .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
                 .bind::<Text,_>(write.cell_id.as_str()).bind::<Binary,_>(event.event_id.token_bytes().to_vec())
                 .execute(&mut *conn).await.map_err(PersistenceError::database)?;
@@ -265,7 +297,7 @@ pub(crate) async fn commit_sources(
         let mut entries = Vec::new();
         for cell_id in causal_cells {
             entries.push(
-                publication::materialized_heads(
+                publication::materialized_current(
                     conn,
                     arkret_models_collaboration::sync_frames::current_results::CurrentSelector {
                         scope_ref: event.scope_ref.clone(),

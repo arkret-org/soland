@@ -11,7 +11,7 @@
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
 //! check; rate limiting comes from the global RateLimiter middleware.
 //!
-//! The state model and bottom policy resolution are delegated to
+//! The state-model resolution is delegated to
 //! `state.projections().resolve_cell(realm_id, &cell)`. Both single-cell and
 //! list reads require an explicit Realm scope so product Space subjects are
 //! never mistaken for security boundaries.
@@ -39,8 +39,6 @@ pub struct AdminResolvedCellStateOutcome {
     pub cell_id: CellRef,
     pub state: ResolvedCellState,
     pub state_model: StateModelKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bottom_policy: Option<arkret_wire::CausalRegisterBottomPolicy>,
 }
 
 /// Response body for `GET /_soland/admin/cells?...` (list).
@@ -58,13 +56,11 @@ fn state_response_from(
     cell_id: &CellRef,
     state: &ResolvedCellState,
     state_model: StateModelKind,
-    bottom_policy: Option<arkret_wire::CausalRegisterBottomPolicy>,
 ) -> AdminResolvedCellStateOutcome {
     AdminResolvedCellStateOutcome {
         cell_id: cell_id.clone(),
         state: state.clone(),
         state_model,
-        bottom_policy,
     }
 }
 
@@ -133,7 +129,6 @@ async fn admin_get_cell(
         .resolve_cell(&realm, &cell_ref)
         .map_err(|e| crate::app_error!(NotFound, format!("cell family not registered: {e}"),))?;
     let state_model_kind = binding.model.kind();
-    let bottom_policy = binding.bottom_policy;
 
     let cell_state_opt = {
         let proj = state.projections().snapshot();
@@ -156,7 +151,6 @@ async fn admin_get_cell(
         &cell_ref,
         &cell_state,
         state_model_kind,
-        bottom_policy,
     ))
 }
 
@@ -247,7 +241,6 @@ async fn admin_list_cells(
             &cell,
             &cell_state,
             binding.model.kind(),
-            binding.bottom_policy,
         ));
     }
 
@@ -271,36 +264,10 @@ mod tests {
             CellRef::new("ak:cell:ak.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let st = ResolvedCellState::Value(json!("join"));
-        let resp = state_response_from(&cell, &st, StateModelKind::OrSet, None);
+        let resp = state_response_from(&cell, &st, StateModelKind::OrSet);
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["state"], json!({"value": "join"}));
         assert_eq!(v["state_model"], "or_set");
-        assert!(v.get("bottom_policy").is_none());
-    }
-
-    #[test]
-    fn state_response_preserves_typed_bottom_policy() {
-        let cell =
-            CellRef::new("ak:cell:ak.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
-        let event_id =
-            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [7; 32]);
-        let st = ResolvedCellState::Bottom(arkret_wire::Bottom::conflict(
-            vec![cell.clone()],
-            vec![arkret_wire::CausalHead {
-                event_id,
-                value: json!("candidate"),
-            }],
-        ));
-        let resp = state_response_from(
-            &cell,
-            &st,
-            StateModelKind::CausalRegister,
-            Some(arkret_wire::CausalRegisterBottomPolicy::Expose),
-        );
-        let v = serde_json::to_value(&resp).unwrap();
-        assert_eq!(v["state_model"], "causal_register");
-        assert_eq!(v["bottom_policy"], "expose");
-        assert_eq!(v["state"]["bottom"]["kind"], "conflict");
     }
 
     #[test]

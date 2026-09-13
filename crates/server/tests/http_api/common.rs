@@ -914,6 +914,11 @@ pub(crate) async fn seed_test_realm(
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
             predecessor_ref: None,
             delta: Vec::new(),
+            data_delta: Vec::new(),
+            data_event_set_root: arkret_wire::empty_data_event_set_root(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
             control_event_set_root,
             state_root: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
@@ -932,6 +937,8 @@ pub(crate) async fn seed_test_realm(
                 .unwrap(),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         },
         arkret_canonical::DigestSuite::Sha256,

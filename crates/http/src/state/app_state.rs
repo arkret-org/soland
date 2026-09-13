@@ -2435,6 +2435,8 @@ mod membership_hydration_tests {
                     realm_id: realm.clone(),
                     predecessor_ref: predecessor.clone(),
                     delta,
+                    data_delta: Vec::new(),
+                    data_event_set_root: arkret_wire::empty_data_event_set_root(suite).unwrap(),
                     control_event_set_root: arkret_state::control_event_set_root(
                         &digests.into_iter().collect(),
                         suite,
@@ -2455,6 +2457,8 @@ mod membership_hydration_tests {
                     configuration_ref: members[0].event.event_id.clone(),
                     command_results: vec![result],
                     authorization_closures: Vec::new(),
+                    data_closure_announcements: Vec::new(),
+                    data_closures: Vec::new(),
                     existence_anchors: Vec::new(),
                 };
                 let seal = arkret_wire::Seal::sign_with_signer(unsigned, suite, &signer).unwrap();

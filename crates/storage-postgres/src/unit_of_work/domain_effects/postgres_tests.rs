@@ -100,6 +100,8 @@ fn seal(events: &[Event], digests: &[Hash], outcome: CommandOutcome) -> Seal {
         realm_id: events[0].realm_id.clone(),
         predecessor_ref: None,
         delta: vec![],
+        data_delta: vec![],
+        data_event_set_root: arkret_wire::empty_data_event_set_root(DigestSuite::Sha256).unwrap(),
         control_event_set_root: arkret_state::state::control_event_set_root(
             &BTreeSet::new(),
             DigestSuite::Sha256,
@@ -126,6 +128,8 @@ fn seal(events: &[Event], digests: &[Hash], outcome: CommandOutcome) -> Seal {
         configuration_ref: events[0].event_id.clone(),
         command_results: vec![result],
         authorization_closures: vec![],
+        data_closure_announcements: vec![],
+        data_closures: vec![],
         existence_anchors: vec![],
     };
     seal.id = seal.derive_id(DigestSuite::Sha256).unwrap();

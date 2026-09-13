@@ -1833,6 +1833,11 @@ fn seal_dependency_contract_seal(
         realm_id: realm_id.clone(),
         predecessor_ref,
         delta: vec![delta],
+        data_delta: Vec::new(),
+        data_event_set_root: arkret_wire::empty_data_event_set_root(
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap(),
         control_event_set_root: root.clone(),
         state_root,
         notary_seq: 0,
@@ -1857,6 +1862,8 @@ fn seal_dependency_contract_seal(
         .unwrap(),
         command_results: vec![command_result],
         authorization_closures: Vec::new(),
+        data_closure_announcements: Vec::new(),
+        data_closures: Vec::new(),
         existence_anchors: Vec::new(),
     };
     seal.id = seal

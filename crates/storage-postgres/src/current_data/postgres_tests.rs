@@ -552,6 +552,9 @@ async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publish
             realm_id: realm.clone(),
             predecessor_ref: None,
             delta: vec![],
+            data_delta: vec![],
+            data_event_set_root: arkret_wire::empty_data_event_set_root(DigestSuite::Sha256)
+                .unwrap(),
             control_event_set_root: arkret_state::state::control_event_set_root(
                 &covered,
                 DigestSuite::Sha256,
@@ -578,6 +581,8 @@ async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publish
             configuration_ref: command.event_id.clone(),
             command_results: vec![result],
             authorization_closures: vec![],
+            data_closure_announcements: vec![],
+            data_closures: vec![],
             existence_anchors: vec![],
         };
         seal.id = seal.derive_id(DigestSuite::Sha256).unwrap();

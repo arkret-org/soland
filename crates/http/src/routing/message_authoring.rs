@@ -262,6 +262,7 @@ async fn prepare(
                 .transpose()
                 .map_err(invalid)?,
             direct_binding.clone(),
+            authority_ref.clone(),
             suite,
             observed_at,
         )

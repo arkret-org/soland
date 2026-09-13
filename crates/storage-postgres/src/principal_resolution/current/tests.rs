@@ -114,7 +114,7 @@ async fn current_cell_ignores_async_cache_and_requires_live_exact_source() {
         .bind::<Text,_>(realm.as_str()).bind::<Text,_>(selector.canonical_key().unwrap()).get_result::<Current>(&mut *conn).await.unwrap();
     let entry = CurrentResultEntry::try_from_json(round.payload)
         .expect("database current result roundtrip");
-    let CurrentOutcome::Value { value } = entry.result() else {
+    let CurrentOutcome::Value { value, .. } = entry.result() else {
         panic!("scalar result");
     };
     let _: PrincipalResolutionProjection =

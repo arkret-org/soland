@@ -77,33 +77,34 @@ async fn current_causal_cache_keeps_concurrent_sources_and_rejects_missing_or_st
     };
     let mut leaves = Vec::new();
     for byte in [1, 2] {
-        let head = CurrentCausalHead {
+        let head = CurrentCausalWinner {
             event_id: arkret_wire::EventId::from_digest(
                 arkret_canonical::DigestSuite::Sha256,
                 [byte; 32],
             ),
+            depth: 0,
             value: serde_json::json!({"value":byte}),
         };
         let covered = vec![head.event_id.event_digest().to_string()];
         let view = StoredCheckpointView {
             cells: BTreeMap::new(),
             rule_context: context.clone(),
-            causal_heads: BTreeMap::from([(cell.clone(), vec![head])]),
+            causal_winners: BTreeMap::from([(cell.clone(), head)]),
             causal_ready: true,
         };
         leaves.push(checkpoint(&mut conn, &realm, byte, &view, &covered).await);
     }
-    let (heads, ready) = advance_causal_heads(&mut conn, realm.as_str(), &leaves, &[], &context)
+    let (heads, ready) = advance_causal_winners(&mut conn, realm.as_str(), &leaves, &[], &context)
         .await
         .unwrap();
     assert!(ready);
-    assert_eq!(heads[&cell].len(), 2);
+    assert_eq!(heads[&cell].value, serde_json::json!({"value":2}));
     let missing = format!("ak:seal:sha256:{}", "33".repeat(32));
-    let (_, ready) = advance_causal_heads(&mut conn, realm.as_str(), &[missing], &[], &context)
+    let (_, ready) = advance_causal_winners(&mut conn, realm.as_str(), &[missing], &[], &context)
         .await
         .unwrap();
     assert!(!ready);
-    let (_, ready) = advance_causal_heads(
+    let (_, ready) = advance_causal_winners(
         &mut conn,
         realm.as_str(),
         &leaves,
@@ -178,7 +179,7 @@ async fn expired_agent_current_result_refreshes_atomically_and_partial_view_stay
     let view = StoredCheckpointView {
         cells,
         rule_context: context,
-        causal_heads: Default::default(),
+        causal_winners: Default::default(),
         causal_ready: true,
     };
     checkpoint(
@@ -258,7 +259,7 @@ async fn stale_causal_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order()
     let empty = StoredCheckpointView {
         cells: Default::default(),
         rule_context: old,
-        causal_heads: Default::default(),
+        causal_winners: Default::default(),
         causal_ready: false,
     };
     let mut seals = Vec::<String>::new();
@@ -312,23 +313,18 @@ async fn stale_causal_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order()
         vec![seals[2].clone(), seals[3].clone()],
         vec![seals[3].clone(), seals[2].clone()],
     ] {
-        let (heads, ready) = advance_causal_heads(&mut conn, realm.as_str(), &parents, &[], &fresh)
-            .await
-            .unwrap();
+        let (heads, ready) =
+            advance_causal_winners(&mut conn, realm.as_str(), &parents, &[], &fresh)
+                .await
+                .unwrap();
         assert!(ready);
-        assert_eq!(
-            heads[&cell]
-                .iter()
-                .map(|h| h.value["source"].as_u64().unwrap())
-                .collect::<Vec<_>>(),
-            vec![2, 3, 4]
-        );
+        assert_eq!(heads[&cell].value["source"].as_u64(), Some(4));
     }
     // A missing accepted ancestor cannot be treated as an empty predecessor.
     let mut missing = seals.clone();
     missing.push(format!("ak:seal:sha256:{}", "ff".repeat(32)));
     assert!(
-        rebuild_causal_heads(&mut conn, realm.as_str(), &missing, &coverage[2], &fresh)
+        rebuild_causal_winners(&mut conn, realm.as_str(), &missing, &coverage[2], &fresh)
             .await
             .unwrap()
             .is_none()

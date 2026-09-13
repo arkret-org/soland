@@ -138,6 +138,11 @@ mod tests {
             realm_id: RealmId::from_event_id(&event),
             predecessor_ref: None,
             delta: vec![],
+            data_delta: vec![],
+            data_event_set_root: arkret_wire::empty_data_event_set_root(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
             control_event_set_root: digest.clone(),
             state_root: digest,
             notary_seq: 0,
@@ -152,6 +157,8 @@ mod tests {
             configuration_ref: event,
             command_results: vec![],
             authorization_closures: vec![],
+            data_closure_announcements: vec![],
+            data_closures: vec![],
             existence_anchors: vec![],
         }
     }

@@ -3716,6 +3716,11 @@ mod effective_checkpoint_tests {
             realm_id: realm_id.clone(),
             predecessor_ref,
             delta: Vec::new(),
+            data_delta: Vec::new(),
+            data_event_set_root: arkret_wire::empty_data_event_set_root(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
             control_event_set_root,
             state_root,
             notary_seq,
@@ -3736,6 +3741,8 @@ mod effective_checkpoint_tests {
                 .unwrap(),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         };
         seal.id = seal
@@ -3914,6 +3921,11 @@ mod control_governance_health_tests {
                 realm_id: event.realm_id.clone(),
                 predecessor_ref: None,
                 delta: vec![ack.proposal_digest.clone()],
+                data_delta: Vec::new(),
+                data_event_set_root: arkret_wire::empty_data_event_set_root(
+                    arkret_canonical::DigestSuite::Sha256,
+                )
+                .unwrap(),
                 control_event_set_root: hash(),
                 state_root: hash(),
                 notary_seq: index,
@@ -3936,6 +3948,8 @@ mod control_governance_health_tests {
                 .unwrap(),
                 command_results: Vec::new(),
                 authorization_closures: Vec::new(),
+                data_closure_announcements: Vec::new(),
+                data_closures: Vec::new(),
                 existence_anchors: Vec::new(),
             };
             let store = service.control_event_store();
@@ -4368,13 +4382,11 @@ mod transition_registry_tests {
             let cell =
                 CellRef::new(format!("ak:cell:{}:live-admission", contract.cell_family)).unwrap();
             let binding = registry.resolve(&realm, &cell).unwrap();
-            let (_, _, model, _, bottom_policy) =
-                arkret_lattice_registry::state_model_bindings_for_sdk_registry()
-                    .into_iter()
-                    .find(|(family, ..)| *family == contract.cell_family)
-                    .unwrap();
+            let (_, _, model, _) = arkret_lattice_registry::state_model_bindings_for_sdk_registry()
+                .into_iter()
+                .find(|(family, ..)| *family == contract.cell_family)
+                .unwrap();
             assert_eq!(binding.model.kind(), model);
-            assert_eq!(binding.bottom_policy, bottom_policy);
             assert!(binding.domain_transition.is_some());
         }
     }

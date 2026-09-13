@@ -671,6 +671,9 @@ pub async fn sign_test_seal(
             realm_id,
             predecessor_ref,
             delta,
+            data_delta: Vec::new(),
+            data_event_set_root: arkret_wire::empty_data_event_set_root(digest_suite)
+                .expect("empty data root"),
             control_event_set_root,
             state_root,
             notary_seq,
@@ -683,6 +686,8 @@ pub async fn sign_test_seal(
             configuration_ref,
             command_results,
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         },
         digest_suite,

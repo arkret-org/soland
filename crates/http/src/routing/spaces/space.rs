@@ -889,6 +889,11 @@ mod tests {
             realm_id: RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap(),
             predecessor_ref,
             delta,
+            data_delta: Vec::new(),
+            data_event_set_root: arkret_wire::empty_data_event_set_root(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
             control_event_set_root: test_hash(0x22),
             state_root: test_hash(0x77),
             notary_seq,
@@ -910,6 +915,8 @@ mod tests {
                 .unwrap(),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         };
         seal.id = seal

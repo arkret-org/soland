@@ -114,7 +114,7 @@ pub(super) async fn publish(
     conn: &mut AsyncPgConnection,
     realm: &str,
     cells: &BTreeMap<CellRef, ResolvedCellState>,
-    causal_heads: &super::current_results::CurrentCausalHeads,
+    causal_winners: &super::current_results::CurrentCausalWinners,
     causal_ready: bool,
 ) -> Result<(), EventSealCommitError> {
     super::welcome_discovery::publish(conn, realm, cells).await?;
@@ -184,7 +184,7 @@ pub(super) async fn publish(
         .execute(&mut *conn)
         .await?;
     }
-    super::current_results::publish(conn, realm, cells, revision, causal_heads, causal_ready)
+    super::current_results::publish(conn, realm, cells, revision, causal_winners, causal_ready)
         .await?;
     Ok(())
 }
@@ -252,15 +252,15 @@ pub(super) async fn publish_current_frontier(
                 conn,
                 realm,
                 &view.cells,
-                &view.causal_heads,
+                &view.causal_winners,
                 view.causal_ready,
             )
             .await;
         }
         let heads = if reusable && view.causal_ready {
-            view.causal_heads
+            view.causal_winners
         } else {
-            let Some(heads) = super::current_results::rebuild_causal_heads(
+            let Some(heads) = super::current_results::rebuild_causal_winners(
                 conn,
                 realm,
                 &row.covered_seal_ids,
@@ -332,7 +332,7 @@ pub(super) async fn publish_current_frontier(
         }
         cells.insert(cell.clone(), resolved);
     }
-    let causal_heads = super::current_results::merge_causal_views(&causal_views)?;
+    let causal_winners = super::current_results::merge_causal_winner_views(&causal_views)?;
     if let Some(seal) = expected_seal {
         let root = compute_state_root(
             arkret_state::GovernanceView::new(&security_cells),
@@ -348,5 +348,5 @@ pub(super) async fn publish_current_frontier(
             .into());
         }
     }
-    publish(conn, realm, &cells, &causal_heads, causal_ready).await
+    publish(conn, realm, &cells, &causal_winners, causal_ready).await
 }

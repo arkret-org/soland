@@ -3827,6 +3827,7 @@ CREATE TABLE current_data_sources (
     event_digest TEXT NOT NULL,
     source_value JSONB NOT NULL,
     causal_bases TEXT[] NOT NULL,
+    causal_depth BIGINT NOT NULL CHECK(causal_depth BETWEEN 0 AND 9007199254740991),
     available BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (realm_id,scope_key,cell_id,event_id),
     UNIQUE (realm_id,scope_key,cell_id,event_digest)
@@ -3842,12 +3843,12 @@ CREATE TABLE current_data_pending (
  PRIMARY KEY(realm_id,scope_key,cell_id)
 );
 CREATE INDEX current_data_pending_target ON current_data_pending(realm_id,target_kind,target_key);
-CREATE TABLE current_data_heads (
+CREATE TABLE current_data_winners (
     realm_id TEXT NOT NULL,
     scope_key TEXT NOT NULL,
     cell_id TEXT NOT NULL,
     event_id BYTEA NOT NULL,
-    PRIMARY KEY (realm_id,scope_key,cell_id,event_id),
+    PRIMARY KEY (realm_id,scope_key,cell_id),
     FOREIGN KEY (realm_id,scope_key,cell_id,event_id)
       REFERENCES current_data_sources(realm_id,scope_key,cell_id,event_id)
 );

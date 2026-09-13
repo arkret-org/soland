@@ -4,6 +4,7 @@
 //! index, so process restarts and lost wakeups converge without an in-memory
 //! queue becoming a second source of truth.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use arkret_identifiers::RealmId;
@@ -161,7 +162,110 @@ async fn run_reconciliation_pass(state: &AppState, holder: &str, repair_due: boo
         attempts,
         "control-seal reconciliation attempt budget completed"
     );
+    run_data_publication_pass(state).await;
     run_device_revocation_cleanup_pass(state).await;
+}
+
+async fn run_data_publication_pass(state: &AppState) {
+    let records = match state.event_queries().accepted_events().await {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::error!(%error, "data-publication candidate scan failed");
+            return;
+        }
+    };
+    let mut realms = BTreeSet::new();
+    for record in records {
+        let Ok(event) = serde_json::from_value::<arkret_wire::Event>(record.envelope) else {
+            tracing::error!(event_id = %record.event_id, "accepted Event cannot be decoded during data-publication scan");
+            continue;
+        };
+        if event.kind.is_data_plane() {
+            realms.insert(event.realm_id);
+        }
+    }
+
+    let mut passes = JoinSet::new();
+    for realm_id in realms.into_iter().take(MAX_REALM_ATTEMPTS_PER_PASS) {
+        while passes.len() >= MAX_CONCURRENT_REALM_PASSES {
+            if let Some(Err(error)) = passes.join_next().await {
+                tracing::error!(%error, "isolated data-publication Realm pass failed");
+            }
+        }
+        let state = state.clone();
+        passes.spawn(async move {
+            if tokio::time::timeout(REALM_PASS_TIMEOUT, run_data_realm_pass(&state, &realm_id))
+                .await
+                .is_err()
+            {
+                tracing::error!(%realm_id, "data-publication Realm pass timed out");
+            }
+        });
+    }
+    while let Some(result) = passes.join_next().await {
+        if let Err(error) = result {
+            tracing::error!(%error, "isolated data-publication Realm pass failed");
+        }
+    }
+}
+
+async fn run_data_realm_pass(state: &AppState, realm_id: &RealmId) {
+    let worker = NotaryWorker::for_data_publication(state.service_id().clone());
+    let slot = match worker
+        .signing_lease_slot(state, realm_id, MAX_CONTROL_UNITS_PER_REALM)
+        .await
+    {
+        Ok(SigningLeaseSlotResolution::Ready(slot)) => slot,
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(%error, %realm_id, "data-publication signer slot is unavailable");
+            return;
+        }
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let holder = format!("data:{}:{}", state.service_id(), uuid::Uuid::new_v4());
+    let fence = match state
+        .projections()
+        .try_claim_control_signing_lease(
+            realm_id,
+            &slot,
+            &holder,
+            now_ms,
+            now_ms.saturating_add(SIGNING_LEASE_DURATION_MS),
+        )
+        .await
+    {
+        Ok(Some(fence)) => fence,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%error, %realm_id, "data-publication signing lease claim failed");
+            return;
+        }
+    };
+
+    match worker
+        .sign_pending_for_realm(state, realm_id, MAX_CONTROL_UNITS_PER_REALM)
+        .await
+    {
+        Ok(Some(outcome)) => tracing::info!(
+            %realm_id,
+            seal_id = %outcome.seal_id,
+            "data-publication pass published a Seal"
+        ),
+        Ok(None) => {}
+        Err(error) => tracing::error!(%error, %realm_id, "data-publication signing failed"),
+    }
+    match state
+        .projections()
+        .release_control_signing_lease(realm_id, &slot, &holder, fence)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => tracing::warn!(%realm_id, "data-publication signing lease was replaced"),
+        Err(error) => {
+            tracing::warn!(%error, %realm_id, "data-publication signing lease release failed")
+        }
+    }
 }
 
 async fn run_claimed_realm_pass(state: &AppState, claim: ControlSealScheduleClaim) {

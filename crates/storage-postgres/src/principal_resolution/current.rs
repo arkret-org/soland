@@ -123,7 +123,7 @@ pub(super) async fn read(
         let Some(current)=current.filter(|row|row.ready) else {return Ok(CurrentPrincipalRead::Unavailable);};
         let Ok(entry)=CurrentResultEntry::try_from_json(current.payload) else {return Ok(CurrentPrincipalRead::Unavailable);};
         if entry.selector()!=&selector {return Ok(CurrentPrincipalRead::Unavailable);}
-        let CurrentOutcome::Value{value}=entry.result() else {return Ok(CurrentPrincipalRead::Unavailable);};
+        let CurrentOutcome::Value{value,..}=entry.result() else {return Ok(CurrentPrincipalRead::Unavailable);};
         let Ok(projection)=serde_json::from_value::<PrincipalResolutionProjection>(value.as_json().clone()) else {return Ok(CurrentPrincipalRead::Unavailable);};
         let Ok(source_id)=EventId::new(projection.resolution_event_ref.clone()) else {return Ok(CurrentPrincipalRead::Unavailable);};
         let Some(genesis_event)=accepted(conn,&genesis_id,&realm).await? else {return Ok(CurrentPrincipalRead::Unavailable);};

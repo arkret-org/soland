@@ -188,7 +188,7 @@ fn roster_from_current(
         let CurrentTarget::Member { actor_id } = entry.target() else {
             continue;
         };
-        let CurrentOutcome::Value { value } = entry.result() else {
+        let CurrentOutcome::Value { value, .. } = entry.result() else {
             continue;
         };
         let membership = match value.as_json().as_str() {

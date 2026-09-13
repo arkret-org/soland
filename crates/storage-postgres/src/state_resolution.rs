@@ -56,7 +56,7 @@ pub struct SealEffectiveStateCheckpoint {
 struct StoredCheckpointView {
     cells: BTreeMap<CellRef, ResolvedCellState>,
     rule_context: CheckpointRuleContext,
-    causal_heads: current_results::CurrentCausalHeads,
+    causal_winners: current_results::CurrentCausalWinners,
     causal_ready: bool,
 }
 
@@ -985,6 +985,7 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
             event_id,
             op,
             supersedes,
+            fixed_depth: None,
         },
     })
 }
@@ -2541,11 +2542,11 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
                 insert_new_state_seal(conn, &insert).await?;
-                let (causal_heads, causal_ready) = current_results::advance_causal_heads(conn, &realm_id, &predecessor_seal_ids, &new_rows, &rule_context).await?;
+                let (causal_winners, causal_ready) = current_results::advance_causal_winners(conn, &realm_id, &predecessor_seal_ids, &new_rows, &rule_context).await?;
                 let checkpoint_state_json = serde_json::to_value(StoredCheckpointView {
                     cells: joined.clone(),
                     rule_context: rule_context.clone(),
-                    causal_heads: causal_heads.clone(),
+                    causal_winners: causal_winners.clone(),
                     causal_ready,
                 })
                 .map_err(serde_to_store)?;
@@ -2587,7 +2588,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 }
                 account_summary::register_delta_members(conn, &realm_id, &delta).await?;
                 if expected.iter().all(|leaf| predecessor_seal_ids.contains(leaf)) {
-                    account_summary::publish(conn, &realm_id, &joined, &causal_heads, causal_ready).await?;
+                    account_summary::publish(conn, &realm_id, &joined, &causal_winners, causal_ready).await?;
                 } else {
                     account_summary::publish_current_frontier(conn, &realm_id, cell_registry.as_ref()).await?;
                 }
@@ -3158,15 +3159,15 @@ mod event_seal_commit_tests {
     fn incomplete_or_unknown_checkpoint_fields_are_errors() {
         for damaged in [
             json!({"cells": {}}),
-            json!({"cells": {}, "causal_heads": {}}),
-            json!({"cells": {}, "causal_heads": {}, "rule_context": null}),
-            json!({"cells": {}, "causal_heads": {},
+            json!({"cells": {}, "causal_winners": {}}),
+            json!({"cells": {}, "causal_winners": {}, "rule_context": null}),
+            json!({"cells": {}, "causal_winners": {},
                 "rule_context": {"status": "unavailable"}, "obsolete": true}),
         ] {
             assert!(checkpoint_view_from_value(damaged).is_err());
         }
         let valid = checkpoint_view_from_value(json!({
-            "cells": {}, "causal_heads": {}, "rule_context": {"status": "unavailable"}, "causal_heads": {}, "causal_ready": true
+            "cells": {}, "causal_winners": {}, "rule_context": {"status": "unavailable"}, "causal_winners": {}, "causal_ready": true
         }))
         .unwrap();
         assert!(!valid.rule_context.reusable_with(&valid.rule_context));
@@ -3264,6 +3265,11 @@ mod event_seal_commit_tests {
             realm_id: realm.clone(),
             predecessor_ref: None,
             delta: vec![event_id],
+            data_delta: Vec::new(),
+            data_event_set_root: arkret_wire::empty_data_event_set_root(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
             control_event_set_root: control_root.clone(),
             state_root,
             notary_seq: 0,
@@ -3283,6 +3289,8 @@ mod event_seal_commit_tests {
                 .unwrap(),
             command_results: vec![command_result],
             authorization_closures: Vec::new(),
+            data_closure_announcements: Vec::new(),
+            data_closures: Vec::new(),
             existence_anchors: Vec::new(),
         };
         seal.id = seal

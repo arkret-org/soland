@@ -5279,6 +5279,11 @@ fn contract_covering_seal(
         realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).expect("contract realm id"),
         predecessor_ref: None,
         delta: vec![delta],
+        data_delta: Vec::new(),
+        data_event_set_root: arkret_wire::empty_data_event_set_root(
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap(),
         control_event_set_root: placeholder.clone(),
         state_root: placeholder.clone(),
         notary_seq: 0,
@@ -5300,6 +5305,8 @@ fn contract_covering_seal(
         .unwrap(),
         command_results: vec![command_result],
         authorization_closures: Vec::new(),
+        data_closure_announcements: Vec::new(),
+        data_closures: Vec::new(),
         existence_anchors: Vec::new(),
     };
     seal.id = seal
