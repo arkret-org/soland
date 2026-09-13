@@ -516,7 +516,7 @@ impl ProjectionState {
             };
         };
         // The whole entry is the state model value, so it has to be a complete,
-        // schema-valid object before it can become a head.
+        // schema-valid object before it can become a register write.
         let parsed_entry = match serde_json::from_value::<
             arkret_models_collaboration::objects::productivity::RsvpEntry,
         >(entry.clone())
@@ -596,47 +596,98 @@ impl ProjectionState {
         }
         let actor_id = operation_actor_id(operation);
         let key = (event_ref.to_owned(), occurrence.clone(), actor_id.clone());
-        let head = RsvpHead {
+        let source_identity_matches =
+            arkret_wire::EventId::from_event_digest(&operation.context.canonical_event_digest)
+                .is_ok_and(|derived| derived == operation.context.event_id);
+        if !source_identity_matches {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_event_identity_mismatch".to_owned(),
+            };
+        }
+        let write = RsvpWrite {
             entry: entry.clone(),
-            source_event_id: rsvp_source_event_id(operation),
-            source_event_digest: rsvp_source_event_digest(operation),
+            source_event_id: operation.context.event_id.clone(),
+            source_event_digest: operation.context.canonical_event_digest.clone(),
+            causal_refs: operation.context.envelope_causal_refs.clone(),
             updated_at: now,
         };
 
-        let cell = self.rsvps.entry(key).or_insert_with(|| RsvpProjection {
-            event_ref: event_ref.to_owned(),
-            occurrence: occurrence.clone(),
-            actor_id: actor_id.clone(),
-            heads: Vec::new(),
-        });
-        // Only a byte-identical entry is a value-level no-op. Two responses
-        // that merely share a status are still distinct heads, otherwise a
-        // changed basis or comment would silently disappear.
-        if cell
-            .heads
+        let mut candidate = self
+            .rsvps
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| RsvpProjection {
+                event_ref: event_ref.to_owned(),
+                occurrence: occurrence.clone(),
+                actor_id: actor_id.clone(),
+                writes: Vec::new(),
+                winner_event_id: write.source_event_id.clone(),
+                winner_depth: 0,
+            });
+        if let Some(existing) = candidate
+            .writes
             .iter()
-            .any(|existing| existing.entry == head.entry)
+            .find(|existing| existing.source_event_id == write.source_event_id)
         {
-            return ProjectionEffect::Ignored;
+            return if existing.entry == write.entry
+                && existing.source_event_digest == write.source_event_digest
+                && existing.causal_refs == write.causal_refs
+            {
+                ProjectionEffect::Ignored
+            } else {
+                ProjectionEffect::Rejected {
+                    reason: "rsvp_event_identity_reused".to_owned(),
+                }
+            };
         }
-        // Causal domination: drop exactly the heads this Event observed. Heads
-        // it did not observe are genuinely concurrent and stay exposed; the
-        // responder resolves them with a later RSVP that names both.
-        cell.heads.retain(|existing| {
-            !causal_refs
-                .iter()
-                .any(|value| value == &existing.source_event_digest)
+        candidate.writes.push(write);
+
+        let known_event_ids = candidate
+            .writes
+            .iter()
+            .map(|write| write.source_event_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let state_writes = candidate
+            .writes
+            .iter()
+            .map(|write| {
+                let mut op = arkret_wire::LatticeOp::empty();
+                op.value = Some(write.entry.clone());
+                let same_cell_predecessors = write
+                    .causal_refs
+                    .iter()
+                    .filter_map(|digest| arkret_wire::EventId::from_event_digest(digest).ok())
+                    .filter(|event_id| known_event_ids.contains(event_id));
+                arkret_state::state_model::StateWrite::superseding(
+                    write.source_event_id.clone(),
+                    op,
+                    same_cell_predecessors,
+                )
+            })
+            .collect::<Vec<_>>();
+        let resolved = match arkret_state::state_model::causal_register_state(&state_writes) {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "rsvp_causal_register_invalid".to_owned(),
+                };
+            }
+        };
+        candidate.winner_event_id = resolved.winner.event_id.clone();
+        candidate.winner_depth = resolved.winner.depth;
+        candidate.writes.sort_by(|left, right| {
+            left.source_event_id
+                .token_bytes()
+                .cmp(&right.source_event_id.token_bytes())
         });
-        cell.heads.push(head);
-        cell.heads
-            .sort_by(|left, right| left.source_event_digest.cmp(&right.source_event_digest));
-        let head_count = cell.heads.len();
+        self.rsvps.insert(key, candidate);
 
         ProjectionEffect::RsvpProjected {
             event_ref: event_ref.to_owned(),
             actor_id,
             occurrence,
-            head_count,
+            winner_event_id: resolved.winner.event_id.to_string(),
+            winner_depth: resolved.winner.depth,
         }
     }
 
@@ -996,19 +1047,6 @@ fn rsvp_causal_refs(operation: &Operation) -> Vec<String> {
         .iter()
         .map(ToString::to_string)
         .collect()
-}
-
-fn rsvp_source_event_id(operation: &Operation) -> String {
-    operation.context.event_id.to_string()
-}
-
-/// Identity a later RSVP names in `causal_refs` to dominate this head.
-///
-/// A head with no resolvable digest can never be dominated, so it would stay
-/// exposed forever; the fallback keeps that visible instead of silently
-/// merging unrelated responses.
-fn rsvp_source_event_digest(operation: &Operation) -> String {
-    operation.context.canonical_event_digest.to_string()
 }
 
 struct PinEffectiveScope {

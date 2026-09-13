@@ -1903,7 +1903,8 @@ pub(crate) fn canonical_event_ops_with_frozen_pre_state(
 /// observed. Replaying the Realm's accepted control history in order is what
 /// makes this the same value every receiver computes. A cell with no
 /// accumulated op is simply absent: the resolver reads an absent cell as the
-/// null pre-state. Only ordinary causal-register cells may resolve to Bottom.
+/// null pre-state. Ordinary causal-register concurrency always has one winner;
+/// Bottom is reserved for explicitly registered cross-Cell domain invariants.
 fn frozen_governance_pre_state(
     state: &AppState,
     realm_id: &RealmId,

@@ -1780,7 +1780,8 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
 
     // `realm-state-snapshot-schema.md` section 3: `items[]` is a closed single-branch union
     // of reducer cells, `{kind:"cell", id, state}`, and a `causal_register` cell's
-    // state is its full head set. Every Realm has at least one written CAS cell
+    // state carries complete coverage plus one deterministic winner. Every Realm has at
+    // least one written causal-register cell
     // from genesis — the notary — so a manifest without it is a producer that
     // still dumps Events instead of reducer state, which is what this Station
     // used to do. The chunk payload is read back rather than trusted from the
@@ -1808,22 +1809,28 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .expect("the Realm notary cell is written at genesis and must be a snapshot member");
     assert!(
         notary_item["object"].is_null() && notary_item["source_event_id"].is_null(),
-        "a cell item carries neither object nor source_event_id: one identity \
-         cannot name several live writes",
+        "a cell item carries neither object nor source_event_id",
     );
-    let heads = notary_item["state"]["heads"]
+    let covered = notary_item["state"]["covered_event_ids"]
         .as_array()
-        .expect("a causal_register cell state is a head set");
+        .expect("a causal_register cell state carries covered_event_ids");
     assert!(
-        !heads.is_empty(),
-        "an unwritten cell is not a member, so an emitted cell always has a head",
+        !covered.is_empty(),
+        "an unwritten cell is not a member, so an emitted cell always has coverage",
     );
     assert!(
-        heads.iter().all(|head| head["event_id"]
+        covered.iter().all(|event_id| event_id
             .as_str()
             .is_some_and(|id| id.starts_with("ak:event:"))),
-        "each head is addressed by the Event identity that wrote it",
+        "each covered write is addressed by its Event identity",
     );
+    let winner = &notary_item["state"]["winner"];
+    assert!(
+        winner["event_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("ak:event:"))
+    );
+    assert!(winner["depth"].is_u64());
 
     let kicked = remove_test_realm_member(&state, &realm_id, "did:web:bob.example");
     assert!(

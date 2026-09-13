@@ -33,9 +33,10 @@ pub enum ProjectionEffect {
         event_ref: String,
         actor_id: String,
         occurrence: Option<String>,
-        /// Live `causal_register` heads after the join. More than one means the
-        /// responder has concurrent responses that only they can resolve.
-        head_count: usize,
+        /// The one deterministic current write after joining all accepted evidence.
+        winner_event_id: String,
+        /// Receiver-derived causal depth used before the full Event-id tie-break.
+        winner_depth: u64,
     },
     PinProjected {
         pin_scope_key: String,

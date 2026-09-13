@@ -117,7 +117,7 @@ pub use projections::{
     MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
     PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
     RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
-    RedactionCellValue, RsvpHead, RsvpProjection, SidecarContextProjection, SidecarProjection,
+    RedactionCellValue, RsvpProjection, RsvpWrite, SidecarContextProjection, SidecarProjection,
     SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
     SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,

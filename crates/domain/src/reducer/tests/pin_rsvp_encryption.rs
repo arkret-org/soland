@@ -124,6 +124,15 @@ fn set_causal_refs(operation: &mut arkret_event_draft::ProjectedEventOperation, 
         .collect();
 }
 
+fn set_event_identity(operation: &mut arkret_event_draft::ProjectedEventOperation, digest: &str) {
+    let digest = arkret_identifiers::Hash::new(digest).expect("event digest parses");
+    let event_id = arkret_identifiers::EventId::from_event_digest(&digest)
+        .expect("event digest forms an EventId");
+    operation.context.canonical_event_digest = digest;
+    operation.context.event_id = event_id.clone();
+    operation.context.accepted_event_id = event_id;
+}
+
 fn rsvp_operation(payload: Value) -> arkret_event_draft::ProjectedEventOperation {
     let mut operation = make_operation(arkret_wire::EventKind::RsvpSet, REALM_ID, payload);
     set_causal_refs(&mut operation, &[BASIS_A]);
@@ -275,7 +284,7 @@ fn rsvp_target_must_be_an_active_calendar_in_the_same_realm() {
 }
 
 #[test]
-fn rsvp_projects_the_complete_entry_as_one_head() {
+fn rsvp_projects_the_complete_entry_as_the_current_winner() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
@@ -283,12 +292,24 @@ fn rsvp_projects_the_complete_entry_as_one_head() {
     let effect = state.apply(&rsvp_operation(rsvp_payload(Value::Null)), &hlc);
     assert!(matches!(
         effect,
-        ProjectionEffect::RsvpProjected { head_count: 1, .. }
+        ProjectionEffect::RsvpProjected {
+            winner_depth: 0,
+            ..
+        }
     ));
     let rsvp = state.rsvps.values().next().expect("rsvp should project");
-    assert_eq!(rsvp.heads.len(), 1);
-    assert_eq!(rsvp.heads[0].entry["response"]["status"], "accepted");
-    assert!(rsvp.heads[0].entry.get("schedule_basis_refs").is_some());
+    assert_eq!(rsvp.writes.len(), 1);
+    assert_eq!(
+        rsvp.winner().unwrap().entry["response"]["status"],
+        "accepted"
+    );
+    assert!(
+        rsvp.winner()
+            .unwrap()
+            .entry
+            .get("schedule_basis_refs")
+            .is_some()
+    );
     // Series RSVP keeps the signed JSON null rather than a sentinel string.
     assert_eq!(rsvp.occurrence, None);
 }
@@ -335,35 +356,50 @@ fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
 }
 
 #[test]
-fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
+fn concurrent_rsvps_expose_one_arrival_independent_winner_and_a_successor_dominates() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
 
     let mut first = rsvp_operation(rsvp_payload_for("accepted", Value::Null, Value::Null));
-    first.context.canonical_event_digest = arkret_identifiers::Hash::new(
+    set_event_identity(
+        &mut first,
         "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-    )
-    .unwrap();
+    );
     state.apply(&first, &hlc);
 
-    // Concurrent: this response did not observe the first, so both heads stay
-    // exposed. Nothing here may pick a winner by HLC or arrival order.
+    // Same-depth concurrency is settled by the complete Event identity, never
+    // by HLC or arrival order.
     let mut concurrent = rsvp_operation(rsvp_payload_for("declined", Value::Null, Value::Null));
-    concurrent.context.canonical_event_digest = arkret_identifiers::Hash::new(
+    set_event_identity(
+        &mut concurrent,
         "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-    )
-    .unwrap();
+    );
     let effect = state.apply(&concurrent, &hlc);
     assert!(matches!(
         effect,
-        ProjectionEffect::RsvpProjected { head_count: 2, .. }
+        ProjectionEffect::RsvpProjected {
+            winner_depth: 0,
+            ..
+        }
     ));
     let rsvp = state.rsvps.values().next().expect("rsvp should project");
-    assert!(rsvp.is_conflicted());
+    assert_eq!(rsvp.writes.len(), 2);
+    assert_eq!(
+        rsvp.winner().unwrap().entry["response"]["status"],
+        "declined"
+    );
 
-    // Causal successor: it names both heads, so it dominates them and the
-    // responder is back to a single answer.
+    let mut reversed = ProjectionState::new();
+    seed_pin_target(&mut reversed, &hlc);
+    reversed.apply(&concurrent, &hlc);
+    reversed.apply(&first, &hlc);
+    assert_eq!(
+        reversed.rsvps.values().next().unwrap().winner_event_id,
+        rsvp.winner_event_id
+    );
+
+    // A causal successor of both concurrent writes has greater depth and wins.
     let mut resolving = rsvp_operation(rsvp_payload_for("tentative", Value::Null, Value::Null));
     set_causal_refs(
         &mut resolving,
@@ -373,22 +409,28 @@ fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
             "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         ],
     );
-    resolving.context.canonical_event_digest = arkret_identifiers::Hash::new(
+    set_event_identity(
+        &mut resolving,
         "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-    )
-    .unwrap();
+    );
     let effect = state.apply(&resolving, &hlc);
     assert!(matches!(
         effect,
-        ProjectionEffect::RsvpProjected { head_count: 1, .. }
+        ProjectionEffect::RsvpProjected {
+            winner_depth: 1,
+            ..
+        }
     ));
     let rsvp = state.rsvps.values().next().expect("rsvp should project");
-    assert!(!rsvp.is_conflicted());
-    assert_eq!(rsvp.heads[0].entry["response"]["status"], "tentative");
+    assert_eq!(rsvp.writes.len(), 3);
+    assert_eq!(
+        rsvp.winner().unwrap().entry["response"]["status"],
+        "tentative"
+    );
 }
 
 #[test]
-fn byte_identical_rsvp_entry_is_a_value_level_noop() {
+fn replaying_the_same_rsvp_event_is_an_identity_level_noop() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
@@ -398,5 +440,37 @@ fn byte_identical_rsvp_entry_is_a_value_level_noop() {
     let effect = state.apply(&operation, &hlc);
     assert!(matches!(effect, ProjectionEffect::Ignored));
     let rsvp = state.rsvps.values().next().expect("rsvp should project");
-    assert_eq!(rsvp.heads.len(), 1);
+    assert_eq!(rsvp.writes.len(), 1);
+}
+
+#[test]
+fn a_high_identity_stale_rsvp_sibling_cannot_displace_a_deeper_winner() {
+    const FIRST: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const HONEST: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    const STALE: &str = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_pin_target(&mut state, &hlc);
+
+    let mut first = rsvp_operation(rsvp_payload_for("accepted", Value::Null, Value::Null));
+    set_event_identity(&mut first, FIRST);
+    state.apply(&first, &hlc);
+
+    let mut honest = rsvp_operation(rsvp_payload_for("tentative", Value::Null, Value::Null));
+    set_event_identity(&mut honest, HONEST);
+    set_causal_refs(&mut honest, &[BASIS_A, FIRST]);
+    state.apply(&honest, &hlc);
+
+    let mut stale = rsvp_operation(rsvp_payload_for("declined", Value::Null, Value::Null));
+    set_event_identity(&mut stale, STALE);
+    state.apply(&stale, &hlc);
+
+    let rsvp = state.rsvps.values().next().expect("rsvp should project");
+    assert_eq!(rsvp.writes.len(), 3);
+    assert_eq!(rsvp.winner_depth, 1);
+    assert_eq!(
+        rsvp.winner().unwrap().entry["response"]["status"],
+        "tentative"
+    );
 }

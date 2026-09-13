@@ -1397,10 +1397,10 @@ async fn accepted_account_profile_in_realm(
             .settled_value()
             .expect("checked settled value")
             .clone(),
-        Some(ResolvedCellState::Bottom(_) | ResolvedCellState::Causal(_)) => {
+        Some(ResolvedCellState::Bottom(_)) => {
             return Err(crate::app_error!(
                 FailedPrecondition,
-                "accepted account profile cell has unresolved concurrent heads",
+                "accepted account profile is unavailable because a registered cross-cell invariant failed",
             )
             .with_wire_code("failed_bottom"));
         }

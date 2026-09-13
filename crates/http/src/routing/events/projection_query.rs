@@ -1105,11 +1105,7 @@ struct StrandProjectionView {
     /// `metadata.fields.calendar` subtree co-occur in both directions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     schema_refs: Vec<String>,
-    /// Every live RSVP `causal_register` head for this Strand.
-    ///
-    /// Concurrent responses are exposed side by side rather than reduced to one
-    /// value: only the responder can resolve them, and the spec forbids
-    /// choosing between them by HLC, arrival order or event id.
+    /// One deterministic current RSVP value for every occurrence/responder Cell.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rsvps: Vec<StrandRsvpProjectionView>,
     board_space_id: Option<String>,
@@ -1131,18 +1127,11 @@ struct StrandRsvpProjectionView {
     /// `null` is the whole series; a string is a canonical instance key.
     occurrence: Option<String>,
     actor_id: String,
-    /// More than one head means the responder has concurrent answers that only
-    /// they can resolve.
-    heads: Vec<StrandRsvpHeadView>,
-}
-
-/// One `causal_register` head. `entry` is the complete signed state model value, so a
-/// reader can classify it on both the basis and response axes without going
-/// back to the Event.
-#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
-struct StrandRsvpHeadView {
+    /// Exact Event identity selected by `(causal depth, full EventId bytes)`.
     source_event_id: String,
     source_event_digest: String,
+    winner_depth: u64,
+    /// Complete signed state-model value, including schedule basis and response.
     entry: Value,
 }
 
@@ -1239,18 +1228,16 @@ async fn get_strand_projection(
         proj.rsvps
             .values()
             .filter(|cell| cell.event_ref == strand_id)
-            .map(|cell| StrandRsvpProjectionView {
-                occurrence: cell.occurrence.clone(),
-                actor_id: cell.actor_id.clone(),
-                heads: cell
-                    .heads
-                    .iter()
-                    .map(|head| StrandRsvpHeadView {
-                        source_event_id: head.source_event_id.clone(),
-                        source_event_digest: head.source_event_digest.clone(),
-                        entry: head.entry.clone(),
-                    })
-                    .collect(),
+            .filter_map(|cell| {
+                let winner = cell.winner()?;
+                Some(StrandRsvpProjectionView {
+                    occurrence: cell.occurrence.clone(),
+                    actor_id: cell.actor_id.clone(),
+                    source_event_id: winner.source_event_id.to_string(),
+                    source_event_digest: winner.source_event_digest.to_string(),
+                    winner_depth: cell.winner_depth,
+                    entry: winner.entry.clone(),
+                })
             })
             .collect::<Vec<_>>()
     };

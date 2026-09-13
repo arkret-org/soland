@@ -12,7 +12,7 @@ use arkret_models_collaboration::events_payloads::ContentBlock;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::profiles::StrandTrack;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
-use arkret_wire::{AppletId, DidCoreId, ObjectStage};
+use arkret_wire::{AppletId, DidCoreId, EventId, Hash, ObjectStage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -917,39 +917,38 @@ pub struct ReactionState {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// One `causal_register` head of `ak.component.calendar.rsvp.v1`.
+/// One accepted write in an `ak.component.calendar.rsvp.v1` causal register.
 ///
-/// The state model value is the whole `payload.entry`, so a head independently
-/// carries the schedule basis the responder observed and the response itself.
-/// `source_event_digest` is what later RSVPs name in `causal_refs` to dominate
-/// this head; nothing here is ordered by HLC or arrival.
+/// The state model value is the whole `payload.entry`. History remains available
+/// so out-of-order delivery can recompute depth after a predecessor arrives.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RsvpHead {
+pub struct RsvpWrite {
     pub entry: Value,
-    pub source_event_id: String,
-    pub source_event_digest: String,
+    pub source_event_id: EventId,
+    pub source_event_digest: Hash,
+    pub causal_refs: Vec<Hash>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Converged RSVP cell for one `(event_ref, occurrence, actor_id)` subject.
 ///
-/// Concurrent responses stay side by side: the projection exposes every head
-/// rather than picking a winner, because the spec forbids resolving them by
-/// HLC, `created_at`, `event_id` or arrival order. A causally later response by
-/// the same responder dominates the heads it observed.
+/// The projection retains all covered writes but exposes exactly one winner,
+/// selected by causal depth and then the complete Event identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RsvpProjection {
     pub event_ref: String,
     pub occurrence: Option<String>,
     pub actor_id: String,
-    pub heads: Vec<RsvpHead>,
+    pub writes: Vec<RsvpWrite>,
+    pub winner_event_id: EventId,
+    pub winner_depth: u64,
 }
 
 impl RsvpProjection {
-    /// True when the responder has more than one live head, i.e. concurrent
-    /// responses that only that responder can resolve.
-    pub fn is_conflicted(&self) -> bool {
-        self.heads.len() > 1
+    pub fn winner(&self) -> Option<&RsvpWrite> {
+        self.writes
+            .iter()
+            .find(|write| write.source_event_id == self.winner_event_id)
     }
 }
 

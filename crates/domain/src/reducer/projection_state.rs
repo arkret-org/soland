@@ -36,8 +36,8 @@ pub struct ProjectionState {
     /// `(event_ref, occurrence, actor_id)`, where `occurrence` keeps the signed
     /// JSON null as `None` rather than a sentinel string.
     ///
-    /// This mirrors the `ak.component.calendar.rsvp.v1` `causal_register` cell: it
-    /// holds every live head, never a single last-writer value.
+    /// This mirrors the `ak.component.calendar.rsvp.v1` `causal_register` cell:
+    /// it retains covered writes and exposes the deterministic current winner.
     pub rsvps: BTreeMap<(String, Option<String>, String), RsvpProjection>,
     /// Shared pin projection keyed by `(pin_scope_key, target_ref)`.
     /// Saved items remain holder-private account-data and never enter this
