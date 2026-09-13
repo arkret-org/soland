@@ -391,19 +391,23 @@ async fn open_service_resolution_serves_byte_canonical_evidence_body() {
 }
 
 #[test]
-fn readyz_returns_503_until_session_grant_introspection_bearer_is_configured() {
+fn readyz_returns_503_until_session_grant_internal_channel_is_complete() {
     run_on_deep_stack(
-        "readyz_returns_503_until_session_grant_introspection_bearer_is_configured",
-        readyz_returns_503_until_session_grant_introspection_bearer_is_configured_body,
+        "readyz_returns_503_until_session_grant_internal_channel_is_complete",
+        readyz_returns_503_until_session_grant_internal_channel_is_complete_body,
     );
 }
 
-async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configured_body() {
+async fn readyz_returns_503_until_session_grant_internal_channel_is_complete_body() {
     let mut config = test_config();
     config.development_mode = false;
     config.session_grant_introspection_url =
         Some("https://coauth.example/_arkret/gate/account/session-grants/introspect".to_owned());
-    config.session_grant_introspection_bearer = None;
+    // URL + bearer alone must not make the process ready: the unsigned
+    // introspection path is unavailable until trust-domain and integrity
+    // registration have also produced `internal_authority_channel`.
+    config.session_grant_introspection_bearer = Some("configured-but-insufficient".to_owned());
+    config.internal_authority_channel = None;
     let service = app_from_state(soland_test_support::app_state(config));
 
     let mut response = TestClient::get("http://server/readyz").send(&service).await;

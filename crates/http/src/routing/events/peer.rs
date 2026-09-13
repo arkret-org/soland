@@ -479,13 +479,20 @@ pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<Did
 /// `/_arkret/peer/*`, `/_arkret/gate/*`, `/_arkret/root/*` or `/_arkret/self/*`
 /// into deployment-bearer path groups. An operator-editable list would be a way
 /// to do exactly that, so there is none: the two entries below are the
-/// operations soland takes part in (one inbound, one outbound), and every other
-/// `/_arkret/peer/*` operation keeps the §2.2 RFC 9421 service signature
-/// untouched.
-pub(crate) const INTERNAL_CHANNEL_OPERATIONS: [&str; 2] = [
+/// operations soland takes part in, and every other operation keeps the §2.2
+/// RFC 9421 service signature untouched.
+pub(crate) const INTERNAL_CHANNEL_OPERATIONS: [&str; 4] = [
+    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
+    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1,
     arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
     arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
 ];
+
+/// Registered operations for which Soland is the HTTP receiver. The other
+/// three entries above are outbound from Soland and must never make a Soland
+/// path accept this bearer.
+const INBOUND_INTERNAL_CHANNEL_OPERATIONS: [&str; 1] =
+    [arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1];
 
 /// One resolved registered deployment-internal authenticated channel.
 ///
@@ -499,8 +506,13 @@ pub(crate) struct RegisteredInternalChannel {
     pub(crate) caller_service_id: DidCoreId,
     /// This Station — the configured target service identity.
     pub(crate) destination_service_id: DidCoreId,
-    /// The configured trust domain both ends are registered in.
-    pub(crate) trust_domain: arkret_identifiers::TrustDomainId,
+    /// Explicitly configured Account Authority/source trust domain.
+    pub(crate) source_trust_domain: arkret_identifiers::TrustDomainId,
+    /// This Station's configured destination trust domain.
+    pub(crate) destination_trust_domain: arkret_identifiers::TrustDomainId,
+    /// Validated transport-integrity declaration. Without it the bearer is not
+    /// allowed to replace the ordinary RFC 9421 service signature.
+    integrity: crate::config::InternalChannelIntegrityConfig,
     credential: String,
 }
 
@@ -517,29 +529,47 @@ impl RegisteredInternalChannel {
 
 /// Resolve the registered channel, or fail closed.
 ///
-/// A missing Account Authority endpoint or a missing shared credential means
-/// no channel is registered. The registered operations then fail — they do not
-/// degrade to an anonymous call, to a self-reported identity, or to any weaker
-/// contract.
+/// A missing Account Authority endpoint, source trust domain, shared credential
+/// or valid integrity declaration means no channel is registered. The
+/// registered operations then fail — they do not degrade to an anonymous call,
+/// self-reported identity, hop-by-hop TLS assertion, or any weaker contract.
 pub(crate) async fn registered_internal_authority_channel(
     state: &AppState,
 ) -> Result<RegisteredInternalChannel, AppError> {
-    let caller_service_id = trusted_account_authority_id(state).await?;
-    let credential = state
-        .config()
+    registered_internal_authority_channel_from_config(state.config(), state.service_core_id())
+}
+
+fn registered_internal_authority_channel_from_config(
+    config: &crate::config::AppConfig,
+    service_id: DidCoreId,
+) -> Result<RegisteredInternalChannel, AppError> {
+    let authority_url = config
+        .account_authority_url
+        .as_deref()
+        .ok_or_else(|| AppError::capability_denied("Account Authority is not configured"))?;
+    CanonicalServiceUrl::canonicalize(authority_url).map_err(|error| {
+        AppError::internal(format!(
+            "configured Account Authority URL is invalid: {error}"
+        ))
+    })?;
+    let channel_config = config
         .internal_authority_channel
         .as_ref()
-        .map(|channel| channel.credential().to_owned())
+        .filter(|channel| channel.integrity().permits_unsigned_transport())
         .ok_or_else(|| {
             AppError::capability_denied(
                 "no deployment-internal authenticated channel is registered for this Account Authority",
             )
         })?;
     Ok(RegisteredInternalChannel {
-        caller_service_id,
-        destination_service_id: state.service_core_id(),
-        trust_domain: state.config().trust_domain.clone(),
-        credential,
+        // A split Account Authority signs as this Station; its endpoint does
+        // not establish a second service identity.
+        caller_service_id: service_id.clone(),
+        destination_service_id: service_id,
+        source_trust_domain: channel_config.account_authority_trust_domain().clone(),
+        destination_trust_domain: config.trust_domain.clone(),
+        integrity: channel_config.integrity().clone(),
+        credential: channel_config.credential().to_owned(),
     })
 }
 
@@ -574,17 +604,32 @@ pub(in crate::routing) async fn authenticate_internal_channel_request(
     req: &Request,
     operation: &str,
 ) -> Result<RegisteredInternalChannel, AppError> {
-    debug_assert!(
-        INTERNAL_CHANNEL_OPERATIONS.contains(&operation),
-        "`{operation}` is not a §2.2.3 registered internal-channel operation",
-    );
+    authenticate_internal_channel_request_from_config(
+        state.config(),
+        state.service_core_id(),
+        req.headers(),
+        operation,
+    )
+}
+
+fn authenticate_internal_channel_request_from_config(
+    config: &crate::config::AppConfig,
+    service_id: DidCoreId,
+    headers: &salvo::http::HeaderMap,
+    operation: &str,
+) -> Result<RegisteredInternalChannel, AppError> {
     let rejected = || {
         AppError::unauthenticated(
             "caller is not authenticated on the registered deployment-internal channel",
         )
     };
-    let channel = registered_internal_authority_channel(state).await?;
-    if !internal_channel_request_is_authentic(&channel, operation, req.headers()) {
+    if !INTERNAL_CHANNEL_OPERATIONS.contains(&operation)
+        || !INBOUND_INTERNAL_CHANNEL_OPERATIONS.contains(&operation)
+    {
+        return Err(rejected());
+    }
+    let channel = registered_internal_authority_channel_from_config(config, service_id)?;
+    if !internal_channel_request_is_authentic(&channel, operation, headers) {
         return Err(rejected());
     }
     Ok(channel)
@@ -597,6 +642,9 @@ fn internal_channel_request_is_authentic(
     operation: &str,
     headers: &salvo::http::HeaderMap,
 ) -> bool {
+    if !channel.integrity.permits_unsigned_transport() {
+        return false;
+    }
     let presented = headers
         .get(salvo::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -621,21 +669,20 @@ fn internal_channel_request_is_authentic(
     if headers.contains_key("content-digest") {
         return false;
     }
-    // The trust domain this channel is registered in is a configured fact and
-    // is bound by `RegisteredInternalChannel::trust_domain`; it is deliberately
-    // *not* compared against the `*-Trust-Domain` headers. The Account
-    // Authority derives the value it sends from its own public hostname when no
-    // explicit trust domain is configured, and sends that one value for both
-    // the source and the destination position — so the headers carry the
-    // caller's own view, not a claim about this Station, and comparing them
-    // would reject a correctly registered channel. Nothing is lost: the headers
-    // were never an identity source, and the configured trust domain still
-    // bounds the channel.
+    // The trust domain is a configured channel fact, never an identity source
+    // from the request. Its headers remain optional redundant inputs, but when
+    // present they must agree byte-for-byte with configuration just like the
+    // service identities and operation selector.
     let redundant = [
         (HEADER_SOURCE_SERVICE_ID, channel.caller_service_id.as_str()),
         (
             HEADER_DESTINATION_SERVICE_ID,
             channel.destination_service_id.as_str(),
+        ),
+        ("source-trust-domain", channel.source_trust_domain.as_str()),
+        (
+            "destination-trust-domain",
+            channel.destination_trust_domain.as_str(),
         ),
         ("arkret-operation", operation),
     ];
@@ -2833,19 +2880,62 @@ fn render_app_error(res: &mut Response, error: AppError) {
 
 #[cfg(test)]
 mod internal_channel_tests {
+    use std::collections::BTreeMap;
+
     use salvo::http::{HeaderMap, HeaderName, HeaderValue};
+    use soland_storage_postgres::Db;
 
     use super::*;
 
     const CALLER: &str = "ak:did_core:web:soland.example";
     const TRUST_DOMAIN: &str = "ak:trust_domain:soland.example";
+    const AUTHORITY_TRUST_DOMAIN: &str = "ak:trust_domain:auth.soland.example";
     const CREDENTIAL: &str = "shared-internal-channel-credential";
 
+    fn configured_values(include_integrity: bool) -> BTreeMap<String, String> {
+        let mut values = BTreeMap::from([
+            ("SOLAND_TRUST_DOMAIN".to_owned(), TRUST_DOMAIN.to_owned()),
+            ("SOLAND_DEVELOPMENT_MODE".to_owned(), "true".to_owned()),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_URL".to_owned(),
+                "https://auth.soland.example".to_owned(),
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER".to_owned(),
+                CREDENTIAL.to_owned(),
+            ),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN".to_owned(),
+                AUTHORITY_TRUST_DOMAIN.to_owned(),
+            ),
+        ]);
+        if include_integrity {
+            values.insert(
+                "SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE".to_owned(),
+                "mtls_direct_process".to_owned(),
+            );
+        }
+        values
+    }
+
+    fn configured_app(include_integrity: bool) -> crate::config::AppConfig {
+        crate::config::AppConfig::from_values(
+            &configured_values(include_integrity),
+            crate::config::StartupOverrides::default(),
+        )
+        .unwrap()
+    }
+
     fn channel() -> RegisteredInternalChannel {
+        let config = configured_app(true);
+        let configured_channel = config.internal_authority_channel.unwrap();
         RegisteredInternalChannel {
             caller_service_id: DidCoreId::new(CALLER).unwrap(),
             destination_service_id: DidCoreId::new(CALLER).unwrap(),
-            trust_domain: arkret_identifiers::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
+            source_trust_domain: arkret_identifiers::TrustDomainId::new(AUTHORITY_TRUST_DOMAIN)
+                .unwrap(),
+            destination_trust_domain: arkret_identifiers::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
+            integrity: configured_channel.integrity().clone(),
             credential: CREDENTIAL.to_owned(),
         }
     }
@@ -2866,7 +2956,7 @@ mod internal_channel_tests {
             ("authorization", "Bearer shared-internal-channel-credential"),
             ("source-service-id", CALLER),
             ("destination-service-id", CALLER),
-            ("source-trust-domain", TRUST_DOMAIN),
+            ("source-trust-domain", AUTHORITY_TRUST_DOMAIN),
             ("destination-trust-domain", TRUST_DOMAIN),
             (
                 "arkret-operation",
@@ -2883,12 +2973,34 @@ mod internal_channel_tests {
         )
     }
 
+    fn environment_headers(state: &AppState) -> HeaderMap {
+        let mut result = headers(&[
+            ("authorization", "Bearer shared-internal-channel-credential"),
+            ("source-trust-domain", AUTHORITY_TRUST_DOMAIN),
+            ("destination-trust-domain", TRUST_DOMAIN),
+            (
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+            ),
+        ]);
+        let service_id = HeaderValue::from_str(state.service_id()).unwrap();
+        result.insert(HEADER_SOURCE_SERVICE_ID, service_id.clone());
+        result.insert(HEADER_DESTINATION_SERVICE_ID, service_id);
+        result
+    }
+
     #[test]
     fn registered_operation_set_stays_closed() {
         // §2.2.3 allows only per-operation registration. Anything else on
         // `/_arkret/peer/*` keeps the §2.2 RFC 9421 service signature, so it
         // must not appear here.
-        assert_eq!(INTERNAL_CHANNEL_OPERATIONS.len(), 2);
+        assert_eq!(INTERNAL_CHANNEL_OPERATIONS.len(), 4);
+        assert!(INTERNAL_CHANNEL_OPERATIONS.contains(
+            &arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1
+        ));
+        assert!(INTERNAL_CHANNEL_OPERATIONS.contains(
+            &arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1
+        ));
         assert!(
             INTERNAL_CHANNEL_OPERATIONS.contains(
                 &arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1
@@ -2897,6 +3009,12 @@ mod internal_channel_tests {
         assert!(INTERNAL_CHANNEL_OPERATIONS.contains(
             &arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1
         ));
+        assert_eq!(INBOUND_INTERNAL_CHANNEL_OPERATIONS.len(), 1);
+        assert!(
+            INBOUND_INTERNAL_CHANNEL_OPERATIONS.contains(
+                &arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1
+            )
+        );
         for unregistered in [
             arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
             arkret_wire::ServiceOperationId::PEER_KEYS_READ_LOOKUP_V1,
@@ -2939,6 +3057,8 @@ mod internal_channel_tests {
         for optional in [
             "source-service-id",
             "destination-service-id",
+            "source-trust-domain",
+            "destination-trust-domain",
             "arkret-operation",
         ] {
             let mut pairs = authentic_pairs();
@@ -2952,6 +3072,8 @@ mod internal_channel_tests {
         for (header, conflicting) in [
             ("source-service-id", "ak:did_core:web:attacker.example"),
             ("destination-service-id", "ak:did_core:web:other.example"),
+            ("source-trust-domain", "ak:trust_domain:attacker.example"),
+            ("destination-trust-domain", "ak:trust_domain:other.example"),
             (
                 "arkret-operation",
                 arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
@@ -2978,6 +3100,146 @@ mod internal_channel_tests {
         let mut pairs = authentic_pairs();
         pairs.push(("content-digest", "sha-256=:UjNhZGU=:"));
         assert!(!authentic(&pairs));
+    }
+
+    #[tokio::test]
+    async fn environment_registered_channel_authenticates_receiver() {
+        let state = AppState::new(configured_app(true), Db { pool: None });
+        let mut request = Request::new();
+        *request.headers_mut() = environment_headers(&state);
+
+        let authenticated = authenticate_internal_channel_request(
+            &state,
+            &request,
+            arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+        )
+        .await
+        .expect("complete environment registration must authenticate");
+        assert_eq!(
+            authenticated.destination_service_id,
+            state.service_core_id()
+        );
+        assert_eq!(
+            authenticated.source_trust_domain.as_str(),
+            AUTHORITY_TRUST_DOMAIN
+        );
+        assert_eq!(
+            authenticated.destination_trust_domain.as_str(),
+            TRUST_DOMAIN
+        );
+    }
+
+    #[tokio::test]
+    async fn url_and_bearer_without_integrity_do_not_register_unsigned_channel() {
+        let config = configured_app(false);
+        assert!(config.internal_authority_channel.is_none());
+        let state = AppState::new(config, Db { pool: None });
+        let mut request = Request::new();
+        *request.headers_mut() = headers(&authentic_pairs());
+
+        assert!(
+            authenticate_internal_channel_request(
+                &state,
+                &request,
+                arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn channel_without_explicit_authority_trust_domain_is_not_registered() {
+        let mut values = configured_values(true);
+        values.remove("SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN");
+        let config = crate::config::AppConfig::from_values(
+            &values,
+            crate::config::StartupOverrides::default(),
+        )
+        .unwrap();
+        assert!(config.internal_authority_channel.is_none());
+        let state = AppState::new(config, Db { pool: None });
+        let mut request = Request::new();
+        *request.headers_mut() = headers(&authentic_pairs());
+
+        assert!(
+            authenticate_internal_channel_request(
+                &state,
+                &request,
+                arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_credential_has_no_unregistered_operation_permission() {
+        let state = AppState::new(configured_app(true), Db { pool: None });
+        let mut request = Request::new();
+        *request.headers_mut() = environment_headers(&state);
+
+        assert!(
+            authenticate_internal_channel_request(
+                &state,
+                &request,
+                arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
+            )
+            .await
+            .is_err()
+        );
+
+        assert!(
+            authenticate_internal_channel_request(
+                &state,
+                &request,
+                arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
+            )
+            .await
+            .is_err(),
+            "an outbound-only registered operation must not be admitted at a Soland receiver",
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_registered_receiver_rejects_conflicting_transport_inputs() {
+        let state = AppState::new(configured_app(true), Db { pool: None });
+        for (header, conflicting) in [
+            ("authorization", "Bearer wrong-credential"),
+            ("destination-service-id", "ak:did_core:web:other.example"),
+            (
+                "source-trust-domain",
+                "ak:trust_domain:other-authority.example",
+            ),
+            (
+                "destination-trust-domain",
+                "ak:trust_domain:other-station.example",
+            ),
+            (
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
+            ),
+            ("content-digest", "sha-256=:UjNhZGU=:"),
+        ] {
+            let mut request = Request::new();
+            let mut request_headers = environment_headers(&state);
+            request_headers.insert(
+                HeaderName::from_bytes(header.as_bytes()).unwrap(),
+                HeaderValue::from_str(conflicting).unwrap(),
+            );
+            *request.headers_mut() = request_headers;
+
+            assert!(
+                authenticate_internal_channel_request(
+                    &state,
+                    &request,
+                    arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
+                )
+                .await
+                .is_err(),
+                "conflicting {header} must fail at the configured receiver",
+            );
+        }
     }
 }
 

@@ -17,6 +17,8 @@ pub(crate) struct AccountAuthorityClient<'a> {
     introspection_url: &'a str,
     logout_url: &'a str,
     bearer: &'a str,
+    source_trust_domain: &'a str,
+    destination_trust_domain: &'a str,
 }
 
 impl<'a> AccountAuthorityClient<'a> {
@@ -35,19 +37,22 @@ impl<'a> AccountAuthorityClient<'a> {
                 "Auth-side session logout requires SOLAND_AUTH_SESSION_LOGOUT_URL",
             )
         })?;
-        let bearer = config
-            .session_grant_introspection_bearer
-            .as_deref()
+        let channel = config
+            .internal_authority_channel
+            .as_ref()
+            .filter(|channel| channel.integrity().permits_unsigned_transport())
             .ok_or_else(|| {
                 AppError::unsupported_feature(
-                    "Account Authority S2S calls require SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
+                    "Account Authority S2S calls require a complete registered internal channel, including its integrity declaration",
                 )
             })?;
         Ok(Self {
             state,
             introspection_url,
             logout_url,
-            bearer,
+            bearer: channel.credential(),
+            source_trust_domain: config.trust_domain.as_str(),
+            destination_trust_domain: channel.account_authority_trust_domain().as_str(),
         })
     }
 
@@ -115,6 +120,10 @@ impl<'a> AccountAuthorityClient<'a> {
         .map_err(AppError::capability_denied)?;
         let response = crate::routing::with_arkret_operation(client.post(endpoint), operation_id)
             .bearer_auth(self.bearer)
+            .header("source-service-id", self.state.service_id().as_str())
+            .header("destination-service-id", self.state.service_id().as_str())
+            .header("source-trust-domain", self.source_trust_domain)
+            .header("destination-trust-domain", self.destination_trust_domain)
             .json(request)
             .send()
             .await

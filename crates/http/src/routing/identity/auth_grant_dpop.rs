@@ -397,11 +397,16 @@ async fn introspect_session_grant_remote(
             "session grant introspection URL is not configured",
         ));
     };
-    let Some(bearer) = state.config().session_grant_introspection_bearer.as_deref() else {
+    let Some(channel) = state
+        .config()
+        .internal_authority_channel
+        .as_ref()
+        .filter(|channel| channel.integrity().permits_unsigned_transport())
+    else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_misconfigured",
-            "session grant introspection bearer is not configured",
+            "session grant introspection internal channel is not configured",
         ));
     };
     let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
@@ -436,7 +441,14 @@ async fn introspect_session_grant_remote(
             client.post(validated_url),
             arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
         )
-        .bearer_auth(bearer)
+        .bearer_auth(channel.credential())
+        .header("source-service-id", state.service_id().as_str())
+        .header("destination-service-id", state.service_id().as_str())
+        .header("source-trust-domain", state.config().trust_domain.as_str())
+        .header(
+            "destination-trust-domain",
+            channel.account_authority_trust_domain().as_str(),
+        )
         .json(&request)
         .send()
         .await

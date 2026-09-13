@@ -1061,7 +1061,12 @@ async fn preflight_controller_gate(
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "source-trust-domain",
-        channel.trust_domain.as_str(),
+        channel.destination_trust_domain.as_str(),
+    );
+    crate::routing::federation::outbox::insert_header_if_valid(
+        &mut headers,
+        "destination-trust-domain",
+        channel.source_trust_domain.as_str(),
     );
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,

@@ -194,6 +194,9 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_KEYSTORE_MASTER_KEY_FILE=/run/secrets/soland-keystore-master-key \
   -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
+  -e SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example \
+  -e SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE=registered_tcb \
+  -e SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES=soland-edge,coauth-edge \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
@@ -237,9 +240,12 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER` / `_FILE` | unset | When set with the external Provider URL, stores Soland's own service identity there (class A); no first-provisioning flag or configured DID is used |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
+| `SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN` | unset | Explicit source trust domain of the configured Account Authority; required to register the unsigned §2.2.3 internal channel and never derived from its URL |
+| `SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE` | unset | `mtls_direct_process` only when mTLS terminates in both business processes, or `registered_tcb` when every decrypting/forwarding proxy is registered; missing/invalid values leave the unsigned channel unregistered |
+| `SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES` | unset | Complete comma-separated proxy registrations required by `registered_tcb`; entries must be trimmed non-empty and unique, and the setting is forbidden with `mtls_direct_process` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
 | `SOLAND_AUTH_SESSION_LOGOUT_URL` | unset | exact Account Authority process S2S `/_arkret/gate/account/auth-sessions/logout` endpoint; never derived from the introspection URL |
-| `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Shared per-edge credential for this Station ↔ its Account Authority. Sent to the session-grant introspection endpoint, and — together with `SOLAND_ACCOUNT_AUTHORITY_URL` — registers the `service-http-binding.md` §2.2.3 deployment-internal authenticated channel that carries the device-revocation gate check (inbound) and the controller-gate attestation issue (outbound). Registering it asserts the link has no untrusted intermediate point; leave the pair unset otherwise |
+| `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Shared per-edge credential for this Station ↔ its Account Authority. The unsigned §2.2.3 channel is registered only when this, the Authority URL/trust domain, and a complete integrity declaration are all present; it is confined to exact-token introspection, Auth-side logout, controller-gate issue, and device-revocation gate check |
 | `DATABASE_URL` | unset | Required for runtime startup; enables PostgreSQL and runs migrations. In-memory persistence is test-only, and a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `filesystem`/`local` |
@@ -342,6 +348,9 @@ SOLAND_KEYSTORE_MASTER_KEY_FILE=./.local/secrets/soland-keystore-master-key
 SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
+SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:auth.local.host
+SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE=registered_tcb
+SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES=local-development-reverse-proxy
 SOLAND_OAUTH_CLIENT_ID=01GFWR28C4KNE04WG3HKXB7C9R
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_arkret/gate/account/session-grants/introspect
 SOLAND_AUTH_SESSION_LOGOUT_URL=https://auth.local.host/_arkret/gate/account/auth-sessions/logout

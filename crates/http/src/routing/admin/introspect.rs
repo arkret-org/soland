@@ -238,15 +238,16 @@ pub(crate) async fn introspect_admin_scopes(
             proof: None,
         },
     );
-    let bearer = state
+    let channel = state
         .config()
-        .session_grant_introspection_bearer
-        .as_deref()
+        .internal_authority_channel
+        .as_ref()
+        .filter(|channel| channel.integrity().permits_unsigned_transport())
         .ok_or_else(|| {
             crate::app_error!(
                 InternalError,
-                "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER"
-                    .to_owned(),
+                "session grant introspection requires a complete registered internal channel"
+                    .to_owned()
             )
         })?;
 
@@ -263,7 +264,14 @@ pub(crate) async fn introspect_admin_scopes(
         client.post(url),
         arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
     )
-    .bearer_auth(bearer)
+    .bearer_auth(channel.credential())
+    .header("source-service-id", state.service_id().as_str())
+    .header("destination-service-id", state.service_id().as_str())
+    .header("source-trust-domain", state.config().trust_domain.as_str())
+    .header(
+        "destination-trust-domain",
+        channel.account_authority_trust_domain().as_str(),
+    )
     .json(&request)
     .send()
     .await

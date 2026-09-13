@@ -220,18 +220,109 @@ fn validate_persistence_key_store(
     Ok(())
 }
 
-/// The four registered facts plus the credential of one deployment-internal
-/// authenticated channel (`sync/service-http-binding.md` §2.2.3).
+/// The integrity declaration for one deployment-internal authenticated channel
+/// (`sync/service-http-binding.md` §2.2.3).
 ///
-/// Three of the four facts are this Station's own already-configured identity
-/// and are resolved where the channel is used, not duplicated here: the calling
-/// service identity is the Account Authority named by `account_authority_url`
-/// (a split Account Authority signs as this Station, so it is this Station's
-/// own service `did_core_id`), the target service identity is this Station, and
-/// the trust domain is this Station's configured `trust_domain`. What this
-/// struct adds is the fourth fact and the credential: the closed set of
-/// operations the channel may carry, and the shared per-edge secret that
-/// authenticates it.
+/// This is deliberately a closed representation: an unsigned internal-channel
+/// transport exists only after configuration proves one of the two normative
+/// shapes. In particular, `registered_tcb` cannot be constructed with an empty
+/// proxy registration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InternalChannelIntegrityConfig {
+    mode: InternalChannelIntegrityMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum InternalChannelIntegrityMode {
+    MtlsDirectProcess,
+    RegisteredTcb {
+        decrypting_forwarding_proxies: Vec<String>,
+    },
+}
+
+impl InternalChannelIntegrityConfig {
+    fn from_values(values: &BTreeMap<String, String>) -> anyhow::Result<Option<Self>> {
+        const MODE_ENV: &str = "SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE";
+        const PROXIES_ENV: &str = "SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES";
+
+        let mode = env_non_empty(values, MODE_ENV);
+        // Deployment templates commonly render optional env keys as an empty
+        // string. Treat that as unset unless `registered_tcb` was selected; in
+        // that mode the raw value is read below and an empty list is rejected.
+        let proxies_configured = env_non_empty(values, PROXIES_ENV).is_some();
+        match mode.as_deref() {
+            None => {
+                if proxies_configured {
+                    anyhow::bail!("{PROXIES_ENV} requires {MODE_ENV}=registered_tcb");
+                }
+                Ok(None)
+            }
+            Some("mtls_direct_process") => {
+                if proxies_configured {
+                    anyhow::bail!("{PROXIES_ENV} is only valid with {MODE_ENV}=registered_tcb");
+                }
+                Ok(Some(Self {
+                    mode: InternalChannelIntegrityMode::MtlsDirectProcess,
+                }))
+            }
+            Some("registered_tcb") => {
+                let raw = lookup(values, PROXIES_ENV).map_err(|_| {
+                    anyhow::anyhow!("{PROXIES_ENV} is required with {MODE_ENV}=registered_tcb")
+                })?;
+                let mut proxies = Vec::new();
+                for value in raw.split(',') {
+                    let value = value.trim();
+                    if value.is_empty() {
+                        anyhow::bail!(
+                            "{PROXIES_ENV} must contain only non-empty proxy registrations"
+                        );
+                    }
+                    if proxies.iter().any(|registered| registered == value) {
+                        anyhow::bail!(
+                            "{PROXIES_ENV} contains duplicate proxy registration `{value}`"
+                        );
+                    }
+                    proxies.push(value.to_owned());
+                }
+                if proxies.is_empty() {
+                    anyhow::bail!("{PROXIES_ENV} must be non-empty with {MODE_ENV}=registered_tcb");
+                }
+                Ok(Some(Self {
+                    mode: InternalChannelIntegrityMode::RegisteredTcb {
+                        decrypting_forwarding_proxies: proxies,
+                    },
+                }))
+            }
+            Some(other) => anyhow::bail!(
+                "{MODE_ENV} must be `mtls_direct_process` or `registered_tcb`, got `{other}`"
+            ),
+        }
+    }
+
+    /// Whether the declaration is complete enough to replace transport-shell
+    /// signatures on the registered internal operations.
+    #[must_use]
+    pub fn permits_unsigned_transport(&self) -> bool {
+        match &self.mode {
+            InternalChannelIntegrityMode::MtlsDirectProcess => true,
+            InternalChannelIntegrityMode::RegisteredTcb {
+                decrypting_forwarding_proxies,
+            } => !decrypting_forwarding_proxies.is_empty(),
+        }
+    }
+}
+
+/// The four registered facts, integrity declaration and credential of one
+/// deployment-internal authenticated channel (`sync/service-http-binding.md`
+/// §2.2.3).
+///
+/// Service identities are resolved where the channel is used rather than
+/// copied here: a split Account Authority signs as this Station, so both ends
+/// use this Station's service `did_core_id`. Trust domains are not collapsed:
+/// the Account Authority/source domain is explicit here and the
+/// Station/destination domain comes from `AppConfig::trust_domain`. The closed
+/// operation set remains a compile-time fact, while this struct carries the
+/// shared per-edge secret and validated integrity declaration.
 ///
 /// The operation set is a closed compile-time constant
 /// (`routing::events::peer::INTERNAL_CHANNEL_OPERATIONS`) rather than an
@@ -247,6 +338,9 @@ pub struct InternalAuthorityChannelConfig {
     /// general deployment bearer and grants nothing outside the registered
     /// operations.
     credential: String,
+    /// Account Authority/source trust domain from explicit deployment config.
+    account_authority_trust_domain: TrustDomainId,
+    integrity: InternalChannelIntegrityConfig,
 }
 
 impl InternalAuthorityChannelConfig {
@@ -256,6 +350,18 @@ impl InternalAuthorityChannelConfig {
     pub fn credential(&self) -> &str {
         &self.credential
     }
+
+    /// The validated integrity declaration for the unsigned transport.
+    #[must_use]
+    pub fn integrity(&self) -> &InternalChannelIntegrityConfig {
+        &self.integrity
+    }
+
+    /// Trust domain configured for the Account Authority/source side.
+    #[must_use]
+    pub fn account_authority_trust_domain(&self) -> &TrustDomainId {
+        &self.account_authority_trust_domain
+    }
 }
 
 impl std::fmt::Debug for InternalAuthorityChannelConfig {
@@ -263,6 +369,11 @@ impl std::fmt::Debug for InternalAuthorityChannelConfig {
         formatter
             .debug_struct("InternalAuthorityChannelConfig")
             .field("credential", &"<redacted>")
+            .field(
+                "account_authority_trust_domain",
+                &self.account_authority_trust_domain,
+            )
+            .field("integrity", &self.integrity)
             .finish()
     }
 }
@@ -340,14 +451,14 @@ pub struct AppConfig {
     /// Station and its Account Authority (`sync/service-http-binding.md`
     /// §2.2.3), or `None` when no such channel is registered.
     ///
-    /// **Configuring this channel is the operator's assertion that the link has
-    /// no untrusted intermediate point** — mTLS terminates directly in the
-    /// business process, every decrypting/forwarding proxy belongs to the same
-    /// registered TCB, or the two processes talk directly with no proxy at all.
-    /// §2.2.3 makes that a precondition, not a preference: where it does not
-    /// hold, the signature the internal contract replaces MUST be kept, so the
-    /// deployment MUST NOT register the channel. "Every hop is TLS" does not
-    /// satisfy it.
+    /// The channel is registered only when the operator also supplies the
+    /// Account Authority's source trust domain and a valid
+    /// `SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE`: either mTLS terminates directly
+    /// in the business process, or every decrypting/forwarding proxy is named in
+    /// `SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES` as part of the
+    /// same registered TCB. §2.2.3 makes that a precondition, not a preference:
+    /// where it does not hold, the signature the internal contract replaces
+    /// MUST be kept. "Every hop is TLS" does not satisfy it.
     ///
     /// That assertion is what carries the integrity the pruned carriers no
     /// longer carry themselves: `ak.peer.device_revocations.command.check.v1`
@@ -355,8 +466,6 @@ pub struct AppConfig {
     /// `verification_method` (`crypto-media/device-lifecycle.md` §2.2), and no
     /// signature covers the transport shell in either direction.
     ///
-    /// It is deliberately a single declaration. A second "integrity" switch
-    /// beside it would only produce half-configured deployments.
     pub internal_authority_channel: Option<InternalAuthorityChannelConfig>,
     pub did_resolver_allow_methods: Vec<String>,
     /// Enable soland's built-in `did:webvh` provider. This is intended for
@@ -996,6 +1105,28 @@ impl AppConfig {
             log_format: LogFormat::Plain,
         }
     }
+
+    /// Register a direct-process mTLS channel in integration fixtures without
+    /// exposing unchecked production constructors for the channel types.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn register_test_internal_authority_channel_mtls_direct(
+        &mut self,
+        credential: impl Into<String>,
+    ) {
+        assert!(
+            self.account_authority_url.is_some(),
+            "test internal channel requires an Account Authority URL"
+        );
+        let credential = credential.into();
+        self.session_grant_introspection_bearer = Some(credential.clone());
+        self.internal_authority_channel = Some(InternalAuthorityChannelConfig {
+            credential,
+            account_authority_trust_domain: self.trust_domain.clone(),
+            integrity: InternalChannelIntegrityConfig {
+                mode: InternalChannelIntegrityMode::MtlsDirectProcess,
+            },
+        });
+    }
 }
 
 impl AppConfig {
@@ -1079,17 +1210,31 @@ impl AppConfig {
         }
         let session_grant_introspection_bearer =
             env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
+        let account_authority_trust_domain =
+            env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN")
+                .map(|value| {
+                    TrustDomainId::new(value).map_err(|error| {
+                anyhow::anyhow!(
+                    "SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}"
+                )
+            })
+                })
+                .transpose()?;
+        let internal_channel_integrity = InternalChannelIntegrityConfig::from_values(values)?;
         // `service-http-binding.md` §2.2.3 — register the deployment-internal
         // authenticated channel to this Station's Account Authority.
         //
-        // Both inputs are required and neither is guessed: the Account
+        // All four inputs are required and none is guessed: the Account
         // Authority endpoint names the peer this channel is registered with,
-        // and the shared credential is what authenticates it. Either one
-        // missing leaves the channel unregistered, and the operations that
-        // travel on it then fail closed rather than falling back to an
-        // anonymous or relaxed path. There is deliberately no fallback to
-        // `describe`, to a first configured peer, or to an unauthenticated
-        // call.
+        // its trust domain binds the source side independently from this
+        // Station's destination trust domain, the shared credential
+        // authenticates it, and the integrity declaration proves that removing
+        // transport-shell signatures is permitted. Any one missing leaves the
+        // channel unregistered, and the operations that travel on it then fail
+        // closed rather than falling back to an anonymous or relaxed path.
+        // There is deliberately no fallback to `describe`, a hostname-derived
+        // trust domain, a first configured peer, hop-by-hop TLS, or an
+        // unauthenticated call.
         //
         // The credential is the same per-edge secret the Account Authority
         // holds as `stations[].session_grant_introspection_bearer`; both
@@ -1099,10 +1244,16 @@ impl AppConfig {
         let internal_authority_channel = match (
             account_authority_url.as_deref(),
             session_grant_introspection_bearer.as_deref(),
+            account_authority_trust_domain,
+            internal_channel_integrity,
         ) {
-            (Some(_), Some(credential)) => Some(InternalAuthorityChannelConfig {
-                credential: credential.to_owned(),
-            }),
+            (Some(_), Some(credential), Some(account_authority_trust_domain), Some(integrity)) => {
+                Some(InternalAuthorityChannelConfig {
+                    credential: credential.to_owned(),
+                    account_authority_trust_domain,
+                    integrity,
+                })
+            }
             _ => None,
         };
         let did_resolver_allow_methods = env_csv(values, "SOLAND_DID_RESOLVER_ALLOW_METHODS")
@@ -2098,6 +2249,109 @@ fn lookup(values: &BTreeMap<String, String>, name: &str) -> Result<String, std::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn internal_channel_values(
+        mode: Option<&str>,
+        proxies: Option<&str>,
+    ) -> BTreeMap<String, String> {
+        let mut values = BTreeMap::new();
+        if let Some(mode) = mode {
+            values.insert(
+                "SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE".to_owned(),
+                mode.to_owned(),
+            );
+        }
+        if let Some(proxies) = proxies {
+            values.insert(
+                "SOLAND_INTERNAL_CHANNEL_DECRYPTING_FORWARDING_PROXIES".to_owned(),
+                proxies.to_owned(),
+            );
+        }
+        values
+    }
+
+    #[test]
+    fn internal_channel_integrity_accepts_only_the_two_closed_modes() {
+        let direct = InternalChannelIntegrityConfig::from_values(&internal_channel_values(
+            Some("mtls_direct_process"),
+            None,
+        ))
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            &direct.mode,
+            InternalChannelIntegrityMode::MtlsDirectProcess
+        ));
+        assert!(direct.permits_unsigned_transport());
+
+        let registered = InternalChannelIntegrityConfig::from_values(&internal_channel_values(
+            Some("registered_tcb"),
+            Some("edge-proxy-a, edge-proxy-b"),
+        ))
+        .unwrap()
+        .unwrap();
+        let InternalChannelIntegrityMode::RegisteredTcb {
+            decrypting_forwarding_proxies,
+        } = &registered.mode
+        else {
+            panic!("registered_tcb must retain its proxy registration");
+        };
+        assert!(
+            decrypting_forwarding_proxies
+                .iter()
+                .map(String::as_str)
+                .eq(["edge-proxy-a", "edge-proxy-b"])
+        );
+        assert!(registered.permits_unsigned_transport());
+
+        let error = InternalChannelIntegrityConfig::from_values(&internal_channel_values(
+            Some("hop_by_hop_tls"),
+            None,
+        ))
+        .expect_err("hop-by-hop TLS is not an integrity mode");
+        assert!(error.to_string().contains("mtls_direct_process"));
+    }
+
+    #[test]
+    fn registered_tcb_rejects_incomplete_proxy_registration() {
+        for proxies in [None, Some(""), Some("   "), Some("edge-a,,edge-b")] {
+            assert!(
+                InternalChannelIntegrityConfig::from_values(&internal_channel_values(
+                    Some("registered_tcb"),
+                    proxies,
+                ))
+                .is_err(),
+                "incomplete proxy registration {proxies:?} must fail closed",
+            );
+        }
+
+        let duplicate = InternalChannelIntegrityConfig::from_values(&internal_channel_values(
+            Some("registered_tcb"),
+            Some("edge-a, edge-a"),
+        ))
+        .expect_err("each decrypting/forwarding proxy must be registered exactly once");
+        assert!(duplicate.to_string().contains("duplicate proxy"));
+    }
+
+    #[test]
+    fn proxy_registration_without_registered_tcb_mode_is_rejected() {
+        assert!(
+            InternalChannelIntegrityConfig::from_values(&internal_channel_values(None, Some("")))
+                .unwrap()
+                .is_none(),
+            "an empty optional Helm value is equivalent to an unset proxy list"
+        );
+        for mode in [None, Some("mtls_direct_process")] {
+            assert!(
+                InternalChannelIntegrityConfig::from_values(&internal_channel_values(
+                    mode,
+                    Some("edge-proxy"),
+                ))
+                .is_err(),
+                "proxy list outside registered_tcb mode must not authorize unsigned transport",
+            );
+        }
+    }
 
     #[test]
     fn key_store_config_selects_backends() {
