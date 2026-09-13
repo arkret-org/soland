@@ -43,7 +43,6 @@ use sha2::{Digest, Sha256};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::query_param;
 use soland_services::events::{AcceptedEvent, ProjectedEvent as ProjectionEventRecord};
-use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
 
 use super::util::{canonical_json, order_hlc_clocks, sha256_digest};
 use crate::state::AppState;
@@ -686,21 +685,16 @@ pub async fn device_signing_key_did(
         "last_seen_at": now,
     });
     state
-        .identities()
-        .save_device(SaveDeviceCommand {
-            actor_id: body.actor_id.clone(),
-            device_id: body.device_id.clone(),
+        .persistence()
+        .seed_device_fixture(&soland_storage::DeviceInventoryRecord {
+            actor: body.actor_id,
+            device_id: body.device_id,
             display_name: Some("Cotest Signal Device".to_owned()),
-            device: DeviceIdentity {
-                actor_id: body.actor_id,
-                device_id: body.device_id,
-                display_name: Some("Cotest Signal Device".to_owned()),
-                verification_state: "verified".to_owned(),
-                payload,
-                created_at: now,
-                updated_at: now,
-                revoked_at: None,
-            },
+            verification_state: "verified".to_owned(),
+            payload,
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
         })
         .await
         .map_err(|error| AppError::internal(format!("store Signal device key: {error}")))?;

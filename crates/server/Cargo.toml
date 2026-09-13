@@ -17,7 +17,10 @@ authors.workspace = true
 default = []
 # Compile the development-only `/_arkret/_conformance/*` harness into the
 # binary. Off by default; `cotest` enables it for the SUT build.
-conformance-harness = ["soland-http/conformance-harness"]
+conformance-harness = [
+    "soland-http/conformance-harness",
+    "soland-storage-postgres/test-support",
+]
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry-otlp",

@@ -3,7 +3,7 @@ mod confirmed;
 use std::hash::{Hash as _, Hasher};
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{RealmId, SealId};
+use arkret_identifiers::{DeviceId, EventId, RealmId, SealId};
 pub use arkret_models_crypto::keys::DeviceGenerationStatus;
 pub(crate) use confirmed::load_confirmed_device_history;
 use serde_json::Value;
@@ -33,6 +33,121 @@ pub struct DeviceGenerationView {
     pub status: DeviceGenerationStatus,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AcceptedBootstrapDeviceBinding {
+    device_id: DeviceId,
+    authorization_event_id: EventId,
+}
+
+/// Resolve the one pre-Seal device authority current-v1 permits.
+///
+/// Human PCR genesis is accepted as a closed two-Event unit and its canonical
+/// receipt, Account/PCR slot and principal-resolution index are committed in
+/// the same transaction. `account-lifecycle.md` §2.1.2 step 7 makes that exact
+/// acceptance initialize device generation 1 as active so the Account
+/// Authority can run the mandatory gate before issuing the first grant. No
+/// re-anchor or ordinary unsealed Event is admitted by this path.
+async fn accepted_bootstrap_device_binding(
+    state: &AppState,
+    account: &arkret_wire::AccountId,
+) -> Result<Option<AcceptedBootstrapDeviceBinding>, ServiceError> {
+    let Some(binding) = state
+        .persistence()
+        .principal_resolution_by_account_id(account)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let genesis = &binding.genesis_event;
+    if binding.account_id != *account
+        || genesis.actor_id != arkret_wire::ActorId::account(account.clone())
+        || genesis.realm_id != binding.pcr_realm_id
+        || genesis.kind != arkret_wire::EventKind::RealmCreate
+    {
+        return Err(ServiceError::Conflict(
+            "accepted PCR bootstrap binding is internally inconsistent".to_owned(),
+        ));
+    }
+    let actor = arkret_wire::ActorId::account(account.clone()).to_string();
+    let candidates = state
+        .event_queries()
+        .accepted_events_for_actor(&actor)
+        .await?
+        .into_iter()
+        .filter(|record| {
+            record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
+                && record.realm_id.as_deref() == Some(binding.pcr_realm_id.as_str())
+                && record
+                    .envelope
+                    .get("prev_refs")
+                    .and_then(Value::as_array)
+                    .is_some_and(|refs| {
+                        refs.len() == 1 && refs[0].as_str() == Some(genesis.event_id.as_str())
+                    })
+                && record
+                    .envelope
+                    .pointer("/payload/authorization_binding_kind")
+                    .and_then(Value::as_str)
+                    == Some("registration_anchor")
+        })
+        .collect::<Vec<_>>();
+    let [authorize] = candidates.as_slice() else {
+        return Err(ServiceError::Conflict(
+            "accepted PCR bootstrap does not have one founding authorization".to_owned(),
+        ));
+    };
+    let device_id = authorize
+        .envelope
+        .pointer("/payload/device_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ServiceError::Conflict(
+                "accepted PCR founding authorization omits its device".to_owned(),
+            )
+        })?;
+    let device_id = DeviceId::new(device_id.to_owned()).map_err(|error| {
+        ServiceError::Conflict(format!(
+            "accepted PCR founding authorization device is invalid: {error}"
+        ))
+    })?;
+    let authorization_event_id = EventId::new(authorize.event_id.clone()).map_err(|error| {
+        ServiceError::Conflict(format!(
+            "accepted PCR founding authorization Event id is invalid: {error}"
+        ))
+    })?;
+    let receipts = state
+        .event_queries()
+        .canonical_batch_receipts_for_event(authorization_event_id.as_str())
+        .await?;
+    let receipt_matches = receipts.iter().any(|receipt| {
+        let Ok(scope) = receipt.pcr_genesis_scope() else {
+            return false;
+        };
+        scope.principal_id == account.principal_id
+            && scope.realm_id == binding.pcr_realm_id
+            && scope.accepted_device_id == device_id
+            && receipt.issuer_id == account.station_id
+            && receipt.events.len() == 2
+            && receipt.events.iter().any(|row| {
+                row.event_id == genesis.event_id
+                    && row.kind.as_str() == arkret_wire::EventKind::RealmCreate.as_str()
+            })
+            && receipt.events.iter().any(|row| {
+                row.event_id == authorization_event_id
+                    && row.kind.as_str() == arkret_wire::EventKind::DeviceAuthorize.as_str()
+            })
+    });
+    if !receipt_matches {
+        return Err(ServiceError::Conflict(
+            "accepted PCR founding authorization has no matching durable batch receipt".to_owned(),
+        ));
+    }
+    Ok(Some(AcceptedBootstrapDeviceBinding {
+        device_id,
+        authorization_event_id,
+    }))
+}
+
 pub async fn current_device_generation(
     state: &AppState,
     principal_id: &str,
@@ -58,10 +173,18 @@ pub async fn current_device_generation(
                 ServiceError::Conflict(format!("confirmed device mirror unavailable: {error}"))
             })?;
     }
-    Ok(history.map(|history| DeviceGenerationView {
-        current_ref: history.current_generation().number(),
-        status: DeviceGenerationStatus::Active,
-    }))
+    if let Some(history) = history {
+        return Ok(Some(DeviceGenerationView {
+            current_ref: history.current_generation().number(),
+            status: DeviceGenerationStatus::Active,
+        }));
+    }
+    Ok(accepted_bootstrap_device_binding(state, &account)
+        .await?
+        .map(|_| DeviceGenerationView {
+            current_ref: 1,
+            status: DeviceGenerationStatus::Active,
+        }))
 }
 
 /// Recover the device mirror independently of generic timeline progress. No
@@ -147,24 +270,39 @@ pub async fn active_device_revocation_gate_selector(
         .await
         .map_err(|error| {
             ServiceError::Conflict(format!("confirmed device history unavailable: {error}"))
-        })?
-        .ok_or_else(|| {
-            ServiceError::Conflict("device authorization has no confirmed history".into())
         })?;
-    let authorization = history
-        .authorization(&target_device_authorize_event_id)
-        .filter(|authorization| history.is_currently_active(authorization))
-        .ok_or_else(|| {
-            ServiceError::Conflict(
-                "device mirror does not name an active confirmed authorization instance".into(),
-            )
-        })?;
-    if authorization.device_id() != &device_id
-        || authorization.authorized_generation_ref() != authorized_generation_ref
-    {
-        return Err(ServiceError::Conflict(
-            "device mirror differs from the confirmed authorization instance".into(),
-        ));
+    if let Some(history) = history {
+        let authorization = history
+            .authorization(&target_device_authorize_event_id)
+            .filter(|authorization| history.is_currently_active(authorization))
+            .ok_or_else(|| {
+                ServiceError::Conflict(
+                    "device mirror does not name an active confirmed authorization instance".into(),
+                )
+            })?;
+        if authorization.device_id() != &device_id
+            || authorization.authorized_generation_ref() != authorized_generation_ref
+        {
+            return Err(ServiceError::Conflict(
+                "device mirror differs from the confirmed authorization instance".into(),
+            ));
+        }
+    } else {
+        let bootstrap = accepted_bootstrap_device_binding(state, &account)
+            .await?
+            .ok_or_else(|| {
+                ServiceError::Conflict(
+                    "device authorization has neither bootstrap nor confirmed history".into(),
+                )
+            })?;
+        if bootstrap.device_id != device_id
+            || bootstrap.authorization_event_id != target_device_authorize_event_id
+            || authorized_generation_ref != 1
+        {
+            return Err(ServiceError::Conflict(
+                "device mirror differs from the accepted PCR founding authorization".into(),
+            ));
+        }
     }
     let target_device_generation_ref = generation.current_ref;
     if authorized_generation_ref != target_device_generation_ref {

@@ -472,7 +472,16 @@ pub(super) async fn submit_identity_anchor_batch(
     let device_projection = if reanchor_conflict {
         None
     } else {
-        Some(identity_anchor_device_projection(state, &second, &envelopes[1], received_at).await?)
+        Some(
+            identity_anchor_device_projection(
+                state,
+                &second,
+                &envelopes[1],
+                is_bootstrap,
+                received_at,
+            )
+            .await?,
+        )
     };
     let receipt = if is_bootstrap {
         Some(build_pcr_genesis_batch_receipt(
@@ -1672,6 +1681,7 @@ async fn identity_anchor_device_projection(
     state: &AppState,
     authorize: &ValidatedEventEnvelope,
     envelope: &Value,
+    activate_bootstrap_generation: bool,
     accepted_at: DateTime<Utc>,
 ) -> Result<soland_services::events::IdentityAnchorDeviceState, SubmitOneError> {
     let typed = typed_device_authorize_payload(envelope)?;
@@ -1696,22 +1706,53 @@ async fn identity_anchor_device_projection(
                 format!("device projection lookup failed: {error}"),
             )
         })?;
-    // Admission may reserve a local endpoint, but cannot install authority.
-    // Storage inserts this minimal placeholder only when no row exists.
-    let payload = json!({"device_id": device_id});
+    // A re-anchor is only a pending candidate until a confirmed Seal installs
+    // its history. Human PCR genesis is the deliberately narrower exception:
+    // account-lifecycle.md §2.1.2 step 7 makes the closed two-Event acceptance
+    // itself initialize generation 1 as active, before the initial grant can
+    // be issued. Preserve that exact founding authorization in the same atomic
+    // commit as the receipt; do not generalize it to later generations.
+    let (verification_state, payload, revoked_at) = if activate_bootstrap_generation {
+        let mut payload = serde_json::to_value(&typed).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("serialize founding device projection: {error}"),
+            )
+        })?;
+        let payload = payload
+            .as_object_mut()
+            .expect("typed device authorization payload is an object");
+        payload.insert("device_authorize_projected".to_owned(), Value::Bool(true));
+        payload.insert(
+            "device_authorize_event_id".to_owned(),
+            Value::String(authorize.event_id.to_string()),
+        );
+        payload.insert(
+            "authorized_generation_ref".to_owned(),
+            Value::Number(1_u64.into()),
+        );
+        ("verified", Value::Object(payload.clone()), None)
+    } else {
+        (
+            "unverified",
+            json!({"device_id": device_id}),
+            existing.as_ref().and_then(|record| record.revoked_at),
+        )
+    };
     Ok(soland_services::events::IdentityAnchorDeviceState {
         actor: principal_id.to_owned(),
         device_id: device_id.to_owned(),
         display_name: existing
             .as_ref()
             .and_then(|record| record.display_name.clone()),
-        verification_state: "unverified".to_owned(),
+        verification_state: verification_state.to_owned(),
         payload,
         created_at: existing
             .as_ref()
             .map_or(accepted_at, |record| record.created_at),
         updated_at: accepted_at,
-        revoked_at: existing.as_ref().and_then(|record| record.revoked_at),
+        revoked_at,
     })
 }
 

@@ -297,7 +297,37 @@ pub(crate) async fn current_device_binding_in_transaction(
     device_id: &str,
 ) -> PersistenceResult<Option<DeviceRevocationGateSelector>> {
     ensure_head_locked(conn, principal_id.as_str(), station_id.as_str(), device_id).await?;
-    let row = sql_query("SELECT d.payload,(d.verification_state='verified' AND d.revoked_at IS NULL AND EXISTS (SELECT 1 FROM device_history_projections p JOIN state_seals h ON h.id=p.confirmed_head WHERE p.principal_id=$1 AND p.station_id=$2 AND h.realm_id=p.realm_id AND NOT EXISTS(SELECT 1 FROM state_seal_quarantine_realms q WHERE q.realm_id=p.realm_id) AND NOT EXISTS(SELECT 1 FROM state_seals c WHERE c.realm_id=p.realm_id AND c.predecessor_ref=h.id) AND NOT EXISTS(SELECT 1 FROM state_seals other_head WHERE other_head.realm_id=p.realm_id AND other_head.id<>h.id AND NOT EXISTS(SELECT 1 FROM state_seals child WHERE child.realm_id=p.realm_id AND child.predecessor_ref=other_head.id)))) AS active FROM devices d WHERE d.actor_id=$1 AND d.station_id=$2 AND d.device_id=$3 FOR SHARE OF d")
+    let row = sql_query(
+        "SELECT d.payload, \
+         (d.verification_state='verified' AND d.revoked_at IS NULL AND ( \
+           EXISTS (SELECT 1 FROM device_history_projections p JOIN state_seals h ON h.id=p.confirmed_head \
+             WHERE p.principal_id=$1 AND p.station_id=$2 AND h.realm_id=p.realm_id \
+               AND NOT EXISTS(SELECT 1 FROM state_seal_quarantine_realms q WHERE q.realm_id=p.realm_id) \
+               AND NOT EXISTS(SELECT 1 FROM state_seals c WHERE c.realm_id=p.realm_id AND c.predecessor_ref=h.id) \
+               AND NOT EXISTS(SELECT 1 FROM state_seals other_head WHERE other_head.realm_id=p.realm_id AND other_head.id<>h.id \
+                 AND NOT EXISTS(SELECT 1 FROM state_seals child WHERE child.realm_id=p.realm_id AND child.predecessor_ref=other_head.id))) \
+           OR EXISTS (SELECT 1 FROM identity_anchor_account_slots s \
+             JOIN accepted_events a ON a.envelope->>'event_id'=d.payload->>'device_authorize_event_id' \
+             JOIN event_batch_receipt_events bre ON bre.event_pk=a.pk \
+             JOIN event_batch_receipts br ON br.pk=bre.receipt_pk \
+             WHERE s.principal_id=$1 AND s.station_id=$2 AND s.account_authority_id=$2 AND s.realm_id=a.realm_id \
+               AND NOT EXISTS(SELECT 1 FROM state_seals sealed WHERE sealed.realm_id=s.realm_id) \
+               AND d.payload->>'authorized_generation_ref'='1' \
+               AND a.kind='ak.device.authorize' \
+               AND a.envelope->'prev_refs'=jsonb_build_array(s.create_event_id) \
+               AND a.envelope->'payload'->>'authorization_binding_kind'='registration_anchor' \
+               AND a.envelope->'payload'->>'device_id'=d.device_id \
+               AND br.issuer_id=$2 AND br.scope->>'audience_id'=$2 AND br.scope->>'kind'='pcr_genesis_unit' \
+               AND br.scope->>'principal_id'=$1 AND br.scope->>'realm_id'=s.realm_id \
+               AND br.scope->>'accepted_device_id'=d.device_id \
+               AND (SELECT count(*) FROM event_batch_receipt_events all_events WHERE all_events.receipt_pk=br.pk)=2 \
+               AND EXISTS (SELECT 1 FROM event_batch_receipt_events create_link \
+                 JOIN accepted_events creation ON creation.pk=create_link.event_pk \
+                 WHERE create_link.receipt_pk=br.pk AND creation.kind='ak.realm.create' \
+                   AND creation.envelope->>'event_id'=s.create_event_id)) \
+         )) AS active \
+         FROM devices d WHERE d.actor_id=$1 AND d.station_id=$2 AND d.device_id=$3 FOR SHARE OF d",
+    )
         .bind::<Text,_>(principal_id.as_str()).bind::<Text,_>(station_id.as_str()).bind::<Text,_>(device_id)
         .get_result::<CurrentDeviceBindingRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
     let Some(row) = row.filter(|row| row.active) else {

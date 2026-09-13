@@ -1738,13 +1738,85 @@ impl EventStore for PgEventStore {
                 if !reanchor_conflict
                     && let Some(device) = device
                 {
-                    if device.verification_state != "unverified"
-                        || device.payload != serde_json::json!({"device_id": device.device_id}) {
-                        return Err(PersistenceError::SchemaViolation("identity admission may only insert an unverified endpoint placeholder".into()).into());
+                    if device.verification_state == "verified" {
+                        let slot = account_slot.as_ref().ok_or_else(|| {
+                            PersistenceError::SchemaViolation(
+                                "only PCR bootstrap may install accepted device authority".into(),
+                            )
+                        })?;
+                        let receipt = receipt.as_ref().ok_or_else(|| {
+                            PersistenceError::SchemaViolation(
+                                "PCR bootstrap device authority requires its atomic receipt".into(),
+                            )
+                        })?;
+                        let scope = receipt.pcr_genesis_scope().map_err(|error| {
+                            PersistenceError::SchemaViolation(format!(
+                                "PCR bootstrap receipt is invalid: {error}"
+                            ))
+                        })?;
+                        let authorize = records
+                            .iter()
+                            .find(|record| record.kind == "ak.device.authorize")
+                            .ok_or_else(|| {
+                                PersistenceError::SchemaViolation(
+                                    "PCR bootstrap device projection has no authorize Event".into(),
+                                )
+                            })?;
+                        let projected_event_id = device
+                            .payload
+                            .get("device_authorize_event_id")
+                            .and_then(Value::as_str);
+                        let projected_device_id = device
+                            .payload
+                            .get("device_id")
+                            .and_then(Value::as_str);
+                        let accepted_device_id = authorize
+                            .envelope
+                            .pointer("/payload/device_id")
+                            .and_then(Value::as_str);
+                        if device.actor != slot.account_id.principal_id.as_str()
+                            || device.device_id != scope.accepted_device_id.as_str()
+                            || scope.principal_id != slot.account_id.principal_id
+                            || scope.realm_id.as_str() != slot.realm_id
+                            || receipt.issuer_id != slot.account_id.station_id
+                            || authorize.realm_id.as_deref() != Some(slot.realm_id.as_str())
+                            || projected_event_id != Some(authorize.event_id.as_str())
+                            || projected_device_id != Some(device.device_id.as_str())
+                            || accepted_device_id != Some(device.device_id.as_str())
+                            || device
+                                .payload
+                                .get("authorized_generation_ref")
+                                .and_then(Value::as_u64)
+                                != Some(1)
+                            || device
+                                .payload
+                                .get("device_authorize_projected")
+                                .and_then(Value::as_bool)
+                                != Some(true)
+                            || device.revoked_at.is_some()
+                        {
+                            return Err(PersistenceError::SchemaViolation(
+                                "PCR bootstrap device projection does not exactly bind the accepted founding authorization"
+                                    .into(),
+                            )
+                            .into());
+                        }
+                    } else if device.verification_state != "unverified"
+                        || device.payload
+                            != serde_json::json!({"device_id": device.device_id})
+                    {
+                        return Err(PersistenceError::SchemaViolation(
+                            "non-bootstrap identity admission may only insert an unverified endpoint placeholder"
+                                .into(),
+                        )
+                        .into());
                     }
                     sql_query(
                         "INSERT INTO devices (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (actor_id, device_id) DO NOTHING",
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                         ON CONFLICT (actor_id, device_id) DO UPDATE SET \
+                         payload=EXCLUDED.payload,verification_state=EXCLUDED.verification_state,updated_at=EXCLUDED.updated_at,revoked_at=EXCLUDED.revoked_at \
+                         WHERE EXCLUDED.verification_state='verified'",
                     )
                     .bind::<sql_types::Uuid, _>(Uuid::now_v7())
                     .bind::<Text, _>(&device.actor)
