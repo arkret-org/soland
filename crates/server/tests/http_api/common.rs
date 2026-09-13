@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_identifiers::{Did, DidCoreId, OperationId, RealmId, new_prefixed_uuid7};
+pub(crate) use arkret_identifiers::{Did, DidCoreId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
@@ -933,8 +933,10 @@ pub(crate) async fn seed_test_realm(
                 now.timestamp_millis().max(0) as u64
             ))
             .unwrap(),
-            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
-                .unwrap(),
+            configuration_ref: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0xaa; 32],
+            ),
             command_results: Vec::new(),
             authorization_closures: Vec::new(),
             data_closure_announcements: Vec::new(),
@@ -1736,6 +1738,131 @@ pub(crate) async fn seed_verified_device_with_public_key(
     signing_key: &SigningKey,
 ) {
     project_test_authorized_device(state, actor, device_id, signing_key).await;
+}
+
+/// Install a verifier-produced device history for the focused keys/device
+/// integration tests. Unlike `project_test_authorized_device`, every verified
+/// directory row comes from signed Events covered by a persisted Seal.
+pub(crate) async fn install_confirmed_device_history_fixture(
+    state: &AppState,
+    fixture: &soland_test_support::device_authorization_history::DeviceHistoryFixture,
+) -> arkret::DeviceAuthorizationHistory {
+    let verified = fixture.verify().expect("fixture device history verifies");
+    let inception_operation = serde_json::to_value(&fixture.inception.operation)
+        .expect("serialize fixture DID inception");
+    state
+        .test_persistence()
+        .webvh()
+        .append_log_event(soland_storage::WebvhLogRecord {
+            event_digest: arkret_canonical::canonical_sha256(&inception_operation)
+                .expect("digest fixture DID inception"),
+            did: fixture.did.to_string(),
+            seq: fixture.inception.seq.unwrap_or(1),
+            operation: inception_operation,
+            created_at: fixture.events[0].created_at,
+        })
+        .await
+        .expect("persist fixture DID inception");
+    for event in &fixture.events {
+        state
+            .test_persistence()
+            .events()
+            .put(soland_test_support::signed_event::canonical_event_record(
+                event,
+                Some(event.realm_id.as_str()),
+                event.created_at,
+            ))
+            .await
+            .expect("persist confirmed device history Event");
+    }
+    soland_test_support::device_authorization_history::commit_confirmed_history_fixture(
+        state, fixture,
+    )
+    .await
+    .expect("commit confirmed device history through registered Control units");
+
+    let verified_root =
+        arkret_signatures::webvh::validate_principal_inception_operation(&fixture.inception)
+            .expect("fixture principal inception verifies");
+    let genesis = fixture.events.first().expect("fixture PCR genesis Event");
+    let persistence = state.test_persistence();
+    let resolutions = persistence.principal_resolutions();
+    if resolutions
+        .by_account_id(&fixture.account)
+        .await
+        .expect("read confirmed principal resolution")
+        .is_none()
+    {
+        let result = resolutions
+            .compare_and_set(
+                None,
+                soland_storage::PrincipalResolutionRecord {
+                    account_id: fixture.account.clone(),
+                    pcr_realm_id: genesis.realm_id.clone(),
+                    genesis_event: genesis.clone(),
+                    current_event: genesis.clone(),
+                    projection: arkret_models_identity::PrincipalResolutionProjection {
+                        did: fixture.did.clone(),
+                        method_history_head: verified_root.log_head_digest.to_string(),
+                        version_id: verified_root.did_version_id,
+                        resolution_event_ref: genesis.event_id.to_string(),
+                        updated_at: genesis.created_at,
+                    },
+                },
+            )
+            .await
+            .expect("persist confirmed principal resolution");
+        assert!(matches!(
+            result,
+            soland_storage::PrincipalResolutionCasResult::Applied(_)
+        ));
+    }
+
+    state
+        .test_persistence()
+        .devices()
+        .install_confirmed_history(&verified)
+        .await
+        .expect("install confirmed device history");
+    verified
+}
+
+/// Advance an already-installed confirmed device history by persisting only
+/// the appended Events and successor Seals, then replace the device directory
+/// projection from the verifier-produced history at the new durable head.
+pub(crate) async fn extend_confirmed_device_history_fixture(
+    state: &AppState,
+    fixture: &soland_test_support::device_authorization_history::DeviceHistoryFixture,
+    first_event_index: usize,
+    first_seal_index: usize,
+) -> arkret::DeviceAuthorizationHistory {
+    let verified = fixture.verify().expect("extended fixture history verifies");
+    for event in fixture.events.iter().skip(first_event_index) {
+        state
+            .test_persistence()
+            .events()
+            .put(soland_test_support::signed_event::canonical_event_record(
+                event,
+                Some(event.realm_id.as_str()),
+                event.created_at,
+            ))
+            .await
+            .expect("persist appended confirmed device history Event");
+    }
+    soland_test_support::device_authorization_history::commit_confirmed_history_fixture_from(
+        state,
+        fixture,
+        first_seal_index,
+    )
+    .await
+    .expect("commit appended confirmed device history through registered Control units");
+    state
+        .test_persistence()
+        .devices()
+        .install_confirmed_history(&verified)
+        .await
+        .expect("install extended confirmed device history");
+    verified
 }
 
 /// Project an accepted `ak.device.authorize` fixture so strict principal-device

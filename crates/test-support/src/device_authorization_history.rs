@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_canonical::DigestSuite;
 use arkret_models_collaboration::events_payloads::*;
 use arkret_models_identity::ResolutionCommitment;
+use arkret_state::state::ControlProposalIngress;
 use arkret_state::{
     CommandEventResult, OrderedControlUnit, OrderedControlUnitEvent, ResolvedCellState,
 };
@@ -35,33 +36,62 @@ pub fn possession(
     index: u8,
     binding: DeviceAuthorizationBindingKind,
 ) -> DeviceAuthorizePayload {
-    let key = SigningKey::from_bytes(&[80 + index; 32]);
+    possession_with(
+        account,
+        DeviceAuthorizationSpec {
+            device_id: device(index),
+            signing_seed: [80 + index; 32],
+            hpke_seed: [index; 32],
+            authorized_by: if binding == DeviceAuthorizationBindingKind::AcceptedDevice {
+                DeviceOrPrincipalRef::DeviceId(device(1))
+            } else {
+                DeviceOrPrincipalRef::Principal(account.principal_id.clone())
+            },
+            not_before: at(),
+            expires_at: None,
+            binding,
+        },
+    )
+}
+
+#[derive(Clone)]
+pub struct DeviceAuthorizationSpec {
+    pub device_id: DeviceId,
+    pub signing_seed: [u8; 32],
+    pub hpke_seed: [u8; 32],
+    pub authorized_by: DeviceOrPrincipalRef,
+    pub not_before: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub binding: DeviceAuthorizationBindingKind,
+}
+
+pub fn possession_with(
+    account: &AccountId,
+    spec: DeviceAuthorizationSpec,
+) -> DeviceAuthorizePayload {
+    let key = SigningKey::from_bytes(&spec.signing_seed);
     let public =
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(&key.verifying_key().to_bytes());
     let mut hpke = vec![0xec, 0x01];
-    hpke.extend([index; 32]);
+    hpke.extend(spec.hpke_seed);
     let mut unsigned = UnsignedDeviceAuthorizePayload::new(
-        device(index),
+        spec.device_id,
         NonEmptyString::new(format!("did:key:{public}")).unwrap(),
         NonEmptyString::new(arkret_canonical::encode_multibase_base58btc(hpke)).unwrap(),
         vec![NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap()],
         Some(NonEmptyString::new("Ed25519").unwrap()),
-        if binding == DeviceAuthorizationBindingKind::AcceptedDevice {
-            DeviceOrPrincipalRef::DeviceId(device(1))
-        } else {
-            DeviceOrPrincipalRef::Principal(account.principal_id.clone())
-        },
+        spec.authorized_by,
         None,
-        at(),
-        None,
-        binding,
-        (binding == DeviceAuthorizationBindingKind::PcrRecovery).then(|| {
+        spec.not_before,
+        spec.expires_at.map(Some),
+        spec.binding,
+        (spec.binding == DeviceAuthorizationBindingKind::PcrRecovery).then(|| {
             RecoverySessionId::new("ak:recovery_session:01904100-0000-7000-8000-000000000002")
                 .unwrap()
         }),
     )
     .unwrap();
-    if binding == DeviceAuthorizationBindingKind::AcceptedDevice {
+    if spec.binding == DeviceAuthorizationBindingKind::AcceptedDevice {
         unsigned = unsigned.with_pairing_challenge_transcript_digest(hash("pairing"));
     }
     let bytes = unsigned.device_possession_signature_input(account).unwrap();
@@ -73,6 +103,35 @@ pub fn possession(
             .unwrap(),
         )
         .unwrap()
+}
+
+#[derive(Clone)]
+pub struct DeviceHistoryFixtureOptions {
+    pub local_id: String,
+    pub root_seed: [u8; 32],
+    pub next_root_seed: [u8; 32],
+    pub founding_device_id: DeviceId,
+    pub founding_device_signing_seed: [u8; 32],
+    pub founding_device_hpke_seed: [u8; 32],
+    pub founding_not_before: DateTime<Utc>,
+    pub founding_expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl Default for DeviceHistoryFixtureOptions {
+    fn default() -> Self {
+        Self {
+            local_id: "alice".to_owned(),
+            root_seed: [70; 32],
+            next_root_seed: [71; 32],
+            founding_device_id: device(1),
+            founding_device_signing_seed: [81; 32],
+            founding_device_hpke_seed: [1; 32],
+            founding_not_before: at(),
+            founding_expires_at: None,
+            created_at: at(),
+        }
+    }
 }
 fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
     event.proofs.clear();
@@ -107,22 +166,33 @@ pub struct DeviceHistoryFixture {
     pub seals: Vec<Seal>,
     pub state: BTreeMap<CellRef, ResolvedCellState>,
     pub covered: BTreeSet<Hash>,
+    pub sealed_ops: Vec<Vec<(CellRef, arkret_state::state_model::ordered_log::IssuedOp)>>,
+    pub founding_device_id: DeviceId,
+    pub founding_device_signing_seed: [u8; 32],
+    notary_signing_seed: [u8; 32],
+    created_at: DateTime<Utc>,
 }
 impl DeviceHistoryFixture {
     // Real inception/root/device/Seal signatures and deterministic effects.
     // This fixture does not assert HTTP admission or recovery-session policy.
     pub fn new(station_id: DidCoreId) -> Self {
+        Self::new_with(station_id, DeviceHistoryFixtureOptions::default())
+    }
+
+    pub fn new_with(station_id: DidCoreId, options: DeviceHistoryFixtureOptions) -> Self {
         let next_root = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            &SigningKey::from_bytes(&[71; 32]).verifying_key().to_bytes(),
+            &SigningKey::from_bytes(&options.next_root_seed)
+                .verifying_key()
+                .to_bytes(),
         );
         let prepared = arkret_signatures::webvh::prepare_principal_inception(
             &arkret_signatures::webvh::PrincipalInceptionInput {
                 provider_endpoint: &"https://principal.example/".parse().unwrap(),
                 principal_endpoint: &"https://principal.example/".parse().unwrap(),
-                local_id: "alice",
+                local_id: &options.local_id,
                 also_known_as: &[],
-                version_time: at(),
-                root_seed: &[70; 32],
+                version_time: options.created_at,
+                root_seed: &options.root_seed,
                 next_root_public_key_multibase: &next_root,
                 witness_policy: None,
             },
@@ -133,16 +203,24 @@ impl DeviceHistoryFixture {
                 .unwrap();
         let did = Did::new(prepared.did.clone()).unwrap();
         let account = AccountId::new(project_did_to_core_id(&did).unwrap(), station_id);
-        let payload = possession(
+        let payload = possession_with(
             &account,
-            1,
-            DeviceAuthorizationBindingKind::RegistrationAnchor,
+            DeviceAuthorizationSpec {
+                device_id: options.founding_device_id.clone(),
+                signing_seed: options.founding_device_signing_seed,
+                hpke_seed: options.founding_device_hpke_seed,
+                authorized_by: DeviceOrPrincipalRef::Principal(account.principal_id.clone()),
+                not_before: options.founding_not_before,
+                expires_at: options.founding_expires_at,
+                binding: DeviceAuthorizationBindingKind::RegistrationAnchor,
+            },
         );
-        let key = SigningKey::from_bytes(&[81; 32]);
+        let key = SigningKey::from_bytes(&options.founding_device_signing_seed);
         let configuration = NotaryValue::new(
             NotarySignerDescriptor {
                 actor_id: ActorId::account(account.clone()),
-                verification_method: DidUrl::new(format!("{did}#{}", device(1))).unwrap(),
+                verification_method: DidUrl::new(format!("{did}#{}", options.founding_device_id))
+                    .unwrap(),
                 key_kind: NotaryKeyKind::Ed25519Raw32,
                 jose_algorithm: NotaryJoseAlgorithm::Ed25519,
                 frozen_public_key_b64u: arkret_canonical::base64url_encode(
@@ -153,7 +231,9 @@ impl DeviceHistoryFixture {
         )
         .unwrap();
         let root = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            &SigningKey::from_bytes(&[70; 32]).verifying_key().to_bytes(),
+            &SigningKey::from_bytes(&options.root_seed)
+                .verifying_key()
+                .to_bytes(),
         );
         let mut inception = EventRef::new(
             verified_root.did_version_id.clone(),
@@ -190,7 +270,7 @@ impl DeviceHistoryFixture {
                     )
                     .unwrap(),
                 },
-                created_at: at(),
+                created_at: options.created_at,
                 hlc: hlc(0),
             },
             &project,
@@ -200,7 +280,7 @@ impl DeviceHistoryFixture {
         let create = sign_event(
             create,
             DidUrl::new(format!("did:key:{root}#{root}")).unwrap(),
-            [70; 32],
+            options.root_seed,
         );
         let mut fixture = Self {
             account,
@@ -211,6 +291,11 @@ impl DeviceHistoryFixture {
             seals: Vec::new(),
             state: BTreeMap::new(),
             covered: BTreeSet::new(),
+            sealed_ops: Vec::new(),
+            founding_device_id: options.founding_device_id,
+            founding_device_signing_seed: options.founding_device_signing_seed,
+            notary_signing_seed: options.founding_device_signing_seed,
+            created_at: options.created_at,
         };
         let mut authorize = fixture.raw_event(
             EventKind::DeviceAuthorize,
@@ -222,7 +307,7 @@ impl DeviceHistoryFixture {
         authorize = sign_event(
             authorize,
             fixture.configuration.signer.verification_method.clone(),
-            [81; 32],
+            fixture.notary_signing_seed,
         );
         fixture.append(vec![create, authorize]);
         fixture
@@ -244,7 +329,7 @@ impl DeviceHistoryFixture {
             sequence,
             hlc(sequence as usize),
             payload,
-            at(),
+            self.created_at,
         )
         .unwrap();
         event.seal_basis = self.seals.last().map(|seal| SealBasis {
@@ -265,7 +350,7 @@ impl DeviceHistoryFixture {
         sign_event(
             event,
             self.configuration.signer.verification_method.clone(),
-            [81; 32],
+            self.notary_signing_seed,
         )
     }
     pub fn append(&mut self, events: Vec<Event>) {
@@ -313,6 +398,7 @@ impl DeviceHistoryFixture {
         .unwrap();
         self.covered
             .extend(batch.committed_event_digests.iter().cloned());
+        self.sealed_ops.push(batch.committed_ops.clone());
         let body = UnsignedSeal {
             realm_id: events[0].realm_id.clone(),
             predecessor_ref: self.seals.last().map(|seal| seal.id.clone()),
@@ -335,7 +421,7 @@ impl DeviceHistoryFixture {
             covered_event_digests: vec![],
             previous_state_root: None,
             previous_digest_algorithm: None,
-            sealed_at: at(),
+            sealed_at: self.created_at,
             hlc: hlc(self.seals.len() + 10),
             configuration_ref: self
                 .events
@@ -349,7 +435,7 @@ impl DeviceHistoryFixture {
             existence_anchors: vec![],
         };
         let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-            [81; 32],
+            self.notary_signing_seed,
             self.did.clone(),
             self.configuration.signer.verification_method.clone(),
         );
@@ -407,4 +493,126 @@ impl DeviceHistoryFixture {
         );
         vec![reanchor, authorize]
     }
+}
+
+/// Commit the fixture through the same registered-unit and atomic Seal path
+/// used by PostgreSQL governance. This is intentionally separate from
+/// `verify`: callers can still use the fixture as an in-memory verifier input,
+/// while HTTP tests that exercise runtime reconstruction install the complete
+/// durable history rather than only its Event and Seal objects.
+pub async fn commit_confirmed_history_fixture(
+    state: &soland_http::state::AppState,
+    fixture: &DeviceHistoryFixture,
+) -> std::result::Result<(), String> {
+    commit_confirmed_history_fixture_from(state, fixture, 0).await
+}
+
+/// Commit only the Seal suffix beginning at `first_seal_index`.
+///
+/// Tests that need to exercise a stale session can first install an active
+/// authorization, author the request, append a real `DeviceRevoke`, and then
+/// durably advance the same Realm to the fixture's new confirmed head. The
+/// already-persisted prefix still contributes to the covered-event set, but is
+/// never replayed through `commit_if_head`.
+pub async fn commit_confirmed_history_fixture_from(
+    state: &soland_http::state::AppState,
+    fixture: &DeviceHistoryFixture,
+    first_seal_index: usize,
+) -> std::result::Result<(), String> {
+    if first_seal_index > fixture.seals.len() {
+        return Err(format!(
+            "fixture Seal suffix starts at {first_seal_index}, but only {} Seals exist",
+            fixture.seals.len()
+        ));
+    }
+    let (control_events, committer) = {
+        let registry = crate::state_test_registry().lock();
+        let resources = registry
+            .get(&crate::app_state_key(state))
+            .ok_or_else(|| "AppState was not constructed by soland-test-support".to_owned())?;
+        (
+            resources
+                .control_event_store
+                .clone()
+                .ok_or_else(|| "test Control Event store is unavailable".to_owned())?,
+            resources
+                .event_seal_committer
+                .clone()
+                .ok_or_else(|| "test atomic Seal committer is unavailable".to_owned())?,
+        )
+    };
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        fixture.notary_signing_seed,
+        fixture.did.clone(),
+        fixture.configuration.signer.verification_method.clone(),
+    );
+    let authority_set_ref = Hash::new(
+        arkret_canonical::canonical_sha256(&fixture.configuration)
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let by_digest = fixture
+        .events
+        .iter()
+        .map(|event| (event.event_id.event_digest(), event))
+        .collect::<BTreeMap<_, _>>();
+    let mut covered = fixture.seals[..first_seal_index]
+        .iter()
+        .flat_map(|seal| {
+            seal.covered_event_digests
+                .iter()
+                .chain(seal.delta.iter())
+                .cloned()
+        })
+        .collect::<BTreeSet<_>>();
+
+    for (seal_index, seal) in fixture.seals.iter().enumerate().skip(first_seal_index) {
+        for result in &seal.command_results {
+            let mut members = Vec::with_capacity(result.unit_event_digests.len());
+            for digest in &result.unit_event_digests {
+                let event = by_digest
+                    .get(digest)
+                    .ok_or_else(|| format!("fixture Seal names missing Control Event {digest}"))?;
+                let ack = ControlProposalAck::issue_with_signer(
+                    seal.realm_id.clone(),
+                    digest.clone(),
+                    authority_set_ref.clone(),
+                    event.created_at,
+                    ControlProposalDecisionPolicy::default(),
+                    &signer,
+                )
+                .map_err(|error| error.to_string())?;
+                members.push(arkret_state::state::ControlUnitIngressMember {
+                    event: (*event).clone(),
+                    digest_suite: DigestSuite::Sha256,
+                    ingress: ControlProposalIngress::AckRequired(ack),
+                });
+            }
+            control_events
+                .put_pending_unit_with_ingress(&members)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        covered.extend(seal.covered_event_digests.iter().cloned());
+        covered.extend(seal.delta.iter().cloned());
+        let ops = fixture
+            .sealed_ops
+            .get(seal_index)
+            .ok_or_else(|| format!("fixture Seal {seal_index} has no matching committed ops"))?;
+        if !committer
+            .commit_if_head(
+                seal,
+                DigestSuite::Sha256,
+                seal.predecessor_ref.as_ref(),
+                ops,
+                &covered,
+                &[],
+            )
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            return Err(format!("fixture Seal {} frontier changed", seal.id));
+        }
+    }
+    Ok(())
 }

@@ -37,6 +37,57 @@ async fn seed_local_key_account(state: &AppState, principal: &DidCoreId) {
     }
 }
 
+fn confirmed_history_time() -> chrono::DateTime<chrono::Utc> {
+    "2026-09-12T00:00:00Z".parse().unwrap()
+}
+
+async fn install_confirmed_founding_device(
+    state: &AppState,
+    local_id: &str,
+    identity_seed: u8,
+    device_id: &str,
+    signing_seed: [u8; 32],
+    not_before: chrono::DateTime<chrono::Utc>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> (
+    soland_test_support::device_authorization_history::DeviceHistoryFixture,
+    arkret::DeviceAuthorizationHistory,
+) {
+    use soland_test_support::device_authorization_history::{
+        DeviceHistoryFixture, DeviceHistoryFixtureOptions,
+    };
+
+    let fixture = DeviceHistoryFixture::new_with(
+        state.service_core_id(),
+        DeviceHistoryFixtureOptions {
+            local_id: local_id.to_owned(),
+            root_seed: [identity_seed; 32],
+            next_root_seed: [identity_seed.wrapping_add(1); 32],
+            founding_device_id: arkret_identifiers::DeviceId::new(device_id).unwrap(),
+            founding_device_signing_seed: signing_seed,
+            founding_device_hpke_seed: [identity_seed.wrapping_add(2); 32],
+            founding_not_before: not_before,
+            founding_expires_at: expires_at,
+            ..DeviceHistoryFixtureOptions::default()
+        },
+    );
+    seed_local_key_account(state, &fixture.account.principal_id).await;
+    let verified = install_confirmed_device_history_fixture(state, &fixture).await;
+    (fixture, verified)
+}
+
+fn confirmed_authorize_event_id(
+    fixture: &soland_test_support::device_authorization_history::DeviceHistoryFixture,
+    history: &arkret::DeviceAuthorizationHistory,
+    event_index: usize,
+) -> String {
+    history
+        .authorization(&fixture.events[event_index].event_id)
+        .expect("fixture authorization is confirmed")
+        .authorization_event_id()
+        .to_string()
+}
+
 fn keys_query_request(
     state: &AppState,
     selectors: &[(&DidCoreId, &[&str])],
@@ -101,31 +152,44 @@ fn account_device_rows<'a>(
         .unwrap_or(&Value::Null)
 }
 
-fn accepted_device_authorize_operation(
-    operation_id: OperationId,
-    realm_id: RealmId,
-    actor: arkret_identifiers::DidCoreId,
-    payload: Value,
-) -> arkret_event_draft::ProjectedEventOperation {
-    let event = arkret_wire::test_support::raw_event_at(
-        arkret_wire::EventKind::DeviceAuthorize.as_str(),
-        arkret_wire::ScopeRef::Realm { realm_id },
-        actor,
-        soland_test_support::fixture_station_id(),
-        1,
-        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
-        payload,
-        chrono::Utc::now(),
-    )
-    .unwrap();
-    arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-        operation_id,
-        arkret_wire::OperationKind::Create,
-        None,
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap()
+async fn stored_push_target_id(
+    state: &AppState,
+    principal: &DidCoreId,
+    device_id: &str,
+) -> arkret_identifiers::PushTargetId {
+    state
+        .test_push_devices()
+        .await
+        .into_iter()
+        .filter_map(|record| {
+            serde_json::from_value::<arkret_models_integration::PushRegistrationRecord>(record).ok()
+        })
+        .find(|record| {
+            record.account_id.principal_id == *principal && record.device_id.as_str() == device_id
+        })
+        .map(|record| record.push_target_id)
+        .expect("stored push registration matches the confirmed account and device")
+}
+
+async fn append_confirmed_device_revoke(
+    state: &AppState,
+    fixture: &mut soland_test_support::device_authorization_history::DeviceHistoryFixture,
+    device_id: &str,
+) {
+    let first_event_index = fixture.events.len();
+    let first_seal_index = fixture.seals.len();
+    let revoke = fixture.event(
+        arkret_wire::EventKind::DeviceRevoke,
+        serde_json::json!({
+            "device_id": device_id,
+            "revoked_by": fixture.founding_device_id,
+            "revoked_at": "2026-09-12T00:00:00.000Z",
+            "reason": "user_requested"
+        }),
+    );
+    fixture.append(vec![revoke]);
+    extend_confirmed_device_history_fixture(state, fixture, first_event_index, first_seal_index)
+        .await;
 }
 
 #[test]
@@ -137,14 +201,24 @@ fn auth_keys_device_messages_and_blobs_work() {
 }
 
 async fn auth_keys_device_messages_and_blobs_work_body() {
-    let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
-    let alice = "did:web:alice.example";
-    let alice_core = core_principal(alice);
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_device_key = SigningKey::from_bytes(&[61u8; 32]);
+    let (alice_history, _) = install_confirmed_founding_device(
+        &state,
+        "keys-auth-alice",
+        101,
+        alice_device,
+        alice_device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
+    )
+    .await;
+    let alice_did = alice_history.did.to_string();
+    let alice = alice_did.as_str();
+    let token = dev_token_for_device(state.clone(), alice, alice_device, "Alice Desktop").await;
+    let alice_core = core_principal(alice);
     let alice_device_public = test_ed25519_multibase_public(&alice_device_key);
-    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_key).await;
     let upload_body = signed_keys_upload_body(
         alice,
         alice_device,
@@ -362,7 +436,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
 
     let locked_realm = seed_test_realm(
         &state,
-        "did:web:alice.example",
+        alice,
         "Blob Policy Realm",
         None,
         "invite_only",
@@ -541,7 +615,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     let service_id = state.service_id().clone();
     let shared_plaintext_realm = seed_test_realm(
         &state,
-        "did:web:alice.example",
+        alice,
         "Shared Plaintext Blob Realm",
         None,
         "invite_only",
@@ -755,15 +829,12 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     );
     // push-notifications.md §3.1: the registration response carries the push
     // target pseudonym; the stored registration must agree with it.
-    let push_target_id = arkret_identifiers::PushTargetId::new(
-        soland_test_support::registered_push_target_id(
-            &state,
-            "ak:did_core:web:alice.example",
-            "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        )
-        .await,
+    let push_target_id = stored_push_target_id(
+        &state,
+        &alice_core,
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
     )
-    .expect("stored push target id is typed");
+    .await;
     assert_eq!(
         push_registration["push_target_id"].as_str(),
         Some(push_target_id.as_str()),
@@ -789,16 +860,25 @@ fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
 }
 
 async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
-    let state = soland_test_support::app_state(test_config());
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
 
-    let alice = "did:web:alice.example";
-    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_device_key = SigningKey::from_bytes(&[201u8; 32]);
+    let (mut alice_history, _) = install_confirmed_founding_device(
+        &state,
+        "keys-query-alice",
+        111,
+        alice_device,
+        alice_device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
+    )
+    .await;
+    let alice_did = alice_history.did.to_string();
+    let alice = alice_did.as_str();
+    let alice_core = alice_history.account.principal_id.clone();
     let alice_device_multibase = test_ed25519_multibase_public(&alice_device_key);
     let expected_principal_id_key = format!("did:key:{alice_device_multibase}");
-    seed_local_key_account(&state, &alice_core).await;
-    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_key).await;
 
     // Member B queries member A's (actor, device) directory entry.
     let bob = dev_token_for_device(
@@ -838,20 +918,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
     // revoked device is omitted rather than degraded into a partial row; that is
     // also the anti-enumeration shape, since the omission is indistinguishable
     // from "no relationship" and from "no such device".
-    let mut revoked = state
-        .test_persistence()
-        .devices()
-        .get(alice_core.as_str(), alice_device)
-        .await
-        .unwrap()
-        .unwrap();
-    revoked.revoked_at = Some(chrono::Utc::now());
-    state
-        .test_persistence()
-        .devices()
-        .seed_test_record(&revoked)
-        .await
-        .unwrap();
+    append_confirmed_device_revoke(&state, &mut alice_history, alice_device).await;
 
     let post_revoke: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -884,24 +951,46 @@ fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
 }
 
 async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body() {
-    let state = soland_test_support::app_state(test_config());
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
 
-    let bob = "did:web:bob.example";
-    let bob_core = core_principal(bob);
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_device_key = SigningKey::from_bytes(&[204u8; 32]);
+    let (bob_history, _) = install_confirmed_founding_device(
+        &state,
+        "keys-history-bob",
+        121,
+        bob_device,
+        bob_device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
+    )
+    .await;
+    let bob_did_text = bob_history.did.to_string();
+    let bob = bob_did_text.as_str();
+    let bob_core = bob_history.account.principal_id.clone();
     let bob_device_multibase = test_ed25519_multibase_public(&bob_device_key);
     let expected_principal_id_key = format!("did:key:{bob_device_multibase}");
-    seed_local_key_account(&state, &bob_core).await;
-    seed_verified_device_with_public_key(&state, bob, bob_device, &bob_device_key).await;
-    let carol = "did:web:carol.example";
-    let carol_core = core_principal(carol);
     let carol_device = "ak:device:01904100-0000-7000-8000-ca2010000001";
     let carol_device_key = SigningKey::from_bytes(&[205u8; 32]);
-    seed_local_key_account(&state, &carol_core).await;
-    seed_verified_device_with_public_key(&state, carol, carol_device, &carol_device_key).await;
+    let (carol_history, _) = install_confirmed_founding_device(
+        &state,
+        "keys-history-carol",
+        131,
+        carol_device,
+        carol_device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
+    )
+    .await;
+    let carol_core = carol_history.account.principal_id.clone();
     // Complete login hydration before installing the historical membership fixture.
-    let alice = dev_token(state.clone()).await;
+    let alice = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        "Alice Desktop",
+    )
+    .await;
     assert_eq!(
         add_test_realm_member(&state, demo_realm_id(), "did:web:alice.example")["ok"],
         true
@@ -970,41 +1059,23 @@ fn device_authorize_projects_public_key_into_devices_table() {
 }
 
 async fn device_authorize_projects_public_key_into_devices_table_body() {
-    let state = soland_test_support::app_state(test_config());
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
 
-    let alice = "did:web:alice.example";
-    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
     let device_key = SigningKey::from_bytes(&[202u8; 32]);
     let multibase = format!("did:key:{}", test_ed25519_multibase_public(&device_key));
-
-    // Exercise accepted device authorization projection directly.
-    let control_realm = soland_test_support::fixture_principal_control_realm(alice);
-    let operation_id = new_prefixed_uuid7("ak:operation:");
-    let operation = accepted_device_authorize_operation(
-        OperationId::new(operation_id.clone()).unwrap(),
-        RealmId::new(control_realm).unwrap(),
-        alice_core.clone(),
-        serde_json::json!({
-            // device-lifecycle.md §5.2: an accepted ak.device.authorize MUST
-            // carry hpke_key + canonical algorithms (they enter the device
-            // trust-binding transcript) plus authorized_by + not_before (the
-            // §5.2 possession-proof input). project_device_authorize parses the
-            // typed DeviceAuthorizePayload, so the fixture must be a
-            // spec-complete device.authorize, not a three-field stub.
-            "device_id": alice_device,
-            "device_public_key_did": multibase,
-            "hpke_key": "z6LSTestPhase1HpkeKey",
-            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": alice_core,
-            "not_before": "2026-05-08T10:00:00.000Z",
-            "authorization_binding_kind": "registration_anchor",
-            "device_signature": "c2ln"
-        }),
-    );
-    let expected_authorize_event_id = operation.context.event_id.to_string();
-    soland_test_support::project_accepted_operations(&state, alice_core.as_str(), &[operation])
-        .await;
+    let (fixture, verified) = install_confirmed_founding_device(
+        &state,
+        "keys-projection-alice",
+        141,
+        alice_device,
+        device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
+    )
+    .await;
+    let alice_core = fixture.account.principal_id.clone();
+    let expected_authorize_event_id = confirmed_authorize_event_id(&fixture, &verified, 1);
 
     let device = state
         .test_persistence()
@@ -1034,50 +1105,20 @@ fn device_authorize_projection_preserves_atomic_generation_binding() {
 }
 
 async fn device_authorize_projection_preserves_atomic_generation_binding_body() {
-    let state = soland_test_support::app_state(test_config());
-    let alice = "did:web:managed-alice.example";
-    let alice_core = core_principal(alice);
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000003";
-    let generation_ref = "1-QmBootstrapGeneration";
-    let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .devices()
-        .seed_test_record(&soland_storage::DeviceInventoryRecord {
-            actor: alice_core.to_string(),
-            device_id: alice_device.to_owned(),
-            display_name: None,
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_id": alice_device,
-                "authorized_generation_ref": generation_ref
-            }),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        })
-        .await
-        .unwrap();
-
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
-    let operation = accepted_device_authorize_operation(
-        OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
-        RealmId::new(soland_test_support::fixture_principal_control_realm(alice)).unwrap(),
-        alice_core.clone(),
-        serde_json::json!({
-            "device_id": alice_device,
-            "device_public_key_did": format!("did:key:{}", test_ed25519_multibase_public(&device_key)),
-            "hpke_key": "z6LSTestPhase1HpkeKey",
-            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": alice_core,
-            "not_before": "2026-05-08T10:00:00.000Z",
-            "authorization_binding_kind": "registration_anchor",
-            "device_signature": "c2ln"
-        }),
-    );
-
-    soland_test_support::project_accepted_operations(&state, alice_core.as_str(), &[operation])
-        .await;
+    let (fixture, _) = install_confirmed_founding_device(
+        &state,
+        "keys-generation-alice",
+        151,
+        alice_device,
+        device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
+    )
+    .await;
+    let alice_core = fixture.account.principal_id;
 
     let projected = state
         .test_persistence()
@@ -1087,8 +1128,8 @@ async fn device_authorize_projection_preserves_atomic_generation_binding_body() 
         .unwrap()
         .expect("device remains projected");
     assert_eq!(
-        projected.payload["authorized_generation_ref"].as_str(),
-        Some(generation_ref)
+        projected.payload["authorized_generation_ref"].as_u64(),
+        Some(1)
     );
 }
 
@@ -1101,26 +1142,27 @@ fn keys_query_exposes_accepted_device_anchor() {
 }
 
 async fn keys_query_exposes_accepted_device_anchor_body() {
-    let state = soland_test_support::app_state(test_config());
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
 
-    let alice = "did:web:managed-alice.example";
-    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000004";
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
-    // Seed through the full PCR bootstrap path, not a bare projected operation:
-    // §8.2 returns a row only for a device that is actually usable, and a
-    // device with no identity-root generation never passes the generation gate.
-    let expected_authorize_event_id =
-        project_test_authorized_device(&state, alice, alice_device, &device_key).await;
-
-    let token = dev_token_for_device(
-        state.clone(),
-        alice,
-        "ak:device:01904100-0000-7000-8000-a11ce0000099",
-        "Alice Desktop",
+    let (fixture, verified) = install_confirmed_founding_device(
+        &state,
+        "keys-anchor-alice",
+        161,
+        alice_device,
+        device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
     )
     .await;
+    let alice_did = fixture.did.to_string();
+    let alice = alice_did.as_str();
+    let alice_core = fixture.account.principal_id.clone();
+    let expected_authorize_event_id = confirmed_authorize_event_id(&fixture, &verified, 1);
+
+    let token = dev_token_for_device(state.clone(), alice, alice_device, "Alice Desktop").await;
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&keys_query_request(
@@ -1187,114 +1229,147 @@ fn keys_query_attestation_cannot_extend_the_accepted_authorization_window() {
 }
 
 async fn keys_query_authorization_window_body() {
-    let state = soland_test_support::app_state(test_config());
-    let alice = "did:web:alice.example";
-    let alice_core = core_principal(alice);
-    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let key = SigningKey::from_bytes(&[204u8; 32]);
-    seed_local_key_account(&state, &alice_core).await;
-    project_test_authorized_device(&state, alice, device_id, &key).await;
-    let bob = dev_token_for_device(
-        state.clone(),
-        "did:web:bob.example",
-        "ak:device:01904100-0000-7000-8000-b0b000000001",
-        "Bob Desktop",
-    )
-    .await;
-    add_test_realm_member(&state, demo_realm_id(), alice);
-    add_test_realm_member(&state, demo_realm_id(), "did:web:bob.example");
-    let query = || async {
+    async fn query_case(
+        local_id: &str,
+        identity_seed: u8,
+        not_before: chrono::DateTime<chrono::Utc>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<arkret_models_crypto::QueryDeviceRecord> {
+        let state = soland_test_support::app_state_with_postgres_governance(test_config());
+        let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+        let key = SigningKey::from_bytes(&[204u8; 32]);
+        let (fixture, _) = install_confirmed_founding_device(
+            &state,
+            local_id,
+            identity_seed,
+            device_id,
+            key.to_bytes(),
+            not_before,
+            expires_at,
+        )
+        .await;
+        let alice_did = fixture.did.to_string();
+        let alice = alice_did.as_str();
+        let alice_core = fixture.account.principal_id.clone();
+        let bob_did = format!("did:web:window-bob-{identity_seed}.example");
+        let bob = dev_token_for_device(
+            state.clone(),
+            &bob_did,
+            "ak:device:01904100-0000-7000-8000-b0b000000001",
+            "Bob Desktop",
+        )
+        .await;
+        add_test_realm_member(&state, demo_realm_id(), alice);
+        add_test_realm_member(&state, demo_realm_id(), &bob_did);
         let mut response = TestClient::post("http://server/_arkret/self/keys/query")
             .add_header("authorization", format!("Bearer {bob}"), true)
             .json(&keys_query_request(&state, &[(&alice_core, &[device_id])]))
             .send(&app_from_state(state.clone()))
             .await;
         assert_eq!(response.status_code, Some(StatusCode::OK));
-        response.take_json::<Value>().await.unwrap()
-    };
-    let baseline = query().await;
-    let row = &account_device_rows(&baseline, "device_keys", &state, &alice_core)[device_id];
-    let projected: arkret_models_crypto::QueryDeviceRecord =
-        serde_json::from_value(row.clone()).unwrap();
-    let core = &projected.device_projection;
-    assert_eq!((core.expires_at - core.attested_at).num_seconds(), 300);
+        let response = response.take_json::<Value>().await.unwrap();
+        let row = &account_device_rows(&response, "device_keys", &state, &alice_core)[device_id];
+        (!row.is_null()).then(|| serde_json::from_value(row.clone()).unwrap())
+    }
+
+    let baseline = query_case("keys-window-baseline", 181, confirmed_history_time(), None)
+        .await
+        .expect("unbounded confirmed authorization is returned");
+    assert_eq!(
+        (baseline.device_projection.expires_at - baseline.device_projection.attested_at)
+            .num_seconds(),
+        300
+    );
+
     let current_time = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let expiry = current_time + chrono::Duration::seconds(60);
-    set_test_device_authorization_window(
-        &state,
-        alice,
-        device_id,
-        &key,
+    let bounded = query_case(
+        "keys-window-bounded",
+        184,
         current_time - chrono::Duration::minutes(1),
         Some(expiry),
     )
+    .await
+    .expect("currently effective bounded authorization is returned");
+    assert_eq!(bounded.device_projection.expires_at, expiry);
+
+    let future = query_case(
+        "keys-window-future",
+        187,
+        current_time + chrono::Duration::minutes(1),
+        None,
+    )
     .await;
-    let bounded = query().await;
-    let row = &account_device_rows(&bounded, "device_keys", &state, &alice_core)[device_id];
-    let projected: arkret_models_crypto::QueryDeviceRecord =
-        serde_json::from_value(row.clone()).unwrap();
-    assert_eq!(projected.device_projection.expires_at, expiry);
-    for (not_before, expires_at) in [
-        (current_time + chrono::Duration::minutes(1), None),
-        (
-            current_time - chrono::Duration::minutes(2),
-            Some(current_time - chrono::Duration::minutes(1)),
-        ),
-    ] {
-        set_test_device_authorization_window(
-            &state, alice, device_id, &key, not_before, expires_at,
-        )
-        .await;
-        let rejected = query().await;
-        assert!(
-            account_device_rows(&rejected, "device_keys", &state, &alice_core)
-                .get(device_id)
-                .is_none(),
-            "ineffective authorization must not become an Active attestation: {rejected}"
-        );
-    }
+    assert!(
+        future.is_none(),
+        "future authorization must not become an Active attestation"
+    );
+    let expired = query_case(
+        "keys-window-expired",
+        190,
+        current_time - chrono::Duration::minutes(2),
+        Some(current_time - chrono::Duration::minutes(1)),
+    )
+    .await;
+    assert!(
+        expired.is_none(),
+        "expired authorization must not become an Active attestation"
+    );
 }
 
 async fn keys_query_hides_revoked_device_body() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_core = core_principal("did:web:alice.example");
-    let desktop = dev_token_for_device(
-        state.clone(),
-        "did:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "Alice Desktop",
-    )
-    .await;
-    let mobile = dev_token_for_device(
-        state.clone(),
-        "did:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-9b04e0000007",
-        "Alice Phone",
-    )
-    .await;
+    use arkret_models_collaboration::events_payloads::{
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef,
+    };
+    use soland_test_support::device_authorization_history::{
+        DeviceAuthorizationSpec, DeviceHistoryFixture, DeviceHistoryFixtureOptions, possession_with,
+    };
+
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
     let desktop_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let mobile_device = "ak:device:01904100-0000-7000-8000-9b04e0000007";
     let desktop_key = SigningKey::from_bytes(&[62u8; 32]);
     let mobile_key = SigningKey::from_bytes(&[63u8; 32]);
-    seed_verified_device_with_public_key(
-        &state,
-        "did:web:alice.example",
-        desktop_device,
-        &desktop_key,
-    )
-    .await;
-    seed_verified_device_with_public_key(
-        &state,
-        "did:web:alice.example",
-        mobile_device,
-        &mobile_key,
-    )
-    .await;
-
+    let mut fixture = DeviceHistoryFixture::new_with(
+        state.service_core_id(),
+        DeviceHistoryFixtureOptions {
+            local_id: "keys-revocation-alice".to_owned(),
+            root_seed: [171; 32],
+            next_root_seed: [172; 32],
+            founding_device_id: arkret_identifiers::DeviceId::new(desktop_device).unwrap(),
+            founding_device_signing_seed: desktop_key.to_bytes(),
+            founding_device_hpke_seed: [173; 32],
+            ..DeviceHistoryFixtureOptions::default()
+        },
+    );
+    let mobile_authorize = fixture.event(
+        arkret_wire::EventKind::DeviceAuthorize,
+        serde_json::to_value(possession_with(
+            &fixture.account,
+            DeviceAuthorizationSpec {
+                device_id: arkret_identifiers::DeviceId::new(mobile_device).unwrap(),
+                signing_seed: mobile_key.to_bytes(),
+                hpke_seed: [174; 32],
+                authorized_by: DeviceOrPrincipalRef::DeviceId(fixture.founding_device_id.clone()),
+                not_before: confirmed_history_time(),
+                expires_at: None,
+                binding: DeviceAuthorizationBindingKind::AcceptedDevice,
+            },
+        ))
+        .unwrap(),
+    );
+    fixture.append(vec![mobile_authorize]);
+    seed_local_key_account(&state, &fixture.account.principal_id).await;
+    install_confirmed_device_history_fixture(&state, &fixture).await;
+    let alice_did = fixture.did.to_string();
+    let alice = alice_did.as_str();
+    let alice_core = fixture.account.principal_id.clone();
+    let desktop = dev_token_for_device(state.clone(), alice, desktop_device, "Alice Desktop").await;
+    let mobile = dev_token_for_device(state.clone(), alice, mobile_device, "Alice Phone").await;
     let _desktop_keys: Value = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&signed_keys_upload_body(
-            "did:web:alice.example",
+            alice,
             desktop_device,
             &desktop_key,
             serde_json::json!({"signed_curve25519:desktop": {
@@ -1317,7 +1392,7 @@ async fn keys_query_hides_revoked_device_body() {
     let _phone_keys: Value = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .json(&signed_keys_upload_body(
-            "did:web:alice.example",
+            alice,
             mobile_device,
             &mobile_key,
             serde_json::json!({"signed_curve25519:phone": {
@@ -1365,23 +1440,7 @@ async fn keys_query_hides_revoked_device_body() {
         "phone-device-key"
     );
 
-    let mut revoked = state
-        .test_persistence()
-        .devices()
-        .get(
-            fixture_actor_core_id("did:web:alice.example").as_str(),
-            mobile_device,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    revoked.revoked_at = Some(chrono::Utc::now());
-    state
-        .test_persistence()
-        .devices()
-        .seed_test_record(&revoked)
-        .await
-        .unwrap();
+    append_confirmed_device_revoke(&state, &mut fixture, mobile_device).await;
 
     let post_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
@@ -1425,17 +1484,29 @@ fn revoked_device_blocks_encrypted_writes() {
 }
 
 async fn revoked_device_blocks_encrypted_writes_body() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_core = core_principal("did:web:alice.example");
-    let stale_session = dev_token_for_device(
-        state.clone(),
-        "did:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-30b11e000005",
-        "Alice Mobile",
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
+    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_key = SigningKey::from_bytes(&[21_u8; 32]);
+    let (mut fixture, _) = install_confirmed_founding_device(
+        &state,
+        "keys-stale-session-alice",
+        194,
+        alice_device,
+        alice_device_key.to_bytes(),
+        confirmed_history_time(),
+        None,
     )
     .await;
+    let alice_did = fixture.did.to_string();
+    let alice = alice_did.as_str();
+    let stale_session =
+        dev_token_for_device(state.clone(), alice, alice_device, "Alice Mobile").await;
+    assert_eq!(
+        add_test_realm_member(&state, demo_realm_id(), alice)["ok"],
+        true
+    );
     let mut blocked_event = signed_message_event_envelope(
-        "did:web:alice.example",
+        alice,
         demo_realm_id(),
         demo_realm_id(),
         encrypted_envelope("ak.message.v1", "blocked-ciphertext"),
@@ -1444,51 +1515,54 @@ async fn revoked_device_blocks_encrypted_writes_body() {
     move_event_to_actor_realm_frontier(
         &state,
         &stale_session,
-        "did:web:alice.example",
+        alice,
         demo_realm_id(),
         &mut blocked_event,
     )
     .await;
+    let blocked_submission = arkret_wire::EventInitialSubmission::online(
+        serde_json::from_value(blocked_event).expect("stale Event fixture remains typed"),
+    );
+    let blocked_upload_request = signed_keys_upload_body(
+        alice,
+        alice_device,
+        &alice_device_key,
+        serde_json::json!({"signed_curve25519:stale": {
+            "key": "stale-one-time-key",
+            "algorithm": "signed_curve25519",
+            "signature": {"kid": format!("{alice}#{alice_device}"), "signature_algorithm": "Ed25519", "sig": "c2ln"}
+        }}),
+        serde_json::json!({}),
+    );
 
-    let mut revoked = state
-        .test_persistence()
-        .devices()
-        .get(
-            alice_core.as_str(),
-            "ak:device:01904100-0000-7000-8000-30b11e000005",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    revoked.revoked_at = Some(chrono::Utc::now());
-    state
-        .test_persistence()
-        .devices()
-        .seed_test_record(&revoked)
-        .await
-        .unwrap();
+    append_confirmed_device_revoke(&state, &mut fixture, alice_device).await;
 
     let mut blocked_send = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
-        .json(&blocked_event)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&blocked_submission).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(blocked_send.status_code.unwrap().as_u16(), 400);
+    let blocked_send_status = blocked_send.status_code.unwrap();
     let blocked_send_body: Value = blocked_send.take_json().await.unwrap();
-    assert_eq!(problem_code(&blocked_send_body), "param_invalid");
-    assert_eq!(blocked_send_body["reason_detail"], "invalid_proof");
+    assert_eq!(
+        blocked_send_status,
+        StatusCode::FORBIDDEN,
+        "{blocked_send_body}"
+    );
+    assert_eq!(problem_code(&blocked_send_body), "device_unauthorized");
 
     let mut blocked_upload = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
-        .json(&serde_json::json!({
-            "device_id": "ak:device:01904100-0000-7000-8000-30b11e000005",
-            "one_time_keys": {},
-            "fallback_keys": {},
-            "device_signature": {"signature_algorithm": "none"}
-        }))
+        .json(&blocked_upload_request)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(blocked_upload.status_code.unwrap().as_u16(), 422);
+    let blocked_upload_status = blocked_upload.status_code.unwrap();
     let blocked_upload_body: Value = blocked_upload.take_json().await.unwrap();
-    assert_eq!(problem_code(&blocked_upload_body), "schema_violation");
+    assert_eq!(
+        blocked_upload_status,
+        StatusCode::FORBIDDEN,
+        "{blocked_upload_body}"
+    );
+    assert_eq!(problem_code(&blocked_upload_body), "device_unauthorized");
 }
