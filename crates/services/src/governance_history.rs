@@ -169,12 +169,13 @@ impl GovernanceHistoryService {
                 }
             };
             // A first-contact receiver has no Realm visibility yet, but it must
-            // still authenticate the provider Station's historical admission
-            // signature. Service DID resolution evidence is public identity
-            // material, so permit only the provider's own exact,
-            // content-addressed Service branch. Principal, device, Agent and
-            // third-party service evidence remain behind the ordinary Realm or
-            // retained-cut authorization paths.
+            // still authenticate both the provider Station's historical
+            // admission signature and a human Control Event produced by an
+            // Account owned by that Station. Permit only the provider's exact,
+            // content-addressed Service evidence or account-device Control root;
+            // the latter exposes only its explicit dependency refs. Principal,
+            // Data-only device, Agent and third-party evidence remain behind the
+            // ordinary Realm or retained-cut authorization paths.
             if item.is_none()
                 && access.is_none()
                 && let Some(provider_service_id) = public_service_signer_id
@@ -200,6 +201,12 @@ impl GovernanceHistoryService {
                                 signer_id,
                                 ..
                             } if signer_id == provider_service_id
+                        ) || matches!(
+                            authenticated_signer_resolution_evidence.as_ref(),
+                            arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
+                                account_id,
+                                ..
+                            } if &account_id.station_id == provider_service_id
                         )
                     )
                 }) {

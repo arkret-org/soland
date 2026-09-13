@@ -2139,12 +2139,12 @@ async fn account_device_summaries(
     state: &AppState,
     actor: &str,
 ) -> Result<Vec<AccountDeviceSummary>, AppError> {
+    let current_generation = super::device_generation::current_device_generation(state, actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let devices = state
         .identities()
         .devices_for_actor(actor)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let current_generation = super::device_generation::current_device_generation(state, actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut summaries = Vec::with_capacity(devices.len());
@@ -2188,6 +2188,18 @@ async fn account_device_summary(
         .payload
         .get("authorized_generation_ref")
         .and_then(Value::as_u64);
+    let signer_resolution_evidence_ref = device
+        .payload
+        .get("signer_resolution_evidence_ref")
+        .and_then(Value::as_str)
+        .map(|reference| {
+            arkret_wire::SignerEvidenceRef::new(reference.to_owned()).map_err(|error| {
+                AppError::internal(format!(
+                    "stored signer_resolution_evidence_ref `{reference}` is invalid: {error}"
+                ))
+            })
+        })
+        .transpose()?;
     let mut revocation_states = if let (Some(event_id), Some(generation_ref)) =
         (authorized_event_ref.as_ref(), authorized_generation_ref)
     {
@@ -2265,6 +2277,7 @@ async fn account_device_summary(
         display_name,
         authorized_at: authorized_event_ref.as_ref().map(|_| device.created_at),
         authorized_event_ref,
+        signer_resolution_evidence_ref,
         last_seen_at: None,
         revoked_at: device.revoked_at,
         revocation_states: (!revocation_states.is_empty()).then_some(revocation_states),

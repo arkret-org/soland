@@ -333,6 +333,22 @@ pub trait GovernanceDependencyStore: Send + Sync {
         selector: &GovernanceDependencySelector,
     ) -> PersistenceResult<Option<GovernanceDependency>>;
 
+    /// Whether an exact Event is explicitly named by a portable human Control
+    /// signer root owned by `provider_service_id`.
+    async fn provider_account_device_control_event_ref(
+        &self,
+        provider_service_id: &arkret_wire::DidCoreId,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<bool>;
+
+    /// Whether an exact Seal is explicitly named by a portable human Control
+    /// signer root owned by `provider_service_id`.
+    async fn provider_account_device_control_seal_ref(
+        &self,
+        provider_service_id: &arkret_wire::DidCoreId,
+        seal_id: &SealId,
+    ) -> PersistenceResult<bool>;
+
     async fn put_realm_object_exact(
         &self,
         realm_id: &RealmId,

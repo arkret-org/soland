@@ -1396,6 +1396,7 @@ async fn peer_events_resolve(
         .await
         .map_err(|error| AppError::internal(format!("peer events resolve: {error}")))?;
     let authz = PeerReadAuthz::build(state, &source_id, &records).await?;
+    let provider_service_id = state.service_core_id();
     let mut events = Vec::new();
     let mut found_ids = BTreeSet::new();
     let mut found_digests = BTreeSet::new();
@@ -1408,7 +1409,20 @@ async fn peer_events_resolve(
         if !id_match && !digest_match {
             continue;
         }
-        if !authz.record_visible(&record) {
+        let portable_control_dependency = id_match
+            && state
+                .persistence()
+                .governance_dependency_store()
+                .provider_account_device_control_event_ref(
+                    &provider_service_id,
+                    &arkret_wire::EventId::new(record.event_id.clone())
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                )
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("portable Control Event visibility: {error}"))
+                })?;
+        if !authz.record_visible(&record) && !portable_control_dependency {
             continue;
         }
         found_ids.insert(record.event_id.clone());

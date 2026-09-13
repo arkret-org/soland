@@ -41,6 +41,23 @@ pub(super) async fn install(
             .bind::<Text, _>(history.account_id().principal_id.as_str()).execute(&mut *conn).await
             .map_err(PersistenceError::database)?;
         for authorization in history.authorizations().iter().filter(|a| history.is_currently_active(a)) {
+            let evidence = history
+                .control_signer_evidence(authorization.authorization_event_id())
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            let content_digest = evidence
+                .canonical_sha256_digest()
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            let evidence_ref = evidence
+                .evidence_ref()
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            crate::governance_history::put_unscoped_signer_evidence_exact_in_transaction(
+                conn,
+                arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                    selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest },
+                    authenticated_signer_resolution_evidence: Box::new(evidence),
+                },
+            )
+            .await?;
             let mut payload = serde_json::to_value(authorization.payload()).map_err(|e| PersistenceError::Internal(e.to_string()))?;
             let object = payload.as_object_mut().ok_or_else(|| PersistenceError::Internal("device payload is not an object".into()))?;
             object.insert("device_authorize_projected".into(), Value::Bool(true));
@@ -48,6 +65,10 @@ pub(super) async fn install(
             object.insert("authorized_generation_ref".into(), serde_json::json!(authorization.authorized_generation_ref()));
             object.insert("generation_event_id".into(), Value::String(authorization.generation_event_id().to_string()));
             object.insert("confirmed_seal_id".into(), Value::String(history.confirmed_head().to_string()));
+            object.insert(
+                "signer_resolution_evidence_ref".into(),
+                Value::String(evidence_ref.as_ref().to_owned()),
+            );
             sql_query(
                 "INSERT INTO devices(id,actor_id,device_id,payload,verification_state,created_at,updated_at,revoked_at) \
                  VALUES($1,$2,$3,$4,'verified',$5,$6,NULL) \

@@ -87,6 +87,55 @@ pub(in crate::routing::events::event_log) async fn verify_historical_producer(
         .as_ref()
         .ok_or_else(|| "ordinary Event proof omits signer evidence".to_owned())?;
     let root = retained_evidence(state, reference).await?;
+    if let AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
+        history_event_refs,
+        history_seal_refs,
+        ..
+    } = &root
+    {
+        let mut events = Vec::with_capacity(history_event_refs.len());
+        for event_ref in history_event_refs {
+            let record = state
+                .event_queries()
+                .canonical_event(event_ref.as_str())
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| {
+                    "dependency_missing: account-device Control history Event is unavailable"
+                        .to_owned()
+                })?;
+            events.push(
+                serde_json::from_value::<arkret_wire::Event>(record.envelope)
+                    .map_err(|error| format!("stored Control history Event is invalid: {error}"))?,
+            );
+        }
+        let mut seals = Vec::with_capacity(history_seal_refs.len());
+        for seal_ref in history_seal_refs {
+            seals.push(
+                state
+                    .projections()
+                    .seal_by_id(seal_ref)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| {
+                        "dependency_missing: account-device Control history Seal is unavailable"
+                            .to_owned()
+                    })?,
+            );
+        }
+        let source = arkret::historical_producer::AuthenticatedHistoricalProducerSource::authenticate_account_device_control(
+            reference,
+            event.executed_by.as_ref().unwrap_or(&event.actor_id),
+            &root,
+            &events,
+            &seals,
+            event.created_at,
+        )
+        .map_err(|error| format!("historical producer source authentication failed: {error}"))?;
+        return source
+            .verify_event(event, digest_suite)
+            .map_err(|error| error.to_string());
+    }
     let dependencies = match &root {
         AuthenticatedSignerResolutionEvidence::Principal {
             attester_signer_evidence_ref,

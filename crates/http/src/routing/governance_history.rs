@@ -669,6 +669,7 @@ async fn resolve_peer_seals(
         false
     };
     let history = state.persistence().governance_history_service();
+    let provider_service_id = state.service_core_id();
     let retained_seals = match request.history_traversal_access.clone() {
         Some(access) => history
             .resolve_peer_retained_seals(&request.realm_id, access, &source_service_core_id, now())
@@ -705,8 +706,20 @@ async fn resolve_peer_seals(
             seals.push(seal);
             continue;
         }
+        let portable_control_dependency = request.history_traversal_access.is_none()
+            && state
+                .persistence()
+                .governance_dependency_store()
+                .provider_account_device_control_seal_ref(&provider_service_id, seal_ref)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("portable Control Seal visibility: {error}"))
+                })?;
         match state.projections().seal_by_id(seal_ref).await {
-            Ok(Some(seal)) if seal.realm_id == request.realm_id && ordinary_visible => {
+            Ok(Some(seal))
+                if seal.realm_id == request.realm_id
+                    && (ordinary_visible || portable_control_dependency) =>
+            {
                 seals.push(seal)
             }
             _ => missing_seal_refs.push(seal_ref.clone()),
@@ -1911,7 +1924,13 @@ fn history_source_author_profile(
                 match authenticated_signer_resolution_evidence.as_ref() {
                     arkret_models_identity::AuthenticatedSignerResolutionEvidence::Principal {
                         ..
-                    } | arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice { .. } => AuthorProfile::OrdinaryHuman,
+                    }
+                    | arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
+                        ..
+                    }
+                    | arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
+                        ..
+                    } => AuthorProfile::OrdinaryHuman,
                     arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
                         ..
                     } => AuthorProfile::Agent,
