@@ -191,7 +191,7 @@ async fn issue_event_leases(
         submission
             .validate_structural_in_context(
                 if context.is_some() {
-                    arkret_wire::EventSubmitContext::AnchorUnit
+                    arkret_wire::EventSubmitContext::RealmBootstrap
                 } else {
                     arkret_wire::EventSubmitContext::Standard
                 },

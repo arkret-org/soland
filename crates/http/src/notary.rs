@@ -1359,11 +1359,7 @@ impl NotaryWorker {
             proof_results.insert(digest.clone(), proof_result);
         }
 
-        let submit_context = if predecessor_ref.is_none() || allow_self_principal_ingress {
-            arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
-        } else {
-            arkret_wire::event_envelope::EventSubmitContext::Standard
-        };
+        let submit_context = notary_submit_context(predecessor_ref, allow_self_principal_ingress);
         execute_ordered_control_units(
             realm_id,
             pre_state,
@@ -2182,6 +2178,23 @@ fn availability_authority_is_genesis(predecessor_ref: Option<&SealId>) -> bool {
     predecessor_ref.is_none()
 }
 
+fn notary_submit_context(
+    predecessor_ref: Option<&SealId>,
+    allow_self_principal_ingress: bool,
+) -> arkret_wire::EventSubmitContext {
+    if predecessor_ref.is_none() {
+        // Genesis was accepted by the ordinary/Applet Realm unit validator.
+        // It is basis-free, but retains portable producer signer evidence.
+        arkret_wire::EventSubmitContext::RealmBootstrap
+    } else if allow_self_principal_ingress {
+        // This flag is admitted only for the exact PCR-policy
+        // reanchor/replacement-authorize native unit checked by the caller.
+        arkret_wire::EventSubmitContext::AnchorUnit
+    } else {
+        arkret_wire::EventSubmitContext::Standard
+    }
+}
+
 async fn local_service_is_eligible_availability_holder(
     state: &AppState,
     predecessor_state: &BTreeMap<CellRef, ResolvedCellState>,
@@ -2584,6 +2597,28 @@ mod tests {
 
         let predecessor = SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
         assert!(!availability_authority_is_genesis(Some(&predecessor)));
+    }
+
+    #[test]
+    fn notary_context_keeps_genesis_portable_and_recovery_native() {
+        assert_eq!(
+            notary_submit_context(None, false),
+            arkret_wire::EventSubmitContext::RealmBootstrap,
+        );
+        assert_eq!(
+            notary_submit_context(None, true),
+            arkret_wire::EventSubmitContext::RealmBootstrap,
+            "genesis classification takes precedence over the recovery flag",
+        );
+        let predecessor = SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
+        assert_eq!(
+            notary_submit_context(Some(&predecessor), true),
+            arkret_wire::EventSubmitContext::AnchorUnit,
+        );
+        assert_eq!(
+            notary_submit_context(Some(&predecessor), false),
+            arkret_wire::EventSubmitContext::Standard,
+        );
     }
 
     #[test]

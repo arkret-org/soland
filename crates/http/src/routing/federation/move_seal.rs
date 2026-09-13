@@ -1936,7 +1936,7 @@ pub(crate) async fn apply_inbound_seal(
         }
         arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events)
             .map_err(|error| seal_admission_error(error.to_string()))?;
-        arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+        arkret_wire::event_envelope::EventSubmitContext::RealmBootstrap
     } else {
         arkret_wire::event_envelope::EventSubmitContext::Standard
     };

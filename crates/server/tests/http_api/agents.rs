@@ -952,7 +952,10 @@ async fn provision_agent_sdk_commit_attempt_inner(
         &mut pcr_genesis,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::for_native_unit().with_created_at(now),
+        arkret_signatures::SignEventOptions::new(
+            soland_test_support::fixture_signer_evidence_ref(),
+        )
+        .with_created_at(now),
     )
     .unwrap();
     let pcr_genesis = pcr_genesis.into_event();
@@ -1399,7 +1402,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     genesis_submission.control_proposal_ack = Some(proposal_member);
     genesis_submission
         .validate_structural_in_context(
-            arkret_wire::EventSubmitContext::AnchorUnit,
+            arkret_wire::EventSubmitContext::RealmBootstrap,
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();

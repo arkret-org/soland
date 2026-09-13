@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn initial_batch_context_separates_portable_realm_bootstrap_from_native_units() {
+    for ordinary_realm_create in [
+        serde_json::json!({
+            "kind": arkret_wire::EventKind::RealmCreate.as_str(),
+            "payload": {"object": {"purpose": "collaboration"}},
+            "refs": [],
+        }),
+        serde_json::json!({
+            "kind": arkret_wire::EventKind::RealmCreate.as_str(),
+            "payload": {"object": {"purpose": "direct_conversation"}},
+            "refs": [],
+        }),
+        serde_json::json!({
+            "kind": arkret_wire::EventKind::RealmCreate.as_str(),
+            "payload": {"object": {"purpose": "agent_control"}},
+            "refs": [],
+        }),
+        serde_json::json!({
+            "kind": arkret_wire::EventKind::RealmCreate.as_str(),
+            "payload": {"object": {"purpose": "applet_managed_control"}},
+            "refs": [],
+        }),
+    ] {
+        assert_eq!(
+            initial_batch_submit_context(&[ordinary_realm_create]),
+            arkret_wire::EventSubmitContext::RealmBootstrap,
+        );
+    }
+
+    let human_pcr_create = serde_json::json!({
+        "kind": arkret_wire::EventKind::RealmCreate.as_str(),
+        "refs": [{
+            "role": "did_inception",
+            "id": "fixture",
+            "critical": true,
+        }],
+    });
+    assert_eq!(
+        initial_batch_submit_context(&[human_pcr_create]),
+        arkret_wire::EventSubmitContext::AnchorUnit,
+    );
+
+    let recovery_reanchor = serde_json::json!({
+        "kind": arkret_wire::EventKind::DeviceReanchor.as_str(),
+        "refs": [],
+    });
+    assert_eq!(
+        initial_batch_submit_context(&[recovery_reanchor]),
+        arkret_wire::EventSubmitContext::AnchorUnit,
+    );
+
+    assert_eq!(
+        initial_batch_submit_context(&[serde_json::json!({
+            "kind": arkret_wire::EventKind::RealmProfile.as_str(),
+            "refs": [],
+        })]),
+        arkret_wire::EventSubmitContext::Standard,
+    );
+}
+
+#[test]
 fn identity_creation_proof_allows_bounded_cross_service_clock_skew() {
     let now = chrono::Utc::now();
     let accepted_issued_at =

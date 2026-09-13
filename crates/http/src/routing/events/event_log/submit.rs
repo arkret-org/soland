@@ -1333,6 +1333,21 @@ pub(in crate::routing) fn submit_initial_event_batch_outcome<'a>(
     ))
 }
 
+fn initial_batch_submit_context(envelopes: &[Value]) -> arkret_wire::EventSubmitContext {
+    if batch_contains_identity_anchor(envelopes) {
+        // Human PCR genesis and PCR-policy recovery are the only native
+        // signer-material units. Their dedicated batch validator runs before
+        // persistence and supplies the frozen root/candidate overlay.
+        arkret_wire::EventSubmitContext::AnchorUnit
+    } else if batch_begins_realm_create(envelopes) {
+        // Ordinary, Direct Conversation, Agent and Applet Realm genesis are
+        // basis-free reducer units, but their producer proof remains portable.
+        arkret_wire::EventSubmitContext::RealmBootstrap
+    } else {
+        arkret_wire::EventSubmitContext::Standard
+    }
+}
+
 async fn submit_initial_event_batch_outcome_inner(
     state: &AppState,
     session: &SessionRecord,
@@ -1348,12 +1363,7 @@ async fn submit_initial_event_batch_outcome_inner(
         typed_events.push(submission.event.clone());
         envelopes.push(typed_event_to_canonical_value(submission.event.clone())?);
     }
-    let submit_context =
-        if batch_contains_identity_anchor(&envelopes) || batch_begins_realm_create(&envelopes) {
-            arkret_wire::EventSubmitContext::AnchorUnit
-        } else {
-            arkret_wire::EventSubmitContext::Standard
-        };
+    let submit_context = initial_batch_submit_context(&envelopes);
     let event_refs = typed_events.iter().collect::<Vec<_>>();
     let digest_suites = trusted_federated_event_digest_suites(state, &event_refs)
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error))?;
@@ -1384,9 +1394,7 @@ async fn submit_initial_event_batch_outcome_inner(
         control_proposal_acks.push(control_proposal_ack);
         compensation_evidence.push(membership_compensation_evidence);
     }
-    if submit_context == arkret_wire::EventSubmitContext::AnchorUnit
-        && leases.iter().any(Option::is_some)
-    {
+    if submit_context.is_basis_free_unit() && leases.iter().any(Option::is_some) {
         let complete_leases = leases
             .iter()
             .cloned()

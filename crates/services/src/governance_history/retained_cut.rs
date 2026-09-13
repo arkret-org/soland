@@ -199,7 +199,7 @@ pub fn prepare_retained_history_cut(
                     ));
                 }
                 let context = if anchor_events.contains(event_digest) {
-                    arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+                    arkret_wire::event_envelope::EventSubmitContext::RealmBootstrap
                 } else {
                     arkret_wire::event_envelope::EventSubmitContext::Standard
                 };

@@ -592,7 +592,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
     commit_options: SubmitCommitOptions<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let submit_context = if submission.event.kind == arkret_wire::EventKind::RealmCreate {
-        arkret_wire::EventSubmitContext::AnchorUnit
+        arkret_wire::EventSubmitContext::RealmBootstrap
     } else {
         arkret_wire::EventSubmitContext::Standard
     };

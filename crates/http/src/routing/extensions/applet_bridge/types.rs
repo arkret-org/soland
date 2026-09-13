@@ -313,7 +313,7 @@ fn validate_managed_actor_unit(
     )?;
     validate_stored_event(
         pcr_event,
-        EventSubmitContext::AnchorUnit,
+        EventSubmitContext::RealmBootstrap,
         "managed PCR genesis",
     )?;
     validate_stored_event(
