@@ -340,6 +340,9 @@ pub struct InternalAuthorityChannelConfig {
     credential: String,
     /// Account Authority/source trust domain from explicit deployment config.
     account_authority_trust_domain: TrustDomainId,
+    /// Exact controller-gate operation endpoint derived from the canonical
+    /// Account Authority base at startup.
+    controller_gate_url: String,
     integrity: InternalChannelIntegrityConfig,
 }
 
@@ -362,6 +365,12 @@ impl InternalAuthorityChannelConfig {
     pub fn account_authority_trust_domain(&self) -> &TrustDomainId {
         &self.account_authority_trust_domain
     }
+
+    /// Exact controller-gate operation endpoint bound to the Authority origin.
+    #[must_use]
+    pub fn controller_gate_url(&self) -> &str {
+        &self.controller_gate_url
+    }
 }
 
 impl std::fmt::Debug for InternalAuthorityChannelConfig {
@@ -373,6 +382,7 @@ impl std::fmt::Debug for InternalAuthorityChannelConfig {
                 "account_authority_trust_domain",
                 &self.account_authority_trust_domain,
             )
+            .field("controller_gate_url", &self.controller_gate_url)
             .field("integrity", &self.integrity)
             .finish()
     }
@@ -1122,6 +1132,13 @@ impl AppConfig {
         self.internal_authority_channel = Some(InternalAuthorityChannelConfig {
             credential,
             account_authority_trust_domain: self.trust_domain.clone(),
+            controller_gate_url: internal_authority_operation_url(
+                self.account_authority_url
+                    .as_deref()
+                    .expect("checked above"),
+                INTERNAL_CONTROLLER_GATE_PATH,
+            )
+            .expect("test Account Authority URL must be valid"),
             integrity: InternalChannelIntegrityConfig {
                 mode: InternalChannelIntegrityMode::MtlsDirectProcess,
             },
@@ -1162,7 +1179,15 @@ impl AppConfig {
         let ice = load_ice_servers_config(values);
         let livekit = load_livekit_config(values);
         let media = load_media_issuer_config(values);
-        let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL");
+        let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL")
+            .map(|value| {
+                arkret_models_identity::service_identity::CanonicalServiceUrl::canonicalize(value)
+                    .map(|url| url.as_str().to_owned())
+                    .map_err(|error| {
+                        anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_URL is invalid: {error}")
+                    })
+            })
+            .transpose()?;
         let account_authority_public_key_multibase =
             env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE");
         if let Some(key) = &account_authority_public_key_multibase {
@@ -1247,10 +1272,35 @@ impl AppConfig {
             account_authority_trust_domain,
             internal_channel_integrity,
         ) {
-            (Some(_), Some(credential), Some(account_authority_trust_domain), Some(integrity)) => {
+            (
+                Some(authority_url),
+                Some(credential),
+                Some(account_authority_trust_domain),
+                Some(integrity),
+            ) => {
+                if let Some(introspection_url) = session_grant_introspection_url.as_deref() {
+                    validate_internal_authority_endpoint_binding(
+                        authority_url,
+                        introspection_url,
+                        "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                        INTERNAL_SESSION_GRANT_INTROSPECTION_PATH,
+                    )?;
+                }
+                if let Some(logout_url) = auth_session_logout_url.as_deref() {
+                    validate_internal_authority_endpoint_binding(
+                        authority_url,
+                        logout_url,
+                        "SOLAND_AUTH_SESSION_LOGOUT_URL",
+                        INTERNAL_AUTH_SESSION_LOGOUT_PATH,
+                    )?;
+                }
                 Some(InternalAuthorityChannelConfig {
                     credential: credential.to_owned(),
                     account_authority_trust_domain,
+                    controller_gate_url: internal_authority_operation_url(
+                        authority_url,
+                        INTERNAL_CONTROLLER_GATE_PATH,
+                    )?,
                     integrity,
                 })
             }
@@ -1748,21 +1798,75 @@ impl AppConfig {
     }
 }
 
-fn validate_auth_session_logout_url(value: &str) -> anyhow::Result<()> {
+const INTERNAL_SESSION_GRANT_INTROSPECTION_PATH: &str =
+    "/_arkret/gate/account/session-grants/introspect";
+const INTERNAL_AUTH_SESSION_LOGOUT_PATH: &str = "/_arkret/gate/account/auth-sessions/logout";
+const INTERNAL_CONTROLLER_GATE_PATH: &str = "/_arkret/gate/account/controller-gate-attestations";
+
+fn parse_internal_authority_operation_url(
+    value: &str,
+    env_name: &str,
+    expected_path: &str,
+) -> anyhow::Result<url::Url> {
     let parsed = url::Url::parse(value)
-        .map_err(|error| anyhow::anyhow!("SOLAND_AUTH_SESSION_LOGOUT_URL is invalid: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("{env_name} is invalid: {error}"))?;
     if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.query().is_some()
         || parsed.fragment().is_some()
-        || parsed.path() != "/_arkret/gate/account/auth-sessions/logout"
+        || parsed.path() != expected_path
     {
         anyhow::bail!(
-            "SOLAND_AUTH_SESSION_LOGOUT_URL must be an http(s) URL without credentials, query, or fragment and with path /_arkret/gate/account/auth-sessions/logout"
+            "{env_name} must be an http(s) URL with a host, without credentials, query, or fragment, and with exact path {expected_path}"
         );
     }
+    Ok(parsed)
+}
+
+fn validate_auth_session_logout_url(value: &str) -> anyhow::Result<()> {
+    parse_internal_authority_operation_url(
+        value,
+        "SOLAND_AUTH_SESSION_LOGOUT_URL",
+        INTERNAL_AUTH_SESSION_LOGOUT_PATH,
+    )
+    .map(|_| ())
+}
+
+fn validate_internal_authority_endpoint_binding(
+    authority_url: &str,
+    operation_url: &str,
+    env_name: &str,
+    expected_path: &str,
+) -> anyhow::Result<()> {
+    let authority = url::Url::parse(authority_url).map_err(|error| {
+        anyhow::anyhow!("canonical SOLAND_ACCOUNT_AUTHORITY_URL is invalid: {error}")
+    })?;
+    let operation = parse_internal_authority_operation_url(operation_url, env_name, expected_path)?;
+    anyhow::ensure!(
+        operation.origin() == authority.origin(),
+        "{env_name} must have the same scheme, host, and effective port as SOLAND_ACCOUNT_AUTHORITY_URL"
+    );
     Ok(())
+}
+
+fn internal_authority_operation_url(
+    authority_url: &str,
+    expected_path: &str,
+) -> anyhow::Result<String> {
+    let authority = url::Url::parse(authority_url).map_err(|error| {
+        anyhow::anyhow!("canonical SOLAND_ACCOUNT_AUTHORITY_URL is invalid: {error}")
+    })?;
+    let target = authority.join(expected_path).map_err(|error| {
+        anyhow::anyhow!("Account Authority operation URL cannot be derived: {error}")
+    })?;
+    parse_internal_authority_operation_url(
+        target.as_str(),
+        "derived Account Authority operation URL",
+        expected_path,
+    )?;
+    Ok(target.to_string())
 }
 
 fn load_object_storage_config(
@@ -2268,6 +2372,118 @@ mod tests {
             );
         }
         values
+    }
+
+    fn registered_internal_channel_values() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (
+                "SOLAND_TRUST_DOMAIN".to_owned(),
+                "ak:trust_domain:station.example".to_owned(),
+            ),
+            ("SOLAND_DEVELOPMENT_MODE".to_owned(), "true".to_owned()),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_URL".to_owned(),
+                "https://auth.example".to_owned(),
+            ),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN".to_owned(),
+                "ak:trust_domain:auth.example".to_owned(),
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER".to_owned(),
+                "test-internal-channel-secret".to_owned(),
+            ),
+            (
+                "SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE".to_owned(),
+                "mtls_direct_process".to_owned(),
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL".to_owned(),
+                "https://auth.example:443/_arkret/gate/account/session-grants/introspect"
+                    .to_owned(),
+            ),
+            (
+                "SOLAND_AUTH_SESSION_LOGOUT_URL".to_owned(),
+                "https://auth.example/_arkret/gate/account/auth-sessions/logout".to_owned(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn registered_internal_channel_binds_every_bearer_target_to_authority_origin() {
+        let config = AppConfig::from_values(
+            &registered_internal_channel_values(),
+            StartupOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            config.account_authority_url.as_deref(),
+            Some("https://auth.example/")
+        );
+        assert_eq!(
+            config
+                .internal_authority_channel
+                .as_ref()
+                .unwrap()
+                .controller_gate_url(),
+            "https://auth.example/_arkret/gate/account/controller-gate-attestations"
+        );
+    }
+
+    #[test]
+    fn registered_internal_channel_rejects_cross_origin_or_inexact_bearer_targets() {
+        for (env_name, invalid) in [
+            ("SOLAND_ACCOUNT_AUTHORITY_URL", "https://user@auth.example/"),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_URL",
+                "https://auth.example/?routing=unsafe",
+            ),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_URL",
+                "https://auth.example/#routing",
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                "https://other.example/_arkret/gate/account/session-grants/introspect",
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                "http://auth.example/_arkret/gate/account/session-grants/introspect",
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                "https://auth.example:444/_arkret/gate/account/session-grants/introspect",
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                "https://user@auth.example/_arkret/gate/account/session-grants/introspect",
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                "https://auth.example/_arkret/gate/account/session-grants/introspect?copy=1",
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                "https://auth.example/_arkret/gate/account/session-grants/introspect#copy",
+            ),
+            (
+                "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
+                "https://auth.example/_arkret/gate/account/session-grants/introspect/",
+            ),
+            (
+                "SOLAND_AUTH_SESSION_LOGOUT_URL",
+                "https://other.example/_arkret/gate/account/auth-sessions/logout",
+            ),
+        ] {
+            let mut values = registered_internal_channel_values();
+            values.insert(env_name.to_owned(), invalid.to_owned());
+            let error = AppConfig::from_values(&values, StartupOverrides::default())
+                .expect_err("a bearer target outside the registered endpoint must fail startup");
+            assert!(
+                error.to_string().contains(env_name),
+                "{env_name}={invalid}: {error}"
+            );
+        }
     }
 
     #[test]

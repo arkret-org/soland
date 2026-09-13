@@ -590,6 +590,13 @@ pre-upgrade backup if you need to roll back.
   `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared
   server-to-server secret configured there (coauth's
   `stations[].session_grant_introspection_bearer` for this Station).
+- Before registering the channel, Soland canonicalizes
+  `SOLAND_ACCOUNT_AUTHORITY_URL` and requires every configured bearer target to
+  use its exact origin (same scheme, host and effective port). Introspection and
+  Auth-side logout must use their exact operation paths; credentials, query and
+  fragment are forbidden. The controller-gate target is derived as its exact
+  path on that same origin. Any conflict aborts startup before the bearer can be
+  sent.
 - Setting that bearer together with the Authority URL/trust domain and a valid
   `SOLAND_INTERNAL_CHANNEL_INTEGRITY_MODE` registers the
   `service-http-binding.md` §2.2.3 deployment-internal authenticated channel

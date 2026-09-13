@@ -510,6 +510,8 @@ pub(crate) struct RegisteredInternalChannel {
     pub(crate) source_trust_domain: arkret_identifiers::TrustDomainId,
     /// This Station's configured destination trust domain.
     pub(crate) destination_trust_domain: arkret_identifiers::TrustDomainId,
+    /// Exact controller-gate endpoint derived and origin-bound at startup.
+    controller_gate_url: String,
     /// Validated transport-integrity declaration. Without it the bearer is not
     /// allowed to replace the ordinary RFC 9421 service signature.
     integrity: crate::config::InternalChannelIntegrityConfig,
@@ -524,6 +526,10 @@ impl RegisteredInternalChannel {
     /// deployment bearer.
     pub(in crate::routing) fn credential(&self) -> &str {
         &self.credential
+    }
+
+    pub(in crate::routing) fn controller_gate_url(&self) -> &str {
+        &self.controller_gate_url
     }
 }
 
@@ -568,6 +574,7 @@ fn registered_internal_authority_channel_from_config(
         destination_service_id: service_id,
         source_trust_domain: channel_config.account_authority_trust_domain().clone(),
         destination_trust_domain: config.trust_domain.clone(),
+        controller_gate_url: channel_config.controller_gate_url().to_owned(),
         integrity: channel_config.integrity().clone(),
         credential: channel_config.credential().to_owned(),
     })
@@ -2935,6 +2942,7 @@ mod internal_channel_tests {
             source_trust_domain: arkret_identifiers::TrustDomainId::new(AUTHORITY_TRUST_DOMAIN)
                 .unwrap(),
             destination_trust_domain: arkret_identifiers::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
+            controller_gate_url: configured_channel.controller_gate_url().to_owned(),
             integrity: configured_channel.integrity().clone(),
             credential: CREDENTIAL.to_owned(),
         }

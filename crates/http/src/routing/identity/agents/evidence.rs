@@ -982,16 +982,10 @@ async fn preflight_controller_gate(
         return Ok(gate.clone());
     }
     *cached_gate = None;
-    let account_authority_url = state
-        .config()
-        .account_authority_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    let target = format!(
-        "{}/_arkret/gate/account/controller-gate-attestations",
-        account_authority_url.trim_end_matches('/')
-    );
+    let channel = crate::routing::events::peer::registered_internal_authority_channel(state)
+        .await
+        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+    let target = channel.controller_gate_url();
     let request_id = RequestId::new(format!("ak:request:{}", uuid::Uuid::now_v7()))
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let request = ControllerAccountGateAttestationIssueRequestBody {
@@ -1002,7 +996,7 @@ async fn preflight_controller_gate(
     let body = arkret_canonical::canonical_json_bytes(&request)
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
-        &target,
+        target,
         "controller account gate",
         state.config().development_mode,
         Duration::from_secs(10),
@@ -1028,9 +1022,6 @@ async fn preflight_controller_gate(
     // The *response* attestation is unaffected: it keeps its own signature, its
     // DID assertion authorization and its TTL, and is verified below, because it
     // leaves this relationship and enters the external Agent evidence chain.
-    let channel = crate::routing::events::peer::registered_internal_authority_channel(state)
-        .await
-        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
