@@ -58,11 +58,9 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
-use soland_http::util::bearer_token;
 use soland_services::identity::{
     AgentPairingState as AgentPrincipalRecord, SessionIdentityState as SessionRecord,
 };
-use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now};
 use crate::ids;
@@ -91,14 +89,83 @@ use pairing::*;
 use participation::*;
 use sidecar::*;
 
-fn agent_projection_service_authorized(state: &AppState, req: &Request) -> bool {
-    let Some(expected) = state.config().session_grant_introspection_bearer.as_deref() else {
-        return false;
-    };
-    let Some(presented) = bearer_token(req) else {
-        return false;
-    };
-    expected.len() == presented.len() && bool::from(expected.as_bytes().ct_eq(presented.as_bytes()))
+const GET_AGENT_SERVICE_OPERATION: &str = "ak.self.agent.resource.get.v1";
+const PAIR_AGENT_KEY_SERVICE_OPERATION: &str = "ak.gate.account.command.pair_agent_key.v1";
+
+fn agent_service_signature_present(req: &Request) -> bool {
+    req.headers().contains_key("signature-input") || req.headers().contains_key("signature")
+}
+
+fn required_agent_service_header<'a>(req: &'a Request, name: &str) -> Result<&'a str, AppError> {
+    req.headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::unauthenticated("Agent service authentication failed"))
+}
+
+fn validate_agent_service_claims(
+    local_service_id: &str,
+    local_service_did: &str,
+    account_authority_trust_domain: &str,
+    local_trust_domain: &str,
+    expected_operation: &str,
+    source_service_id: &str,
+    destination_service_id: &str,
+    source_trust_domain: &str,
+    destination_trust_domain: &str,
+    operation: &str,
+    key_id: &str,
+) -> Result<(), AppError> {
+    let expected_key_id = format!("{local_service_did}#account-authority");
+    if source_service_id != local_service_id
+        || destination_service_id != local_service_id
+        || source_trust_domain != account_authority_trust_domain
+        || destination_trust_domain != local_trust_domain
+        || operation != expected_operation
+        || key_id != expected_key_id
+    {
+        return Err(AppError::unauthenticated(
+            "Agent service authentication failed",
+        ));
+    }
+    Ok(())
+}
+
+async fn agent_projection_service_authorized(
+    state: &AppState,
+    req: &mut Request,
+    expected_operation: &str,
+    has_body: bool,
+) -> Result<bool, AppError> {
+    // No signature headers means the ordinary user-session path. A partial or
+    // invalid signature attempt never falls back to that path.
+    if !agent_service_signature_present(req) {
+        return Ok(false);
+    }
+    let channel = state
+        .config()
+        .internal_authority_channel
+        .as_ref()
+        .ok_or_else(|| AppError::unauthenticated("Agent service authentication failed"))?;
+    let signature_input = soland_http::http_signature::parse_signature_input_header(req)
+        .map_err(|_| AppError::unauthenticated("Agent service authentication failed"))?;
+    validate_agent_service_claims(
+        state.service_id(),
+        state.service_did().as_str(),
+        channel.account_authority_trust_domain().as_str(),
+        state.config().trust_domain.as_str(),
+        expected_operation,
+        required_agent_service_header(req, "source-service-id")?,
+        required_agent_service_header(req, "destination-service-id")?,
+        required_agent_service_header(req, "source-trust-domain")?,
+        required_agent_service_header(req, "destination-trust-domain")?,
+        required_agent_service_header(req, "arkret-operation")?,
+        &signature_input.key_id,
+    )?;
+    crate::routing::federation::verify_inbound_peer_http_signature(state, req, has_body).await?;
+    Ok(true)
 }
 
 /// Mounted under `/_arkret/self`.

@@ -981,6 +981,9 @@ pub(super) async fn agent_key_pair(
     req: &mut Request,
 ) -> JsonResult<AgentKeyPairOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let service_authorized =
+        agent_projection_service_authorized(state, req, PAIR_AGENT_KEY_SERVICE_OPERATION, true)
+            .await?;
     let body = body.into_inner();
     body.authorize_event
         .event
@@ -999,7 +1002,6 @@ pub(super) async fn agent_key_pair(
         )
         .with_wire_code("duplicate_conflict"));
     }
-    let service_authorized = agent_projection_service_authorized(state, req);
     let session = if service_authorized {
         let controller_principal_id =
             body.authorize_event

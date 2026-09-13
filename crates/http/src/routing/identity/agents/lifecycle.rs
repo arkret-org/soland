@@ -961,7 +961,8 @@ pub(super) async fn get_agent(
     req: &mut Request,
 ) -> JsonResult<AgentView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_authorized = agent_projection_service_authorized(state, req);
+    let service_authorized =
+        agent_projection_service_authorized(state, req, GET_AGENT_SERVICE_OPERATION, false).await?;
     let session = if service_authorized {
         None
     } else {

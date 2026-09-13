@@ -266,6 +266,12 @@ impl InternalAuthorityChannelConfig {
     pub fn controller_gate_url(&self) -> &str {
         &self.controller_gate_url
     }
+
+    /// Account Authority trust domain bound by deployment configuration.
+    #[must_use]
+    pub fn account_authority_trust_domain(&self) -> &TrustDomainId {
+        &self.account_authority_trust_domain
+    }
 }
 
 impl std::fmt::Debug for InternalAuthorityChannelConfig {

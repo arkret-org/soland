@@ -603,6 +603,13 @@ pre-upgrade backup if you need to roll back.
   service signature.
   Every plaintext proxy on this internal link is a trusted member of the same
   deployment TCB; Soland does not model or inspect the proxy chain.
+- Account Authority calls to `GET /_arkret/self/agents/{id}` and
+  `POST /_arkret/gate/account/agent-key-pair` are outside that four-operation
+  bearer channel. They require an RFC 9421 signature whose source and
+  destination service ids both equal this Station, whose trust-domain headers
+  match the explicitly configured Authority and Station domains, and whose
+  `keyid` is exactly this Station DID's delegated `#account-authority`
+  assertion method. The shared bearer does not authorize these routes.
 - `SOLAND_AUTH_SESSION_LOGOUT_URL` independently points at coauth's exact
   `/_arkret/gate/account/auth-sessions/logout` S2S operation; it is never
   inferred from the introspection URL.

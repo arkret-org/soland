@@ -5,6 +5,108 @@ const AGENT_DID: &str = "did:web:agent.example";
 const CONTROLLER_CORE: &str = "ak:did_core:web:controller.example";
 const SERVICE_CORE: &str = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
 
+#[test]
+fn deployment_bearer_does_not_select_agent_service_auth() {
+    let mut request = Request::new();
+    request.headers_mut().insert(
+        "authorization",
+        "Bearer shared-internal-channel-secret".parse().unwrap(),
+    );
+    assert!(!agent_service_signature_present(&request));
+
+    request
+        .headers_mut()
+        .insert("signature-input", "sig1=()".parse().unwrap());
+    assert!(agent_service_signature_present(&request));
+}
+
+#[test]
+fn account_authority_agent_service_claims_are_exactly_bound() {
+    let validate = |source_service_id: &str,
+                    destination_service_id: &str,
+                    source_trust_domain: &str,
+                    destination_trust_domain: &str,
+                    operation: &str,
+                    key_id: &str| {
+        validate_agent_service_claims(
+            "ak:did_core:web:station.example",
+            "did:web:station.example",
+            "ak:trust_domain:authority.example",
+            "ak:trust_domain:station.example",
+            GET_AGENT_SERVICE_OPERATION,
+            source_service_id,
+            destination_service_id,
+            source_trust_domain,
+            destination_trust_domain,
+            operation,
+            key_id,
+        )
+    };
+    assert!(
+        validate(
+            "ak:did_core:web:station.example",
+            "ak:did_core:web:station.example",
+            "ak:trust_domain:authority.example",
+            "ak:trust_domain:station.example",
+            GET_AGENT_SERVICE_OPERATION,
+            "did:web:station.example#account-authority",
+        )
+        .is_ok()
+    );
+    for rejected in [
+        validate(
+            "ak:did_core:web:other.example",
+            "ak:did_core:web:station.example",
+            "ak:trust_domain:authority.example",
+            "ak:trust_domain:station.example",
+            GET_AGENT_SERVICE_OPERATION,
+            "did:web:station.example#account-authority",
+        ),
+        validate(
+            "ak:did_core:web:station.example",
+            "ak:did_core:web:other.example",
+            "ak:trust_domain:authority.example",
+            "ak:trust_domain:station.example",
+            GET_AGENT_SERVICE_OPERATION,
+            "did:web:station.example#account-authority",
+        ),
+        validate(
+            "ak:did_core:web:station.example",
+            "ak:did_core:web:station.example",
+            "ak:trust_domain:other.example",
+            "ak:trust_domain:station.example",
+            GET_AGENT_SERVICE_OPERATION,
+            "did:web:station.example#account-authority",
+        ),
+        validate(
+            "ak:did_core:web:station.example",
+            "ak:did_core:web:station.example",
+            "ak:trust_domain:authority.example",
+            "ak:trust_domain:other.example",
+            GET_AGENT_SERVICE_OPERATION,
+            "did:web:station.example#account-authority",
+        ),
+        validate(
+            "ak:did_core:web:station.example",
+            "ak:did_core:web:station.example",
+            "ak:trust_domain:authority.example",
+            "ak:trust_domain:station.example",
+            PAIR_AGENT_KEY_SERVICE_OPERATION,
+            "did:web:station.example#account-authority",
+        ),
+        validate(
+            "ak:did_core:web:station.example",
+            "ak:did_core:web:station.example",
+            "ak:trust_domain:authority.example",
+            "ak:trust_domain:station.example",
+            GET_AGENT_SERVICE_OPERATION,
+            "did:web:station.example#service-key",
+        ),
+    ] {
+        assert!(rejected.is_err());
+    }
+}
+
 fn web_did(core_id: &str) -> String {
     core_id
         .strip_prefix("ak:did_core:web:")
