@@ -60,38 +60,28 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
         actor_id: &str,
         device_id: &str,
     ) -> crate::ServiceResult<crate::delivery::DeviceDeliveryPurgeResult> {
-        let to_device_messages_dropped = match self
-            .0
-            .device_messages()
-            .purge(actor_id, device_id)
-            .await
-        {
-            Ok(count) => count,
-            Err(error) => {
-                tracing::error!(%error, actor_id, device_id, "failed to purge to-device messages");
-                0
-            }
-        };
-        let push_registrations_removed = match self
+        let to_device_messages_dropped =
+            self.0.device_messages().purge(actor_id, device_id).await?;
+        let push_registrations_removed = self
             .0
             .push_devices()
             .purge_principal_device(actor_id, device_id)
-            .await
-        {
-            Ok(count) => count,
-            Err(error) => {
-                tracing::error!(%error, actor_id, device_id, "failed to unregister push devices");
-                0
-            }
-        };
+            .await?;
         Ok(crate::delivery::DeviceDeliveryPurgeResult {
             to_device_messages_dropped,
             push_registrations_removed,
         })
     }
 
-    async fn register_push_device(&self, registration: Value) -> crate::ServiceResult<()> {
-        self.0.push_devices().register(registration).await?;
+    async fn register_push_device(
+        &self,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
+        registration: Value,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .push_devices()
+            .register(authorization, registration)
+            .await?;
         Ok(())
     }
 

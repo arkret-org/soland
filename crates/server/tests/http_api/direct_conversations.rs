@@ -41,6 +41,24 @@ fn fixture_protocol_signature(
     }
 }
 
+fn fixture_contact_producer_signer(
+    account_id: &arkret_wire::AccountId,
+) -> arkret_models_collaboration::contact_operations::ContactProducerSigner {
+    arkret_models_collaboration::contact_operations::ContactProducerSigner::direct(
+        arkret_wire::DidUrl::new(format!(
+            "did:web:{}#device",
+            account_id
+                .principal_id
+                .as_str()
+                .strip_prefix("ak:did_core:web:")
+                .expect("fixture web principal")
+        ))
+        .unwrap(),
+        arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode([7_u8; 32])).unwrap(),
+    )
+    .unwrap()
+}
+
 fn normal_contact_evidence(
     requester_id: arkret_wire::AccountId,
     target: arkret_wire::AccountId,
@@ -59,6 +77,8 @@ fn normal_contact_evidence(
     let target_peer = ContactPeer::Human {
         account_id: target.clone(),
     };
+    let requester_producer = fixture_contact_producer_signer(&requester_id);
+    let target_producer = fixture_contact_producer_signer(&target);
     let mut request_receipt = RequestAcceptanceReceipt {
         core: RequestAcceptanceReceiptCore {
             holder: requester_peer,
@@ -67,6 +87,7 @@ fn normal_contact_evidence(
             slot_predecessor: None,
             previous_terminal_contact_round_id: None,
             request_event_ref: request_event_ref.clone(),
+            producer_signer: requester_producer,
             source_checkpoint: fixture_hash('2'),
             accepted_at: now,
             issuer_id: requester_id.station_id.clone(),
@@ -117,6 +138,7 @@ fn normal_contact_evidence(
             contact_round_id: contact_round_id.clone(),
             request_receipt,
             response_event_ref: response_event_ref.clone(),
+            producer_signer: target_producer,
             outgoing_slot_absence_digest: fixture_hash('5'),
             accepted_at: now,
             issuer_id: target.station_id.clone(),

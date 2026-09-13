@@ -264,30 +264,11 @@ async fn run_device_revocation_material_cleanup(
     intent: &soland_storage::DeviceRevocationCleanupIntent,
 ) -> Result<(), String> {
     let completed_at = chrono::Utc::now();
-    let sessions_revoked = state
-        .sessions()
-        .revoke_actor_device_sessions(
-            intent.selector.principal_id.as_str(),
-            &intent.selector.device_id,
-            completed_at,
-        )
+    let completed = state
+        .persistence()
+        .complete_device_revocation_material_cleanup(&intent.proposal_digest, completed_at)
         .await
-        .map_err(|error| format!("session cleanup failed: {error}"))?;
-    let keypackages_retired = crate::routing::mls::retire_device_keypackages(
-        state,
-        intent.selector.principal_id.as_str(),
-        &intent.selector.device_id,
-    )
-    .await
-    .map_err(|error| format!("KeyPackage cleanup failed: {error}"))?;
-    let delivery = state
-        .deliveries()
-        .purge_device_delivery(
-            intent.selector.principal_id.as_str(),
-            &intent.selector.device_id,
-        )
-        .await
-        .map_err(|error| format!("to-device/push cleanup failed: {error}"))?;
+        .map_err(|error| format!("atomic material cleanup failed: {error}"))?;
 
     crate::routing::append_audit_log(
         state,
@@ -300,19 +281,11 @@ async fn run_device_revocation_material_cleanup(
             "device_id": intent.selector.device_id,
             "target_device_authorize_event_id": intent.selector.target_device_authorize_event_id,
             "target_device_generation_ref": intent.selector.target_device_generation_ref,
-            "sessions_revoked": sessions_revoked,
-            "keypackages_retired": keypackages_retired,
-            "to_device_messages_dropped": delivery.to_device_messages_dropped,
-            "push_registrations_removed": delivery.push_registrations_removed,
+            "material_cleanup_applied": completed,
         }),
         "completed",
     )
     .await;
-    state
-        .persistence()
-        .complete_device_revocation_material_cleanup(&intent.proposal_digest, completed_at)
-        .await
-        .map_err(|error| format!("durable material cleanup acknowledgement failed: {error}"))?;
     Ok(())
 }
 

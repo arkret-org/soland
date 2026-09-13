@@ -719,8 +719,7 @@ pub(crate) async fn dev_token(state: AppState) -> String {
         device_id,
         &SigningKey::from_bytes(&[21_u8; 32]),
     )
-    .await
-    .unwrap();
+    .await;
     token
 }
 
@@ -761,8 +760,7 @@ pub(crate) async fn verified_dev_token_for_device(
         device_id,
         &SigningKey::from_bytes(&[21_u8; 32]),
     )
-    .await
-    .expect("empty fixture Seal control root");
+    .await;
     token
 }
 
@@ -909,7 +907,8 @@ pub(crate) async fn seed_test_realm(
         &[],
         arkret_canonical::DigestSuite::Sha256,
     )
-    .await;
+    .await
+    .expect("fixture empty control Event set root");
     let bootstrap_seal = arkret_wire::Seal::sign_with_signer(
         arkret_wire::UnsignedSeal {
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
@@ -1396,7 +1395,7 @@ pub(crate) fn signed_message_event_envelope(
         "01904100-0000-7000-8000-a11ce0000001",
         realm_id,
         actor_seq,
-        None,
+        Vec::new(),
         payload,
     )
 }
@@ -2285,7 +2284,7 @@ pub(crate) async fn seed_signal_basis_seal(
     subject: &str,
 ) -> arkret_wire::SealId {
     seed_realm_genesis_event(state, realm_id, subject).await;
-    let (seal, ops) = signal_basis_with_joined_members(state, realm_id, subject);
+    let (seal, ops) = signal_basis_with_joined_members(state, realm_id, subject).await;
     install_signal_basis(state, &seal, &ops).await;
     seed_signal_mls_basis(
         state,
@@ -2304,7 +2303,7 @@ pub(crate) async fn seed_shared_signal_basis_seal(
     subject: &str,
 ) -> arkret_wire::SealId {
     seed_realm_genesis_event(authority, realm_id, subject).await;
-    let (seal, ops) = signal_basis_with_joined_members(authority, realm_id, subject);
+    let (seal, ops) = signal_basis_with_joined_members(authority, realm_id, subject).await;
     install_signal_basis(authority, &seal, &ops).await;
     for replica in replicas {
         install_signal_basis(replica, &seal, &ops).await;
@@ -2324,7 +2323,7 @@ type SignalBasisOp = (
     arkret_state::state_model::ordered_log::IssuedOp,
 );
 
-fn signal_basis_with_joined_members(
+async fn signal_basis_with_joined_members(
     state: &AppState,
     realm_id: &str,
     subject: &str,

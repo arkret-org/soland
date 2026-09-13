@@ -246,22 +246,14 @@ async fn send_device_messages(
                 })
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
-            let target_agent_endpoint = if !device_is_active_verified(target_record.as_ref()) {
-                active_agent_keypackage_endpoint(state, &prepared.recipient, &prepared.device_id)
-                    .await?
-            } else {
-                false
-            };
-            let target_active = device_is_active(target_record.as_ref()) || target_agent_endpoint;
-            let target_verified =
-                device_is_active_verified(target_record.as_ref()) || target_agent_endpoint;
+            let target_verified = device_is_active_verified(target_record.as_ref());
             if secret_message && !target_verified {
                 return Err(AppError::capability_denied(
                     "secret to-device messages require authorized sender and recipient devices",
                 )
                 .with_wire_code("device_unauthorized"));
             }
-            let deliverable = target_active;
+            let deliverable = target_verified;
             if deliverable {
                 let created_at = now();
                 let mut content = serde_json::to_value(&prepared.target)
@@ -277,6 +269,10 @@ async fn send_device_messages(
                     sender: session.actor.clone(),
                     recipient: prepared.recipient.clone(),
                     device_id: prepared.device_id.clone(),
+                    recipient_device_authorization: recipient_authorization(
+                        state,
+                        target_record.as_ref().expect("verified target exists"),
+                    )?,
                     position: state.next_to_device_position(),
                     content,
                     created_at,
@@ -493,11 +489,18 @@ pub(crate) async fn fanout_actor_private_update(
         .unwrap_or_default();
     let mut delivered = 0;
     for device in devices {
-        if device.revoked_at.is_some()
+        if !device_is_active_verified(Some(&device))
             || origin_device_id.is_some_and(|origin| device.device_id == origin)
         {
             continue;
         }
+        let recipient_device_authorization = match recipient_authorization(state, &device) {
+            Ok(source) => source,
+            Err(error) => {
+                tracing::error!(%error, "actor-private target lacks its original device authorization");
+                continue;
+            }
+        };
         let position = state.next_to_device_position();
         let envelope = DeviceMessageEnvelope {
             device_message_id: arkret_identifiers::DeviceMessageId::new(crate::ids::generate(
@@ -536,6 +539,7 @@ pub(crate) async fn fanout_actor_private_update(
                     sender: actor.to_owned(),
                     recipient: actor.to_owned(),
                     device_id: device.device_id,
+                    recipient_device_authorization,
                     position,
                     content: envelope.clone(),
                     created_at,
@@ -740,58 +744,32 @@ pub(crate) fn device_message_envelopes_after(
         .collect()
 }
 
-fn device_is_active(record: Option<&DeviceIdentity>) -> bool {
-    record.is_some_and(|record| record.revoked_at.is_none())
-}
-
 fn device_is_active_verified(record: Option<&DeviceIdentity>) -> bool {
     record.is_some_and(|record| {
         record.revoked_at.is_none() && record.verification_state == "verified"
     })
 }
 
-async fn active_agent_keypackage_endpoint(
+fn recipient_authorization(
     state: &AppState,
-    principal_id: &str,
-    device_id: &str,
-) -> Result<bool, AppError> {
-    let now_unix = now().timestamp();
-    let rows = state
-        .mls_key_packages()
-        .key_packages()
-        .await
-        .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
-    let principal = arkret_identifiers::DidCoreId::new(principal_id.to_owned())
-        .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?;
-    for row in &rows {
-        let lifecycle = row.lifecycle().map_err(|error| {
-            AppError::internal(format!(
-                "invalid persisted MLS KeyPackage lifecycle for `{}`: {error}",
-                row.id
-            ))
-        })?;
-        let Some(authorize_event_id) = row.agent_key_authorize_event_id.as_deref() else {
-            continue;
-        };
-        if row.actor_id == principal_id
-            && row.device_id.as_deref() == Some(device_id)
-            && matches!(
-                lifecycle.claim_state,
-                soland_services::events::PersistedKeyPackageClaimState::Available
-                    | soland_services::events::PersistedKeyPackageClaimState::Claimed { .. }
-            )
-            && row.lifetime_not_after > now_unix
-            && crate::routing::mls::current_agent_key_authorization_matches(
-                state,
-                &principal,
-                authorize_event_id,
-            )
-            .await
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    record: &DeviceIdentity,
+) -> Result<soland_storage::DeviceRevocationGateSelector, AppError> {
+    let (event, generation) =
+        super::device_generation::verified_device_authorization_binding(record)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                AppError::capability_denied("recipient device authorization is unavailable")
+            })?;
+    Ok(soland_storage::DeviceRevocationGateSelector {
+        principal_id: record
+            .actor_id
+            .parse()
+            .map_err(|error| AppError::internal(format!("recipient account: {error}")))?,
+        station_id: state.service_core_id().clone(),
+        device_id: record.device_id.clone(),
+        target_device_authorize_event_id: event.to_string(),
+        target_device_generation_ref: generation,
+    })
 }
 
 fn note_unknown_device(

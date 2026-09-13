@@ -462,6 +462,7 @@ dependencies = [
  "arkret-identifiers",
  "arkret-models-crypto",
  "arkret-models-identity",
+ "arkret-models-integration",
  "arkret-schema",
  "arkret-wire",
  "chrono",
@@ -6110,6 +6111,8 @@ dependencies = [
  "diesel_migrations",
  "ed25519-dalek 3.0.0",
  "parking_lot",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
  "serde",
  "serde_json",
  "soland-domain",
@@ -6124,11 +6127,13 @@ dependencies = [
 name = "soland-test-support"
 version = "0.3.0"
 dependencies = [
+ "arkret",
  "arkret-bootstrap",
  "arkret-canonical",
  "arkret-event-draft",
  "arkret-identifiers",
  "arkret-identity",
+ "arkret-lattice-registry",
  "arkret-models-collaboration",
  "arkret-models-identity",
  "arkret-policy",

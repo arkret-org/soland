@@ -445,6 +445,8 @@ pub struct DeviceMessageRecord {
     pub sender: String,
     pub recipient: String,
     pub device_id: String,
+    /// Private immutable authorization of the intended recipient instance.
+    pub recipient_device_authorization: DeviceRevocationGateSelector,
     pub position: i64,
     pub content: Value,
     pub created_at: chrono::DateTime<chrono::Utc>,

@@ -3858,55 +3858,6 @@ async fn revoke_keypackages(
     json_ok(KeyPackagesRevokeOutcome { revoked, failures })
 }
 
-pub(crate) async fn retire_device_keypackages(
-    state: &AppState,
-    actor_id: &str,
-    device_id: &str,
-) -> Result<usize, AppError> {
-    let rows = state
-        .mls_key_packages()
-        .key_packages()
-        .await
-        .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
-    let retired_at = now().timestamp();
-    let mut retired = 0usize;
-    for row in rows.into_iter().filter(|row| {
-        row.actor_id == actor_id
-            && row.device_id.as_deref() == Some(device_id)
-            && row.lifecycle().is_ok_and(|lifecycle| {
-                matches!(
-                    lifecycle.claim_state,
-                    PersistedKeyPackageClaimState::Available
-                )
-            })
-    }) {
-        if state
-            .mls_key_packages()
-            .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
-                id: &row.id,
-                target: soland_services::events::ClaimMlsKeyPackageTarget::Retire,
-                intended_realm_id: None,
-                device_authorize_event_id: None,
-                agent_key_authorize_event_id: None,
-                device_revocation_gate: None,
-                claimed_at: retired_at,
-                claim_expires_at_unix_ms: None,
-            })
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("mls keypackage retirement failed: {error}"))
-            })?
-            .is_some()
-        {
-            state
-                .projections()
-                .mark_key_packages_retired(std::slice::from_ref(&row.id));
-            retired += 1;
-        }
-    }
-    Ok(retired)
-}
-
 // ── commits ───────────────────────────────────────────────────────────
 //
 // Deleted as part of the spec-canonical refactor. MLS commits are now

@@ -1,5 +1,7 @@
 //! The remote path consumes an SDK-authenticated original Event, never a
 //! caller-supplied boolean or an unauthenticated device selector.
+use soland_storage::EventCommitRequest;
+
 use super::*;
 
 pub(crate) fn validate_event_producer_binding(

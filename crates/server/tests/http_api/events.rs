@@ -591,6 +591,11 @@ async fn seed_agent_grant_session_with_suite(
         expected_accepted_basis: arkret_wire::SealBasis { leaves: vec![] },
         outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active,
         authorized_key_event: key_authorization_event,
+        signer_resolution_evidence_ref: authorize_event
+            .proofs
+            .first()
+            .and_then(|proof| proof.signer_resolution_evidence_ref.clone()),
+        current_signer_evidence: None,
         authorized_at: now,
     };
     assert!(

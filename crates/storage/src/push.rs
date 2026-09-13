@@ -2,7 +2,11 @@ use super::{PersistenceResult, Value, async_trait};
 /// Authenticated push registration storage.
 #[async_trait]
 pub trait PushDeviceStore: Send + Sync {
-    async fn register(&self, device: Value) -> PersistenceResult<()>;
+    async fn register(
+        &self,
+        authorization: &crate::DeviceRevocationGateSelector,
+        device: Value,
+    ) -> PersistenceResult<()>;
     async fn unregister(
         &self,
         actor: &arkret_wire::AccountId,

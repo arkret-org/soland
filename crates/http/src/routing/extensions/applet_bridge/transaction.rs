@@ -1,5 +1,5 @@
 use arkret_identifiers::EventId;
-use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
+use arkret_models_collaboration::http_bodies::AppletEventTransactionRequestBody;
 use arkret_models_integration::{
     AppletEventRejection, AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionStatus,
     namespace_pattern_matches,
@@ -17,7 +17,7 @@ use crate::state::AppState;
 
 pub(super) async fn process_verified_transaction(
     state: &AppState,
-    transaction: AppletTransactionRequestBody,
+    transaction: AppletEventTransactionRequestBody,
     idempotency_key: &str,
     verified: VerifiedAppletServiceSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
@@ -253,7 +253,7 @@ const QUEUE_FULL_RETRY_AFTER_MS: u64 = 1_000;
 
 /// Reject every event in the delivery for inbound backpressure, without
 /// consuming the idempotency identity.
-fn queue_full_outcome(transaction: &AppletTransactionRequestBody) -> AppletTransactionOutcome {
+fn queue_full_outcome(transaction: &AppletEventTransactionRequestBody) -> AppletTransactionOutcome {
     AppletTransactionOutcome {
         status: AppletTransactionStatus::Rejected,
         rejections: transaction
@@ -321,7 +321,7 @@ mod backpressure_tests {
             "ak:event:AfJRB2whShXS-ghpXQhgN5u_MsXwor5nNWDxQ6YCfvcf",
             "ak:event:AfJRB2whShXS-ghpXQhgN5u_MsXwor5nNWDxQ6YCfvcg",
         ];
-        let transaction = AppletTransactionRequestBody {
+        let transaction = AppletEventTransactionRequestBody {
             applet_id: arkret_identifiers::AppletId::new(
                 "ak:applet:01904100-0000-7000-8000-aaaaaaaaaaaa",
             )

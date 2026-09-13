@@ -11,11 +11,13 @@ description = "Development-only fixtures and helpers for Soland integration test
 publish = false
 
 [dependencies]
+arkret.workspace = true
 arkret-bootstrap.workspace = true
 arkret-canonical.workspace = true
 arkret-event-draft = { workspace = true, features = ["test-support"] }
 arkret-identifiers.workspace = true
 arkret-identity.workspace = true
+arkret-lattice-registry.workspace = true
 arkret-models-collaboration.workspace = true
 arkret-models-identity.workspace = true
 arkret-policy.workspace = true

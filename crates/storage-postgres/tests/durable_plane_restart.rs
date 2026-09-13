@@ -193,9 +193,8 @@ async fn postgres_device_keys_survive_restart() {
     let _db_guard = DB_GUARD.lock().await;
     let pool = fresh_pool().await;
     let store = PgDeviceKeyStore { pool: pool.clone() };
-    let namespace = format!("postgres-device-keys-{}", uuid::Uuid::now_v7());
     let authorization = device_authority(&pool).await;
-    assert_device_key_store_contract(&store, &namespace, &authorization).await;
+    assert_device_key_store_contract(&store, &authorization).await;
     drop(pool);
 
     let restarted_pool = fresh_pool().await;

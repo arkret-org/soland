@@ -1,3 +1,5 @@
+#[path = "../../test-support/src/device_authorization_history.rs"]
+mod device_history_fixture;
 mod support;
 
 use soland_storage::contract_tests::{
@@ -58,10 +60,59 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
         diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,'ak:did_core:web:storage-contract.example') ON CONFLICT(singleton) DO NOTHING")
             .execute(&mut *conn).await.unwrap();
     }
+    use diesel::sql_types::{Binary, Bool, Jsonb, Nullable, Text};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::DeviceInventoryStore;
+    #[derive(diesel::QueryableByName)]
+    struct Station {
+        #[diesel(sql_type=Text)]
+        station_id: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let station =
+        diesel::sql_query("SELECT station_id FROM device_inventory_station WHERE singleton")
+            .get_result::<Station>(&mut *conn)
+            .await
+            .unwrap();
+    let mut source =
+        device_history_fixture::DeviceHistoryFixture::new(station.station_id.parse().unwrap());
+    let second = source.event(arkret_wire::EventKind::DeviceAuthorize,
+        serde_json::to_value(device_history_fixture::possession(&source.account, 2,
+            arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice)).unwrap());
+    source.append(vec![second]);
+    let history = source.verify().unwrap();
+    // Already-confirmed storage fixture; all source signatures are real.
+    for seal in &source.seals {
+        diesel::sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_ref,is_genesis) VALUES($1,'sha256',$2,$3,$4,$5,$6,$7)")
+            .bind::<Text,_>(seal.id.as_str()).bind::<Text,_>(seal.realm_id.as_str())
+            .bind::<Binary,_>(seal.canonical_bytes_for_id().unwrap()).bind::<Binary,_>(arkret_wire::seal::seal_canonical_bytes(seal).unwrap())
+            .bind::<Jsonb,_>(serde_json::to_value(seal).unwrap()).bind::<Nullable<Text>,_>(seal.predecessor_ref.as_ref().map(|id|id.as_str()))
+            .bind::<Bool,_>(seal.predecessor_ref.is_none()).execute(&mut *conn).await.unwrap();
+    }
+    drop(conn);
     let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+    inventory.install_confirmed_history(&history).await.unwrap();
+    let selectors = history
+        .authorizations()
+        .iter()
+        .map(|a| soland_storage::DeviceRevocationGateSelector {
+            principal_id: source.account.principal_id.clone(),
+            station_id: source.account.station_id.clone(),
+            device_id: a.device_id().to_string(),
+            target_device_authorize_event_id: a.authorization_event_id().to_string(),
+            target_device_generation_ref: a.authorized_generation_ref(),
+        })
+        .collect::<Vec<_>>();
     let messages = PgDeviceMessageStore { pool };
     let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
-    assert_device_message_snapshot_guard_contract(&inventory, &messages, &namespace).await;
+    assert_device_message_snapshot_guard_contract(
+        &inventory,
+        &messages,
+        &namespace,
+        &selectors[0],
+        &selectors[1],
+    )
+    .await;
 }
 
 static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
@@ -2781,6 +2832,7 @@ async fn postgres_adapter_settles_sealed_device_revocations() {
             unit_of_work: &unit_of_work,
             revocations: &revocations,
             control_events: stores.control_event_store.as_ref(),
+            seals: stores.seal_store.as_ref(),
         },
         &namespace,
     )

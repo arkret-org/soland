@@ -1685,6 +1685,7 @@ CREATE TABLE public.device_messages (
     sender text NOT NULL,
     recipient text NOT NULL,
     device_id text NOT NULL,
+    recipient_device_authorization jsonb NOT NULL,
     position bigint NOT NULL,
     content jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
@@ -1717,6 +1718,7 @@ CREATE TABLE public.device_message_ack_tokens (
     ack_token text PRIMARY KEY,
     recipient text NOT NULL,
     device_id text NOT NULL,
+    recipient_device_authorization jsonb NOT NULL,
     queue_position bigint NOT NULL,
     issued_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone NOT NULL,
@@ -2861,6 +2863,7 @@ CREATE TABLE public.push_devices (
     id text PRIMARY KEY,
     actor_id text,
     device_id text NOT NULL,
+    device_authorization jsonb NOT NULL,
     push_gateway text NOT NULL,
     push_key text NOT NULL,
     platform text,

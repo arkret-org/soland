@@ -24,7 +24,7 @@ use super::{
     AppletIdentityCommit, AppletRecordCommit, AppletStore, CanonicalEventRecord, ConsentCellRecord,
     ConsentCellStore, ConsentGrantDot, ConsentProjectionCommit, ContactProjectionCommit,
     ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
-    ControlProposalAuthorityAckStore, DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore,
+    ControlProposalAuthorityAckStore, DeviceInventoryStore, DeviceKeyStore,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
     DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
     DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
@@ -335,26 +335,20 @@ pub async fn assert_device_message_snapshot_guard_contract(
     inventory: &dyn DeviceInventoryStore,
     messages: &dyn DeviceMessageStore,
     namespace: &str,
+    authorization_a: &DeviceRevocationGateSelector,
+    authorization_b: &DeviceRevocationGateSelector,
 ) {
     let now = database_timestamp_now();
-    let actor = format!("ak:did_core:webvh:z{namespace}");
-    let device_a = format!("ak:device:{}", uuid::Uuid::now_v7());
-    let device_b = format!("ak:device:{}", uuid::Uuid::now_v7());
-    for device_id in [&device_a, &device_b] {
-        inventory
-            .seed_test_record(&DeviceInventoryRecord {
-                actor: actor.clone(),
-                device_id: device_id.clone(),
-                display_name: None,
-                verification_state: "verified".to_owned(),
-                payload: serde_json::json!({"device_id": device_id}),
-                created_at: now,
-                updated_at: now,
-                revoked_at: None,
-            })
-            .await
-            .expect("seed verified target device");
-    }
+    let actor = authorization_a.principal_id.to_string();
+    assert_eq!(authorization_a.principal_id, authorization_b.principal_id);
+    let device_a = authorization_a.device_id.clone();
+    let device_b = authorization_b.device_id.clone();
+    let devices = inventory.list_for_actor(&actor).await.unwrap();
+    let snapshot = devices
+        .iter()
+        .filter(|d| d.verification_state == "verified" && d.revoked_at.is_none())
+        .map(|d| (d.device_id.clone(), d.updated_at))
+        .collect::<Vec<_>>();
     let request_key = format!("repair:{namespace}");
     let request_digest = format!("sha256:{namespace}");
     let expires_at = now + Duration::days(1);
@@ -364,16 +358,9 @@ pub async fn assert_device_message_snapshot_guard_contract(
         idempotency_expires_at: expires_at,
         target_snapshot_guard: Some(DeviceMessageTargetSnapshotGuard {
             recipient: actor.clone(),
-            devices: vec![(device_a.clone(), now), (device_b.clone(), now)],
+            devices: snapshot,
         }),
-        device_revocation_gate: Some(DeviceRevocationGateSelector {
-            principal_id: arkret_identifiers::DidCoreId::new(actor.clone()).unwrap(),
-            station_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example")
-                .unwrap(),
-            device_id: "sender-device".to_owned(),
-            target_device_authorize_event_id: format!("ak:event:A{}", "a".repeat(43)),
-            target_device_generation_ref: 1,
-        }),
+        device_revocation_gate: Some(authorization_a.clone()),
         items: [&device_a, &device_b]
             .into_iter()
             .enumerate()
@@ -386,6 +373,11 @@ pub async fn assert_device_message_snapshot_guard_contract(
                     sender: format!("{actor}:sender"),
                     recipient: actor.clone(),
                     device_id: device_id.clone(),
+                    recipient_device_authorization: if index == 0 {
+                        authorization_a.clone()
+                    } else {
+                        authorization_b.clone()
+                    },
                     position: index as i64 + 1,
                     content: serde_json::json!({"kind":"ak.agent.runtime.command","content":{}}),
                     created_at: now,
@@ -399,6 +391,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
         .await
         .expect("read target device")
         .expect("target exists");
+    let original_updated_at = revoked.updated_at;
     revoked.revoked_at = Some(now + Duration::seconds(1));
     revoked.updated_at = now + Duration::seconds(1);
     inventory
@@ -422,7 +415,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
     );
 
     revoked.revoked_at = None;
-    revoked.updated_at = now;
+    revoked.updated_at = original_updated_at;
     inventory
         .seed_test_record(&revoked)
         .await
@@ -4953,7 +4946,6 @@ pub async fn assert_message_store_contract(store: &dyn MessageStore, namespace: 
 
 pub async fn assert_device_key_store_contract(
     store: &dyn DeviceKeyStore,
-    namespace: &str,
     authorization: &DeviceRevocationGateSelector,
 ) {
     let actor = authorization.principal_id.to_string();
@@ -5168,6 +5160,7 @@ pub struct DeviceRevocationSealSettlementStores<'a> {
     pub unit_of_work: &'a dyn EventCommitUnitOfWork,
     pub revocations: &'a dyn DeviceRevocationStore,
     pub control_events: &'a dyn arkret_state::state::ControlEventStore,
+    pub seals: &'a dyn arkret_state::state::SealStore,
 }
 
 fn contract_device_revoke_fixture(
@@ -5369,6 +5362,14 @@ pub async fn assert_device_revocation_seal_settlement_contract(
 
     let digest = Hash::new(proposal_digest.clone()).expect("typed proposal digest");
     let seal = contract_covering_seal(&realm_id, digest.clone(), database_timestamp_now());
+    assert!(
+        stores
+            .seals
+            .put_if_head(&seal, None, arkret_canonical::DigestSuite::Sha256)
+            .await
+            .expect("persist the covering Seal"),
+        "fixture Realm must not already have a confirmed head"
+    );
     stores
         .control_events
         .record_seal_command_results(&seal)

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cbs_basis;
+pub mod device_authorization_history;
 pub mod fault_injection;
 pub mod sealed_grant;
 pub mod signed_event;
@@ -632,7 +633,7 @@ pub async fn sign_test_seal(
         ),
         Some(predecessor_ref) => {
             let predecessor = state
-                .projections()
+                .test_projections()
                 .seal_by_id(predecessor_ref)
                 .await
                 .expect("fixture predecessor lookup")

@@ -355,7 +355,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_signatures::SignEventOptions::for_native_unit().with_created_at(created_at),
     )
     .unwrap();
-    let mut bootstrap = bootstrap.into_event();
+    let bootstrap = bootstrap.into_event();
     let mut authorize = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm {

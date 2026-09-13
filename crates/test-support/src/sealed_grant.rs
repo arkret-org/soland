@@ -125,7 +125,7 @@ pub async fn seal_accepted_capability_grant(
         panic!("fixture grant requires one predecessor Seal");
     };
     let predecessor = state
-        .projections()
+        .test_projections()
         .seal_by_id(predecessor_ref)
         .await
         .expect("fixture predecessor Seal lookup")

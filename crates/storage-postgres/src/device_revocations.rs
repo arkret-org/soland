@@ -1,5 +1,8 @@
+mod artifact;
+pub(crate) use artifact::lock_artifact_devices_in_transaction;
 mod historical;
 pub(crate) use historical::{enforce_event_gate, validate_event_producer_binding};
+mod material_cleanup;
 
 use super::*;
 
@@ -782,19 +785,7 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
         proposal_digest: &str,
         completed_at: chrono::DateTime<Utc>,
     ) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "UPDATE device_revocation_cleanup_intents SET material_cleanup_completed_at=$2 \
-             WHERE proposal_digest=$1 AND material_cleanup_completed_at IS NULL",
-        )
-        .bind::<Text, _>(proposal_digest)
-        .bind::<Timestamptz, _>(completed_at)
-        .execute(&mut conn)
-        .await
-        .map(|affected| affected > 0)
-        .map_err(PersistenceError::database)
+        material_cleanup::cleanup(&self.pool, proposal_digest, completed_at).await
     }
 
     async fn complete_mls_obligation(

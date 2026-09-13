@@ -15,7 +15,7 @@ pub(super) async fn retained_historical_producer_dependencies(
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
     while let Some(reference) = pending.pop() {
-        if !seen.insert(reference.to_string()) {
+        if !seen.insert(reference.clone()) {
             continue;
         }
         if seen.len() > 64 {

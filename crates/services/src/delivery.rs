@@ -79,7 +79,11 @@ pub trait DeviceDeliveryPort: Send + Sync {
         actor_id: &str,
         device_id: &str,
     ) -> ServiceResult<DeviceDeliveryPurgeResult>;
-    async fn register_push_device(&self, registration: Value) -> ServiceResult<()>;
+    async fn register_push_device(
+        &self,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
+        registration: Value,
+    ) -> ServiceResult<()>;
     async fn unregister_push_device(
         &self,
         actor_id: &arkret_wire::AccountId,
@@ -308,9 +312,13 @@ impl DeliveryService {
             .await
     }
 
-    pub async fn register_push_device(&self, registration: Value) -> ServiceResult<()> {
+    pub async fn register_push_device(
+        &self,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
+        registration: Value,
+    ) -> ServiceResult<()> {
         self.device_delivery
-            .register_push_device(registration)
+            .register_push_device(authorization, registration)
             .await
     }
     pub async fn unregister_push_device(
@@ -644,7 +652,11 @@ mod tests {
             Ok(DeviceDeliveryPurgeResult::default())
         }
 
-        async fn register_push_device(&self, _registration: Value) -> ServiceResult<()> {
+        async fn register_push_device(
+            &self,
+            _authorization: &soland_storage::DeviceRevocationGateSelector,
+            _registration: Value,
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn unregister_push_device(
