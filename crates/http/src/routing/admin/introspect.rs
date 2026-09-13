@@ -68,10 +68,14 @@ fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
 }
 
 fn read_cached(token_hash: &str) -> Option<SessionGrantIntrospection> {
+    read_cached_at(token_hash, Instant::now())
+}
+
+fn read_cached_at(token_hash: &str, now: Instant) -> Option<SessionGrantIntrospection> {
     let mut cache = cache().lock();
-    prune_cache_locked(&mut cache, Instant::now());
+    prune_cache_locked(&mut cache, now);
     let entry = cache.get(token_hash)?;
-    if entry.inserted_at.elapsed() > INTROSPECTION_CACHE_TTL {
+    if now.duration_since(entry.inserted_at) >= INTROSPECTION_CACHE_TTL {
         return None;
     }
     Some(entry.grant.clone())
@@ -325,4 +329,47 @@ pub(crate) async fn require_admin_scope(
         ));
     }
     Ok(grant)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_admin_grant() -> SessionGrantIntrospection {
+        SessionGrantIntrospection {
+            active: true,
+            status: SessionGrantAdminIntrospectionStatus::Active,
+            principal_id: DidCoreId::new("ak:did_core:web:admin.example").unwrap(),
+            admin_scopes: vec!["arkret.admin.read".to_owned()],
+            expires_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00.000Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            ),
+            device_id: Some("ak:device:0196419b-0000-7000-8000-000000000001".to_owned()),
+            audit_context: serde_json::json!({"source": "controlled-admin-ttl-test"}),
+        }
+    }
+
+    #[test]
+    fn admin_introspection_cache_expires_at_exact_30_second_boundary() {
+        let key = "controlled-admin-ttl";
+        let inserted_at = Instant::now();
+        cache().lock().insert(
+            key.to_owned(),
+            CacheEntry {
+                grant: test_admin_grant(),
+                inserted_at,
+            },
+        );
+        assert!(
+            read_cached_at(
+                key,
+                inserted_at + INTROSPECTION_CACHE_TTL - Duration::from_nanos(1)
+            )
+            .is_some()
+        );
+        assert!(read_cached_at(key, inserted_at + INTROSPECTION_CACHE_TTL).is_none());
+        cache().lock().remove(key);
+    }
 }

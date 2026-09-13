@@ -173,10 +173,14 @@ fn introspection_cache_key_for(state: &AppState, grant_jwt: &str) -> String {
 }
 
 fn cache_lookup(key: &str) -> Option<SessionGrantIntrospectGrant> {
+    cache_lookup_at(key, Instant::now())
+}
+
+fn cache_lookup_at(key: &str, now: Instant) -> Option<SessionGrantIntrospectGrant> {
     let mut cache = INTROSPECTION_CACHE.lock();
-    prune_introspection_cache_locked(&mut cache, Instant::now());
+    prune_introspection_cache_locked(&mut cache, now);
     match cache.get(key) {
-        Some(entry) if entry.inserted_at.elapsed() < INTROSPECTION_CACHE_TTL => {
+        Some(entry) if now.duration_since(entry.inserted_at) < INTROSPECTION_CACHE_TTL => {
             Some(entry.grant.clone())
         }
         Some(_) => {
@@ -914,9 +918,79 @@ pub(crate) fn grant_session_binding(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use arkret_identifiers::SessionGrantId;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
+
+    async fn read_mock_http_request(stream: &mut tokio::net::TcpStream) {
+        let mut request = Vec::new();
+        let mut content_length = None;
+        let mut header_end = None;
+        loop {
+            let mut chunk = [0_u8; 2048];
+            let read = stream.read(&mut chunk).await.expect("read mock request");
+            assert!(read > 0, "mock request ended before its body");
+            request.extend_from_slice(&chunk[..read]);
+            if header_end.is_none()
+                && let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n")
+            {
+                let end = index + 4;
+                let headers = String::from_utf8_lossy(&request[..end]);
+                content_length = Some(
+                    headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0),
+                );
+                header_end = Some(end);
+            }
+            if header_end
+                .zip(content_length)
+                .is_some_and(|(end, length)| request.len() >= end + length)
+            {
+                return;
+            }
+        }
+    }
+
+    async fn spawn_counting_introspection_mock(
+        outcome: SessionGrantIntrospectOutcome,
+    ) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind introspection mock");
+        let address = listener.local_addr().expect("mock address");
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let body = Arc::new(serde_json::to_vec(&outcome).expect("serialize mock outcome"));
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                read_mock_http_request(&mut stream).await;
+                observed.fetch_add(1, Ordering::SeqCst);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write headers");
+                stream.write_all(&body).await.expect("write body");
+            }
+        });
+        (format!("http://{address}/introspect"), count, task)
+    }
 
     #[test]
     fn jti_replay_is_rejected_within_window() {
@@ -1020,6 +1094,83 @@ mod tests {
         assert!(memoized_grant(&fresh, "token-a", false).is_some());
         assert!(memoized_grant(&fresh, "token-b", true).is_none());
         assert!(memoized_grant(&Request::default(), "token-a", false).is_none());
+    }
+
+    #[tokio::test]
+    async fn request_memo_cache_and_force_fresh_count_real_http_round_trips() {
+        let grant = test_introspection_grant();
+        let outcome = SessionGrantIntrospectOutcome {
+            active: true,
+            status: SessionGrantIntrospectStatus::Active,
+            proof_required: false,
+            one_time_use_consumed: false,
+            grant: Some(grant),
+        };
+        let (url, count, mock) = spawn_counting_introspection_mock(outcome).await;
+        let mut config = crate::config::AppConfig::test_default();
+        config.development_mode = true;
+        config.seed_demo_data = false;
+        config.session_grant_introspection_url = Some(url.clone());
+        config.account_authority_url = Some(url.trim_end_matches("/introspect").to_owned());
+        config.register_test_internal_authority_channel("counting-mock-secret");
+        let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+        let token = format!("counting-grant-{}", url.rsplit(':').next().unwrap());
+        let key = introspection_cache_key_for(&state, &token);
+        INTROSPECTION_CACHE.lock().remove(&key);
+        invalidate_introspection_http_client(&url, true);
+
+        let mut request = Request::default();
+        take_request_authoritative_grant(&state, &mut request, &token, false)
+            .await
+            .expect("first consumer introspects");
+        request_authoritative_grant(&state, &request, &token, false)
+            .await
+            .expect("second consumer reuses request memo");
+        assert_eq!(count.load(Ordering::SeqCst), 1, "two consumers use one RTT");
+
+        let mut warm_request = Request::default();
+        take_request_authoritative_grant(&state, &mut warm_request, &token, false)
+            .await
+            .expect("warm cache serves low-sensitivity request");
+        assert_eq!(count.load(Ordering::SeqCst), 1, "warm cache adds no RTT");
+
+        take_request_authoritative_grant(&state, &mut warm_request, &token, true)
+            .await
+            .expect("force-fresh consumer bypasses cached memo");
+        request_authoritative_grant(&state, &warm_request, &token, true)
+            .await
+            .expect("later force-fresh consumer reuses fresh memo");
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            2,
+            "force-fresh adds exactly one RTT"
+        );
+
+        INTROSPECTION_CACHE.lock().remove(&key);
+        invalidate_introspection_http_client(&url, true);
+        mock.abort();
+    }
+
+    #[test]
+    fn self_introspection_cache_expires_at_exact_120_second_boundary() {
+        let key = "controlled-self-ttl";
+        let inserted_at = Instant::now();
+        INTROSPECTION_CACHE.lock().insert(
+            key.to_owned(),
+            CachedIntrospection {
+                grant: test_introspection_grant(),
+                inserted_at,
+            },
+        );
+        assert!(
+            cache_lookup_at(
+                key,
+                inserted_at + INTROSPECTION_CACHE_TTL - StdDuration::from_nanos(1)
+            )
+            .is_some()
+        );
+        assert!(cache_lookup_at(key, inserted_at + INTROSPECTION_CACHE_TTL).is_none());
+        INTROSPECTION_CACHE.lock().remove(key);
     }
 
     #[test]
