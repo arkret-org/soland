@@ -59,7 +59,7 @@ async fn device_authority(pool: &PgPool) -> soland_storage::DeviceRevocationGate
     }
     drop(conn);
     soland_storage_postgres::PgDeviceInventoryStore { pool: pool.clone() }
-        .install_confirmed_history(&history)
+        .seed_test_confirmed_history_without_control_roots(&history)
         .await
         .unwrap();
     let authorization = history.authorizations().first().unwrap();

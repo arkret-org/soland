@@ -613,7 +613,7 @@ async fn committed_unit_publishes_nonfirst_data_member_and_rejected_unit_publish
         assert!(
             stores
                 .event_seal_committer
-                .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &covered, &[])
+                .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &covered, &[], None)
                 .await
                 .unwrap()
         );

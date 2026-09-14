@@ -905,6 +905,18 @@ pub(in crate::routing) fn refresh_authz_index_from_capability_grant_id(
     }
 }
 
+fn confirmed_event_cell_writes(
+    state: &AppState,
+    event: &arkret_wire::Event,
+) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, String> {
+    state
+        .projections()
+        .project_accepted_cell_writes_with_digest_suite(
+            event,
+            event.event_id.digest_suite_code().digest_suite(),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1244,6 +1256,75 @@ mod tests {
             .typed_payload::<arkret_wire::event_spec::MemberState>()
             .expect("closed typed membership payload");
     }
+
+    #[test]
+    fn confirmed_capability_grant_reprojection_uses_authority_resolver() {
+        let projection = soland_domain::reducer::ProjectionState::new();
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned(),
+        )
+        .unwrap();
+        let issuer = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let subject = arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+        let event = crate::test_event::raw_event(
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            issuer.clone(),
+            1,
+            arkret_wire::Hlc::new("01980b44cc00-0000-aabbcce3").unwrap(),
+            json!({
+                "grant": {
+                    "schema": "ak.schema.capability.v1",
+                    "realm_id": realm_id,
+                    "issuer_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        issuer,
+                        crate::test_event::station_id(),
+                    )),
+                    "subject": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        subject,
+                        crate::test_event::station_id(),
+                    )),
+                    "actions": ["ak.realm.admin"],
+                    "resources": [{
+                        "kind": "realm",
+                        "realm_id": realm_id,
+                        "match_scope": "realm_wide"
+                    }],
+                    "issued_at": "2026-08-25T00:00:00.000Z",
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": realm_id,
+                        "cell_ref": arkret_wire::REALM_AUTHORITY_ROOT_CELL,
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+
+        assert!(
+            arkret_schema::project_registered_cell_writes(
+                &event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .is_err(),
+            "schema-only replay must remain fail-closed without authority context",
+        );
+        let writes = projection
+            .project_registered_cell_writes(&event, arkret_canonical::DigestSuite::Sha256)
+            .expect("confirmed replay supplies ProjectionState authority context");
+        assert_eq!(writes.len(), 1);
+        let arkret_wire::cbs::ProjectedOp::Direct(op) = &writes[0].op else {
+            panic!("capability grant must project a direct OR-Set add");
+        };
+        assert_eq!(
+            op.value.as_ref().unwrap()["grant"]["authority_depth"],
+            json!(1),
+        );
+    }
 }
 
 /// Publish only exact locally confirmed command units, preserving member order.
@@ -1376,11 +1457,14 @@ pub(crate) async fn publish_confirmed_seal_commands(
                 let operation =
                     super::super::event_log::projection_operation_from_envelope(&envelope)
                         .ok_or_else(|| "committed command has no domain projection".to_owned())?;
-                let writes = arkret_schema::project_registered_cell_writes(
-                    event,
-                    event.event_id.digest_suite_code().digest_suite(),
-                )
-                .map_err(|error| error.to_string())?;
+                // Rebuild the exact writes accepted at admission through the
+                // ProjectionState projector. Capability grants derive their
+                // immutable authority depth/root audit from the confirmed
+                // parent-grant state; the schema-only projector has no
+                // authority resolver and therefore rejects every grant here.
+                // The accepted-event lane also preserves the frozen invite
+                // lifecycle binding already checked before durable admission.
+                let writes = confirmed_event_cell_writes(state, event)?;
                 Ok((operation, writes))
             })
             .collect::<Result<Vec<_>, String>>()?;

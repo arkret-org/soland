@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cbs_basis;
+pub mod confirmed_device_history_commit;
 pub mod device_authorization_history;
 pub mod fault_injection;
 pub mod sealed_grant;
@@ -470,6 +471,7 @@ impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool> {
         self.0
             .commit_if_head(
@@ -479,6 +481,7 @@ impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
                 new_ops,
                 covered,
                 governance_dependencies,
+                confirmed_device_control,
             )
             .await
     }
@@ -532,6 +535,14 @@ pub trait AppStateTestExt {
         ack: &arkret_wire::ControlProposalAck,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()>;
+    /// Register one exact fixture Control command unit with the immutable Ack
+    /// carried by each member. Multi-member units must use this method rather
+    /// than registering each member as an unrelated singleton.
+    async fn test_put_pending_control_unit_with_acks(
+        &self,
+        members: &[(arkret_wire::Event, arkret_wire::ControlProposalAck)],
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()>;
 
     /// Append sealed cell effects the way `apply_seal` commits them.
     ///
@@ -554,6 +565,7 @@ pub trait AppStateTestExt {
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
         ops: &[(CellRef, IssuedOp)],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<()>;
 }
 
@@ -778,6 +790,32 @@ impl AppStateTestExt for AppState {
             .map(|_| ())
     }
 
+    async fn test_put_pending_control_unit_with_acks(
+        &self,
+        members: &[(arkret_wire::Event, arkret_wire::ControlProposalAck)],
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()> {
+        let store = state_test_registry()
+            .lock()
+            .get(&app_state_key(self))
+            .and_then(|resources| resources.control_event_store.clone())
+            .expect("test Control Event store is unavailable for this AppState");
+        let members = members
+            .iter()
+            .map(
+                |(event, ack)| arkret_state::state::ControlUnitIngressMember {
+                    event: event.clone(),
+                    digest_suite,
+                    ingress: ControlProposalIngress::AckRequired(ack.clone()),
+                },
+            )
+            .collect::<Vec<_>>();
+        store
+            .put_pending_unit_with_ingress(&members)
+            .await
+            .map(|_| ())
+    }
+
     async fn test_append_confirmed_effects(
         &self,
         realm_id: &RealmId,
@@ -796,6 +834,7 @@ impl AppStateTestExt for AppState {
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
         ops: &[(CellRef, IssuedOp)],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<()> {
         if !seal.predecessor_ref.is_none() {
             return Err(StoreError::Conflict(
@@ -809,7 +848,15 @@ impl AppStateTestExt for AppState {
             .expect("test atomic Seal committer unavailable");
         let covered = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
         if !committer
-            .commit_if_head(seal, digest_suite, None, ops, &covered, &[])
+            .commit_if_head(
+                seal,
+                digest_suite,
+                None,
+                ops,
+                &covered,
+                &[],
+                confirmed_device_control,
+            )
             .await?
         {
             return Err(StoreError::Conflict(
@@ -1118,7 +1165,13 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool> {
+        if confirmed_device_control.is_some() {
+            return Err(StoreError::Backend(
+                "confirmed device Control projection requires atomic durable storage".to_owned(),
+            ));
+        }
         let _guard = self.lock.lock();
         if let Some(existing) = self.seal_store.get(&seal.id).await? {
             let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)

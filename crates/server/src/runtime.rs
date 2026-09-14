@@ -101,6 +101,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
         )],
         covered: &BTreeSet<arkret_wire::Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> arkret_state::state::StoreResult<bool> {
         self.0
             .commit_if_head(
@@ -110,6 +111,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
                 new_ops,
                 covered,
                 governance_dependencies,
+                confirmed_device_control,
             )
             .await
     }

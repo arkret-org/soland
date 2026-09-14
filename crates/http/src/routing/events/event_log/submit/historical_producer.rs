@@ -87,74 +87,103 @@ pub(in crate::routing::events::event_log) async fn verify_historical_producer(
         .as_ref()
         .ok_or_else(|| "ordinary Event proof omits signer evidence".to_owned())?;
     let root = retained_evidence(state, reference).await?;
-    if let AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
-        history_event_refs,
-        history_seal_refs,
-        ..
-    } = &root
-    {
-        let mut events = Vec::with_capacity(history_event_refs.len());
-        for event_ref in history_event_refs {
-            let record = state
-                .event_queries()
-                .canonical_event(event_ref.as_str())
-                .await
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| {
-                    "dependency_missing: account-device Control history Event is unavailable"
-                        .to_owned()
+    let signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+    let source = match &root {
+        AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
+            pcr_genesis_event_ref,
+            history_event_refs,
+            history_seal_refs,
+            ..
+        } => {
+            let history_suite = pcr_genesis_event_ref
+                .event_digest()
+                .digest_suite()
+                .map_err(|error| {
+                    format!("Control signer PCR genesis digest suite is invalid: {error}")
                 })?;
-            events.push(
-                serde_json::from_value::<arkret_wire::Event>(record.envelope)
-                    .map_err(|error| format!("stored Control history Event is invalid: {error}"))?,
-            );
-        }
-        let mut seals = Vec::with_capacity(history_seal_refs.len());
-        for seal_ref in history_seal_refs {
-            seals.push(
-                state
+            let mut events = Vec::with_capacity(history_event_refs.len());
+            for event_ref in history_event_refs {
+                let event_digest = event_ref.event_digest();
+                let retained = state
+                    .projections()
+                    .control_event_by_digest(&event_digest)
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "dependency_missing: Control signer history Event lookup failed: {error}"
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        format!(
+                            "dependency_missing: Control signer history Event {event_ref} is unavailable"
+                        )
+                    })?;
+                if &retained.event_id != event_ref {
+                    return Err(
+                        "Control signer history Event bytes differ from their exact reference"
+                            .to_owned(),
+                    );
+                }
+                events.push(retained);
+            }
+            let mut seals = Vec::with_capacity(history_seal_refs.len());
+            for seal_ref in history_seal_refs {
+                let retained = state
                     .projections()
                     .seal_by_id(seal_ref)
                     .await
-                    .map_err(|error| error.to_string())?
+                    .map_err(|error| {
+                        format!(
+                            "dependency_missing: Control signer history Seal lookup failed: {error}"
+                        )
+                    })?
                     .ok_or_else(|| {
-                        "dependency_missing: account-device Control history Seal is unavailable"
-                            .to_owned()
-                    })?,
-            );
+                        format!(
+                            "dependency_missing: Control signer history Seal {seal_ref} is unavailable"
+                        )
+                    })?;
+                if &retained.id != seal_ref {
+                    return Err(
+                        "Control signer history Seal bytes differ from their exact reference"
+                            .to_owned(),
+                    );
+                }
+                seals.push(retained);
+            }
+            arkret::historical_producer::AuthenticatedHistoricalProducerSource::authenticate_account_device_control(
+                reference,
+                signer,
+                &root,
+                &seals,
+                &events,
+                history_suite,
+            )
+            .map_err(|error| {
+                format!("historical Control producer source authentication failed: {error}")
+            })?
         }
-        let source = arkret::historical_producer::AuthenticatedHistoricalProducerSource::authenticate_account_device_control(
-            reference,
-            event.executed_by.as_ref().unwrap_or(&event.actor_id),
-            &root,
-            &events,
-            &seals,
-            event.created_at,
-        )
-        .map_err(|error| format!("historical producer source authentication failed: {error}"))?;
-        return source
-            .verify_event(event, digest_suite)
-            .map_err(|error| error.to_string());
-    }
-    let dependencies = match &root {
-        AuthenticatedSignerResolutionEvidence::Principal {
-            attester_signer_evidence_ref,
-            ..
+        _ => {
+            let dependencies = match &root {
+                AuthenticatedSignerResolutionEvidence::Principal {
+                    attester_signer_evidence_ref,
+                    ..
+                }
+                | AuthenticatedSignerResolutionEvidence::AccountDevice {
+                    attester_signer_evidence_ref,
+                    ..
+                } => vec![retained_evidence(state, attester_signer_evidence_ref).await?],
+                _ => Vec::new(),
+            };
+            arkret::historical_producer::AuthenticatedHistoricalProducerSource::authenticate(
+                reference,
+                signer,
+                &root,
+                &dependencies,
+                event.created_at,
+            )
+            .map_err(|error| format!("historical producer source authentication failed: {error}"))?
         }
-        | AuthenticatedSignerResolutionEvidence::AccountDevice {
-            attester_signer_evidence_ref,
-            ..
-        } => vec![retained_evidence(state, attester_signer_evidence_ref).await?],
-        _ => Vec::new(),
     };
-    let source = arkret::historical_producer::AuthenticatedHistoricalProducerSource::authenticate(
-        reference,
-        event.executed_by.as_ref().unwrap_or(&event.actor_id),
-        &root,
-        &dependencies,
-        event.created_at,
-    )
-    .map_err(|error| format!("historical producer source authentication failed: {error}"))?;
     let producer = source
         .verify_event(event, digest_suite)
         .map_err(|error| error.to_string())?;

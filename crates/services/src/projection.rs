@@ -118,6 +118,7 @@ pub trait EventSealCommitPort: Send + Sync {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool>;
 
     async fn effective_state_checkpoint(
@@ -1614,6 +1615,7 @@ impl ProjectionService {
                 &prepared.new_ops,
                 &prepared.covered_event_digests,
                 &[],
+                None,
             )
             .await?;
         if !committed {
@@ -1699,6 +1701,7 @@ impl ProjectionService {
                 &prepared.new_ops,
                 &prepared.covered_event_digests,
                 &[],
+                None,
             )
             .await?;
         if !committed {
@@ -1832,6 +1835,7 @@ impl ProjectionService {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
         self.commit_seal_with_metadata_fence(
@@ -1841,6 +1845,7 @@ impl ProjectionService {
             new_ops,
             covered,
             governance_dependencies,
+            confirmed_device_control,
         )
         .await
     }
@@ -3688,6 +3693,7 @@ mod effective_checkpoint_tests {
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+            _confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
         ) -> StoreResult<bool> {
             panic!("checkpoint lookup test must not commit a Seal")
         }
@@ -3863,6 +3869,7 @@ mod control_governance_health_tests {
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+            _confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
         ) -> StoreResult<bool> {
             panic!("governance health must not commit a Seal")
         }

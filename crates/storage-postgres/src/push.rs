@@ -237,7 +237,7 @@ mod tests {
         PgDeviceInventoryStore {
             pool: store.pool.clone(),
         }
-        .install_confirmed_history(&history)
+        .seed_test_confirmed_history_without_control_roots(&history)
         .await
         .unwrap();
         let mut record: arkret_models_integration::PushRegistrationRecord = serde_json::from_value(serde_json::json!({

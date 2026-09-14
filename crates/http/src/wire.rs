@@ -459,8 +459,12 @@ pub fn describe(
     if let Some(account_authority_url) =
         account_authority_url.filter(|value| !value.trim().is_empty())
     {
-        let issuer = account_authority_url.trim_end_matches('/').to_owned();
-        let openid_configuration = format!("{issuer}/.well-known/openid-configuration");
+        // `AppConfig` stores the Account Authority endpoint as a canonical
+        // service URL, including its trailing slash. OIDC discovery requires
+        // clients to compare the advertised issuer with the provider's
+        // `issuer` value exactly, so preserve that canonical spelling here.
+        let issuer = account_authority_url.to_owned();
+        let openid_configuration = format!("{issuer}.well-known/openid-configuration");
         methods.push(AuthMethod {
             method: AuthMethodKind::Oidc,
             issuer_uri: Some(issuer.clone()),
@@ -866,6 +870,30 @@ mod tests {
             method_history_head: "fixture-history-head".to_owned(),
             version_id: "fixture-v1".to_owned(),
         }
+    }
+
+    #[test]
+    fn service_describe_preserves_canonical_oidc_issuer() {
+        let description = describe(
+            &fixture_service_resolution(),
+            "memory",
+            &crate::config::AppConfig {
+                account_authority_url: Some("https://auth.example/".to_owned()),
+                oidc_client_id: Some("01GFWR28C4KNE04WG3HKXB7C9R".to_owned()),
+                ..crate::config::AppConfig::test_default()
+            },
+        );
+
+        let method = description
+            .auth_metadata
+            .methods
+            .first()
+            .expect("configured Account Authority advertises OIDC");
+        assert_eq!(method.issuer_uri.as_deref(), Some("https://auth.example/"));
+        assert_eq!(
+            method.openid_configuration_url.as_deref(),
+            Some("https://auth.example/.well-known/openid-configuration")
+        );
     }
 
     #[test]

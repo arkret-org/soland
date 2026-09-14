@@ -1,13 +1,14 @@
-mod confirmed_history;
+pub(crate) mod confirmed_history;
 mod queue_authority;
 
 use super::{
-    AsyncConnection, BTreeMap, BTreeSet, BigInt, Bool, DeviceInventoryRecord, DeviceInventoryStore,
-    DeviceKeyStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
-    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
-    DeviceRevocationGateSelector, DeviceRevocationGateStatus, Integer, JsonPayloadRow, Jsonb,
-    MaxSeqRow, Nullable, OneTimeKeyStore, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value,
+    AsyncConnection, AsyncPgConnection, BTreeMap, BTreeSet, BigInt, Bool, DeviceInventoryRecord,
+    DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
+    DeviceMessageBatchInspection, DeviceMessageBatchRecord, DeviceMessageIntentRecord,
+    DeviceMessageRecord, DeviceMessageStore, DeviceRevocationGateSelector,
+    DeviceRevocationGateStatus, Integer, JsonPayloadRow, Jsonb, MaxSeqRow, Nullable,
+    OneTimeKeyStore, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value,
     async_trait, ensure_device_message_id, fresh_device_message_ack_token, pg_conn, sql_query,
     sql_types,
 };
@@ -556,7 +557,7 @@ pub struct PgDeviceInventoryStore {
 }
 #[async_trait]
 impl DeviceInventoryStore for PgDeviceInventoryStore {
-    async fn install_confirmed_history(
+    async fn seed_test_confirmed_history_without_control_roots(
         &self,
         history: &arkret::DeviceAuthorizationHistory,
     ) -> PersistenceResult<()> {

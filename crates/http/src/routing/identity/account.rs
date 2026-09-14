@@ -18,6 +18,7 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountProfileAcceptedBasis, AccountUpdateProfileRequestBody, AccountView,
 };
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_wire::SignerEvidenceRef;
 // `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
@@ -2192,8 +2193,9 @@ async fn account_device_summary(
         .payload
         .get("signer_resolution_evidence_ref")
         .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty())
         .map(|reference| {
-            arkret_wire::SignerEvidenceRef::new(reference.to_owned()).map_err(|error| {
+            SignerEvidenceRef::new(reference.to_owned()).map_err(|error| {
                 AppError::internal(format!(
                     "stored signer_resolution_evidence_ref `{reference}` is invalid: {error}"
                 ))
@@ -2265,11 +2267,105 @@ async fn account_device_summary(
     } else {
         DeviceSummaryStatus::Active
     };
+    let has_successful_confirmation = device
+        .payload
+        .get("confirmed_seal_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
     let verification_state = match device.verification_state.as_str() {
-        "verified" => DeviceSummaryVerificationState::Verified,
+        // The identity-anchor transaction installs a possession-verified
+        // bootstrap gate before the first successful Seal exists. That gate is
+        // sufficient for the bootstrap SessionGrant, but it is not yet the
+        // confirmed portable authoring state exposed by account/viewer.
+        "verified" if has_successful_confirmation => DeviceSummaryVerificationState::Verified,
+        "verified" => DeviceSummaryVerificationState::Unresolved,
         "stale" => DeviceSummaryVerificationState::Stale,
         _ => DeviceSummaryVerificationState::Unresolved,
     };
+    if verification_state == DeviceSummaryVerificationState::Verified {
+        let authorization_event_ref = authorized_event_ref.as_ref().ok_or_else(|| {
+            AppError::internal("verified device has no durable authorization Event reference")
+        })?;
+        let generation_ref = authorized_generation_ref.ok_or_else(|| {
+            AppError::internal("verified device has no durable authorization generation")
+        })?;
+        let evidence_ref = signer_resolution_evidence_ref.as_ref().ok_or_else(|| {
+            AppError::internal("verified device has no durable Control signer evidence reference")
+        })?;
+        let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+            content_digest: evidence_ref.content_digest().map_err(|error| {
+                AppError::internal(format!("stored Control signer evidence ref is invalid: {error}"))
+            })?,
+        };
+        let dependency = state
+            .persistence()
+            .governance_dependency_store()
+            .get_unscoped_signer_evidence(&selector)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "stored Control signer evidence is unavailable: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                AppError::internal("verified device Control signer evidence root is missing")
+            })?;
+        let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            authenticated_signer_resolution_evidence: evidence,
+            ..
+        } = dependency
+        else {
+            return Err(AppError::internal(
+                "Control signer evidence selector resolved to another dependency kind",
+            ));
+        };
+        evidence.validate_attester_binding().map_err(|error| {
+            AppError::internal(format!(
+                "stored Control signer evidence is invalid: {error}"
+            ))
+        })?;
+        if &evidence.evidence_ref().map_err(|error| {
+            AppError::internal(format!(
+                "stored Control signer evidence cannot be hashed: {error}"
+            ))
+        })? != evidence_ref
+        {
+            return Err(AppError::internal(
+                "stored Control signer evidence bytes differ from their reference",
+            ));
+        }
+        let expected_account = arkret_wire::AccountId::new(
+            DidCoreId::new(actor).map_err(|error| {
+                AppError::internal(format!("authenticated principal_id is invalid: {error}"))
+            })?,
+            DidCoreId::new(state.service_id().clone()).map_err(|error| {
+                AppError::internal(format!("service station_id is invalid: {error}"))
+            })?,
+        );
+        let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
+            signer_id,
+            account_id,
+            device_id: evidence_device_id,
+            authorization_event_ref: evidence_authorization_event_ref,
+            authorized_generation_ref: evidence_generation_ref,
+            ..
+        } = evidence.as_ref()
+        else {
+            return Err(AppError::internal(
+                "verified device signer evidence is not account_device_control",
+            ));
+        };
+        if signer_id != &expected_account.principal_id
+            || account_id != &expected_account
+            || evidence_device_id != &device_id
+            || evidence_authorization_event_ref != authorization_event_ref
+            || *evidence_generation_ref != generation_ref
+        {
+            return Err(AppError::internal(
+                "verified device row differs from its Control signer evidence root",
+            ));
+        }
+    }
     let summary = AccountDeviceSummary {
         device_id,
         status,

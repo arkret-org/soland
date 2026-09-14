@@ -235,10 +235,12 @@ async fn seed_agent_grant_session_with_suite(
         authority_address
     ));
     config.register_test_internal_authority_channel(format!("introspection-bearer-{slug}"));
-    let state = soland_test_support::app_state(config);
+    let state = soland_test_support::app_state_with_postgres_governance(config);
 
-    let controller = "did:web:alice.example";
+    let controller = super::agents::controller_fixture_did();
     let controller_token = format!("agent-grant-controller-{slug}");
+    let controller_authority =
+        super::agents::seed_active_controller_device_generation(&state, controller).await;
     super::agents::seed_controller_session(&state, &controller_token, controller).await;
     let controller_account_id =
         arkret_wire::AccountId::new(fixture_actor_core_id(controller), state.service_core_id());
@@ -258,8 +260,6 @@ async fn seed_agent_grant_session_with_suite(
         controller_account_id.station_id
     );
     super::agents::seed_agent_provision_prerequisites(&state, controller).await;
-    let controller_authority =
-        super::agents::seed_active_controller_device_generation(&state, controller).await;
     let (status, body) = super::agents::provision_agent_with_sdk_events_and_pcr_suite(
         &state,
         &controller_token,

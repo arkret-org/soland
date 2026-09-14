@@ -54,12 +54,12 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let state = soland_test_support::app_state_with_postgres_governance(config);
     super::events::spawn_controller_gate_mock(controller_gate, &state);
     let app = app_from_state(state.clone());
-    let controller = "did:web:alice.example";
+    let controller = super::agents::controller_fixture_did();
     let token = "agent-pairing-ceremony-session";
-    super::agents::seed_controller_session(&state, token, controller).await;
-    super::agents::seed_agent_provision_prerequisites(&state, controller).await;
     let controller_authority =
         super::agents::seed_active_controller_device_generation(&state, controller).await;
+    super::agents::seed_controller_session(&state, token, controller).await;
+    super::agents::seed_agent_provision_prerequisites(&state, controller).await;
     let controller_core = fixture_actor_core_id(controller);
     let service_core = arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap();
 

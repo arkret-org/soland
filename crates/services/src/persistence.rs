@@ -714,16 +714,6 @@ impl PersistenceHandle {
         self.persistence.devices().seed_test_record(record).await
     }
 
-    pub async fn install_confirmed_device_history(
-        &self,
-        history: &arkret::DeviceAuthorizationHistory,
-    ) -> PersistenceResult<()> {
-        self.persistence
-            .devices()
-            .install_confirmed_history(history)
-            .await
-    }
-
     pub fn member_identity_store(&self) -> &dyn soland_storage::MemberIdentityStore {
         self.persistence.member_identity()
     }

@@ -6145,6 +6145,8 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "diesel",
+ "diesel-async",
  "ed25519-dalek 3.0.0",
  "futures-util",
  "parking_lot",
@@ -6157,6 +6159,7 @@ dependencies = [
  "soland-services",
  "soland-storage",
  "soland-storage-postgres",
+ "tokio",
 ]
 
 [[package]]

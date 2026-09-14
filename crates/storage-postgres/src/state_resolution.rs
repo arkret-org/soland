@@ -119,6 +119,7 @@ pub trait EventSealCommitStore: Send + Sync {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool>;
 
     /// Return the immutable, receiver-verified effective state frozen at one
@@ -2227,6 +2228,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool> {
         if seal.predecessor_ref.as_ref() != expected_store_head {
             return Err(StoreError::Conflict(
@@ -2251,6 +2253,15 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         .to_owned(),
                 ));
             }
+        }
+        if let Some(projection) = confirmed_device_control
+            && (projection.history().realm_id() != &seal.realm_id
+                || projection.history().confirmed_head() != &seal.id)
+        {
+            return Err(StoreError::Conflict(
+                "schema_violation: confirmed device Control projection does not bind the committed Realm and Seal head"
+                    .to_owned(),
+            ));
         }
         let pool = self.pool.clone();
         let cell_registry = self.cell_registry.clone();
@@ -2290,6 +2301,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .map(|digest| digest.as_str().to_owned())
             .collect::<BTreeSet<_>>();
         let governance_dependencies = governance_dependencies.to_vec();
+        let confirmed_device_control = confirmed_device_control.cloned();
         let new_rows = new_ops
             .iter()
             .enumerate()
@@ -2385,6 +2397,15 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                                 .to_owned(),
                         )
                         .into());
+                    }
+                    if let Some(projection) = &confirmed_device_control {
+                        crate::devices::confirmed_history::install_control_projection_in_transaction(
+                            conn,
+                            projection,
+                            crate::devices::confirmed_history::AtomicProjectionMode::ExactRetry,
+                        )
+                        .await
+                        .map_err(persistence_to_store)?;
                     }
                     for (command_index, result) in command_results.iter().enumerate() {
                         for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
@@ -2657,6 +2678,15 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         .await?;
                     }
                 }
+                if let Some(projection) = &confirmed_device_control {
+                    crate::devices::confirmed_history::install_control_projection_in_transaction(
+                        conn,
+                        projection,
+                        crate::devices::confirmed_history::AtomicProjectionMode::Insert,
+                    )
+                    .await
+                    .map_err(persistence_to_store)?;
+                }
                 account_summary::register_delta_members(conn, &realm_id, &delta).await?;
                 if expected.iter().all(|leaf| predecessor_seal_ids.contains(leaf)) {
                     account_summary::publish(conn, &realm_id, &joined, &causal_winners, causal_ready).await?;
@@ -2741,7 +2771,13 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool> {
+        if confirmed_device_control.is_some() {
+            return Err(StoreError::Backend(
+                "confirmed device Control projection requires atomic durable storage".to_owned(),
+            ));
+        }
         let _guard = self.lock.lock().await;
         if seal.predecessor_ref.as_ref() != expected_store_head {
             return Err(StoreError::Conflict(
@@ -3506,6 +3542,7 @@ mod event_seal_commit_tests {
                     &ops,
                     &covered,
                     &[],
+                    None,
                 )
                 .await
                 .unwrap()
@@ -3529,6 +3566,7 @@ mod event_seal_commit_tests {
                     &ops,
                     &covered,
                     &[],
+                    None,
                 )
                 .await
                 .unwrap(),
@@ -3559,6 +3597,7 @@ mod event_seal_commit_tests {
                     &out_of_order_ops,
                     &out_of_order_covered,
                     &[],
+                    None,
                 )
                 .await
                 .unwrap(),
@@ -3646,6 +3685,7 @@ mod event_seal_commit_tests {
                         &candidate.1,
                         &candidate.2,
                         &[],
+                        None,
                     )
                     .await
                     .unwrap();
@@ -3709,6 +3749,7 @@ mod event_seal_commit_tests {
                     &winner.1,
                     &std::iter::once(winner.1[0].1.op.event_id.event_digest()).collect(),
                     &[],
+                    None,
                 )
                 .await
                 .unwrap()

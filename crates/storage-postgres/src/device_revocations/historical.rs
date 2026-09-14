@@ -55,6 +55,37 @@ pub(crate) async fn enforce_event_gate(
             // Original source/JWS authentication is already opaque above;
             // only revocations actually known here constrain this live ingress.
             status_from_rows(&target_rows(conn, &selector, None).await?).ensure_allowed()?;
+        } else if let Some(control) = producer.account_device_control_authorization() {
+            let authorization = control
+                .history()
+                .authorization(control.authorization_event_id())
+                .ok_or_else(|| {
+                    PersistenceError::Conflict(
+                        "verified Control producer lost its authorization interval".into(),
+                    )
+                })?;
+            let selector = DeviceRevocationGateSelector {
+                principal_id: control.history().account_id().principal_id.clone(),
+                station_id: control.history().account_id().station_id.clone(),
+                device_id: authorization.device_id().to_string(),
+                target_device_authorize_event_id: authorization
+                    .authorization_event_id()
+                    .to_string(),
+                target_device_generation_ref: authorization.authorized_generation_ref(),
+            };
+            ensure_head_locked(
+                conn,
+                selector.principal_id.as_str(),
+                selector.station_id.as_str(),
+                &selector.device_id,
+            )
+            .await?;
+            if !control.authorization_contains(Utc::now()) {
+                return Err(PersistenceError::Conflict(
+                    "failed_precondition: original device authorization window does not allow live ingress".into(),
+                ));
+            }
+            status_from_rows(&target_rows(conn, &selector, None).await?).ensure_allowed()?;
         }
         return Ok(());
     }

@@ -166,6 +166,67 @@ pub(crate) async fn put_governance_dependency_exact_in_transaction(
     Ok(ExactWriteOutcome::Inserted)
 }
 
+pub(crate) async fn put_unscoped_signer_evidence_exact_in_transaction(
+    conn: &mut AsyncPgConnection,
+    item: &GovernanceDependency,
+) -> PersistenceResult<ExactWriteOutcome> {
+    let canonical = governance_signer_evidence_canonical(item)?;
+    let lock_key = format!(
+        "governance-unscoped-signer:{}:{}",
+        canonical.dependency_kind, canonical.selector_value
+    );
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(&lock_key)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    let inserted = sql_query(
+        "INSERT INTO governance_unscoped_signer_evidence \
+            (dependency_kind,object_digest,canonical_bytes,object_json) \
+         VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(canonical.dependency_kind)
+    .bind::<Text, _>(&canonical.selector_value)
+    .bind::<Binary, _>(&canonical.canonical_bytes)
+    .bind::<Jsonb, _>(&canonical.object_json)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if inserted == 1 {
+        return Ok(ExactWriteOutcome::Inserted);
+    }
+    if unscoped_signer_evidence_matches_in_transaction(conn, item).await? {
+        return Ok(ExactWriteOutcome::ExactReplay);
+    }
+    Err(PersistenceError::Conflict(
+        "duplicate_conflict: unscoped signer evidence differs".to_owned(),
+    ))
+}
+
+pub(crate) async fn unscoped_signer_evidence_matches_in_transaction(
+    conn: &mut AsyncPgConnection,
+    item: &GovernanceDependency,
+) -> PersistenceResult<bool> {
+    let canonical = governance_signer_evidence_canonical(item)?;
+    let stored = sql_query(
+        "SELECT dependency_kind,object_digest,canonical_bytes,object_json \
+         FROM governance_unscoped_signer_evidence \
+         WHERE dependency_kind=$1 AND object_digest=$2",
+    )
+    .bind::<Text, _>(canonical.dependency_kind)
+    .bind::<Text, _>(&canonical.selector_value)
+    .get_result::<DependencyObjectRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    Ok(stored.is_some_and(|stored| {
+        stored.dependency_kind == canonical.dependency_kind
+            && stored.object_digest == canonical.selector_value
+            && stored.canonical_bytes == canonical.canonical_bytes
+            && stored.object_json == canonical.object_json
+    }))
+}
+
 pub(crate) async fn governance_dependencies_match_in_transaction(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
@@ -364,61 +425,6 @@ pub struct PgGovernanceDependencyStore {
     pub pool: PgPool,
 }
 
-pub(crate) async fn put_unscoped_signer_evidence_exact_in_transaction(
-    conn: &mut AsyncPgConnection,
-    item: GovernanceDependency,
-) -> PersistenceResult<ExactWriteOutcome> {
-    let canonical = governance_signer_evidence_canonical(&item)?;
-    let lock_key = format!(
-        "governance-unscoped-signer:{}:{}",
-        canonical.dependency_kind, canonical.selector_value
-    );
-    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind::<Text, _>(&lock_key)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-    let inserted = sql_query(
-        "INSERT INTO governance_unscoped_signer_evidence \
-            (dependency_kind,object_digest,canonical_bytes,object_json) \
-         VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-    )
-    .bind::<Text, _>(canonical.dependency_kind)
-    .bind::<Text, _>(&canonical.selector_value)
-    .bind::<Binary, _>(&canonical.canonical_bytes)
-    .bind::<Jsonb, _>(&canonical.object_json)
-    .execute(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    if inserted == 1 {
-        return Ok(ExactWriteOutcome::Inserted);
-    }
-    let stored = sql_query(
-        "SELECT dependency_kind,object_digest,canonical_bytes,object_json \
-         FROM governance_unscoped_signer_evidence \
-         WHERE dependency_kind=$1 AND object_digest=$2",
-    )
-    .bind::<Text, _>(canonical.dependency_kind)
-    .bind::<Text, _>(&canonical.selector_value)
-    .get_result::<DependencyObjectRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?;
-    let Some(stored) = stored else {
-        return Err(PersistenceError::Conflict(
-            "duplicate_conflict: historical signer evidence tuple differs".to_owned(),
-        ));
-    };
-    if stored.canonical_bytes != canonical.canonical_bytes
-        || stored.object_json != canonical.object_json
-    {
-        return Err(PersistenceError::Conflict(
-            "duplicate_conflict: unscoped signer evidence differs".to_owned(),
-        ));
-    }
-    Ok(ExactWriteOutcome::ExactReplay)
-}
-
 #[async_trait]
 impl GovernanceDependencyStore for PgGovernanceDependencyStore {
     async fn put_agent_seal_signer_exact(
@@ -485,9 +491,9 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
     ) -> PersistenceResult<ExactWriteOutcome> {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            put_unscoped_signer_evidence_exact_in_transaction(conn, item)
+            put_unscoped_signer_evidence_exact_in_transaction(conn, &item)
                 .await
-                .map_err(PgTransactionError::from)
+                .map_err(Into::into)
         })
         .await
         .map_err(PgTransactionError::into_persistence)

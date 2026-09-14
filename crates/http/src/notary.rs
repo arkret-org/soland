@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use arkret_identifiers::{CellRef, Hash, Hlc, RealmId, SealId};
+use arkret_identifiers::{CellRef, EventId, Hash, Hlc, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector,
 };
@@ -38,6 +38,20 @@ use tokio::sync::Mutex;
 
 use crate::routing::federation::move_seal::select_jws_verifier;
 use crate::state::AppState;
+
+fn required_data_basis(
+    event_id: &EventId,
+    data_basis: Option<SealId>,
+    basis_free_genesis_events: &BTreeSet<EventId>,
+) -> Result<Option<SealId>, NotaryError> {
+    match data_basis {
+        Some(basis) => Ok(Some(basis)),
+        None if basis_free_genesis_events.contains(event_id) => Ok(None),
+        None => Err(NotaryError::Store(
+            "accepted non-genesis data Event has no data_basis".to_owned(),
+        )),
+    }
+}
 
 fn genesis_digest_suite(events: &[Event]) -> Result<arkret_canonical::DigestSuite, NotaryError> {
     let create_events = events
@@ -162,6 +176,31 @@ pub enum NotaryError {
 impl From<StoreError> for NotaryError {
     fn from(value: StoreError) -> Self {
         Self::Store(value.to_string())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidateExecutionMode {
+    /// Station-owned signing uses the ordinary proof verifier and requires an Ack.
+    AutomaticNotary,
+    /// A current device/Agent prepares a successor from retained signer evidence.
+    PreparedPcrSuccessor,
+    /// The closed recovery transaction admits only its exact Ackless native unit.
+    #[allow(dead_code)]
+    RecoveryAnchorUnit,
+}
+
+impl CandidateExecutionMode {
+    const fn allows_ackless_self_principal(self) -> bool {
+        matches!(self, Self::PreparedPcrSuccessor | Self::RecoveryAnchorUnit)
+    }
+
+    const fn requires_exact_recovery_unit(self) -> bool {
+        matches!(self, Self::RecoveryAnchorUnit)
+    }
+
+    const fn uses_retained_producer_evidence(self) -> bool {
+        matches!(self, Self::PreparedPcrSuccessor | Self::RecoveryAnchorUnit)
     }
 }
 
@@ -599,6 +638,18 @@ impl NotaryWorker {
             .realm_events_newest_first(realm_id.as_str())
             .await
             .map_err(|error| NotaryError::Store(error.to_string()))?;
+        // An ordinary Realm bootstrap is one already-confirmed command unit.
+        // Its initial Data members are deliberately basis-free because no
+        // predecessor Seal exists yet.  Only that exact durable unit receives
+        // the exception; every later Data Event must cite a confirmed basis.
+        let basis_free_genesis_events = state
+            .projections()
+            .confirmed_genesis_unit(realm_id)
+            .await?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|event| event.event_id)
+            .collect::<BTreeSet<_>>();
         let mut accepted_by_basis =
             BTreeMap::<SealId, Vec<(Hash, chrono::DateTime<chrono::Utc>)>>::new();
         for record in records {
@@ -608,9 +659,14 @@ impl NotaryWorker {
             if !event.kind.is_data_plane() {
                 continue;
             }
-            let basis = event.data_basis.ok_or_else(|| {
-                NotaryError::Store("accepted data Event has no data_basis".to_owned())
-            })?;
+            let Some(basis) = required_data_basis(
+                &event.event_id,
+                event.data_basis,
+                &basis_free_genesis_events,
+            )?
+            else {
+                continue;
+            };
             if !confirmed_prefix.contains(&basis) {
                 return Err(NotaryError::Store(
                     "accepted data Event basis is outside the confirmed Seal lineage".to_owned(),
@@ -895,7 +951,7 @@ impl NotaryWorker {
                 predecessor_ref.as_ref(),
                 &pre_state,
                 event_digest_suite,
-                false,
+                CandidateExecutionMode::AutomaticNotary,
             )
             .await?;
 
@@ -921,7 +977,7 @@ impl NotaryWorker {
                     predecessor_ref.as_ref(),
                     &pre_state,
                     digest_suites.seal_digest_suite,
-                    false,
+                    CandidateExecutionMode::AutomaticNotary,
                 )
                 .await?;
             if executed.committed_event_digests != delta {
@@ -1148,6 +1204,18 @@ impl NotaryWorker {
         // PostgreSQL implements this contract in EventSealCommitStore's
         // single transaction.
         let new_ops = executed.new_security_ops;
+        let confirmed_device_control =
+            crate::routing::identity::device_generation::candidate_device_control_projection(
+                state,
+                &seal,
+                digest_suites.seal_digest_suite,
+            )
+            .await
+            .map_err(|error| {
+                NotaryError::Store(format!(
+                    "derive confirmed device Control projection: {error}"
+                ))
+            })?;
         match state
             .projections()
             .commit_event_seal_if_head(
@@ -1157,6 +1225,7 @@ impl NotaryWorker {
                 &new_ops,
                 &covered,
                 &availability_dependency_writes,
+                confirmed_device_control.as_ref(),
             )
             .await
         {
@@ -1268,9 +1337,10 @@ impl NotaryWorker {
         predecessor_ref: Option<&SealId>,
         pre_state: &BTreeMap<CellRef, ResolvedCellState>,
         result_digest_suite: arkret_canonical::DigestSuite,
-        allow_self_principal_ingress: bool,
+        mode: CandidateExecutionMode,
     ) -> Result<arkret_state::state::OrderedControlBatchEffect, NotaryError> {
         let verifier = select_jws_verifier(state);
+        let allow_ackless_self_principal = mode.allows_ackless_self_principal();
         if predecessor_ref.is_none() {
             if units.len() != 1 {
                 return Err(NotaryError::Construction(
@@ -1287,7 +1357,7 @@ impl NotaryWorker {
             )
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         }
-        if allow_self_principal_ingress {
+        if mode.requires_exact_recovery_unit() {
             let [unit] = units else {
                 return Err(NotaryError::Construction(
                     "PCR Seal preparation requires one registered command unit".to_owned(),
@@ -1338,7 +1408,7 @@ impl NotaryWorker {
                         "Control Proposal Ack for Control Move {digest} is invalid: {error}"
                     ))
                 })?;
-            } else if allow_self_principal_ingress {
+            } else if allow_ackless_self_principal {
                 crate::routing::events::event_log::validate_pcr_prepare_ackless_ingress(
                     state, event, digest,
                 )
@@ -1349,7 +1419,7 @@ impl NotaryWorker {
                     "locally signed Control Move {digest} has no immutable Control Proposal Ack"
                 )));
             }
-            let proof_result = if allow_self_principal_ingress {
+            let proof_result = if mode.uses_retained_producer_evidence() {
                 crate::routing::events::event_log::governance_proof::verify_retained_control_event_proofs(
                     state, event, digest, member.digest_suite,
                 ).await
@@ -1359,7 +1429,7 @@ impl NotaryWorker {
             proof_results.insert(digest.clone(), proof_result);
         }
 
-        let submit_context = notary_submit_context(predecessor_ref, allow_self_principal_ingress);
+        let submit_context = notary_submit_context(predecessor_ref, allow_ackless_self_principal);
         execute_ordered_control_units(
             realm_id,
             pre_state,
@@ -1523,7 +1593,20 @@ impl NotaryWorker {
                 Some(&request.predecessor_ref),
                 &pre_state,
                 suites.seal_digest_suite,
-                true,
+                // `/_arkret/self/seals/prepare` is the general f=0
+                // human/Agent PCR successor surface. Its caller has already
+                // passed the current-device/controller gate, and every
+                // ordinary Control Move must have either its immutable
+                // authority Ack or the durable Ack-less self-principal ingress
+                // admitted for a current accepted device. The latter is also
+                // used by ordinary PCR successors such as the genesis recovery
+                // policy, but it must not select the recovery transaction's
+                // exact two-member re-anchor shape.
+                // Device/Agent PCR preparation replays the producer proof
+                // against the immutable signer evidence retained when the
+                // Event was admitted. It must not reinterpret a historical
+                // device method through the current DID document.
+                CandidateExecutionMode::PreparedPcrSuccessor,
             )
             .await?;
         let accepted_digests = executed
@@ -2618,6 +2701,54 @@ mod tests {
         assert_eq!(
             notary_submit_context(Some(&predecessor), false),
             arkret_wire::EventSubmitContext::Standard,
+        );
+    }
+
+    #[test]
+    fn only_exact_confirmed_genesis_member_may_omit_data_basis() {
+        let genesis_event =
+            EventId::from_event_digest(&Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap())
+                .unwrap();
+        let later_event =
+            EventId::from_event_digest(&Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap())
+                .unwrap();
+        let basis = SealId::new(format!("ak:seal:sha256:{}", "3".repeat(64))).unwrap();
+        let genesis = BTreeSet::from([genesis_event.clone()]);
+
+        assert_eq!(
+            required_data_basis(&genesis_event, None, &genesis).unwrap(),
+            None,
+        );
+        assert!(required_data_basis(&later_event, None, &genesis).is_err());
+        assert_eq!(
+            required_data_basis(&later_event, Some(basis.clone()), &genesis).unwrap(),
+            Some(basis),
+        );
+    }
+
+    #[test]
+    fn candidate_execution_modes_separate_ackless_recovery_from_retained_evidence() {
+        let flags = |mode: CandidateExecutionMode| {
+            (
+                mode.allows_ackless_self_principal(),
+                mode.requires_exact_recovery_unit(),
+                mode.uses_retained_producer_evidence(),
+            )
+        };
+        assert_eq!(
+            flags(CandidateExecutionMode::AutomaticNotary),
+            (false, false, false),
+            "automatic Station signing neither admits Ackless recovery nor selects a special retained-evidence lane",
+        );
+        assert_eq!(
+            flags(CandidateExecutionMode::PreparedPcrSuccessor),
+            (true, false, true),
+            "ordinary PCR preparation admits only retained Ack-less self-principal ingress without imposing recovery-unit shape",
+        );
+        assert_eq!(
+            flags(CandidateExecutionMode::RecoveryAnchorUnit),
+            (true, true, true),
+            "the exact recovery unit is Ackless and must verify its retained native-unit closure",
         );
     }
 

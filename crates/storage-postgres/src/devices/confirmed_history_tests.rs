@@ -34,11 +34,17 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
     let mut source = fixture::DeviceHistoryFixture::new(station);
     let original = source.verify().unwrap();
     assert!(
-        store.install_confirmed_history(&original).await.is_err(),
+        store
+            .seed_test_confirmed_history_without_control_roots(&original)
+            .await
+            .is_err(),
         "uninstalled Seal cannot grant device authority"
     );
     insert_seal(&pool, &source.seals[0]).await;
-    store.install_confirmed_history(&original).await.unwrap();
+    store
+        .seed_test_confirmed_history_without_control_roots(&original)
+        .await
+        .unwrap();
     let first = store
         .get(
             source.account.principal_id.as_str(),
@@ -58,7 +64,10 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
     let updated = source.verify().unwrap();
     insert_seal(&pool, source.seals.last().unwrap()).await;
     assert!(
-        store.install_confirmed_history(&original).await.is_err(),
+        store
+            .seed_test_confirmed_history_without_control_roots(&original)
+            .await
+            .is_err(),
         "older verified prefix cannot reinstall after head advancement"
     );
     {
@@ -66,7 +75,12 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
         sql_query("ALTER TABLE devices ADD CONSTRAINT device_history_failure CHECK(device_id <> 'ak:device:01904100-0000-7000-8000-000000000002')")
             .execute(&mut *conn).await.unwrap();
     }
-    assert!(store.install_confirmed_history(&updated).await.is_err());
+    assert!(
+        store
+            .seed_test_confirmed_history_without_control_roots(&updated)
+            .await
+            .is_err()
+    );
     {
         let mut conn = pool.get().await.unwrap();
         let marker = sql_query("SELECT to_jsonb(confirmed_head) AS payload FROM device_history_projections WHERE principal_id=$1")
@@ -98,7 +112,10 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
             .await
             .unwrap();
     }
-    store.install_confirmed_history(&updated).await.unwrap();
+    store
+        .seed_test_confirmed_history_without_control_roots(&updated)
+        .await
+        .unwrap();
     use soland_storage::{DeviceRevocationStore, SessionStore};
     let sessions = crate::PgSessionStore { pool: pool.clone() };
     let account_pk = {
@@ -153,7 +170,7 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
     source.append(vec![revoke]);
     insert_seal(&pool, source.seals.last().unwrap()).await;
     store
-        .install_confirmed_history(&source.verify().unwrap())
+        .seed_test_confirmed_history_without_control_roots(&source.verify().unwrap())
         .await
         .unwrap();
     assert_eq!(
@@ -197,8 +214,14 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
     source.append(vec![successor]);
     insert_seal(&pool, source.seals.last().unwrap()).await;
     let newest = source.verify().unwrap();
-    store.install_confirmed_history(&newest).await.unwrap();
-    store.install_confirmed_history(&newest).await.unwrap();
+    store
+        .seed_test_confirmed_history_without_control_roots(&newest)
+        .await
+        .unwrap();
+    store
+        .seed_test_confirmed_history_without_control_roots(&newest)
+        .await
+        .unwrap();
     let active = store
         .get(
             source.account.principal_id.as_str(),
@@ -321,7 +344,7 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
     );
     let restored_store = PgDeviceInventoryStore { pool: pool.clone() };
     restored_store
-        .install_confirmed_history(&newest)
+        .seed_test_confirmed_history_without_control_roots(&newest)
         .await
         .unwrap();
     assert_eq!(
@@ -338,7 +361,12 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
         "restarting the installer at an already installed head is a read-only exact replay"
     );
 
-    assert!(store.install_confirmed_history(&updated).await.is_err());
+    assert!(
+        store
+            .seed_test_confirmed_history_without_control_roots(&updated)
+            .await
+            .is_err()
+    );
     assert_eq!(
         store
             .get(
@@ -355,7 +383,7 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
     insert_seal(&pool, source.seals.last().unwrap()).await;
     let generation_two = source.verify().unwrap();
     store
-        .install_confirmed_history(&generation_two)
+        .seed_test_confirmed_history_without_control_roots(&generation_two)
         .await
         .unwrap();
     assert_eq!(
@@ -383,5 +411,10 @@ async fn confirmed_device_history_installation_is_exact_atomic_and_recoverable()
         replacement.payload["authorized_generation_ref"],
         serde_json::json!(2)
     );
-    assert!(store.install_confirmed_history(&newest).await.is_err());
+    assert!(
+        store
+            .seed_test_confirmed_history_without_control_roots(&newest)
+            .await
+            .is_err()
+    );
 }

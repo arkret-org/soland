@@ -756,10 +756,11 @@ fn direct_resolve_private_detail_stays_redacted_in_production() {
 async fn direct_resolve_private_detail_stays_redacted_in_production_body() {
     let mut config = test_config();
     config.development_mode = false;
-    let state = soland_test_support::app_state(config);
+    let state = soland_test_support::app_state_with_postgres_governance(config);
     let token = "production-direct-resolve-session";
-    super::agents::seed_controller_session(&state, token, "did:web:alice.example").await;
-    super::agents::seed_active_controller_device_generation(&state, "did:web:alice.example").await;
+    let controller = super::agents::controller_fixture_did();
+    super::agents::seed_active_controller_device_generation(&state, controller).await;
+    super::agents::seed_controller_session(&state, token, controller).await;
 
     let mut response = post_authenticated_canonical(
         state,

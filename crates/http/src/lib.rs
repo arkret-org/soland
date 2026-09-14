@@ -54,6 +54,24 @@ pub use routing::{
 #[doc(hidden)]
 pub use crate::routing::events::projection::project_accepted_operations;
 
+/// Derive the exact confirmed device-Control projection for a fixture Seal
+/// through the same verified-history loader used by production commits.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub async fn test_candidate_device_control_projection_fixture(
+    state: &crate::state::AppState,
+    seal: &arkret_wire::Seal,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<Option<soland_storage::ConfirmedDeviceControlProjection>, String> {
+    crate::routing::identity::device_generation::candidate_device_control_projection(
+        state,
+        seal,
+        digest_suite,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
 pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String> {
     arkret_canonical::canonical_sha256(value).ok()
 }

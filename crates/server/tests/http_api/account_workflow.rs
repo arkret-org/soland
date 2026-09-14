@@ -466,6 +466,62 @@ async fn account_viewer_returns_device_summaries_body() {
     assert!(devices[0].get("authorized_at").is_some());
 }
 
+#[test]
+fn account_viewer_repeatedly_resolves_atomically_installed_control_root() {
+    run_on_deep_stack(
+        "account_viewer_repeatedly_resolves_atomically_installed_control_root",
+        account_viewer_repeatedly_resolves_atomically_installed_control_root_body,
+    );
+}
+
+async fn account_viewer_repeatedly_resolves_atomically_installed_control_root_body() {
+    let state = soland_test_support::app_state_with_postgres_governance(test_config());
+    let fixture = soland_test_support::device_authorization_history::DeviceHistoryFixture::new(
+        state.service_core_id(),
+    );
+    let _bootstrap_token = register_account(
+        state.clone(),
+        fixture.did.as_str(),
+        "@portable-root",
+        fixture.founding_device_id.as_str(),
+    )
+    .await;
+    install_confirmed_device_history_fixture(&state, &fixture).await;
+    let token = dev_token_for_device(
+        state.clone(),
+        fixture.did.as_str(),
+        fixture.founding_device_id.as_str(),
+        "portable-root",
+    )
+    .await;
+
+    for request_index in 0..2 {
+        let mut response = TestClient::get("http://server/_arkret/self/account/viewer")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
+        assert_eq!(
+            response.status_code,
+            Some(StatusCode::OK),
+            "viewer request {request_index} must not depend on read-side projection repair"
+        );
+        let viewer: Value = response.take_json().await.unwrap();
+        let device = viewer["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|device| device["device_id"] == fixture.founding_device_id.as_str())
+            .expect("confirmed founding device summary");
+        assert_eq!(device["verification_state"], "verified", "{viewer}");
+        assert!(
+            device["signer_resolution_evidence_ref"]
+                .as_str()
+                .is_some_and(|reference| reference.starts_with("ak:signer_evidence:sha256:")),
+            "viewer must expose the fixed generic-Control root: {viewer}"
+        );
+    }
+}
+
 /// `account-lifecycle.md` §3 gives `erasure_pending` exactly one command: an
 /// Account Authority-signed `AccountStatusRecord` replicated through
 /// `POST /_arkret/peer/account-status`. There is deliberately no self-service

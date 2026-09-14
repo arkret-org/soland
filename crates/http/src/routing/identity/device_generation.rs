@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use arkret_identifiers::{DeviceId, EventId, RealmId, SealId};
 pub use arkret_models_crypto::keys::DeviceGenerationStatus;
-pub(crate) use confirmed::load_confirmed_device_history;
+pub(crate) use confirmed::{candidate_device_control_projection, load_confirmed_device_history};
 use serde_json::Value;
 use soland_services::ServiceError;
 
@@ -164,15 +164,6 @@ pub async fn current_device_generation(
         .map_err(|error| {
             ServiceError::Conflict(format!("confirmed device history unavailable: {error}"))
         })?;
-    if let Some(history) = &history {
-        state
-            .persistence()
-            .install_confirmed_device_history(history)
-            .await
-            .map_err(|error| {
-                ServiceError::Conflict(format!("confirmed device mirror unavailable: {error}"))
-            })?;
-    }
     if let Some(history) = history {
         return Ok(Some(DeviceGenerationView {
             current_ref: history.current_generation().number(),
@@ -219,15 +210,11 @@ pub(crate) async fn recover_confirmed_device_projection(
     if account.station_id != state.service_core_id() {
         return Ok(());
     }
-    let history = load_confirmed_device_history(state, account)
+    let _history = load_confirmed_device_history(state, account)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "confirmed PCR has no authenticated device history".to_owned())?;
-    state
-        .persistence()
-        .install_confirmed_device_history(&history)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(())
 }
 
 /// Resolve the exact accepted device authorization tuple used by every

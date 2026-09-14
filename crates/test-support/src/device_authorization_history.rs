@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_canonical::DigestSuite;
 use arkret_models_collaboration::events_payloads::*;
 use arkret_models_identity::ResolutionCommitment;
-use arkret_state::state::ControlProposalIngress;
 use arkret_state::{
     CommandEventResult, OrderedControlUnit, OrderedControlUnitEvent, ResolvedCellState,
 };
@@ -169,7 +168,7 @@ pub struct DeviceHistoryFixture {
     pub sealed_ops: Vec<Vec<(CellRef, arkret_state::state_model::ordered_log::IssuedOp)>>,
     pub founding_device_id: DeviceId,
     pub founding_device_signing_seed: [u8; 32],
-    notary_signing_seed: [u8; 32],
+    pub(crate) notary_signing_seed: [u8; 32],
     created_at: DateTime<Utc>,
 }
 impl DeviceHistoryFixture {
@@ -461,6 +460,7 @@ impl DeviceHistoryFixture {
             DigestSuite::Sha256,
         )
     }
+
     pub fn reanchor(&self, null_basis: bool) -> Vec<Event> {
         let payload = possession(
             &self.account,
@@ -493,126 +493,4 @@ impl DeviceHistoryFixture {
         );
         vec![reanchor, authorize]
     }
-}
-
-/// Commit the fixture through the same registered-unit and atomic Seal path
-/// used by PostgreSQL governance. This is intentionally separate from
-/// `verify`: callers can still use the fixture as an in-memory verifier input,
-/// while HTTP tests that exercise runtime reconstruction install the complete
-/// durable history rather than only its Event and Seal objects.
-pub async fn commit_confirmed_history_fixture(
-    state: &soland_http::state::AppState,
-    fixture: &DeviceHistoryFixture,
-) -> std::result::Result<(), String> {
-    commit_confirmed_history_fixture_from(state, fixture, 0).await
-}
-
-/// Commit only the Seal suffix beginning at `first_seal_index`.
-///
-/// Tests that need to exercise a stale session can first install an active
-/// authorization, author the request, append a real `DeviceRevoke`, and then
-/// durably advance the same Realm to the fixture's new confirmed head. The
-/// already-persisted prefix still contributes to the covered-event set, but is
-/// never replayed through `commit_if_head`.
-pub async fn commit_confirmed_history_fixture_from(
-    state: &soland_http::state::AppState,
-    fixture: &DeviceHistoryFixture,
-    first_seal_index: usize,
-) -> std::result::Result<(), String> {
-    if first_seal_index > fixture.seals.len() {
-        return Err(format!(
-            "fixture Seal suffix starts at {first_seal_index}, but only {} Seals exist",
-            fixture.seals.len()
-        ));
-    }
-    let (control_events, committer) = {
-        let registry = crate::state_test_registry().lock();
-        let resources = registry
-            .get(&crate::app_state_key(state))
-            .ok_or_else(|| "AppState was not constructed by soland-test-support".to_owned())?;
-        (
-            resources
-                .control_event_store
-                .clone()
-                .ok_or_else(|| "test Control Event store is unavailable".to_owned())?,
-            resources
-                .event_seal_committer
-                .clone()
-                .ok_or_else(|| "test atomic Seal committer is unavailable".to_owned())?,
-        )
-    };
-    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
-        fixture.notary_signing_seed,
-        fixture.did.clone(),
-        fixture.configuration.signer.verification_method.clone(),
-    );
-    let authority_set_ref = Hash::new(
-        arkret_canonical::canonical_sha256(&fixture.configuration)
-            .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let by_digest = fixture
-        .events
-        .iter()
-        .map(|event| (event.event_id.event_digest(), event))
-        .collect::<BTreeMap<_, _>>();
-    let mut covered = fixture.seals[..first_seal_index]
-        .iter()
-        .flat_map(|seal| {
-            seal.covered_event_digests
-                .iter()
-                .chain(seal.delta.iter())
-                .cloned()
-        })
-        .collect::<BTreeSet<_>>();
-
-    for (seal_index, seal) in fixture.seals.iter().enumerate().skip(first_seal_index) {
-        for result in &seal.command_results {
-            let mut members = Vec::with_capacity(result.unit_event_digests.len());
-            for digest in &result.unit_event_digests {
-                let event = by_digest
-                    .get(digest)
-                    .ok_or_else(|| format!("fixture Seal names missing Control Event {digest}"))?;
-                let ack = ControlProposalAck::issue_with_signer(
-                    seal.realm_id.clone(),
-                    digest.clone(),
-                    authority_set_ref.clone(),
-                    event.created_at,
-                    ControlProposalDecisionPolicy::default(),
-                    &signer,
-                )
-                .map_err(|error| error.to_string())?;
-                members.push(arkret_state::state::ControlUnitIngressMember {
-                    event: (*event).clone(),
-                    digest_suite: DigestSuite::Sha256,
-                    ingress: ControlProposalIngress::AckRequired(ack),
-                });
-            }
-            control_events
-                .put_pending_unit_with_ingress(&members)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        covered.extend(seal.covered_event_digests.iter().cloned());
-        covered.extend(seal.delta.iter().cloned());
-        let ops = fixture
-            .sealed_ops
-            .get(seal_index)
-            .ok_or_else(|| format!("fixture Seal {seal_index} has no matching committed ops"))?;
-        if !committer
-            .commit_if_head(
-                seal,
-                DigestSuite::Sha256,
-                seal.predecessor_ref.as_ref(),
-                ops,
-                &covered,
-                &[],
-            )
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            return Err(format!("fixture Seal {} frontier changed", seal.id));
-        }
-    }
-    Ok(())
 }

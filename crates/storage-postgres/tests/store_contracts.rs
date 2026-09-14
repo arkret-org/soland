@@ -91,7 +91,10 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
     }
     drop(conn);
     let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-    inventory.install_confirmed_history(&history).await.unwrap();
+    inventory
+        .seed_test_confirmed_history_without_control_roots(&history)
+        .await
+        .unwrap();
     let selectors = history
         .authorizations()
         .iter()
@@ -1991,6 +1994,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &genesis_covered,
                 std::slice::from_ref(&genesis_write),
+                None,
             )
             .await
             .unwrap()
@@ -2062,6 +2066,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &genesis_covered,
                 std::slice::from_ref(&genesis_write),
+                None,
             )
             .await
             .unwrap(),
@@ -2084,6 +2089,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 edge_index: 0,
                 item: replay_mismatch,
             }],
+            None,
         )
         .await
         .unwrap_err();
@@ -2160,6 +2166,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &covered,
                 &[write],
+                None,
             )
             .await
             .unwrap_err();
@@ -2239,6 +2246,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &[],
             &cas_covered,
             std::slice::from_ref(&cas_write),
+            None,
         )
         .await
         .unwrap_err();
@@ -2306,7 +2314,7 @@ async fn postgres_rejected_command_unit_is_terminal_atomically_and_never_coverag
     assert!(
         stores
             .event_seal_committer
-            .commit_if_head(&genesis, suite, None, &[], &covered, &[])
+            .commit_if_head(&genesis, suite, None, &[], &covered, &[], None)
             .await
             .unwrap()
     );
@@ -2357,7 +2365,7 @@ async fn postgres_rejected_command_unit_is_terminal_atomically_and_never_coverag
     assert!(
         stores
             .event_seal_committer
-            .commit_if_head(&rejected, suite, None, &[], &covered, &[])
+            .commit_if_head(&rejected, suite, None, &[], &covered, &[], None)
             .await
             .is_err()
     );
@@ -2374,7 +2382,15 @@ async fn postgres_rejected_command_unit_is_terminal_atomically_and_never_coverag
     assert!(
         stores
             .event_seal_committer
-            .commit_if_head(&rejected, suite, Some(&genesis.id), &[], &covered, &[])
+            .commit_if_head(
+                &rejected,
+                suite,
+                Some(&genesis.id),
+                &[],
+                &covered,
+                &[],
+                None
+            )
             .await
             .unwrap()
     );

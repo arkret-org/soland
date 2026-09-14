@@ -453,7 +453,8 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
                         None,
                         &[],
                         &BTreeSet::new(),
-                        &[]
+                        &[],
+                        None,
                     )
                     .await
                     .is_err()
@@ -483,7 +484,15 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
             assert!(
                 stores
                     .event_seal_committer
-                    .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &BTreeSet::new(), &[])
+                    .commit_if_head(
+                        &seal,
+                        DigestSuite::Sha256,
+                        None,
+                        &[],
+                        &BTreeSet::new(),
+                        &[],
+                        None
+                    )
                     .await
                     .is_err()
             );
@@ -502,7 +511,15 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
         assert!(
             stores
                 .event_seal_committer
-                .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &BTreeSet::new(), &[])
+                .commit_if_head(
+                    &seal,
+                    DigestSuite::Sha256,
+                    None,
+                    &[],
+                    &BTreeSet::new(),
+                    &[],
+                    None
+                )
                 .await
                 .unwrap()
         );
@@ -747,7 +764,15 @@ async fn contact_and_consent_mirrors_require_exact_committed_unit_and_replay_in_
         assert!(
             stores
                 .event_seal_committer
-                .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &BTreeSet::new(), &[])
+                .commit_if_head(
+                    &seal,
+                    DigestSuite::Sha256,
+                    None,
+                    &[],
+                    &BTreeSet::new(),
+                    &[],
+                    None
+                )
                 .await
                 .unwrap(),
             "exact replay is idempotent"
@@ -933,7 +958,15 @@ async fn contact_normal_absence_is_fixed_at_the_committed_slot_transaction() {
     let seal = seal(&[response], &digests, CommandOutcome::Committed);
     stores
         .event_seal_committer
-        .commit_if_head(&seal, DigestSuite::Sha256, None, &[], &BTreeSet::new(), &[])
+        .commit_if_head(
+            &seal,
+            DigestSuite::Sha256,
+            None,
+            &[],
+            &BTreeSet::new(),
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let ready = contacts

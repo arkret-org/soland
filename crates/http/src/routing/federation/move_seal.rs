@@ -1443,6 +1443,14 @@ async fn try_apply_device_generation_event_seal(
         .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
+    let confirmed_device_control =
+        crate::routing::identity::device_generation::candidate_device_control_projection(
+            state,
+            seal,
+            digest_suite,
+        )
+        .await
+        .map_err(|error| seal_admission_error(error.to_string()))?;
     match state
         .projections()
         .commit_event_seal_if_head(
@@ -1452,6 +1460,7 @@ async fn try_apply_device_generation_event_seal(
             &new_ops,
             &target,
             &availability_dependency_writes,
+            confirmed_device_control.as_ref(),
         )
         .await
     {
@@ -1845,6 +1854,14 @@ pub(crate) async fn apply_agent_event_seal(
         .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
+    let confirmed_device_control =
+        crate::routing::identity::device_generation::candidate_device_control_projection(
+            state,
+            seal,
+            digest_suite,
+        )
+        .await
+        .map_err(|error| seal_admission_error(error.to_string()))?;
     // Keep the exact verified key before committing the frontier. An orphaned
     // retention row cannot authorize anything without its accepted Seal.
     state
@@ -1862,6 +1879,7 @@ pub(crate) async fn apply_agent_event_seal(
             &new_ops,
             &target,
             &availability_dependency_writes,
+            confirmed_device_control.as_ref(),
         )
         .await
     {
@@ -1962,6 +1980,14 @@ pub(crate) async fn apply_inbound_seal(
         .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
+    let confirmed_device_control =
+        crate::routing::identity::device_generation::candidate_device_control_projection(
+            state,
+            seal,
+            digest_suite,
+        )
+        .await
+        .map_err(|error| seal_admission_error(error.to_string()))?;
     match state
         .projections()
         .commit_event_seal_if_head(
@@ -1971,6 +1997,7 @@ pub(crate) async fn apply_inbound_seal(
             &prepared.new_ops,
             &prepared.covered_event_digests,
             &governance_dependencies,
+            confirmed_device_control.as_ref(),
         )
         .await
     {

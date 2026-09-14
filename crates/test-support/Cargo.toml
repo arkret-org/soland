@@ -46,3 +46,8 @@ soland-storage-postgres = { version = "0.3.0", path = "../storage-postgres", fea
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+diesel = { workspace = true, features = ["postgres", "serde_json"] }
+diesel-async = { workspace = true, features = ["postgres", "deadpool"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

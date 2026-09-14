@@ -6,11 +6,40 @@ use super::common::*;
 
 pub(crate) const CONTROLLER_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 pub(crate) const CONTROLLER_DEVICE_SIGNING_SEED: [u8; 32] = [91u8; 32];
+const CONTROLLER_ROOT_SIGNING_SEED: [u8; 32] = [90u8; 32];
+const CONTROLLER_NEXT_ROOT_SIGNING_SEED: [u8; 32] = [92u8; 32];
 /// Fragment of the controller's backup-HPKE key agreement seeded by
 /// [`seed_agent_provision_prerequisites`]. Agent PCR key backups must
 /// name it as `encryption.recipient_key_ref`.
 pub(crate) const CONTROLLER_BACKUP_HPKE_FRAGMENT: &str = "backup-hpke-1";
 const CONTROLLER_BACKUP_HPKE_PUBLIC_KEY: &str = "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW";
+
+fn controller_inception_fixture() -> arkret_signatures::webvh::PreparedPrincipalInception {
+    let next_root = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        &SigningKey::from_bytes(&CONTROLLER_NEXT_ROOT_SIGNING_SEED)
+            .verifying_key()
+            .to_bytes(),
+    );
+    arkret_signatures::webvh::prepare_principal_inception(
+        &arkret_signatures::webvh::PrincipalInceptionInput {
+            provider_endpoint: &"https://principal.example/".parse().unwrap(),
+            principal_endpoint: &"https://principal.example/".parse().unwrap(),
+            local_id: "alice",
+            also_known_as: &[],
+            version_time: "2026-09-12T00:00:00Z".parse().unwrap(),
+            root_seed: &CONTROLLER_ROOT_SIGNING_SEED,
+            next_root_public_key_multibase: &next_root,
+            witness_policy: None,
+        },
+    )
+    .unwrap()
+}
+
+pub(crate) fn controller_fixture_did() -> &'static str {
+    static DID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DID.get_or_init(|| controller_inception_fixture().did)
+        .as_str()
+}
 
 /// Genesis-context registry projector: a bootstrap unit has no accepted Realm
 /// yet, so there is no digest-suite cell to read and the protocol baseline
@@ -23,7 +52,7 @@ pub(crate) fn genesis_projector(
 }
 
 fn controller_founding_authorize_payload(
-    actor: &arkret_identifiers::Did,
+    account: &arkret_wire::AccountId,
     created_at: chrono::DateTime<chrono::Utc>,
     signing_key: &SigningKey,
 ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
@@ -45,9 +74,7 @@ fn controller_founding_authorize_payload(
             arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
         ],
         device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
-        authorized_by: DeviceOrPrincipalRef::Principal(
-            arkret_wire::project_did_to_core_id(actor).unwrap(),
-        ),
+        authorized_by: DeviceOrPrincipalRef::Principal(account.principal_id.clone()),
         scopes: None,
         not_before: created_at,
         expires_at: None,
@@ -57,12 +84,7 @@ fn controller_founding_authorize_payload(
         ),
         recovery_session_id: None,
     };
-    let possession_input = payload
-        .device_possession_signature_input(&arkret_wire::AccountId::new(
-            arkret_wire::project_did_to_core_id(actor).unwrap(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-        ))
-        .unwrap();
+    let possession_input = payload.device_possession_signature_input(account).unwrap();
     payload.device_signature = SignatureMaterial::NonEmptyString(
         arkret_wire::NonEmptyString::new(arkret_canonical::base64url_encode(
             ed25519_dalek::Signer::sign(signing_key, &possession_input).to_bytes(),
@@ -114,8 +136,32 @@ fn principal_control_notary(
     // A PCR is owned by this exact Account, not by a Service that happens to
     // use the same signing principal. Preserve the fixture's frozen key.
     signer.actor_id = arkret_wire::ActorId::account(account_id);
+    notary.max_clock_error_ms = 1_000;
     notary.validate().expect("account-owned PCR notary");
     notary
+}
+
+fn controller_founding_notary(
+    account_id: arkret_wire::AccountId,
+    principal_did: &str,
+    signing_key: &SigningKey,
+) -> arkret_wire::NotaryValue {
+    arkret_wire::NotaryValue::new(
+        arkret_wire::NotarySignerDescriptor {
+            actor_id: arkret_wire::ActorId::account(account_id),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{principal_did}#{CONTROLLER_DEVICE_ID}"
+            ))
+            .expect("founding-device notary verification method"),
+            key_kind: arkret_wire::NotaryKeyKind::Ed25519Raw32,
+            jose_algorithm: arkret_wire::NotaryJoseAlgorithm::Ed25519,
+            frozen_public_key_b64u: arkret_canonical::base64url_encode(
+                signing_key.verifying_key().to_bytes(),
+            ),
+        },
+        1_000,
+    )
+    .expect("founding-device PCR notary")
 }
 
 #[test]
@@ -203,15 +249,15 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
     state
         .test_persistence()
         .devices()
-        .seed_test_record(&soland_storage::DeviceInventoryRecord {
-            actor: actor_id,
+        .put_if_absent(&soland_storage::DeviceInventoryRecord {
+            actor: actor_id.clone(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
-            verification_state: "verified".to_owned(),
+            verification_state: "unverified".to_owned(),
             payload: serde_json::json!({
                 "device_id": CONTROLLER_DEVICE_ID,
                 "display_name": "Alice Desktop",
-                "verification": "verified",
+                "verification": "unverified",
                 "last_seen_at": now,
             }),
             created_at: now,
@@ -227,43 +273,30 @@ pub(crate) async fn seed_active_controller_device_generation(
     controller: &str,
 ) -> arkret_wire::AccountId {
     let now = chrono::Utc::now();
-    let generation_ref = 1_u64;
     let signing_key = SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED);
+    let inception = controller_inception_fixture();
+    assert_eq!(controller, inception.did, "controller fixture DID");
+    let verified_inception =
+        arkret_signatures::webvh::validate_principal_inception_operation(&inception.submit_body)
+            .unwrap();
     let verification_method =
         arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
             .expect("fixture verification method is a DID URL");
-    let controller_document = serde_json::json!({
-        "id": controller,
-        "verificationMethod": [{
-            "id": verification_method,
-            "type": "Multikey",
-            "controller": controller,
-            "publicKeyMultibase": test_ed25519_multibase_public(&signing_key),
-        }],
-        "authentication": [verification_method],
-        "assertionMethod": [verification_method],
-    });
-    let normalized_controller_document: arkret_models_identity::DidDocument =
-        serde_json::from_value(controller_document.clone()).unwrap();
-    let document_digest =
-        arkret_identity::document_canonical_digest(&normalized_controller_document).unwrap();
-    let document_digest_hex = document_digest
-        .as_str()
-        .strip_prefix("sha256:")
-        .expect("canonical document digest has SHA-256 suite");
-    let document_version = format!("synthetic-jcs-sha256:{document_digest_hex}");
+    let controller_document = inception
+        .log_entry
+        .get("state")
+        .cloned()
+        .expect("prepared WebVH inception document");
+    let document_version = verified_inception.did_version_id.clone();
     state
         .test_persistence()
         .webvh()
         .append_log_event(soland_storage::WebvhLogRecord {
-            event_digest: format!("sha256:{}", "1".repeat(64)),
+            event_digest: verified_inception.log_head_digest.to_string(),
             did: controller.to_owned(),
             seq: 1,
-            operation: serde_json::json!({
-                "versionId": document_version,
-                "state": controller_document
-            }),
-            created_at: now,
+            operation: serde_json::to_value(&inception.submit_body.operation).unwrap(),
+            created_at: verified_inception.did_version_time,
         })
         .await
         .unwrap();
@@ -273,7 +306,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         .put_document(soland_storage::WebvhDocumentRecord {
             did: controller.to_owned(),
             did_document: controller_document,
-            key_log_head: Some(document_digest.as_str().to_owned()),
+            key_log_head: Some(verified_inception.log_head_digest.to_string()),
             seq: 1,
             method_evidence: serde_json::json!({"mode": "test"}),
             fetched_at: now,
@@ -283,15 +316,20 @@ pub(crate) async fn seed_active_controller_device_generation(
         .await
         .unwrap();
 
-    let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp(), 0).unwrap();
+    let created_at = verified_inception.did_version_time;
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
     let actor = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
     let controller_principal_id = arkret_wire::project_did_to_core_id(&actor).unwrap();
-    let authorize_payload = controller_founding_authorize_payload(&actor, created_at, &signing_key);
+    let controller_account_id = arkret_wire::AccountId::new(
+        controller_principal_id.clone(),
+        state.service_core_id().clone(),
+    );
+    let authorize_payload =
+        controller_founding_authorize_payload(&controller_account_id, created_at, &signing_key);
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let initial_resolution = arkret_models_identity::ResolutionCommitment {
         did: actor.clone(),
-        method_history_head: document_digest.as_str().to_owned(),
+        method_history_head: verified_inception.log_head_digest.to_string(),
         version_id: document_version,
     };
     let bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
@@ -299,13 +337,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             principal_id: controller_principal_id.clone(),
             principal_did: actor.clone(),
             station_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
-            notary: principal_control_notary(
-                arkret_wire::AccountId::new(
-                    controller_principal_id.clone(),
-                    state.service_core_id(),
-                ),
-                actor.as_str(),
-            ),
+            notary: controller_founding_notary(controller_account_id, actor.as_str(), &signing_key),
             initial_resolution: initial_resolution.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -316,7 +348,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             )
             .unwrap(),
             did_inception_ref: arkret_wire::EventRef::new(
-                format!("sha256:{}", "1".repeat(64)),
+                verified_inception.did_version_id,
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
             founding_device_descriptor,
@@ -334,7 +366,12 @@ pub(crate) async fn seed_active_controller_device_generation(
         .as_account_id()
         .expect("PCR bootstrap actor is an account")
         .clone();
-    let bootstrap_signer = arkret_signatures::Ed25519PayloadSigner::new(
+    let root_signer = arkret_signatures::Ed25519PayloadSigner::new(
+        SigningKey::from_bytes(&CONTROLLER_ROOT_SIGNING_SEED),
+        actor.clone(),
+        verified_inception.root_verification_method.clone(),
+    );
+    let device_signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
         actor.clone(),
         verification_method.clone(),
@@ -346,12 +383,8 @@ pub(crate) async fn seed_active_controller_device_generation(
     .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut bootstrap,
-        &bootstrap_signer,
-        &arkret_wire::DidUrl::new(format!(
-            "did:key:{0}#{0}",
-            test_ed25519_multibase_public(&signing_key)
-        ))
-        .unwrap(),
+        &root_signer,
+        &verified_inception.root_verification_method,
         arkret_signatures::SignEventOptions::for_native_unit().with_created_at(created_at),
     )
     .unwrap();
@@ -362,7 +395,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             realm_id: realm.clone(),
         },
         controller_principal_id.clone(),
-        soland_test_support::fixture_station_id(),
+        state.service_core_id().clone(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         serde_json::to_value(authorize_payload).unwrap(),
@@ -377,7 +410,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut authorize,
-        &bootstrap_signer,
+        &device_signer,
         &verification_method,
         arkret_signatures::SignEventOptions::for_native_unit().with_created_at(created_at),
     )
@@ -387,7 +420,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         &bootstrap,
         &authorize,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0003-a13f9c2e")).unwrap(),
-        &bootstrap_signer,
+        &device_signer,
         &genesis_projector,
     )
     .unwrap();
@@ -397,52 +430,9 @@ pub(crate) async fn seed_active_controller_device_generation(
     let bootstrap_authority_set_ref =
         arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&bootstrap_notary).unwrap())
             .unwrap();
-    for event in [&bootstrap, &authorize] {
-        let proposal_digest = arkret_wire::Hash::new(
-            event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .unwrap(),
-        )
-        .unwrap();
-        let authority_ack = arkret_wire::ControlProposalAck::issue_with_signer(
-            realm.clone(),
-            proposal_digest,
-            bootstrap_authority_set_ref.clone(),
-            created_at,
-            arkret_wire::ControlProposalDecisionPolicy::default(),
-            &bootstrap_signer,
-        )
-        .unwrap();
-        let ack = authority_ack;
-        state
-            .test_put_pending_control_event_with_ack(
-                event,
-                &ack,
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .await
-            .expect("bootstrap pending Control Event with actual authority Ack");
-    }
-    seed_seal_with_direct_event_effects(
-        state,
-        &bootstrap_seal,
-        &[&bootstrap, &authorize],
-        &genesis_projector,
-    )
-    .await;
-    let authorize_event_id = authorize.event_id.clone();
-    for event in [bootstrap.clone(), authorize] {
-        state
-            .test_persistence()
-            .events()
-            .put(soland_test_support::signed_event::canonical_event_record(
-                &event,
-                Some(&realm_id),
-                now,
-            ))
-            .await
-            .unwrap();
-    }
+    // Register the local Account-to-PCR binding before the candidate Seal is
+    // committed. The atomic commit derives its device-Control projection from
+    // this binding and the still-pending exact bootstrap unit.
     let resolution_record = soland_storage::PrincipalResolutionRecord {
         account_id: authority_key.clone(),
         pcr_realm_id: realm.clone(),
@@ -464,6 +454,51 @@ pub(crate) async fn seed_active_controller_device_generation(
             .unwrap(),
         soland_storage::PrincipalResolutionCasResult::Applied(_)
     ));
+    let mut bootstrap_unit = Vec::with_capacity(2);
+    for event in [&bootstrap, &authorize] {
+        let proposal_digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
+        let authority_ack = arkret_wire::ControlProposalAck::issue_with_signer(
+            realm.clone(),
+            proposal_digest,
+            bootstrap_authority_set_ref.clone(),
+            created_at,
+            arkret_wire::ControlProposalDecisionPolicy::default(),
+            &device_signer,
+        )
+        .unwrap();
+        bootstrap_unit.push((event.clone(), authority_ack));
+    }
+    state
+        .test_put_pending_control_unit_with_acks(
+            &bootstrap_unit,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .await
+        .expect("bootstrap pending Control unit with actual authority Acks");
+    seed_seal_with_direct_event_effects(
+        state,
+        &bootstrap_seal,
+        &[&bootstrap, &authorize],
+        &genesis_projector,
+    )
+    .await;
+    for event in [bootstrap.clone(), authorize] {
+        state
+            .test_persistence()
+            .events()
+            .put(soland_test_support::signed_event::canonical_event_record(
+                &event,
+                Some(&realm_id),
+                now,
+            ))
+            .await
+            .unwrap();
+    }
     soland_test_support::cbs_basis::seed_realm_genesis_event(state, &realm_id, controller).await;
     let mut realm_entry = soland_http::state::RealmDirectoryEntry::new(
         realm.clone(),
@@ -502,26 +537,13 @@ pub(crate) async fn seed_active_controller_device_generation(
     state
         .test_persistence()
         .devices()
-        .seed_test_record(&soland_storage::DeviceInventoryRecord {
+        .put_metadata(&soland_storage::DeviceInventoryMetadata {
             actor: controller_principal_id.to_string(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_id": CONTROLLER_DEVICE_ID,
-                "display_name": "Alice Desktop",
-                "verification": "verified",
-                "last_seen_at": now,
-                "authorized_generation_ref": generation_ref,
-                "device_authorize_event_id": authorize_event_id,
-                "device_public_key_did": format!(
-                    "did:key:{}",
-                    test_ed25519_multibase_public(&signing_key)
-                )
-            }),
-            created_at: now,
+            last_seen_at: Some(now),
+            last_key_upload_at: None,
             updated_at: now,
-            revoked_at: None,
         })
         .await
         .unwrap();
@@ -1540,12 +1562,12 @@ fn production_agent_provision_admits_controller_signed_sdk_events() {
 async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
     let mut config = test_config();
     config.development_mode = false;
-    let state = soland_test_support::app_state(config);
-    let controller = "did:web:alice.example";
+    let state = soland_test_support::app_state_with_postgres_governance(config);
+    let controller = controller_fixture_did();
     let token = "prod-agent-provision-session";
+    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
-    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
 
     let (status, body) = provision_agent_with_sdk_events(
         &state,
@@ -1673,12 +1695,12 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
         let state =
             soland_test_support::app_state_with_persistence(test_config(), persistence.clone())
                 .await;
-        let controller = "did:web:alice.example";
+        let controller = controller_fixture_did();
         let token = format!("agent-provision-fault-{index}");
-        seed_controller_session(&state, &token, controller).await;
-        seed_agent_provision_prerequisites(&state, controller).await;
         let controller_authority =
             seed_active_controller_device_generation(&state, controller).await;
+        seed_controller_session(&state, &token, controller).await;
+        seed_agent_provision_prerequisites(&state, controller).await;
 
         let requested_scope = serde_json::json!({
             "actions": [
@@ -1816,7 +1838,7 @@ fn agent_provision_commit_requires_its_server_allocation() {
 
 async fn agent_provision_commit_requires_its_server_allocation_body() {
     let state = soland_test_support::app_state(test_config());
-    let controller = "did:web:alice.example";
+    let controller = controller_fixture_did();
     let token = "agent-unallocated-commit-session";
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
@@ -1937,12 +1959,12 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
     let mut config = test_config();
     config.development_mode = true;
     config.session_grant_introspection_bearer = Some("agent-lifecycle-s2s".to_owned());
-    let state = soland_test_support::app_state(config);
-    let controller = "did:web:alice.example";
+    let state = soland_test_support::app_state_with_postgres_governance(config);
+    let controller = controller_fixture_did();
     let token = "agent-list-session";
+    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
-    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
 
     let requested_scope = serde_json::json!({
         "actions": [
@@ -2114,12 +2136,12 @@ fn provisioned_agent_fanout_uses_the_active_controller_device_generation() {
 async fn provisioned_agent_fanout_uses_the_active_controller_device_generation_body() {
     let mut config = test_config();
     config.development_mode = true;
-    let state = soland_test_support::app_state(config);
-    let controller = "did:web:alice.example";
+    let state = soland_test_support::app_state_with_postgres_governance(config);
+    let controller = controller_fixture_did();
     let token = "agent-device-generation-session";
+    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
-    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
 
     let (status, body) = provision_agent_with_sdk_events(
         &state,

@@ -186,3 +186,179 @@ pub(crate) async fn load_confirmed_device_history(
     cache.insert(account.clone(), history.clone());
     Ok(Some(history))
 }
+
+/// Build the device-Control projection that must commit atomically with one
+/// candidate PCR Seal. Non-PCR Realms return `None`; once a Realm is bound as a
+/// local PCR, missing or inconsistent history is an error and the Seal must not
+/// become visible without its portable signer roots.
+pub(crate) async fn candidate_device_control_projection(
+    state: &AppState,
+    candidate: &arkret_wire::Seal,
+    suite: arkret_canonical::DigestSuite,
+) -> Result<Option<soland_storage::ConfirmedDeviceControlProjection>, HistoryEvidenceError> {
+    let Some(binding) = state
+        .persistence()
+        .principal_resolution_for_realm(&candidate.realm_id)
+        .await
+        .map_err(unavailable)?
+    else {
+        return Ok(None);
+    };
+    let account = &binding.account_id;
+    if account.station_id != state.service_core_id()
+        || binding.pcr_realm_id != candidate.realm_id
+        || binding.genesis_event.realm_id != candidate.realm_id
+        || binding.genesis_event.actor_id != ActorId::account(account.clone())
+        || binding.genesis_event.executed_by.is_some()
+    {
+        return Err(invalid(
+            "candidate PCR Seal does not bind the local Account authority",
+        ));
+    }
+    let genesis = &binding.genesis_event;
+    let create = genesis
+        .typed_payload::<arkret_wire::event_spec::RealmCreate>()
+        .map_err(invalid)?;
+    if create.object.purpose
+        != arkret_models_collaboration::events_payloads::RealmPurpose::PrincipalControl
+    {
+        return Ok(None);
+    }
+    if create.object.digest_algorithm != suite {
+        return Err(invalid(
+            "candidate PCR Seal digest suite differs from its genesis",
+        ));
+    }
+    let initial = create
+        .object
+        .initial_resolution
+        .as_ref()
+        .ok_or_else(|| unavailable("registered PCR inception resolution is missing"))?;
+    let entries = state
+        .dids()
+        .log_events(initial.did.as_str())
+        .await
+        .map_err(unavailable)?;
+    let mut inception_entries = entries.iter().filter(|entry| entry.seq == 1);
+    let entry = inception_entries
+        .next()
+        .ok_or_else(|| unavailable("registered PCR original DID inception is missing"))?;
+    if inception_entries.next().is_some() || entry.did != initial.did.as_str() {
+        return Err(invalid(
+            "DID inception storage has an ambiguous subject or entry",
+        ));
+    }
+    let inception = arkret_models_identity::DidOperationSubmitRequestBody {
+        did: initial.did.clone(),
+        did_method: arkret_models_identity::DidMethodName::Webvh,
+        seq: Some(entry.seq),
+        prev_event_digest: None,
+        operation: serde_json::from_value(entry.operation.clone()).map_err(invalid)?,
+    };
+    let root = arkret_signatures::webvh::validate_principal_inception_operation(&inception)
+        .map_err(invalid)?;
+    if root.principal_id != account.principal_id {
+        return Err(invalid(
+            "DID inception root does not authenticate the selected Account",
+        ));
+    }
+    let [proof] = genesis.proofs.as_slice() else {
+        return Err(invalid(
+            "PCR genesis requires its unique inception-root proof",
+        ));
+    };
+    proof.validate_production().map_err(invalid)?;
+    if proof.verification_method != root.root_verification_method
+        || proof.created_at != genesis.created_at
+    {
+        return Err(invalid(
+            "PCR genesis proof differs from its authenticated root",
+        ));
+    }
+    genesis
+        .verify_event_id_matches_content_with_digest_suite(suite)
+        .map_err(invalid)?;
+    let root_key = arkret_canonical::decode_ed25519_multibase(&root.root_public_key_multibase)
+        .map_err(invalid)?;
+    let bytes = arkret_signatures::proof::EventProofBuilder::new()
+        .envelope_bytes(genesis)
+        .map_err(invalid)?;
+    arkret_signatures::proof::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        &bytes,
+        &genesis.actor_id,
+        &arkret_signatures::proof::PublicKeyMaterial::Ed25519Raw {
+            bytes: root_key.to_vec(),
+        },
+        suite,
+    )
+    .map_err(invalid)?;
+
+    let mut seals = Vec::new();
+    let mut seen_seals = BTreeSet::new();
+    let mut next = Some(candidate.clone());
+    while let Some(seal) = next {
+        if !seen_seals.insert(seal.id.clone()) {
+            return Err(invalid("candidate PCR Seal prefix contains a cycle"));
+        }
+        if seal.realm_id != candidate.realm_id {
+            return Err(invalid(
+                "candidate PCR Seal prefix crosses a Realm boundary",
+            ));
+        }
+        next = match seal.predecessor_ref.as_ref() {
+            Some(predecessor) => Some(
+                state
+                    .projections()
+                    .seal_by_id(predecessor)
+                    .await
+                    .map_err(unavailable)?
+                    .ok_or_else(|| unavailable("candidate PCR predecessor Seal is missing"))?,
+            ),
+            None => None,
+        };
+        seals.push(seal);
+    }
+    seals.reverse();
+    let mut events = Vec::new();
+    let mut seen_events = BTreeSet::new();
+    for seal in &seals {
+        for result in &seal.command_results {
+            if result.outcome != arkret_wire::CommandOutcome::Committed {
+                continue;
+            }
+            for digest in &result.unit_event_digests {
+                let event = state
+                    .projections()
+                    .control_event_by_digest(digest)
+                    .await
+                    .map_err(unavailable)?
+                    .ok_or_else(|| unavailable("candidate PCR committed Event is missing"))?;
+                if event.realm_id != candidate.realm_id
+                    || event.event_id.event_digest() != *digest
+                    || !seen_events.insert(event.event_id.clone())
+                {
+                    return Err(invalid(
+                        "candidate PCR committed Event identity or uniqueness is invalid",
+                    ));
+                }
+                events.push(event);
+            }
+        }
+    }
+    let history = arkret::DeviceAuthorizationHistory::verify(
+        account,
+        &genesis.event_id,
+        &create.object.notary,
+        &inception,
+        &candidate.id,
+        &seals,
+        &events,
+        suite,
+    )?;
+    soland_storage::ConfirmedDeviceControlProjection::from_verified_history(
+        history, &inception, &seals, &events, suite,
+    )
+    .map(Some)
+    .map_err(invalid)
+}

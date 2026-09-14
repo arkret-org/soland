@@ -380,8 +380,20 @@ pub(crate) async fn seed_seal_with_direct_event_effects(
         seal.state_root,
         "bootstrap sealed effects must match Seal state_root"
     );
+    let confirmed_device_control = soland_http::test_candidate_device_control_projection_fixture(
+        state,
+        seal,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .await
+    .expect("derive bootstrap device Control projection from verified history");
     state
-        .test_commit_bootstrap_seal(seal, arkret_canonical::DigestSuite::Sha256, &ops)
+        .test_commit_bootstrap_seal(
+            seal,
+            arkret_canonical::DigestSuite::Sha256,
+            &ops,
+            confirmed_device_control.as_ref(),
+        )
         .await
         .expect("bootstrap Seal, cell effects and effective-state checkpoint commit atomically");
 }
@@ -1775,7 +1787,7 @@ pub(crate) async fn install_confirmed_device_history_fixture(
             .await
             .expect("persist confirmed device history Event");
     }
-    soland_test_support::device_authorization_history::commit_confirmed_history_fixture(
+    soland_test_support::confirmed_device_history_commit::commit_confirmed_history_fixture(
         state, fixture,
     )
     .await
@@ -1818,12 +1830,6 @@ pub(crate) async fn install_confirmed_device_history_fixture(
         ));
     }
 
-    state
-        .test_persistence()
-        .devices()
-        .install_confirmed_history(&verified)
-        .await
-        .expect("install confirmed device history");
     verified
 }
 
@@ -1849,19 +1855,13 @@ pub(crate) async fn extend_confirmed_device_history_fixture(
             .await
             .expect("persist appended confirmed device history Event");
     }
-    soland_test_support::device_authorization_history::commit_confirmed_history_fixture_from(
+    soland_test_support::confirmed_device_history_commit::commit_confirmed_history_fixture_from(
         state,
         fixture,
         first_seal_index,
     )
     .await
     .expect("commit appended confirmed device history through registered Control units");
-    state
-        .test_persistence()
-        .devices()
-        .install_confirmed_history(&verified)
-        .await
-        .expect("install extended confirmed device history");
     verified
 }
 

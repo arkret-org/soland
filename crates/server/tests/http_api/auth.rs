@@ -394,9 +394,6 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
         .unwrap(),
     );
     device_history.append(vec![device_b_authorize]);
-    let verified_history = device_history
-        .verify()
-        .expect("fixture device history verifies");
     let actor_did = device_history.did.to_string();
     let principal_id = device_history.account.principal_id.clone();
     let actor = principal_id.to_string();
@@ -404,30 +401,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
     let device_b = soland_test_support::device_authorization_history::device(2).to_string();
     let token_a = dev_token_for_device(state.clone(), &actor_did, &device_a, "Alice Phone").await;
     let _token_b = dev_token_for_device(state.clone(), &actor_did, &device_b, "Alice Tablet").await;
-    for event in &device_history.events {
-        state
-            .test_persistence()
-            .events()
-            .put(soland_test_support::signed_event::canonical_event_record(
-                event,
-                Some(event.realm_id.as_str()),
-                event.created_at,
-            ))
-            .await
-            .expect("persist fixture device history Event");
-    }
-    for seal in &device_history.seals {
-        state
-            .test_put_seal(seal, arkret_canonical::DigestSuite::Sha256)
-            .await
-            .expect("persist fixture device history Seal");
-    }
-    state
-        .test_persistence()
-        .devices()
-        .install_confirmed_history(&verified_history)
-        .await
-        .expect("install verified device history");
+    let verified_history = install_confirmed_device_history_fixture(&state, &device_history).await;
     let device_a_authorize_event = verified_history
         .authorization(&device_history.events[1].event_id)
         .expect("fixture first device authorization")

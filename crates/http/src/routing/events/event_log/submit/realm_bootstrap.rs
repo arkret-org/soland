@@ -692,6 +692,59 @@ pub(crate) async fn publish_confirmed_realm_bootstrap(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let expected_timeline = projected
+        .iter()
+        .map(|projected| {
+            crate::routing::events::projection::projection_event_from_operation(
+                &projected.operation,
+                Some(create.actor_id.signing_principal_id().as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+    // The projection timeline is written only after every bootstrap mirror
+    // effect succeeds.  Therefore a complete set of existing event-id rows is
+    // the durable idempotency checkpoint: an exact Event replay must not run
+    // the sequenced reducers a second time (for example, re-applying the
+    // initial policy revision after the Realm already holds that revision).
+    // Presence alone is insufficient: a conflicting derived row must remain a
+    // hard failure rather than being laundered into an exact retry. The local
+    // `received_at` is deliberately excluded because it records the first
+    // projection attempt and is not part of the canonical Event-derived
+    // identity.
+    let mut existing_count = 0usize;
+    for expected in &expected_timeline {
+        let existing = state
+            .event_queries()
+            .projected_event(expected.event_id.as_str())
+            .await
+            .map_err(|error| error.to_string())?;
+        match existing {
+            Some(existing) if same_bootstrap_projection(&existing, expected) => {
+                existing_count += 1;
+            }
+            Some(_) => {
+                return Err(format!(
+                    "confirmed bootstrap projection conflicts with existing timeline row {}",
+                    expected.event_id
+                ));
+            }
+            None => {}
+        }
+    }
+    if existing_count != 0 && existing_count != expected_timeline.len() {
+        return Err("confirmed bootstrap has a partial projection timeline".to_owned());
+    }
+    let already_published = existing_count == expected_timeline.len();
+    if already_published {
+        organizations::record_realm_organizations_from_event(
+            state,
+            realm_id.as_str(),
+            &serde_json::to_value(create).map_err(|error| error.to_string())?,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        return Ok(true);
+    }
     let staged = match state
         .projections()
         .stage_realm_bootstrap(&projected, direct)
@@ -706,7 +759,7 @@ pub(crate) async fn publish_confirmed_realm_bootstrap(
             .install_staged_realm_bootstrap(staged)
             .map_err(|error| error.reason)?;
     }
-    for projected in &projected {
+    for (projected, record) in projected.iter().zip(expected_timeline) {
         let operation = &projected.operation;
         crate::routing::events::projection::ensure_projected_realm(
             state,
@@ -714,10 +767,6 @@ pub(crate) async fn publish_confirmed_realm_bootstrap(
             operation,
         )
         .await;
-        let record = crate::routing::events::projection::projection_event_from_operation(
-            operation,
-            Some(create.actor_id.signing_principal_id().as_str()),
-        );
         crate::routing::events::projection::persist_and_publish_projection_event(state, record)
             .await
             .map_err(|error| error.to_string())?;
@@ -730,4 +779,64 @@ pub(crate) async fn publish_confirmed_realm_bootstrap(
     .await
     .map_err(|error| error.to_string())?;
     Ok(true)
+}
+
+fn same_bootstrap_projection(
+    existing: &soland_services::events::ProjectedEvent,
+    expected: &soland_services::events::ProjectedEvent,
+) -> bool {
+    existing.event_id == expected.event_id
+        && existing.realm_id == expected.realm_id
+        && existing.event_kind == expected.event_kind
+        && existing.operation_kind == expected.operation_kind
+        && existing.operation_id == expected.operation_id
+        && existing.sender == expected.sender
+        && existing.payload == expected.payload
+        && existing.created_at == expected.created_at
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+    use soland_services::events::ProjectedEvent;
+
+    use super::same_bootstrap_projection;
+
+    fn projected_event() -> ProjectedEvent {
+        ProjectedEvent {
+            event_id: format!("ak:event:sha256:{}", "1".repeat(64)),
+            realm_id: format!("ak:realm:sha256:{}", "2".repeat(64)),
+            event_kind: arkret_wire::EventKind::RealmPolicyBundle,
+            operation_kind: "update".to_owned(),
+            operation_id: Some("bootstrap-policy".to_owned()),
+            sender: Some("ak:did_core:key:owner".to_owned()),
+            payload: serde_json::json!({"policy_revision": 1}),
+            created_at: chrono::Utc.timestamp_millis_opt(1_700_000_000_000).unwrap(),
+            received_at: chrono::Utc.timestamp_millis_opt(1_700_000_000_100).unwrap(),
+        }
+    }
+
+    #[test]
+    fn bootstrap_projection_retry_ignores_only_local_projection_time() {
+        let expected = projected_event();
+        let mut existing = expected.clone();
+        existing.received_at = chrono::Utc.timestamp_millis_opt(1_700_000_000_200).unwrap();
+        assert!(same_bootstrap_projection(&existing, &expected));
+
+        let rejects = |mutate: fn(&mut ProjectedEvent)| {
+            let mut existing = expected.clone();
+            mutate(&mut existing);
+            assert!(!same_bootstrap_projection(&existing, &expected));
+        };
+        rejects(|event| event.event_id.push('x'));
+        rejects(|event| event.realm_id.push('x'));
+        rejects(|event| event.event_kind = arkret_wire::EventKind::RealmProfile);
+        rejects(|event| event.operation_kind = "create".to_owned());
+        rejects(|event| event.operation_id = None);
+        rejects(|event| event.sender = None);
+        rejects(|event| event.payload = serde_json::json!({"policy_revision": 2}));
+        rejects(|event| {
+            event.created_at = chrono::Utc.timestamp_millis_opt(1_700_000_000_001).unwrap();
+        });
+    }
 }

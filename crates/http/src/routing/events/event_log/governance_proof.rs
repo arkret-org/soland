@@ -452,20 +452,30 @@ async fn apply_authoritative_event_seal_path(
             .filter(|(_, issued)| delta.contains(&issued.op.event_id.event_digest()))
             .cloned()
             .collect::<Vec<_>>();
+        let seal_digest_suite = state
+            .projections()
+            .seal_digest_suites(seal)
+            .await
+            .map_err(proof_state_error)?
+            .seal_digest_suite;
+        let confirmed_device_control =
+            crate::routing::identity::device_generation::candidate_device_control_projection(
+                state,
+                seal,
+                seal_digest_suite,
+            )
+            .await
+            .map_err(proof_state_error)?;
         match state
             .projections()
             .commit_event_seal_if_head(
                 seal,
-                state
-                    .projections()
-                    .seal_digest_suites(seal)
-                    .await
-                    .map_err(proof_state_error)?
-                    .seal_digest_suite,
+                seal_digest_suite,
                 head.as_ref(),
                 &new_ops,
                 &target,
                 &[],
+                confirmed_device_control.as_ref(),
             )
             .await
         {

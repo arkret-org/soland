@@ -412,7 +412,7 @@ fn server_describe_advertises_account_authority_and_oidc_method_when_configured(
 
 async fn server_describe_advertises_account_authority_and_oidc_method_when_configured_body() {
     let mut config = test_config();
-    config.account_authority_url = Some("https://auth.local.host".to_owned());
+    config.account_authority_url = Some("https://auth.local.host/".to_owned());
     config.oidc_client_id = Some("01GFWR28C4KNE04WG3HKXB7C9R".to_owned());
     let service = app_from_state(soland_test_support::app_state(config));
 
@@ -430,7 +430,7 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
     assert_eq!(describe["auth_metadata"]["methods"][0]["method"], "oidc");
     assert_eq!(
         describe["auth_metadata"]["methods"][0]["issuer_uri"],
-        "https://auth.local.host"
+        "https://auth.local.host/"
     );
     assert_eq!(
         describe["auth_metadata"]["methods"][0]["openid_configuration_url"],

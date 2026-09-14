@@ -673,6 +673,7 @@ mod test_construction {
             )],
             covered: &BTreeSet<arkret_identifiers::Hash>,
             governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+            confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
         ) -> arkret_state::state::StoreResult<bool> {
             self.0
                 .commit_if_head(
@@ -682,6 +683,7 @@ mod test_construction {
                     new_ops,
                     covered,
                     governance_dependencies,
+                    confirmed_device_control,
                 )
                 .await
         }
@@ -2328,6 +2330,7 @@ mod membership_hydration_tests {
             )],
             _covered: &BTreeSet<arkret_wire::Hash>,
             _dependencies: &[soland_storage::GovernanceDependencyWrite],
+            _confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
         ) -> arkret_state::state::StoreResult<bool> {
             panic!("hydration is read-only")
         }

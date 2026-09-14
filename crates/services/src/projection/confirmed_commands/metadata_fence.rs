@@ -38,6 +38,7 @@ mod tests {
             _ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
             _dependencies: &[soland_storage::GovernanceDependencyWrite],
+            _confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
         ) -> StoreResult<bool> {
             let projection = self.projection.lock().as_ref().unwrap().clone();
             assert_eq!(
@@ -190,6 +191,7 @@ mod tests {
                     &[],
                     &BTreeSet::new(),
                     &[],
+                    None,
                 )
                 .await;
             assert_eq!(result.is_err(), fail);
@@ -325,7 +327,8 @@ mod tests {
                     Some(&old_head.id),
                     &[],
                     &BTreeSet::new(),
-                    &[]
+                    &[],
+                    None,
                 )
                 .await
                 .unwrap()
@@ -472,6 +475,7 @@ impl ProjectionService {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
     ) -> StoreResult<bool> {
         let invalidated = self.invalidate_committing_metadata(seal).await?;
         let result = self
@@ -483,6 +487,7 @@ impl ProjectionService {
                 new_ops,
                 covered,
                 governance_dependencies,
+                confirmed_device_control,
             )
             .await;
         if !matches!(&result, Ok(true))
