@@ -1795,6 +1795,7 @@ async fn ordinary_event_capability_ref_must_resolve() {
         &object,
         &ordinary_event_derived_cells(),
         false,
+        false,
     )
     .await
     .expect_err("unknown capability_ref must reject");
@@ -1822,6 +1823,7 @@ async fn ordinary_event_capability_must_cover_derived_cell() {
         &object,
         &ordinary_event_derived_cells(),
         false,
+        false,
     )
     .await
     .expect("matching grant must cover the derived ordinary Event cell");
@@ -1845,6 +1847,7 @@ async fn ordinary_event_capability_must_cover_derived_cell() {
         "ak.message.create",
         &wrong_action_object,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await
@@ -1876,6 +1879,7 @@ async fn ordinary_event_rejects_producer_selected_capability_fields() {
         &with_capability_refs,
         &ordinary_event_derived_cells(),
         false,
+        false,
     )
     .await
     .expect_err("auth_context.capability_refs must be refused");
@@ -1898,6 +1902,7 @@ async fn ordinary_event_rejects_producer_selected_capability_fields() {
         "ak.message.create",
         &with_effects,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await
@@ -1925,6 +1930,7 @@ async fn ordinary_event_without_authorized_by_refs_uses_the_derived_capability_s
         "ak.message.create",
         &object,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await
@@ -1968,6 +1974,7 @@ async fn applet_ordinary_event_uses_exact_executed_by_grant_at_seal_ref() {
         &object,
         &ordinary_event_derived_cells(),
         false,
+        false,
     )
     .await
     .expect("Applet ordinary Event must use its executor's exact install grant");
@@ -1983,6 +1990,7 @@ async fn applet_ordinary_event_uses_exact_executed_by_grant_at_seal_ref() {
         "ak.message.create",
         &self_action,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await
@@ -2000,6 +2008,7 @@ async fn applet_ordinary_event_uses_exact_executed_by_grant_at_seal_ref() {
         "ak.message.create",
         &object,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await
@@ -2024,6 +2033,7 @@ async fn ordinary_event_capability_ref_must_not_be_revoked() {
         "ak.message.create",
         &object,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await
@@ -2056,6 +2066,7 @@ async fn ordinary_event_capability_ref_reports_upstream_revoked_authority() {
         &object,
         &ordinary_event_derived_cells(),
         false,
+        false,
     )
     .await
     .expect_err("child capability_ref with revoked parent must reject");
@@ -2084,6 +2095,7 @@ async fn ordinary_event_uses_seal_ref_pre_state_not_live_authz_index() {
         &object,
         &ordinary_event_derived_cells(),
         false,
+        false,
     )
     .await
     .expect(
@@ -2109,6 +2121,7 @@ async fn current_revocation_blocks_a_new_ordinary_event_admission() {
         "ak.message.create",
         &object,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await
@@ -2140,6 +2153,7 @@ async fn current_revocation_blocks_admission_regardless_of_seal_distance() {
         "ak.message.create",
         &object,
         &ordinary_event_derived_cells(),
+        false,
         false,
     )
     .await

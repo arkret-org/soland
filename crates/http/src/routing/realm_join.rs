@@ -660,7 +660,7 @@ async fn verify_peer_bootstrap(
         &seals,
         &events,
         &dependencies,
-        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
+        crate::routing::governance_history::historical_governance_key_verifier(state.clone()),
     )
     .await
     .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;

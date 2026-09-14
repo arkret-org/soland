@@ -189,6 +189,7 @@ use realm_index::{
 };
 
 mod submit;
+pub(crate) use submit::verify_historical_producer;
 
 /// Reuse the durable, closed Ack-less admission classification for external PCR signing.
 pub(crate) async fn validate_pcr_prepare_ackless_ingress(

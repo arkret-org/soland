@@ -437,7 +437,9 @@ impl RhrkAcquisitionWorker {
             &cut_seals,
             &event_values,
             &dependency_values,
-            super::super::governance_history::agent_history_key_verifier(self.state.clone()),
+            super::super::governance_history::historical_governance_key_verifier(
+                self.state.clone(),
+            ),
         )
         .await
         .map_err(|error| format!("checkpoint_replay:{error}"))?;

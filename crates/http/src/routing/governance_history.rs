@@ -3165,7 +3165,7 @@ async fn validate_retained_history_cut(
         &prepared.replay_seals,
         &prepared.replay_events,
         &prepared.checkpoint_dependencies,
-        agent_history_key_verifier(state.clone()),
+        historical_governance_key_verifier(state.clone()),
     )
     .await
     .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
@@ -3263,30 +3263,52 @@ pub(crate) async fn verify_agent_history_trust(
     }
 }
 
-pub(crate) fn agent_history_key_verifier(
+pub(crate) fn historical_governance_key_verifier(
     state: AppState,
 ) -> impl for<'a> Fn(
     &'a arkret_wire::Event,
     arkret_canonical::DigestSuite,
     &'a arkret::AuthenticatedSignerResolutionEvidence,
     &'a [GovernanceDependency],
-) -> arkret::VerifyAgentHistoryKeyFuture<'a>
+) -> arkret::VerifyHistoricalGovernanceKeyFuture<'a>
 + Clone
 + Send
 + 'static {
-    move |event, _digest_suite, evidence, dependencies| {
+    move |event, digest_suite, evidence, dependencies| {
         let state = state.clone();
         Box::pin(async move {
-            arkret::verify_agent_historical_event_key(
-                event,
-                evidence,
-                dependencies,
-                move |request| {
-                    let state = state.clone();
-                    Box::pin(async move { verify_agent_history_trust(&state, request).await })
-                },
-            )
-            .await
+            match evidence {
+                arkret::AuthenticatedSignerResolutionEvidence::AccountDeviceControl { .. } => {
+                    let producer = crate::routing::events::event_log::verify_historical_producer(
+                        &state,
+                        event,
+                        digest_suite,
+                    )
+                    .await
+                    .map_err(arkret_wire::WireError::Protocol)?;
+                    Ok(arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                        bytes: producer.key().to_vec(),
+                    })
+                }
+                arkret::AuthenticatedSignerResolutionEvidence::Agent { .. } => {
+                    arkret::verify_agent_historical_event_key(
+                        event,
+                        evidence,
+                        dependencies,
+                        move |request| {
+                            let state = state.clone();
+                            Box::pin(
+                                async move { verify_agent_history_trust(&state, request).await },
+                            )
+                        },
+                    )
+                    .await
+                }
+                _ => Err(arkret_wire::WireError::Protocol(
+                    "historical governance key resolver received a document-backed evidence kind"
+                        .to_owned(),
+                )),
+            }
         })
     }
 }

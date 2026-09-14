@@ -74,7 +74,7 @@ async fn retained_evidence(
     Ok(*evidence)
 }
 
-pub(in crate::routing::events::event_log) async fn verify_historical_producer(
+pub(crate) async fn verify_historical_producer(
     state: &AppState,
     event: &Event,
     digest_suite: arkret_canonical::DigestSuite,

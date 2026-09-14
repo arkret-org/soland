@@ -1121,7 +1121,7 @@ pub(in crate::routing) async fn materialize_governance_frontier(
         &checkpoint,
         &group_genesis_binding,
         &leaves,
-        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
+        crate::routing::governance_history::historical_governance_key_verifier(state.clone()),
     )
     .await
     .map_err(map_governance_frontier_error)
@@ -1192,7 +1192,7 @@ async fn load_governance_checkpoint(
         &seals.into_values().collect::<Vec<_>>(),
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
-        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
+        crate::routing::governance_history::historical_governance_key_verifier(state.clone()),
     )
     .await
     .map(|verified| verified.checkpoint)
@@ -1263,7 +1263,7 @@ pub(crate) async fn load_verified_governance_checkpoint(
         &seals.into_values().collect::<Vec<_>>(),
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
-        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
+        crate::routing::governance_history::historical_governance_key_verifier(state.clone()),
     )
     .await
     .map(|verified| verified.checkpoint)
@@ -1370,6 +1370,29 @@ async fn load_checkpoint_dependencies(
     Ok(dependencies.into_values().collect())
 }
 
+fn references_retained_account_device_control(
+    evidence_ref: Option<&arkret_wire::SignerEvidenceRef>,
+    dependencies: &[GovernanceDependency],
+) -> bool {
+    evidence_ref.is_some_and(|evidence_ref| {
+        dependencies.iter().any(|dependency| {
+            let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                authenticated_signer_resolution_evidence: evidence,
+                ..
+            } = dependency
+            else {
+                return false;
+            };
+            matches!(
+                evidence.as_ref(),
+                arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDeviceControl { .. }
+            ) && evidence
+                .evidence_ref()
+                .is_ok_and(|retained_ref| &retained_ref == evidence_ref)
+        })
+    })
+}
+
 pub(crate) async fn verify_retained_control_event_proofs(
     state: &AppState,
     event: &Event,
@@ -1384,11 +1407,57 @@ pub(crate) async fn verify_retained_control_event_proofs(
     )
     .await
     .map_err(|error| error.to_string())?;
+    let uses_account_device_control = references_retained_account_device_control(
+        event
+            .proofs
+            .first()
+            .and_then(|proof| proof.signer_resolution_evidence_ref.as_ref()),
+        &dependencies,
+    );
+    if uses_account_device_control {
+        let producer = crate::routing::events::event_log::submit::verify_historical_producer(
+            state,
+            event,
+            digest_suite,
+        )
+        .await?;
+        let authorization = producer
+            .account_device_control_authorization()
+            .ok_or_else(|| {
+                "historical Control producer did not retain its verified device authorization"
+                    .to_owned()
+            })?;
+        arkret::verify_retained_governance_event_auxiliary_proofs(
+            event,
+            digest_suite,
+            &dependencies,
+            producer.signer().signing_principal_id(),
+            producer.verification_method(),
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: producer.key().to_vec(),
+            },
+            |method, at| {
+                if method != producer.verification_method()
+                    || !authorization.authorization_contains(at)
+                {
+                    return Err(arkret_wire::WireError::Protocol(
+                        "Control auxiliary proof is outside the verified device authority"
+                            .to_owned(),
+                    ));
+                }
+                Ok(arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: producer.key().to_vec(),
+                })
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
     arkret::verify_retained_governance_event_proofs(
         event,
         digest_suite,
         &dependencies,
-        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
+        crate::routing::governance_history::historical_governance_key_verifier(state.clone()),
     )
     .await
     .map_err(|error| error.to_string())
@@ -2061,6 +2130,95 @@ fn proof_state_error(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account_device_control_dependency() -> (arkret_wire::SignerEvidenceRef, GovernanceDependency)
+    {
+        let evidence: arkret_models_identity::AuthenticatedSignerResolutionEvidence =
+            serde_json::from_value(serde_json::json!({
+                "kind": "account_device_control",
+                "signer_id": "ak:did_core:webvh:z6mkfixture-control.example",
+                "account_id": {
+                    "principal_id": "ak:did_core:webvh:z6mkfixture-control.example",
+                    "station_id": "ak:did_core:web:station.example"
+                },
+                "device_id": "ak:device:019b0000-0000-7000-8000-000000000001",
+                "verification_method": "did:webvh:z6mkfixture-control.example#ak:device:019b0000-0000-7000-8000-000000000001",
+                "authorization_event_ref": "ak:event:AQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
+                "authorized_generation_ref": 1,
+                "generation_event_ref": "ak:event:AQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
+                "confirmation_seal_ref": "ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "pcr_genesis_event_ref": "ak:event:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                "principal_inception": {
+                    "did": "did:webvh:z6mkfixture-control.example",
+                    "did_method": "webvh",
+                    "seq": 0,
+                    "operation": {
+                        "type": "create",
+                        "root_verification_method": "did:webvh:z6mkfixture-control.example#root-1"
+                    }
+                },
+                "history_event_refs": [
+                    "ak:event:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                    "ak:event:AQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC"
+                ],
+                "history_seal_refs": [
+                    "ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ]
+            }))
+            .unwrap();
+        let reference = evidence.evidence_ref().unwrap();
+        let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+            content_digest: reference.content_digest().unwrap(),
+        };
+        (
+            reference,
+            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                selector,
+                authenticated_signer_resolution_evidence: Box::new(evidence),
+            },
+        )
+    }
+
+    #[test]
+    fn retained_account_device_control_dispatch_requires_exact_root_reference() {
+        let (reference, dependency) = account_device_control_dependency();
+        assert!(references_retained_account_device_control(
+            Some(&reference),
+            std::slice::from_ref(&dependency),
+        ));
+        assert!(!references_retained_account_device_control(
+            None,
+            std::slice::from_ref(&dependency),
+        ));
+        let other = arkret_wire::SignerEvidenceRef::new(format!(
+            "ak:signer_evidence:sha256:{}",
+            "0".repeat(64)
+        ))
+        .unwrap();
+        assert!(!references_retained_account_device_control(
+            Some(&other),
+            std::slice::from_ref(&dependency),
+        ));
+
+        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            selector,
+            authenticated_signer_resolution_evidence,
+        } = dependency
+        else {
+            unreachable!();
+        };
+        let mut altered = serde_json::to_value(authenticated_signer_resolution_evidence).unwrap();
+        altered["authorized_generation_ref"] = serde_json::json!(2);
+        let altered = serde_json::from_value(altered).unwrap();
+        let altered_dependency = GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            selector,
+            authenticated_signer_resolution_evidence: Box::new(altered),
+        };
+        assert!(!references_retained_account_device_control(
+            Some(&reference),
+            &[altered_dependency],
+        ));
+    }
 
     #[test]
     fn genesis_binding_uses_exact_accepted_key_schedule() {

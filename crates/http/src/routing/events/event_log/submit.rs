@@ -33,7 +33,7 @@ mod historical_producer;
 pub(in crate::routing) use backfill::{
     admit_frontier_backfill_event, verify_frontier_backfill_event,
 };
-pub(in crate::routing::events::event_log) use historical_producer::verify_historical_producer;
+pub(crate) use historical_producer::verify_historical_producer;
 
 /// Bind the SDK's online-self publication lane to the exact authenticated
 /// principal authority context. Delayed publication is authorized by its
