@@ -7,7 +7,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{HARD_FUTURE_SKEW_MS, Hash, RealmId, SealId};
+use arkret::HARD_FUTURE_SKEW_MS;
+use arkret_identifiers::{Hash, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector,
 };
@@ -2443,8 +2444,7 @@ mod seal_delta_tests {
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-14T15:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let sealed_at =
-            now + chrono::Duration::milliseconds(HARD_FUTURE_SKEW_MS.saturating_add(1));
+        let sealed_at = now + chrono::Duration::milliseconds(HARD_FUTURE_SKEW_MS.saturating_add(1));
 
         let error = validate_seal_submission_time(sealed_at, now)
             .expect_err("a Seal beyond hard future skew must be deferred");
