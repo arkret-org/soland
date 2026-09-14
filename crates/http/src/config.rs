@@ -241,7 +241,7 @@ fn validate_persistence_key_store(
 #[derive(Clone)]
 pub struct InternalAuthorityChannelConfig {
     /// Shared per-edge credential, byte-identical to the Account Authority's
-    /// `stations[].session_grant_introspection_bearer` for this Station. The
+    /// `stations[].internal_authority_shared_secret` for this Station. The
     /// same secret authenticates both directions of this one edge; it is not a
     /// general deployment bearer and grants nothing outside the registered
     /// operations.
@@ -356,7 +356,7 @@ pub struct AppConfig {
     /// be routed or versioned separately and must never be derived from one
     /// another by string substitution.
     pub auth_session_logout_url: Option<String>,
-    pub session_grant_introspection_bearer: Option<String>,
+    pub internal_authority_shared_secret: Option<String>,
     /// The registered deployment-internal authenticated channel between this
     /// Station and its Account Authority (`sync/service-http-binding.md`
     /// §2.2.3), or `None` when no such channel is registered.
@@ -949,7 +949,7 @@ impl AppConfig {
             failpoints: crate::failpoints::FailpointRegistry::disabled(),
             session_grant_introspection_url: None,
             auth_session_logout_url: None,
-            session_grant_introspection_bearer: None,
+            internal_authority_shared_secret: None,
             internal_authority_channel: None,
             // Test fixtures intentionally allow bare `did:web` — the spec
             // conformance vectors use it. The production default
@@ -1013,7 +1013,7 @@ impl AppConfig {
             "test internal channel requires an Account Authority URL"
         );
         let credential = credential.into();
-        self.session_grant_introspection_bearer = Some(credential.clone());
+        self.internal_authority_shared_secret = Some(credential.clone());
         self.internal_authority_channel = Some(InternalAuthorityChannelConfig {
             credential,
             account_authority_trust_domain: self.trust_domain.clone(),
@@ -1115,8 +1115,8 @@ impl AppConfig {
         if let Some(value) = auth_session_logout_url.as_deref() {
             validate_auth_session_logout_url(value)?;
         }
-        let session_grant_introspection_bearer =
-            env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
+        let internal_authority_shared_secret =
+            env_non_empty(values, "SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET");
         let account_authority_trust_domain =
             env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN")
                 .map(|value| {
@@ -1141,13 +1141,13 @@ impl AppConfig {
         // trust domain, a first configured peer, or an unauthenticated call.
         //
         // The credential is the same per-edge secret the Account Authority
-        // holds as `stations[].session_grant_introspection_bearer`; both
+        // holds as `stations[].internal_authority_shared_secret`; both
         // directions of this one edge use it, exactly as coauth does. See
         // `AppConfig::internal_authority_channel` for what registering the
         // channel asserts about the link.
         let internal_authority_channel = match (
             account_authority_url.as_deref(),
-            session_grant_introspection_bearer.as_deref(),
+            internal_authority_shared_secret.as_deref(),
             account_authority_trust_domain,
         ) {
             (Some(authority_url), Some(credential), Some(account_authority_trust_domain)) => {
@@ -1412,7 +1412,7 @@ impl AppConfig {
             failpoints,
             session_grant_introspection_url,
             auth_session_logout_url,
-            session_grant_introspection_bearer,
+            internal_authority_shared_secret,
             internal_authority_channel,
             did_resolver_allow_methods,
             embedded_webvh_provider_enabled,
@@ -2242,7 +2242,7 @@ mod tests {
                 "ak:trust_domain:auth.example".to_owned(),
             ),
             (
-                "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER".to_owned(),
+                "SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET".to_owned(),
                 "test-internal-channel-secret".to_owned(),
             ),
             (

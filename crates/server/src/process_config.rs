@@ -12,7 +12,7 @@ const NO_ENV_OVERRIDES_ARG: &str = "--no-env-overrides";
 const FILE_BACKED_SECRETS: &[&str] = &[
     "SOLAND_KEYSTORE_MASTER_KEY",
     "SOLAND_LIVEKIT_API_SECRET",
-    "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
+    "SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET",
     "SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
     "SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER",
     "SOLAND_TURN_SHARED_SECRET",
@@ -84,16 +84,19 @@ fn resolve_value_or_file(
                 )
             })?;
             let value = raw.trim();
-            (!value.is_empty()).then(|| value.to_owned())
+            anyhow::ensure!(
+                !value.is_empty(),
+                "{file_name} points to an empty secret file"
+            );
+            Some(value.to_owned())
         }
         None => None,
     };
     match (direct.map(ToOwned::to_owned), file_value) {
         (None, None) => Ok(None),
         (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
-        (Some(direct), Some(file)) if direct == file => Ok(Some(direct)),
         (Some(_), Some(_)) => {
-            anyhow::bail!("{name} and {file_name} are both set to different values; pick one")
+            anyhow::bail!("{name} and {file_name} are both set; pick one")
         }
     }
 }
@@ -267,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_direct_and_file_secrets_are_rejected() {
+    fn direct_and_file_secret_sources_are_mutually_exclusive() {
         let path = write_file("conflicting-secret", "from-file\n");
         let mut values = BTreeMap::from([
             ("SOLAND_TURN_SHARED_SECRET".to_owned(), "direct".to_owned()),
@@ -277,7 +280,21 @@ mod tests {
             ),
         ]);
         let error = resolve_secret_files(&mut values).unwrap_err();
-        assert!(error.to_string().contains("both set to different values"));
+        assert!(error.to_string().contains("both set"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn empty_secret_file_is_rejected() {
+        let path = write_file("empty-secret", "  \n");
+        let error = resolve_value_or_file(
+            "SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET",
+            "SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET_FILE",
+            None,
+            Some(path.to_str().unwrap()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("empty secret file"));
         let _ = std::fs::remove_file(path);
     }
 }

@@ -197,7 +197,7 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
-  -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
+  -e SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
@@ -241,7 +241,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN` | unset | Explicit source trust domain of the configured Account Authority; required to register the unsigned §2.2.3 internal channel and never derived from its URL |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | Exact `/_arkret/gate/account/session-grants/introspect` endpoint used for `ak.session.grant + DPoP`; when the internal channel is registered it must match the Account Authority scheme, host and effective port and contain no credentials/query/fragment |
 | `SOLAND_AUTH_SESSION_LOGOUT_URL` | unset | Exact Account Authority process S2S `/_arkret/gate/account/auth-sessions/logout` endpoint; never derived from the introspection URL and subject to the same origin/URL restrictions |
-| `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Shared per-edge credential for this Station ↔ its Account Authority. Together with the Authority URL/trust domain it registers the trusted-proxy §2.2.3 channel, confined to exact-token introspection, Auth-side logout, controller-gate issue, and device-revocation gate check. Agent projection GET and Agent key pairing instead require the Station DID's delegated `#account-authority` RFC 9421 signature; this bearer never authorizes them |
+| `SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET` | unset | Shared per-edge secret for this Station ↔ its Account Authority, presented as an HTTP Bearer token. Together with the Authority URL/trust domain it registers the trusted-proxy §2.2.3 channel, confined to exact-token introspection, Auth-side logout, controller-gate issue, and device-revocation gate check. Agent projection GET and Agent key pairing instead require the Station DID's delegated `#account-authority` RFC 9421 signature; this secret never authorizes them |
 | `DATABASE_URL` | unset | Required for runtime startup; enables PostgreSQL and runs migrations. In-memory persistence is test-only, and a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `filesystem`/`local` |
@@ -348,7 +348,7 @@ SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:auth.local.host
 SOLAND_OAUTH_CLIENT_ID=01GFWR28C4KNE04WG3HKXB7C9R
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_arkret/gate/account/session-grants/introspect
 SOLAND_AUTH_SESSION_LOGOUT_URL=https://auth.local.host/_arkret/gate/account/auth-sessions/logout
-SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=local-coauth-session-grant-introspection
+SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET=local-coauth-session-grant-introspection
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
 ```
 
@@ -480,7 +480,7 @@ The same list is computed at runtime and surfaced on
 - [ ] PQ-hybrid TLS deployment probe verified (`SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified` after `X25519MLKEM768` is negotiated)
 - [ ] CSP header configured at the reverse proxy
 - [ ] CORS limited to the configured allowed origins (`SOLAND_CORS_ALLOW_ORIGIN`)
-- [ ] Secrets in a secret manager (`SOLAND_NOTARY_SIGNING_KEY`, session-grant introspection bearer)
+- [ ] Secrets in a secret manager (`SOLAND_NOTARY_SIGNING_KEY`, internal-authority shared secret)
 - [ ] Log redaction enabled (default outside dev mode)
 - [ ] Admin auth in production mode (`SOLAND_ADMIN_PRINCIPAL_DIDS`, with browser sessions backed by `SOLAND_SESSION_GRANT_INTROSPECTION_URL`)
 - [ ] Rate limit enabled (default; do not disable in production)

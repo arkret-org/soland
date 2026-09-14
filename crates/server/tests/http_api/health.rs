@@ -406,7 +406,7 @@ async fn readyz_returns_503_until_session_grant_internal_channel_is_complete_bod
     // URL + bearer alone must not make the process ready: the unsigned
     // introspection path is unavailable until trust-domain and integrity
     // registration have also produced `internal_authority_channel`.
-    config.session_grant_introspection_bearer = Some("configured-but-insufficient".to_owned());
+    config.internal_authority_shared_secret = Some("configured-but-insufficient".to_owned());
     config.internal_authority_channel = None;
     let service = app_from_state(soland_test_support::app_state(config));
 

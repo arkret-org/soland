@@ -2853,7 +2853,7 @@ mod internal_channel_tests {
                 "https://auth.soland.example".to_owned(),
             ),
             (
-                "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER".to_owned(),
+                "SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET".to_owned(),
                 CREDENTIAL.to_owned(),
             ),
             (

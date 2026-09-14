@@ -116,7 +116,7 @@ SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
 SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
 SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout
-SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
+SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET=<shared-secret-configured-in-coauth>
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
 SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
 SOLAND_OBJECT_STORAGE_S3_REGION=us-east-1
@@ -291,7 +291,7 @@ docker run --name soland --restart=always -d \
   -e SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
-  -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
+  -e SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
@@ -583,9 +583,9 @@ pre-upgrade backup if you need to roll back.
 - The Account Authority signs as this Station with a delegated assertion method, even when it runs at a separate origin.
 - `SOLAND_SESSION_GRANT_INTROSPECTION_URL` points at coauth's
   `/_arkret/gate/account/session-grants/introspect`, and
-  `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared
+  `SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET` matches the shared
   server-to-server secret configured there (coauth's
-  `stations[].session_grant_introspection_bearer` for this Station).
+  `stations[].internal_authority_shared_secret` for this Station).
 - Before registering the channel, Soland canonicalizes
   `SOLAND_ACCOUNT_AUTHORITY_URL` and requires every configured bearer target to
   use its exact origin (same scheme, host and effective port). Introspection and

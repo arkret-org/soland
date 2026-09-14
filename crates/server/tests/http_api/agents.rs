@@ -1958,7 +1958,7 @@ fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
 async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
     let mut config = test_config();
     config.development_mode = true;
-    config.session_grant_introspection_bearer = Some("agent-lifecycle-s2s".to_owned());
+    config.internal_authority_shared_secret = Some("agent-lifecycle-s2s".to_owned());
     let state = soland_test_support::app_state_with_postgres_governance(config);
     let controller = controller_fixture_did();
     let token = "agent-list-session";

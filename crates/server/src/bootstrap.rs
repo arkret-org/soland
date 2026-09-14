@@ -1458,7 +1458,7 @@ fn next_webvh_version_time(head: &Value) -> anyhow::Result<chrono::DateTime<chro
 
 /// JWK `kid` under which an Account Authority publishes its S2S signing key.
 ///
-/// coauth mints this key as `coauth_keystore::ACCOUNT_AUTHORITY_KEY_ID` and
+/// coauth mints this key as `coauth_keyring::ACCOUNT_AUTHORITY_KEY_ID` and
 /// serves its public half in the standard OIDC keyset, so this constant is the
 /// cross-deployment contract between the two processes.
 const ACCOUNT_AUTHORITY_JWK_KID: &str = "coauth-account-authority-v1";
@@ -2220,12 +2220,51 @@ fn seed_public_multibase(seed: &[u8; 32]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arkret_keystore::{InMemoryKeyStore, KeyStore};
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use arkret_keystore::{KeyBytes, KeyStore, KeyStoreError};
     use soland_storage::{DeliveryPolicyStoreRegistry, ResolutionStoreRegistry};
     use soland_storage_postgres::PgPersistenceStore;
     use soland_storage_postgres::test_database::TestDatabase;
 
     use super::*;
+
+    #[derive(Default)]
+    struct TestKeyStore {
+        keys: Mutex<BTreeMap<String, Vec<u8>>>,
+    }
+
+    impl KeyStore for TestKeyStore {
+        fn load(&self, id: &str) -> std::result::Result<KeyBytes, KeyStoreError> {
+            self.keys
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .map(KeyBytes::new)
+                .ok_or_else(|| KeyStoreError::not_found(id))
+        }
+
+        fn store(&self, id: &str, key: &[u8]) -> std::result::Result<(), KeyStoreError> {
+            arkret_keystore::validate_id(id)?;
+            self.keys
+                .lock()
+                .unwrap()
+                .insert(id.to_owned(), key.to_vec());
+            Ok(())
+        }
+
+        fn list(&self) -> std::result::Result<Vec<String>, KeyStoreError> {
+            Ok(self.keys.lock().unwrap().keys().cloned().collect())
+        }
+
+        fn delete(&self, id: &str) -> std::result::Result<(), KeyStoreError> {
+            arkret_keystore::validate_id(id)?;
+            self.keys.lock().unwrap().remove(id);
+            Ok(())
+        }
+    }
 
     /// A durable store on a database leased for the calling test. The lease is
     /// owned by the store, so it lasts exactly as long as the fixture holds it.
@@ -2260,7 +2299,7 @@ mod tests {
     async fn an_account_authority_key_is_authorized_after_the_did_was_minted() {
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
 
         // Mint with no Account Authority in sight.
         resolve_service_identity(
@@ -2363,7 +2402,7 @@ mod tests {
     async fn restart_fails_when_the_configured_account_authority_is_unreachable() {
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         resolve_service_identity(
             &persistence,
             &bootstrap_config(),
@@ -2397,7 +2436,7 @@ mod tests {
     async fn interrupted_rotation_is_recovered_from_its_candidate_key() {
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         resolve_service_identity(
             &persistence,
             &bootstrap_config(),
@@ -2463,7 +2502,7 @@ mod tests {
     async fn endpoint_change_advances_native_did_once_and_survives_restart() {
         let store = leased_store().await;
         let persistence = PersistenceHandle::new(store.clone());
-        let keys = InMemoryKeyStore::new();
+        let keys = TestKeyStore::default();
         let first =
             resolve_service_identity(&persistence, &bootstrap_config(), Some(&keys), None, true)
                 .await
@@ -2594,7 +2633,7 @@ mod tests {
         let config = bootstrap_config();
         let source = leased_store().await;
         let persistence = PersistenceHandle::new(source.clone());
-        let keys = InMemoryKeyStore::new();
+        let keys = TestKeyStore::default();
         resolve_service_identity(&persistence, &config, Some(&keys), None, true)
             .await
             .unwrap();
@@ -2711,7 +2750,7 @@ mod tests {
         let config = bootstrap_config();
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
 
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
             .await
@@ -2785,7 +2824,7 @@ mod tests {
         let config = bootstrap_config();
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
             .await
             .expect("first provisioning");
@@ -2829,7 +2868,7 @@ mod tests {
         };
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
 
         let first = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
             .await
@@ -2871,7 +2910,7 @@ mod tests {
         let config = bootstrap_config();
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
             .await
             .expect("first provisioning");
@@ -2921,7 +2960,7 @@ mod tests {
         let config = bootstrap_config();
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         let bundle_dir = std::env::temp_dir().join(format!(
             "soland-service-identity-bundle-{}",
             uuid::Uuid::new_v4()
@@ -2966,7 +3005,7 @@ mod tests {
     async fn rotated_identity_bundle_replays_the_complete_history() {
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         let bundle_dir = std::env::temp_dir().join(format!(
             "soland-rotated-identity-bundle-{}",
             uuid::Uuid::new_v4()
@@ -3030,7 +3069,7 @@ mod tests {
         let config = bootstrap_config();
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         let bundle_dir = std::env::temp_dir().join(format!(
             "soland-forged-identity-bundle-{}",
             uuid::Uuid::new_v4()
@@ -3075,7 +3114,7 @@ mod tests {
         let config = bootstrap_config();
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         let error = resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
             .await
             .expect_err("empty durable state must require the explicit signal");
@@ -3095,7 +3134,7 @@ mod tests {
         };
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
-        let key_store = Arc::new(InMemoryKeyStore::new());
+        let key_store = Arc::new(TestKeyStore::default());
 
         let first = retry_service_identity(&config, persistence.clone(), Some(key_store.clone()))
             .await
@@ -3141,7 +3180,7 @@ mod tests {
             ..bootstrap_config()
         };
         let provider = external_provider(&config).unwrap();
-        let key_store = InMemoryKeyStore::new();
+        let key_store = TestKeyStore::default();
         let authority_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
             &SigningKey::from_bytes(&[0x5d; 32])
                 .verifying_key()

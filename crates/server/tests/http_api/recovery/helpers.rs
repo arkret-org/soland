@@ -18,7 +18,7 @@ use crate::common::*;
 
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const RECOVERY_INTROSPECTION_PATH: &str = "/_arkret/gate/account/session-grants/introspect";
-const RECOVERY_INTROSPECTION_BEARER: &str = "recovery-policy-introspection-bearer";
+const RECOVERY_INTERNAL_AUTHORITY_SHARED_SECRET: &str = "recovery-policy-introspection-bearer";
 
 type IntrospectionOutcome =
     arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectOutcome;
@@ -227,7 +227,7 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
         "http://{}",
         listener.local_addr().expect("recovery mock address")
     ));
-    config.register_test_internal_authority_channel(RECOVERY_INTROSPECTION_BEARER);
+    config.register_test_internal_authority_channel(RECOVERY_INTERNAL_AUTHORITY_SHARED_SECRET);
     let audience = soland_test_support::fixture_service_identity(config)
         .identity()
         .expect("recovery fixture serving identity")
@@ -261,7 +261,8 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
                         (name.trim().to_ascii_lowercase(), value.trim().to_owned())
                     })
                     .collect::<BTreeMap<_, _>>();
-                let expected_authorization = format!("Bearer {RECOVERY_INTROSPECTION_BEARER}");
+                let expected_authorization =
+                    format!("Bearer {RECOVERY_INTERNAL_AUTHORITY_SHARED_SECRET}");
                 assert_eq!(
                     headers.get("authorization").map(String::as_str),
                     Some(expected_authorization.as_str()),
