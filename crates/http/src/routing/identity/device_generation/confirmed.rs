@@ -205,17 +205,12 @@ pub(crate) async fn candidate_device_control_projection(
         return Ok(None);
     };
     let account = &binding.account_id;
-    if account.station_id != state.service_core_id()
-        || binding.pcr_realm_id != candidate.realm_id
-        || binding.genesis_event.realm_id != candidate.realm_id
-        || binding.genesis_event.actor_id != ActorId::account(account.clone())
-        || binding.genesis_event.executed_by.is_some()
-    {
+    let genesis = &binding.genesis_event;
+    if binding.pcr_realm_id != candidate.realm_id || genesis.realm_id != candidate.realm_id {
         return Err(invalid(
-            "candidate PCR Seal does not bind the local Account authority",
+            "candidate signer projection crosses its registered control Realm",
         ));
     }
-    let genesis = &binding.genesis_event;
     let create = genesis
         .typed_payload::<arkret_wire::event_spec::RealmCreate>()
         .map_err(invalid)?;
@@ -223,6 +218,14 @@ pub(crate) async fn candidate_device_control_projection(
         != arkret_models_collaboration::events_payloads::RealmPurpose::PrincipalControl
     {
         return Ok(None);
+    }
+    if account.station_id != state.service_core_id()
+        || genesis.actor_id != ActorId::account(account.clone())
+        || genesis.executed_by.is_some()
+    {
+        return Err(invalid(
+            "candidate PCR Seal does not bind the local Account authority",
+        ));
     }
     if create.object.digest_algorithm != suite {
         return Err(invalid(

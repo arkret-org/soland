@@ -130,6 +130,17 @@ pub(super) async fn submit_identity_anchor_batch(
                 format!("identity anchor authorize Event is not structurally valid: {error}"),
             )
         })?;
+    arkret_bootstrap::validate_pcr_native_unit_authoring_checkpoint(
+        &typed_create,
+        &typed_authorize,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("identity anchor native authoring checkpoint is invalid: {error}"),
+        )
+    })?;
     if is_bootstrap && authorization_leases.is_some_and(|leases| leases.iter().any(Option::is_some))
     {
         return Err(unit_error(
