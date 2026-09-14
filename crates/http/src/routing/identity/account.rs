@@ -18,7 +18,6 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountProfileAcceptedBasis, AccountUpdateProfileRequestBody, AccountView,
 };
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_wire::SignerEvidenceRef;
 // `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
@@ -56,6 +55,7 @@ use arkret_models_identity::{
     PrincipalResolutionAuditRequest,
 };
 use arkret_state::state_model::ResolvedCellState;
+use arkret_wire::SignerEvidenceRef;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;

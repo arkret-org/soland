@@ -196,17 +196,41 @@ pub(super) async fn resolve_event_root_anchor_method(
             "critical inception reference does not select the unique original DID entry",
         ));
     }
-    let inception = arkret_models_identity::DidOperationSubmitRequestBody {
-        did: principal_did,
-        did_method: arkret_models_identity::DidMethodName::Webvh,
-        seq: Some(1),
-        prev_event_digest: None,
-        operation: serde_json::from_value(entry.operation.clone()).map_err(|error| {
+    let operation: std::collections::BTreeMap<String, Value> =
+        serde_json::from_value(entry.operation.clone()).map_err(|error| {
             event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
-        })?,
+        })?;
+    let normalized_did_document = operation
+        .get("state")
+        .cloned()
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "DID inception omits its normalized state",
+            )
+        })
+        .and_then(|state| {
+            serde_json::from_value(state).map_err(|error| {
+                event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
+            })
+        })?;
+    let anchor = arkret_models_identity::PrincipalRegistrationAnchor::WebvhRegistration {
+        registration_did_operation: Box::new(
+            arkret_models_identity::DidOperationSubmitRequestBody {
+                did: principal_did,
+                did_method: arkret_models_identity::DidMethodName::Webvh,
+                seq: Some(1),
+                prev_event_digest: None,
+                operation: operation.clone(),
+            },
+        ),
+        log_entries: vec![operation],
+        witness_records: Vec::new(),
+        normalized_did_document,
     };
-    let root = arkret_signatures::webvh::validate_principal_inception_operation(&inception)
-        .map_err(|error| {
+    let root =
+        arkret_identity::validate_principal_registration_anchor(&anchor).map_err(|error| {
             event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
         })?;
     if root.principal_id != actor_core_id {

@@ -15,6 +15,36 @@ fn invalid(error: impl std::fmt::Display) -> HistoryEvidenceError {
     HistoryEvidenceError::Invalid(error.to_string())
 }
 
+fn webvh_registration_anchor(
+    did: &arkret_wire::Did,
+    seq: u64,
+    operation: &serde_json::Value,
+) -> Result<arkret_models_identity::PrincipalRegistrationAnchor, HistoryEvidenceError> {
+    let operation: std::collections::BTreeMap<String, serde_json::Value> =
+        serde_json::from_value(operation.clone()).map_err(invalid)?;
+    let normalized_did_document = operation
+        .get("state")
+        .cloned()
+        .ok_or_else(|| invalid("registered DID inception omits its state"))
+        .and_then(|state| serde_json::from_value(state).map_err(invalid))?;
+    let anchor = arkret_models_identity::PrincipalRegistrationAnchor::WebvhRegistration {
+        registration_did_operation: Box::new(
+            arkret_models_identity::DidOperationSubmitRequestBody {
+                did: did.clone(),
+                did_method: arkret_models_identity::DidMethodName::Webvh,
+                seq: Some(seq),
+                prev_event_digest: None,
+                operation: operation.clone(),
+            },
+        ),
+        log_entries: vec![operation],
+        witness_records: Vec::new(),
+        normalized_did_document,
+    };
+    arkret_identity::validate_principal_registration_anchor(&anchor).map_err(invalid)?;
+    Ok(anchor)
+}
+
 /// Load only local canonical material. No directory request, origin fetch or
 /// evidence TTL participates in reconstructing this confirmed source history.
 /// The durable Account/PCR binding selects the genesis; its independently
@@ -84,14 +114,8 @@ pub(crate) async fn load_confirmed_device_history(
             "DID inception storage has an ambiguous subject or entry",
         ));
     }
-    let inception = arkret_models_identity::DidOperationSubmitRequestBody {
-        did: initial.did.clone(),
-        did_method: arkret_models_identity::DidMethodName::Webvh,
-        seq: Some(entry.seq),
-        prev_event_digest: None,
-        operation: serde_json::from_value(entry.operation.clone()).map_err(invalid)?,
-    };
-    let root = arkret_signatures::webvh::validate_principal_inception_operation(&inception)
+    let registration_anchor = webvh_registration_anchor(&initial.did, entry.seq, &entry.operation)?;
+    let root = arkret_identity::validate_principal_registration_anchor(&registration_anchor)
         .map_err(invalid)?;
     if root.principal_id != account.principal_id {
         return Err(invalid(
@@ -162,7 +186,7 @@ pub(crate) async fn load_confirmed_device_history(
         account,
         &genesis.event_id,
         trusted_notary,
-        &inception,
+        &registration_anchor,
         &head,
         &seals,
         &events,
@@ -251,14 +275,8 @@ pub(crate) async fn candidate_device_control_projection(
             "DID inception storage has an ambiguous subject or entry",
         ));
     }
-    let inception = arkret_models_identity::DidOperationSubmitRequestBody {
-        did: initial.did.clone(),
-        did_method: arkret_models_identity::DidMethodName::Webvh,
-        seq: Some(entry.seq),
-        prev_event_digest: None,
-        operation: serde_json::from_value(entry.operation.clone()).map_err(invalid)?,
-    };
-    let root = arkret_signatures::webvh::validate_principal_inception_operation(&inception)
+    let registration_anchor = webvh_registration_anchor(&initial.did, entry.seq, &entry.operation)?;
+    let root = arkret_identity::validate_principal_registration_anchor(&registration_anchor)
         .map_err(invalid)?;
     if root.principal_id != account.principal_id {
         return Err(invalid(
@@ -353,14 +371,18 @@ pub(crate) async fn candidate_device_control_projection(
         account,
         &genesis.event_id,
         &create.object.notary,
-        &inception,
+        &registration_anchor,
         &candidate.id,
         &seals,
         &events,
         suite,
     )?;
     soland_storage::ConfirmedDeviceControlProjection::from_verified_history(
-        history, &inception, &seals, &events, suite,
+        history,
+        &registration_anchor,
+        &seals,
+        &events,
+        suite,
     )
     .map(Some)
     .map_err(invalid)

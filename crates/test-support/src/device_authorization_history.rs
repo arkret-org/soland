@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical::DigestSuite;
 use arkret_models_collaboration::events_payloads::*;
-use arkret_models_identity::ResolutionCommitment;
+use arkret_models_identity::{DidDocument, PrincipalRegistrationAnchor, ResolutionCommitment};
 use arkret_state::{
     CommandEventResult, OrderedControlUnit, OrderedControlUnitEvent, ResolvedCellState,
 };
@@ -161,6 +161,7 @@ pub struct DeviceHistoryFixture {
     pub did: Did,
     pub configuration: NotaryValue,
     pub inception: arkret_models_identity::DidOperationSubmitRequestBody,
+    pub registration_anchor: PrincipalRegistrationAnchor,
     pub events: Vec<Event>,
     pub seals: Vec<Seal>,
     pub state: BTreeMap<CellRef, ResolvedCellState>,
@@ -200,6 +201,16 @@ impl DeviceHistoryFixture {
         let verified_root =
             arkret_signatures::webvh::validate_principal_inception_operation(&prepared.submit_body)
                 .unwrap();
+        let registration_anchor = PrincipalRegistrationAnchor::WebvhRegistration {
+            registration_did_operation: Box::new(prepared.submit_body.clone()),
+            log_entries: vec![serde_json::from_value(prepared.log_entry.clone()).unwrap()],
+            witness_records: Vec::new(),
+            normalized_did_document: serde_json::from_value::<DidDocument>(
+                prepared.log_entry["state"].clone(),
+            )
+            .unwrap(),
+        };
+        arkret_identity::validate_principal_registration_anchor(&registration_anchor).unwrap();
         let did = Did::new(prepared.did.clone()).unwrap();
         let account = AccountId::new(project_did_to_core_id(&did).unwrap(), station_id);
         let payload = possession_with(
@@ -286,6 +297,7 @@ impl DeviceHistoryFixture {
             did,
             configuration,
             inception: prepared.submit_body,
+            registration_anchor,
             events: Vec::new(),
             seals: Vec::new(),
             state: BTreeMap::new(),
@@ -453,7 +465,7 @@ impl DeviceHistoryFixture {
             &self.account,
             &self.events[0].event_id,
             &self.configuration,
-            &self.inception,
+            &self.registration_anchor,
             &self.seals.last().unwrap().id,
             &self.seals,
             &self.events,

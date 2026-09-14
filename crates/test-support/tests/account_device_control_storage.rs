@@ -71,7 +71,7 @@ async fn seed_seal(
 fn projection(source: &DeviceHistoryFixture) -> ConfirmedDeviceControlProjection {
     ConfirmedDeviceControlProjection::from_verified_history(
         source.verify().unwrap(),
-        &source.inception,
+        &source.registration_anchor,
         &source.seals,
         &source.events,
         DigestSuite::Sha256,

@@ -1,12 +1,11 @@
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-
 use arkret_canonical::DigestSuite;
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector,
 };
-use arkret_models_identity::DidOperationSubmitRequestBody;
+use arkret_models_identity::PrincipalRegistrationAnchor;
 use arkret_wire::{Event, Seal};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use super::{
     DeviceInventoryRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
@@ -35,7 +34,7 @@ impl ConfirmedDeviceControlProjection {
     /// advanced to a later head or revocation.
     pub fn from_verified_history(
         history: arkret::DeviceAuthorizationHistory,
-        principal_inception: &DidOperationSubmitRequestBody,
+        principal_registration_anchor: &PrincipalRegistrationAnchor,
         seals: &[Seal],
         events: &[Event],
         suite: DigestSuite,
@@ -45,7 +44,7 @@ impl ConfirmedDeviceControlProjection {
             let evidence = history
                 .account_device_control_evidence(
                     authorization.authorization_event_id(),
-                    principal_inception,
+                    principal_registration_anchor,
                     seals,
                     events,
                     suite,

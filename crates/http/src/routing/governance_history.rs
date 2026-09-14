@@ -1934,13 +1934,6 @@ fn history_source_author_profile(
                     arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
                         ..
                     } => AuthorProfile::Agent,
-                    arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
-                        ..
-                    } => {
-                        return Err(AppError::capability_denied(
-                            "account device Control evidence cannot authorize a history response",
-                        ));
-                    }
                     arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service {
                         ..
                     } => {

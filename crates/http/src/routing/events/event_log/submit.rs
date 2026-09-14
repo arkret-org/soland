@@ -2304,19 +2304,32 @@ async fn validate_identity_creation_control_proof(
             "identity creation control proof is expired or has the wrong audience",
         ));
     }
-    arkret_signatures::webvh::verify_identity_creation_control_proof(
-        &request.registration_did_operation,
-        proof,
+    let validated_anchor = arkret_identity::validate_principal_registration_anchor(
+        &request.principal_registration_anchor,
     )
     .map_err(|error| {
         SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            format!("identity creation proof is invalid: {error}"),
+            format!("principal registration anchor is invalid: {error}"),
         )
     })?;
+    arkret_signatures::webvh::verify_identity_creation_control_proof(&validated_anchor, proof)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                format!("identity creation proof is invalid: {error}"),
+            )
+        })?;
+    let registration_did_operation = match &request.principal_registration_anchor {
+        arkret_models_identity::PrincipalRegistrationAnchor::WebvhRegistration {
+            registration_did_operation,
+            ..
+        } => registration_did_operation.as_ref(),
+    };
     arkret_signatures::webvh::verify_registration_did_evidence_draft(
-        &request.registration_did_operation,
+        registration_did_operation,
         &request.registration_did_evidence.draft(),
     )
     .map_err(|error| {

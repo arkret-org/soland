@@ -119,7 +119,7 @@ pub async fn commit_confirmed_history_fixture_from(
             &fixture.account,
             &fixture.events[0].event_id,
             &fixture.configuration,
-            &fixture.inception,
+            &fixture.registration_anchor,
             &seal.id,
             prefix_seals,
             &prefix_events,
@@ -129,7 +129,7 @@ pub async fn commit_confirmed_history_fixture_from(
         let confirmed_device_control =
             soland_storage::ConfirmedDeviceControlProjection::from_verified_history(
                 verified_prefix,
-                &fixture.inception,
+                &fixture.registration_anchor,
                 prefix_seals,
                 &prefix_events,
                 DigestSuite::Sha256,
