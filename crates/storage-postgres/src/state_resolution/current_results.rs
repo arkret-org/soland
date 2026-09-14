@@ -360,11 +360,14 @@ fn origin_binding(
                     .get("strand_id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| invalid("Strand watch origin misses StrandId"))?
+                    .to_owned()
+            } else if cell.component() == arkret_wire::CellFamilyId::STRAND_POSITION_V1 {
+                cell.strand_position_target().map_err(invalid)?.to_string()
             } else {
-                cell.subject()
+                cell.subject().to_owned()
             };
             CurrentTarget::Strand {
-                strand_id: StrandId::new(id.to_owned()).map_err(invalid)?,
+                strand_id: StrandId::new(id).map_err(invalid)?,
             }
         }
         "pin_scope"
@@ -641,6 +644,27 @@ pub(super) async fn publish(
 mod tests {
     use super::*;
 
+    fn move_event(realm: &RealmId) -> Event {
+        let actor = ActorId::account(arkret_wire::AccountId::new(
+            "ak:did_core:web:current.example".parse().unwrap(),
+            "ak:did_core:web:station.example".parse().unwrap(),
+        ));
+        arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.strand.move",
+            ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            actor,
+            1,
+            "000000000001-0000-00000000".parse().unwrap(),
+            serde_json::json!({}),
+            chrono::DateTime::parse_from_rfc3339("2026-09-14T00:00:00.000Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )
+        .unwrap()
+    }
+
     fn head(byte: u8) -> CurrentCausalWinner {
         CurrentCausalWinner {
             event_id: arkret_wire::EventId::from_digest(
@@ -700,5 +724,32 @@ mod tests {
         let view =
             |head: CurrentCausalWinner| (BTreeMap::from([(cell.clone(), head)]), BTreeSet::new());
         assert!(merge_causal_winner_views(&[view(a), view(bad)]).is_err());
+    }
+
+    #[test]
+    fn strand_position_origin_uses_the_typed_pair_strand_component() {
+        let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(b"typed pair current target"),
+        ));
+        let event = move_event(&realm);
+        let board = "ak:space:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo";
+        let strand = "ak:strand:AR0yYaLgfEhMOjzAp9eFpdYOf2dma-COBObvEGjj8NN0";
+        let cell_text = format!("ak:cell:ak.component.strand.position.v1:{board}:{strand}");
+        let cell = CellId::parse(&cell_text).unwrap();
+        let payload = serde_json::to_value(&event.payload).unwrap();
+
+        let (_, target) = origin_binding(&realm, &cell, &event, &payload, "strand").unwrap();
+        assert_eq!(
+            target,
+            CurrentTarget::Strand {
+                strand_id: StrandId::new(strand.to_owned()).unwrap(),
+            }
+        );
+
+        let malformed_text =
+            format!("ak:cell:ak.component.strand.position.v1:ak:space:bad:{strand}");
+        let malformed = CellId::parse(&malformed_text).unwrap();
+        assert!(origin_binding(&realm, &malformed, &event, &payload, "strand").is_err());
     }
 }
