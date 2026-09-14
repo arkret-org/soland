@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{Hash, RealmId, SealId};
+use arkret_identifiers::{HARD_FUTURE_SKEW_MS, Hash, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector,
 };
@@ -585,6 +585,22 @@ fn control_move_verification_method_matches_signer(
 
 fn seal_admission_error(message: impl Into<String>) -> AppError {
     crate::app_error!(SchemaViolation, message.into())
+}
+
+fn validate_seal_submission_time(
+    sealed_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppError> {
+    let latest = now + chrono::Duration::milliseconds(HARD_FUTURE_SKEW_MS);
+    if sealed_at > latest {
+        return Err(crate::app_error!(
+            SealDeferredFutureSkew,
+            format!(
+                "Seal sealed_at {sealed_at} is beyond verifier wall time {now} plus hard_future_skew_ms={HARD_FUTURE_SKEW_MS}"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn device_generation_fenced(message: impl Into<String>) -> AppError {
@@ -1522,8 +1538,7 @@ pub(crate) async fn apply_agent_event_seal(
         .map_err(|error| seal_admission_error(format!("Agent PCR Seal id: {error}")))?;
     seal.validate_structural()
         .map_err(|error| seal_admission_error(format!("Agent PCR Seal structure: {error}")))?;
-    crate::jws_verify::verify_replay_window(&seal.hlc, state.config().jws_replay_window_seconds)
-        .map_err(|error| seal_admission_error(format!("Agent PCR Seal replay_window: {error}")))?;
+    validate_seal_submission_time(seal.sealed_at, chrono::Utc::now())?;
     // Ordinary successors derive coverage from the accepted basis and delta.
     // Only an explicit compaction coverage set needs the additional equality check.
     let accepted_seal = seal.clone();
@@ -1914,10 +1929,7 @@ pub(crate) async fn apply_inbound_seal(
         .collect::<Vec<_>>();
     validate_seal_delta_entries(&delta_entries)
         .map_err(|(code, reason)| AppError::from_rejection(code, reason))?;
-    crate::jws_verify::verify_replay_window(&seal.hlc, state.config().jws_replay_window_seconds)
-        .map_err(|error| {
-            crate::app_error!(SchemaViolation, format!("seal replay_window: {error}"),)
-        })?;
+    validate_seal_submission_time(seal.sealed_at, chrono::Utc::now())?;
     validate_inbound_data_publication(state, seal).await?;
     if let Some(effect) = try_apply_device_generation_event_seal(state, seal).await? {
         return Ok(effect);
@@ -2414,6 +2426,33 @@ fn is_sha256_digest(s: &str) -> bool {
 #[cfg(test)]
 mod seal_delta_tests {
     use super::*;
+
+    #[test]
+    fn historical_seal_timestamp_is_not_a_replay_lease() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-14T15:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let sealed_at = now - chrono::Duration::days(30);
+
+        validate_seal_submission_time(sealed_at, now)
+            .expect("an old Seal remains eligible for durable exact retry");
+    }
+
+    #[test]
+    fn excessive_future_seal_timestamp_is_deferred() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-14T15:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let sealed_at =
+            now + chrono::Duration::milliseconds(HARD_FUTURE_SKEW_MS.saturating_add(1));
+
+        let error = validate_seal_submission_time(sealed_at, now)
+            .expect_err("a Seal beyond hard future skew must be deferred");
+        assert_eq!(
+            error.wire_code(),
+            arkret_wire::ErrorCode::SEAL_DEFERRED_FUTURE_SKEW
+        );
+    }
 
     #[tokio::test]
     async fn inbound_seal_authentication_precedes_every_state_write() {
