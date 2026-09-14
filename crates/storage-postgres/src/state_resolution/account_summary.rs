@@ -110,6 +110,21 @@ fn singleton<'a>(
     cells.get(&cell)?.settled_value()
 }
 
+fn visible_membership<'a>(
+    cells: &'a BTreeMap<CellRef, ResolvedCellState>,
+    cell: &CellRef,
+    destroyed: bool,
+) -> Option<&'a str> {
+    if destroyed {
+        return None;
+    }
+    cells
+        .get(cell)?
+        .settled_value()?
+        .as_str()
+        .filter(|state| matches!(*state, "join" | "knock"))
+}
+
 pub(super) async fn publish(
     conn: &mut AsyncPgConnection,
     realm: &str,
@@ -138,16 +153,11 @@ pub(super) async fn publish(
     .value;
     for row in rows {
         let cell = CellRef::new(row.cell_id).map_err(|e| StoreError::Backend(e.to_string()))?;
-        let membership = if destroyed {
-            None
-        } else {
-            match cells.get(&cell) {
-                Some(ResolvedCellState::Value(value)) => value
-                    .as_str()
-                    .filter(|state| matches!(*state, "join" | "knock")),
-                _ => None,
-            }
-        };
+        // Membership is a security-plane `sequenced_state` cell. Read the
+        // model-independent settled value just like singleton summaries do;
+        // matching only `ResolvedCellState::Value` silently hid every sealed
+        // join from account-current and made newly created Realms disappear.
+        let membership = visible_membership(cells, &cell, destroyed);
         let title = (membership == Some("join")).then_some(title).flatten();
         let default_strand = (membership == Some("join"))
             .then_some(default_strand)
@@ -349,4 +359,38 @@ pub(super) async fn publish_current_frontier(
         }
     }
     publish(conn, realm, &cells, &causal_winners, causal_ready).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn member_cell() -> CellRef {
+        CellRef::new("ak:cell:ak.component.member.state.v1:test".to_owned()).unwrap()
+    }
+
+    #[test]
+    fn sequenced_membership_is_visible_and_terminal_states_fail_closed() {
+        let cell = member_cell();
+        let event_id = arkret_wire::EventId::new(
+            "ak:event:Aa6iDufaFu2o2ofTO5hEnIl2HBA8OUnXes2kHEWgLlTs".to_owned(),
+        )
+        .unwrap();
+        let mut cells = BTreeMap::from([(
+            cell.clone(),
+            ResolvedCellState::Sequenced(arkret_state::SequencedStateValue {
+                revision_event_id: event_id,
+                value: Value::String("join".to_owned()),
+            }),
+        )]);
+
+        assert_eq!(visible_membership(&cells, &cell, false), Some("join"));
+        assert_eq!(visible_membership(&cells, &cell, true), None);
+
+        cells.insert(
+            cell.clone(),
+            ResolvedCellState::Value(Value::String("leave".to_owned())),
+        );
+        assert_eq!(visible_membership(&cells, &cell, false), None);
+    }
 }

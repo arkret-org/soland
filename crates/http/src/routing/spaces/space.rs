@@ -351,6 +351,41 @@ pub async fn realm_history_access(state: &AppState, realm_or_internal_id: &str) 
     }
 }
 
+fn projection_member_is_joined(
+    projection: &soland_domain::reducer::ProjectionState,
+    realm_id: &str,
+    actor: &arkret_wire::ActorId,
+    actor_key: &str,
+) -> bool {
+    if projection
+        .member(realm_id, actor_key)
+        .is_some_and(|member| member.state == "join")
+    {
+        return true;
+    }
+
+    // Membership authority is the Realm-scoped sealed transition cell. The
+    // structured `members` map is a side-band cache and can legitimately be
+    // absent after cold hydration or during the narrow Seal publish window.
+    // Falling back to the confirmed cell preserves the exact ActorId subject
+    // and never grants access from an unsealed Event or a principal-only row.
+    let Ok(actor_key) = actor.canonical_key() else {
+        return false;
+    };
+    let Ok(subject) = arkret_wire::composite_subject(&[actor_key]) else {
+        return false;
+    };
+    let Ok(cell_id) =
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{subject}"))
+    else {
+        return false;
+    };
+    projection
+        .realm_cell_value(realm_id, &cell_id)
+        .and_then(Value::as_str)
+        == Some("join")
+}
+
 pub async fn realm_member_joined_at(
     state: &AppState,
     realm_or_internal_id: &str,
@@ -475,10 +510,7 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     }
     {
         let projection = state.projections().snapshot();
-        if !projection
-            .member(realm_id, actor)
-            .is_some_and(|member| member.state == "join")
-        {
+        if !projection_member_is_joined(&projection, realm_id, &actor_typed, actor) {
             return false;
         }
         if projection
@@ -933,6 +965,55 @@ mod tests {
             },
             soland_storage_postgres::Db { pool: None },
         )
+    }
+
+    #[test]
+    fn sealed_member_cell_is_authoritative_when_sideband_cache_is_missing() {
+        let realm_id = RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(LIFECYCLE_ACTOR).unwrap(),
+            DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let actor_key = actor.to_string();
+        let subject = arkret_wire::composite_subject(&[actor.canonical_key().unwrap()]).unwrap();
+        let cell_id = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{subject}"
+        ))
+        .unwrap();
+        let mut projection = soland_domain::reducer::ProjectionState::new();
+
+        assert!(!projection_member_is_joined(
+            &projection,
+            realm_id.as_str(),
+            &actor,
+            &actor_key,
+        ));
+        projection.install_reloaded_cells(
+            &realm_id,
+            [(
+                cell_id.clone(),
+                arkret_state::ResolvedCellState::Value(json!("join")),
+            )],
+        );
+        assert!(projection_member_is_joined(
+            &projection,
+            realm_id.as_str(),
+            &actor,
+            &actor_key,
+        ));
+        projection.install_reloaded_cells(
+            &realm_id,
+            [(
+                cell_id,
+                arkret_state::ResolvedCellState::Value(json!("leave")),
+            )],
+        );
+        assert!(!projection_member_is_joined(
+            &projection,
+            realm_id.as_str(),
+            &actor,
+            &actor_key,
+        ));
     }
 
     /// The durable invite row stores complete Account ids, so a fixture cannot
