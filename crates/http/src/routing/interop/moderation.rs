@@ -41,6 +41,35 @@ fn authored_event_wire_value(
     serde_json::to_value(event.event())
 }
 
+fn author_franking_proof_event(
+    proof: FrankingProof,
+    service_actor_id: arkret_wire::DidCoreId,
+    prev_refs: Vec<EventId>,
+    basis: arkret_wire::SealId,
+    actor_seq: u64,
+    hlc: arkret_identifiers::Hlc,
+    created_at: chrono::DateTime<chrono::Utc>,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> arkret_event_draft::Result<arkret_wire::AuthoredEvent> {
+    let auth_context = arkret_wire::AuthContext {
+        authority_refs: vec![basis.clone()],
+    };
+    arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::ModerationFrankingProof>::new(
+        ScopeRef::Realm {
+            realm_id: proof.realm_id.clone(),
+        },
+        arkret_wire::ActorId::service(service_actor_id),
+        proof,
+    )
+    .and_then(|draft| {
+        draft
+            .with_prev_refs(prev_refs)
+            .with_auth_context(auth_context)
+            .with_data_basis(basis)
+            .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
+    })
+}
+
 /// Persist the receiving service's canonical delivery receipt for one accepted
 /// encrypted Event. The canonical Event store is the only durable identity and
 /// restart source; the old private audit digest is deliberately not written.
@@ -128,25 +157,17 @@ pub(crate) async fn prepare_franking_proof_event(
             "franking target Realm has no accepted Seal",
         )
     })?;
-    let auth_context = arkret_wire::AuthContext {
-        authority_refs: vec![seal.id.clone()],
-    };
     let digest_suite = state.projections().realm_digest_suite(realm_id);
-    let mut event = arkret_event_draft::TypedEventDraft::<
-        arkret_wire::event_spec::ModerationFrankingProof,
-    >::new(
-        ScopeRef::Realm {
-            realm_id: proof.realm_id.clone(),
-        },
-        arkret_wire::ActorId::service(service_actor_id.clone()),
+    let mut event = author_franking_proof_event(
         proof,
+        service_actor_id,
+        prev_refs,
+        seal.id,
+        actor_seq,
+        hlc,
+        created_at,
+        digest_suite,
     )
-    .and_then(|draft| {
-        draft
-            .with_prev_refs(prev_refs)
-            .with_auth_context(auth_context)
-            .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
-    })
     .map_err(|error| AppError::internal(format!("franking Event build failed: {error}")))?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         signing_key.as_ref().clone(),
@@ -1487,6 +1508,38 @@ mod report_safety_tests {
         assert_eq!(wire["event_id"], json!(authored.event_id()));
         assert!(wire.get("digest_suite").is_none());
         assert!(wire.get("event").is_none());
+    }
+
+    #[test]
+    fn service_franking_event_binds_authority_and_data_to_the_same_seal() {
+        let state = test_state();
+        let proof: FrankingProof = serde_json::from_value(valid_franking(&state)).unwrap();
+        let basis = arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap();
+        let created_at = chrono::DateTime::parse_from_rfc3339(FRANKING_RECEIVED_AT)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let event = author_franking_proof_event(
+            proof,
+            state.service_core_id().clone(),
+            Vec::new(),
+            basis.clone(),
+            0,
+            arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            created_at,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+
+        assert_eq!(event.event().data_basis.as_ref(), Some(&basis));
+        assert_eq!(
+            event
+                .event()
+                .auth_context
+                .as_ref()
+                .map(|context| context.authority_refs.as_slice()),
+            Some(std::slice::from_ref(&basis)),
+        );
     }
 
     #[test]

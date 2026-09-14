@@ -28,6 +28,7 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
     object: &serde_json::Map<String, Value>,
     derived_cells: &[String],
     realm_authority_root_authorized: bool,
+    applet_formal_aggregate_authorized: bool,
 ) -> Result<(), EventValidationError> {
     let is_ordinary_event = object.contains_key("auth_context");
     if !is_ordinary_event {
@@ -111,17 +112,8 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
             "ordinary Event derives no data-plane write from its registered reducer contract",
         ));
     }
-    let access = ordinary_event_constraint_context(kind, object).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "ordinary Event patch does not expose a canonical field/track authorization context",
-        )
-    })?;
-
     let state_at_ref =
         ordinary_event_state_at_authority_refs(state, &realm, &authority_refs).await?;
-    let historical_grants = ordinary_event_grants_from_state_at_ref(&state_at_ref);
     let mut auth_time: Option<chrono::DateTime<chrono::Utc>> = None;
     for authority_ref in &authority_refs {
         let sealed_at = state
@@ -152,6 +144,25 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
             "ordinary Event authority_refs must not be empty",
         )
     })?;
+    // The managed-actor Profile is a data-plane Event, so it still carries an
+    // open `data_basis` and resolvable `auth_context`. Its signed
+    // `authorization_ref`, however, names the capability grant staged earlier
+    // in the same exact install/provision aggregate. The Applet aggregate gate
+    // has already cross-validated that grant and all four formal Events; a
+    // lookup restricted to the predecessor Seal view cannot see the staged
+    // grant and must not replace the registered unit-local authorization rule.
+    if applet_formal_aggregate_authorized {
+        return Ok(());
+    }
+
+    let access = ordinary_event_constraint_context(kind, object).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "ordinary Event patch does not expose a canonical field/track authorization context",
+        )
+    })?;
+    let historical_grants = ordinary_event_grants_from_state_at_ref(&state_at_ref);
     let historical_snapshot: Vec<crate::authz::Grant> =
         historical_grants.values().cloned().collect();
     // Applet capability checks use the actual producer, including a service

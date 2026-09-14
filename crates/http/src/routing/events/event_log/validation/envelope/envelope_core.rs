@@ -247,6 +247,7 @@ pub(in crate::routing) async fn validate_message_authoring_candidate(
         object,
         &cells,
         root,
+        false,
     )
     .await
     .map_err(render)?;
@@ -988,6 +989,7 @@ async fn validate_event_envelope_with_ingress(
             object,
             &ordinary_event_cells,
             realm_authority_root_authorized,
+            is_verified_applet_formal_aggregate,
         )
         .await?;
     }

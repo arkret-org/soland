@@ -1429,7 +1429,7 @@ impl NotaryWorker {
             proof_results.insert(digest.clone(), proof_result);
         }
 
-        let submit_context = notary_submit_context(predecessor_ref, allow_ackless_self_principal);
+        let submit_context = notary_submit_context(predecessor_ref, mode);
         execute_ordered_control_units(
             realm_id,
             pre_state,
@@ -2263,15 +2263,16 @@ fn availability_authority_is_genesis(predecessor_ref: Option<&SealId>) -> bool {
 
 fn notary_submit_context(
     predecessor_ref: Option<&SealId>,
-    allow_self_principal_ingress: bool,
+    mode: CandidateExecutionMode,
 ) -> arkret_wire::EventSubmitContext {
     if predecessor_ref.is_none() {
         // Genesis was accepted by the ordinary/Applet Realm unit validator.
         // It is basis-free, but retains portable producer signer evidence.
         arkret_wire::EventSubmitContext::RealmBootstrap
-    } else if allow_self_principal_ingress {
-        // This flag is admitted only for the exact PCR-policy
-        // reanchor/replacement-authorize native unit checked by the caller.
+    } else if mode.requires_exact_recovery_unit() {
+        // Only the exact PCR-policy reanchor/replacement-authorize recovery
+        // unit uses candidate-overlay signer material. Ack-less ordinary PCR
+        // successors still carry portable retained signer evidence.
         arkret_wire::EventSubmitContext::AnchorUnit
     } else {
         arkret_wire::EventSubmitContext::Standard
@@ -2683,23 +2684,34 @@ mod tests {
     }
 
     #[test]
-    fn notary_context_keeps_genesis_portable_and_recovery_native() {
+    fn notary_context_separates_ackless_successors_from_native_recovery() {
         assert_eq!(
-            notary_submit_context(None, false),
+            notary_submit_context(None, CandidateExecutionMode::AutomaticNotary),
             arkret_wire::EventSubmitContext::RealmBootstrap,
         );
         assert_eq!(
-            notary_submit_context(None, true),
+            notary_submit_context(None, CandidateExecutionMode::RecoveryAnchorUnit),
             arkret_wire::EventSubmitContext::RealmBootstrap,
-            "genesis classification takes precedence over the recovery flag",
+            "this worker's genesis classification takes precedence over successor mode",
         );
         let predecessor = SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
         assert_eq!(
-            notary_submit_context(Some(&predecessor), true),
+            notary_submit_context(
+                Some(&predecessor),
+                CandidateExecutionMode::PreparedPcrSuccessor,
+            ),
+            arkret_wire::EventSubmitContext::Standard,
+            "Ack-less admission does not imply unit-local signer material",
+        );
+        assert_eq!(
+            notary_submit_context(
+                Some(&predecessor),
+                CandidateExecutionMode::RecoveryAnchorUnit,
+            ),
             arkret_wire::EventSubmitContext::AnchorUnit,
         );
         assert_eq!(
-            notary_submit_context(Some(&predecessor), false),
+            notary_submit_context(Some(&predecessor), CandidateExecutionMode::AutomaticNotary,),
             arkret_wire::EventSubmitContext::Standard,
         );
     }
