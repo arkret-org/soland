@@ -42,17 +42,69 @@ struct AppletAdmissionRecordRow {
     record: serde_json::Value,
 }
 
+fn closed_applet_install_contains_event(
+    event_id: &str,
+    event_applet_id: Option<&str>,
+    mutation: Option<&soland_storage::AppletRecordCommit>,
+) -> bool {
+    let Some(mutation) = mutation.filter(|mutation| mutation.expected_record.is_none()) else {
+        return false;
+    };
+    if event_applet_id != Some(mutation.applet_id.as_str()) {
+        return false;
+    }
+
+    const IDENTITY_EVENT_FIELDS: &[&str] = &[
+        "bot_actor_provision_event",
+        "bot_pcr_genesis_event",
+        "bot_accountability_grant_event",
+        "bot_profile_event",
+    ];
+    IDENTITY_EVENT_FIELDS.iter().any(|field| {
+        mutation
+            .identity
+            .record
+            .get(*field)
+            .and_then(|event| event.get("event_id"))
+            .and_then(serde_json::Value::as_str)
+            == Some(event_id)
+    }) || mutation
+        .record
+        .get("registration_event")
+        .and_then(|event| event.get("event_id"))
+        .and_then(serde_json::Value::as_str)
+        == Some(event_id)
+        || mutation
+            .record
+            .get("capability_grant_events")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|events| {
+                events.iter().any(|event| {
+                    event.get("event_id").and_then(serde_json::Value::as_str) == Some(event_id)
+                })
+            })
+}
+
 /// The identity row is the same linearization lock used by installation
-/// revocation. Retained replicas and closed install units never enter it.
+/// revocation. Retained replicas and exact Events carried by a closed install
+/// mutation never enter it.
 async fn ensure_applet_admission_in_transaction(
     conn: &mut AsyncPgConnection,
     request: &EventCommitRequest,
+    applet_record: Option<&soland_storage::AppletRecordCommit>,
 ) -> PersistenceResult<()> {
     if request.replicated {
         return Ok(());
     }
     let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone())
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if closed_applet_install_contains_event(
+        event.event_id.as_str(),
+        event.applet_id.as_ref().map(arkret_wire::AppletId::as_str),
+        applet_record,
+    ) {
+        return Ok(());
+    }
     let fail = || PersistenceError::Conflict("applet_revoked".to_owned());
     let grant_id = if matches!(
         event.kind,
@@ -1075,6 +1127,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             let mut event_inserted = false;
             let mut projections_inserted = 0;
             let mut outbox_inserted = 0;
+            let applet_record_for_admission = request.applet_record.clone();
             stage_agent_membership_cascade(
                 conn,
                 request.agent_membership_cascade.as_ref(),
@@ -1184,7 +1237,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 continue;
             }
             crate::device_revocations::enforce_event_gate(conn, &request).await?;
-            ensure_applet_admission_in_transaction(conn, &request).await?;
+            ensure_applet_admission_in_transaction(
+                conn,
+                &request,
+                applet_record_for_admission.as_ref(),
+            )
+            .await?;
             let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
                 PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())
             })?;
@@ -1976,5 +2034,82 @@ async fn commit_holder_account_data(
         soland_storage::AccountDataCasResult::Conflict(_) => Err(PersistenceError::Conflict(
             "cas_conflict: account data revision changed before accepted commit".to_owned(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn closed_install_mutation() -> soland_storage::AppletRecordCommit {
+        let applet_id =
+            arkret_wire::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001".to_owned())
+                .unwrap();
+        soland_storage::AppletRecordCommit {
+            applet_id,
+            identity: soland_storage::AppletIdentityCommit {
+                target_station_id: arkret_wire::DidCoreId::new(
+                    "ak:did_core:web:station.example".to_owned(),
+                )
+                .unwrap(),
+                expected_record: None,
+                record: serde_json::json!({
+                    "bot_actor_provision_event": { "event_id": "event-provision" },
+                    "bot_pcr_genesis_event": { "event_id": "event-genesis" },
+                    "bot_accountability_grant_event": { "event_id": "event-accountability" },
+                    "bot_profile_event": { "event_id": "event-profile" }
+                }),
+            },
+            expected_record: None,
+            record: serde_json::json!({
+                "registration_event": { "event_id": "event-registration" },
+                "capability_grant_events": [
+                    { "event_id": "event-grant-1" },
+                    { "event_id": "event-grant-2" }
+                ]
+            }),
+        }
+    }
+
+    #[test]
+    fn closed_install_bypasses_applet_fence_only_for_exact_embedded_events() {
+        let mutation = closed_install_mutation();
+        for event_id in [
+            "event-registration",
+            "event-grant-1",
+            "event-grant-2",
+            "event-provision",
+            "event-genesis",
+            "event-accountability",
+            "event-profile",
+        ] {
+            assert!(closed_applet_install_contains_event(
+                event_id,
+                Some(mutation.applet_id.as_str()),
+                Some(&mutation),
+            ));
+        }
+
+        assert!(!closed_applet_install_contains_event(
+            "event-unbound",
+            Some(mutation.applet_id.as_str()),
+            Some(&mutation),
+        ));
+        assert!(!closed_applet_install_contains_event(
+            "event-profile",
+            Some("ak:applet:01974100-0000-7000-8000-000000000002"),
+            Some(&mutation),
+        ));
+    }
+
+    #[test]
+    fn applet_record_update_does_not_bypass_the_active_install_fence() {
+        let mut mutation = closed_install_mutation();
+        mutation.expected_record = Some(mutation.record.clone());
+        assert!(!closed_applet_install_contains_event(
+            "event-profile",
+            Some(mutation.applet_id.as_str()),
+            Some(&mutation),
+        ));
     }
 }
