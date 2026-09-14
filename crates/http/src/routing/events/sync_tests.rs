@@ -1503,8 +1503,15 @@ async fn selected_unknown_realm_stays_unavailable_without_advancing_detail_posit
         entry.current.is_none()
             && entry.state_at_window_start.is_none()
             && entry.timeline.is_none()
+            && entry.timeline_baseline.is_none()
             && entry.baseline.is_none()
     );
+    // Every produced detail entry must satisfy the wire contract, including
+    // `client-sync.md` 2.3: a timeline window completion claim is only
+    // readable together with the container it fragments.
+    entry
+        .validate_demand()
+        .expect("produced detail entry must satisfy the demand-sync contract");
     let filter = sync_filter_value(body.filter.as_ref());
     let cursor = parse_and_validate_sync_cursor(
         frame.cursor.as_deref().unwrap(),
