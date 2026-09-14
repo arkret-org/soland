@@ -201,8 +201,17 @@ pub(super) async fn rebuild_causal_winners(
             return Ok(None);
         }
     }
-    let rows = sql_query("SELECT cell_id,seal_id,op_json FROM state_cell_ops WHERE realm_id=$1 AND seal_id=ANY($2) AND move_id=ANY($3) ORDER BY cell_id,seq")
-        .bind::<Text,_>(realm).bind::<Array<Text>,_>(closure).bind::<Array<Text>,_>(covered).load::<EventCellOpRow>(&mut *conn).await?;
+    let covered_event_ids = covered
+        .iter()
+        .map(|digest| {
+            let digest = Hash::new(digest.clone()).map_err(invalid)?;
+            EventId::from_event_digest(&digest)
+                .map(|event_id| event_id.to_string())
+                .map_err(invalid)
+        })
+        .collect::<Result<Vec<_>, EventSealCommitError>>()?;
+    let rows = sql_query("SELECT cell_id,seal_id,op_json FROM state_cell_ops WHERE realm_id=$1 AND seal_id=ANY($2) AND event_id=ANY($3) ORDER BY cell_id,seq")
+        .bind::<Text,_>(realm).bind::<Array<Text>,_>(closure).bind::<Array<Text>,_>(&covered_event_ids).load::<EventCellOpRow>(&mut *conn).await?;
     let mut writes = BTreeMap::<CellRef, Vec<arkret_state::StateWrite>>::new();
     for row in rows {
         let cell = CellRef::new(row.cell_id).map_err(invalid)?;

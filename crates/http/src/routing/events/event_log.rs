@@ -32,7 +32,8 @@ use arkret_models_collaboration::event_sync::{
     RealmSealFrontierView, SealFrontierState,
 };
 use arkret_models_collaboration::governance_dependencies::{
-    GovernanceDependency, GovernanceDependencySelector, SealPrepareOutcome, SealPrepareRequestBody,
+    GovernanceDependency, GovernanceDependencySelector, SealPrepareFenceResultOutcome,
+    SealPrepareFenceResultRequestBody, SealPrepareOutcome, SealPrepareRequestBody,
 };
 use arkret_models_collaboration::http_bodies::{
     EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventDeliveryTargetState,

@@ -1203,6 +1203,35 @@ async fn provision_agent_sdk_commit_attempt_inner(
             .get("governance_dependencies")
             .is_none()
     );
+    let recovery_request =
+        arkret_models_collaboration::governance_dependencies::SealPrepareFenceResultRequestBody {
+            realm_id: controller_realm_id.clone(),
+            predecessor_ref: availability_request.predecessor_ref.clone(),
+        };
+    let mut recovery_response =
+        TestClient::post("http://server/_arkret/self/seals/prepare-fence-result")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&recovery_request).unwrap())
+            .send(&app)
+            .await;
+    assert_eq!(recovery_response.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        recovery_response
+            .headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "no-store"
+    );
+    let recovered = serde_json::from_str::<
+        arkret_models_collaboration::governance_dependencies::SealPrepareFenceResultOutcome,
+    >(&recovery_response.take_string().await.unwrap())
+    .unwrap();
+    recovered.validate_for_request(&recovery_request).unwrap();
+    assert_eq!(recovered.frozen_request, availability_request);
+    assert_eq!(recovered.frozen_outcome, availability);
     let mut availability_replay = TestClient::post("http://server/_arkret/self/seals/prepare")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)

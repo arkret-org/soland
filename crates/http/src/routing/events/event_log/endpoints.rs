@@ -255,6 +255,7 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("seals/frontier").query(seals_frontier))
         .push(Router::with_path("seals/pending-control").query(pcr_pending_control))
         .push(Router::with_path("seals/prepare").post(prepare_pcr_seal))
+        .push(Router::with_path("seals/prepare-fence-result").post(prepare_pcr_seal_fence_result))
         .push(Router::with_path("seals").post(submit_event_seal))
         .push(
             Router::with_path("seals/mls-governance-proof")
@@ -400,6 +401,159 @@ fn seal_prepare_fence_outcome(
         ))
     })?;
     Ok(cached)
+}
+
+fn recover_seal_prepare_fence_outcome(
+    record: soland_storage::SealPreparationFenceRecord,
+    request: &SealPrepareFenceResultRequestBody,
+) -> Result<SealPrepareFenceResultOutcome, AppError> {
+    let frozen_outcome = serde_json::from_value::<SealPrepareOutcome>(record.response_body)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "Seal preparation fence recovery outcome is invalid: {error}"
+            ))
+        })?;
+    let seal_body = &frozen_outcome.seal_body;
+    let predecessor_ref = seal_body.predecessor_ref.clone().ok_or_else(|| {
+        AppError::internal("Seal preparation fence recovery contains a genesis body")
+    })?;
+    let frozen_request = SealPrepareRequestBody {
+        realm_id: seal_body.realm_id.clone(),
+        predecessor_ref,
+        event_digests: seal_body
+            .command_results
+            .iter()
+            .map(|result| result.event_digest.clone())
+            .collect(),
+        hlc: seal_body.hlc.clone(),
+    };
+    frozen_request.validate().map_err(|error| {
+        AppError::internal(format!(
+            "Seal preparation fence reconstructed request is invalid: {error}"
+        ))
+    })?;
+    if frozen_request.realm_id != request.realm_id
+        || frozen_request.predecessor_ref != request.predecessor_ref
+    {
+        return Err(AppError::internal(
+            "Seal preparation fence recovery row does not match its lookup key",
+        ));
+    }
+    let request_hash = canonical::canonical_sha256(&frozen_request).map_err(|error| {
+        AppError::internal(format!(
+            "Seal preparation fence reconstructed request is not canonical-hashable: {error}"
+        ))
+    })?;
+    if request_hash != record.request_hash {
+        return Err(AppError::internal(
+            "Seal preparation fence request hash does not match its reconstructed request",
+        ));
+    }
+    let body_digest = canonical::canonical_sha256(seal_body).map_err(|error| {
+        AppError::internal(format!(
+            "Seal preparation fence recovery body is not canonical-hashable: {error}"
+        ))
+    })?;
+    if body_digest != record.body_digest {
+        return Err(AppError::internal(
+            "Seal preparation fence body digest does not match its stored response",
+        ));
+    }
+    frozen_outcome
+        .validate_for_request(&frozen_request)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "Seal preparation fence recovery binding is invalid: {error}"
+            ))
+        })?;
+    Ok(SealPrepareFenceResultOutcome {
+        frozen_request,
+        frozen_outcome,
+    })
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.seals.read.prepare_fence_result",
+    tags("events")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.prepare_fence_result.v1"))]
+async fn prepare_pcr_seal_fence_result(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+    body: JsonBody<SealPrepareFenceResultRequestBody>,
+) -> JsonResult<SealPrepareFenceResultOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    super::super::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_SEALS_READ_PREPARE_FENCE_RESULT_V1,
+    )?;
+    let request = body.into_inner();
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+
+    let own_pcr = durable_account_owns_pcr(state, &actor, &request.realm_id).await?;
+    let delegated_agent = if own_pcr {
+        None
+    } else if let Some(account_id) = actor.as_account_id() {
+        crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
+            state,
+            account_id,
+            request.realm_id.as_str(),
+        )
+        .await?
+    } else {
+        None
+    };
+    if !own_pcr && delegated_agent.is_none() {
+        return Err(AppError::not_found("prepare fence result was not found"));
+    }
+
+    let mut current = state
+        .projections()
+        .realm_seal_basis_leaves(&request.realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Seal frontier unavailable: {error}")))?;
+    current.sort();
+    if current.as_slice() != std::slice::from_ref(&request.predecessor_ref) {
+        return Err(AppError::not_found("prepare fence result was not found"));
+    }
+
+    let signer_gate =
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state,
+            actor.signing_principal_id().as_str(),
+            &session.device_id,
+        )
+        .await
+        .map_err(|_| AppError::not_found("prepare fence result was not found"))?;
+    let signer_slot = format!(
+        "{}#{}@{}",
+        signer_gate.principal_id, signer_gate.device_id, signer_gate.target_device_generation_ref
+    );
+    let predecessor_basis =
+        canonical::canonical_sha256(&request.predecessor_ref).map_err(|error| {
+            crate::app_error!(
+                SchemaViolation,
+                format!("Seal preparation predecessor basis is not canonical-hashable: {error}"),
+            )
+        })?;
+    let record = state
+        .persistence()
+        .seal_preparation_fence(&request.realm_id, &signer_slot, &predecessor_basis)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Seal preparation fence lookup failed: {error}"))
+        })?
+        .ok_or_else(|| AppError::not_found("prepare fence result was not found"))?;
+    let outcome = recover_seal_prepare_fence_outcome(record, &request)?;
+    res.headers_mut().insert(
+        salvo::http::header::CACHE_CONTROL,
+        salvo::http::HeaderValue::from_static("no-store"),
+    );
+    json_ok(outcome)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.prepare", tags("events"))]
@@ -1904,6 +2058,64 @@ async fn applet_managed_actor_pcr_access(
 )]
 mod applet_managed_actor_pcr_access_tests {
     use super::*;
+
+    #[test]
+    fn prepare_fence_recovery_reconstructs_and_revalidates_exact_material() {
+        let frozen_request = serde_json::from_value::<SealPrepareRequestBody>(serde_json::json!({
+            "realm_id": "ak:realm:ARKJ9576lYcSucoyvgOXfrky7T5uCvf5VUw56g_J_Pil",
+            "predecessor_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "event_digests": ["sha256:2222222222222222222222222222222222222222222222222222222222222222"],
+            "hlc": "0000019f69bd-0000-00000001"
+        }))
+        .unwrap();
+        let frozen_outcome = serde_json::from_value::<SealPrepareOutcome>(serde_json::json!({
+            "seal_body": {
+                "realm_id": frozen_request.realm_id,
+                "predecessor_ref": frozen_request.predecessor_ref,
+                "delta": ["sha256:2222222222222222222222222222222222222222222222222222222222222222"],
+                "control_event_set_root": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                "data_delta": [],
+                "data_event_set_root": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "state_root": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+                "notary_seq": 1,
+                "availability_receipt_digests": ["sha256:6666666666666666666666666666666666666666666666666666666666666666"],
+                "sealed_at": "2026-09-10T00:00:00.000Z",
+                "hlc": frozen_request.hlc,
+                "configuration_ref": "ak:event:AQsHmGu_9sPOyJ4aG8VlWQBp8wGGhdC-BjfAaXqrIbk-",
+                "command_results": [{
+                    "event_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                    "outcome": "committed",
+                    "result_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "unit_event_digests": ["sha256:2222222222222222222222222222222222222222222222222222222222222222"]
+                }]
+            }
+        }))
+        .unwrap();
+        frozen_outcome
+            .validate_for_request(&frozen_request)
+            .unwrap();
+        let lookup = SealPrepareFenceResultRequestBody {
+            realm_id: frozen_request.realm_id.clone(),
+            predecessor_ref: frozen_request.predecessor_ref.clone(),
+        };
+        let record = soland_storage::SealPreparationFenceRecord {
+            realm_id: lookup.realm_id.clone(),
+            signer_slot: "test-signer-slot".to_owned(),
+            predecessor_basis: canonical::canonical_sha256(&lookup.predecessor_ref).unwrap(),
+            request_hash: canonical::canonical_sha256(&frozen_request).unwrap(),
+            body_digest: canonical::canonical_sha256(&frozen_outcome.seal_body).unwrap(),
+            response_body: serde_json::to_value(&frozen_outcome).unwrap(),
+            created_at: chrono::Utc::now(),
+        };
+
+        let recovered = recover_seal_prepare_fence_outcome(record.clone(), &lookup).unwrap();
+        assert_eq!(recovered.frozen_request, frozen_request);
+        assert_eq!(recovered.frozen_outcome, frozen_outcome);
+
+        let mut corrupted = record;
+        corrupted.request_hash = format!("sha256:{}", "ff".repeat(32));
+        assert!(recover_seal_prepare_fence_outcome(corrupted, &lookup).is_err());
+    }
 
     #[tokio::test]
     async fn submit_idempotency_first_response_uses_exact_actor_and_operation_scope() {

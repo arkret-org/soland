@@ -245,7 +245,7 @@ async fn stale_causal_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order()
         arkret_canonical::DigestSuite::Sha256,
         [45; 32],
     ));
-    let cell = CellRef::new("ak:cell:ak.component.agent.selector_claim.v1:claim").unwrap();
+    let cell = CellRef::new("ak:cell:ak.component.circle.metadata.v1:circle").unwrap();
     let old = CheckpointRuleContext::Stable {
         digest: Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap(),
     };
@@ -273,11 +273,11 @@ async fn stale_causal_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order()
         (3, Some(0), vec![4]),
     ] {
         let mut covered = parent.map(|p| coverage[p].clone()).unwrap_or_default();
-        covered.extend(
-            sources
-                .iter()
-                .map(|b| format!("sha256:{}", format!("{b:02x}").repeat(32))),
-        );
+        covered.extend(sources.iter().map(|source| {
+            EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [*source; 32])
+                .event_digest()
+                .to_string()
+        }));
         let seal = format!(
             "ak:seal:sha256:{}",
             format!("{:02x}", index + 11).repeat(32)
@@ -301,10 +301,11 @@ async fn stale_causal_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order()
         sql_query("INSERT INTO state_seal_effective_checkpoints(seal_id,realm_id,covered_event_digests,covered_seal_ids,state_json) VALUES($1,$2,$3,$4,$5)")
             .bind::<Text,_>(&seal).bind::<Text,_>(realm.as_str()).bind::<Array<Text>,_>(&covered).bind::<Array<Text>,_>(&closure).bind::<Jsonb,_>(serde_json::to_value(&empty).unwrap()).execute(&mut *conn).await.unwrap();
         for (offset, source) in sources.into_iter().enumerate() {
-            let digest = format!("sha256:{}", format!("{source:02x}").repeat(32));
-            let op = serde_json::json!({"issuer_id":actor,"move_id":digest,"op":{"kind":"set","value":{"source":source}},"supersedes":[]});
-            sql_query("INSERT INTO state_cell_ops(realm_id,seal_id,op_index,cell_id,move_id,op_json) VALUES($1,$2,$3,$4,$5,$6)")
-                .bind::<Text,_>(realm.as_str()).bind::<Text,_>(&seal).bind::<BigInt,_>(offset as i64).bind::<Text,_>(cell.as_str()).bind::<Text,_>(&digest).bind::<Jsonb,_>(op).execute(&mut *conn).await.unwrap();
+            let event_id =
+                EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [source; 32]);
+            let op = serde_json::json!({"issuer_id":actor,"event_id":event_id,"op":{"kind":"set","value":{"source":source}},"supersedes":[]});
+            sql_query("INSERT INTO state_cell_ops(realm_id,seal_id,op_index,cell_id,event_id,op_json) VALUES($1,$2,$3,$4,$5,$6)")
+                .bind::<Text,_>(realm.as_str()).bind::<Text,_>(&seal).bind::<BigInt,_>(offset as i64).bind::<Text,_>(cell.as_str()).bind::<Text,_>(event_id.as_str()).bind::<Jsonb,_>(op).execute(&mut *conn).await.unwrap();
         }
         seals.push(seal);
         coverage.push(covered);
