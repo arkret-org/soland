@@ -283,8 +283,21 @@ pub(super) async fn register_delta_origins(
     realm: &str,
     delta: &[String],
 ) -> Result<(), EventSealCommitError> {
-    let rows = sql_query("SELECT DISTINCT op.cell_id,e.event_json FROM state_cell_ops op JOIN state_control_events e ON e.realm_id=op.realm_id AND e.event_digest=op.event_id WHERE op.realm_id=$1 AND op.event_id=ANY($2)")
-        .bind::<Text,_>(realm).bind::<Array<Text>,_>(delta).load::<OriginEventRow>(&mut *conn).await?;
+    // `state_cell_ops.event_id` is the typed content-bound EventId while a Seal
+    // delta and `state_control_events.event_digest` are the `<suite>:<hex>`
+    // digest. Bridge the two domains explicitly; comparing them directly never
+    // matches, which silently leaves every current selector unregistered.
+    let delta_event_ids = delta
+        .iter()
+        .map(|digest| {
+            let digest = Hash::new(digest.clone()).map_err(invalid)?;
+            EventId::from_event_digest(&digest)
+                .map(|event_id| event_id.to_string())
+                .map_err(invalid)
+        })
+        .collect::<Result<Vec<_>, EventSealCommitError>>()?;
+    let rows = sql_query("SELECT DISTINCT op.cell_id,e.event_json FROM UNNEST($2::text[],$3::text[]) AS d(event_digest,event_id) JOIN state_cell_ops op ON op.realm_id=$1 AND op.event_id=d.event_id JOIN state_control_events e ON e.realm_id=op.realm_id AND e.event_digest=d.event_digest")
+        .bind::<Text,_>(realm).bind::<Array<Text>,_>(delta).bind::<Array<Text>,_>(&delta_event_ids).load::<OriginEventRow>(&mut *conn).await?;
     let realm_id = RealmId::new(realm.to_owned()).map_err(invalid)?;
     for row in rows {
         let cell_ref = CellRef::new(row.cell_id).map_err(invalid)?;

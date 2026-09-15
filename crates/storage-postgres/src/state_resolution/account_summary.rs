@@ -297,6 +297,19 @@ pub(super) async fn publish_current_frontier(
         covered.extend(row.covered_event_digests);
     }
     let covered = covered.into_iter().collect::<Vec<_>>();
+    // Checkpoint coverage names Events by digest; `state_cell_ops` names them by
+    // their typed EventId. Selecting on the digests directly matches nothing and
+    // would rebuild the frontier from an empty cell set.
+    let covered_event_ids = covered
+        .iter()
+        .map(|digest| {
+            let digest = Hash::new(digest.clone())
+                .map_err(|e| EventSealCommitError::from(StoreError::Backend(e.to_string())))?;
+            EventId::from_event_digest(&digest)
+                .map(|event_id| event_id.to_string())
+                .map_err(|e| EventSealCommitError::from(StoreError::Backend(e.to_string())))
+        })
+        .collect::<Result<Vec<_>, EventSealCommitError>>()?;
     let rows = sql_query(
         "SELECT op.cell_id, op.seal_id, op.op_json FROM state_cell_ops op
         WHERE op.realm_id = $1 AND op.event_id = ANY($2)
@@ -305,7 +318,7 @@ pub(super) async fn publish_current_frontier(
         ORDER BY op.cell_id, op.seq",
     )
     .bind::<Text, _>(realm)
-    .bind::<Array<Text>, _>(&covered)
+    .bind::<Array<Text>, _>(&covered_event_ids)
     .load::<EventCellOpRow>(&mut *conn)
     .await?;
     let mut batches = BTreeMap::<CellRef, Vec<(String, Vec<IssuedOp>)>>::new();

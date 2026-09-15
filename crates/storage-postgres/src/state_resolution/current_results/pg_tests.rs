@@ -331,3 +331,154 @@ async fn stale_causal_checkpoint_rebuilds_from_seal_ancestry_not_arrival_order()
             .is_none()
     );
 }
+
+/// A Seal delta names Events by digest while `state_cell_ops` names them by
+/// their typed EventId. Registration must bridge those two domains: a written
+/// singleton that never registers its origin is dropped from publication and
+/// permanently holds the Realm below its ready current generation.
+#[tokio::test]
+async fn written_realm_genesis_registers_its_origin_and_publishes_a_ready_current() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let mut conn = pg_conn(&database.pool()).await.unwrap();
+    let notary = arkret_wire::NotaryValue::new(
+        arkret_wire::NotarySignerDescriptor {
+            actor_id: ActorId::service(
+                arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+            ),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:station.example#notary-key".to_owned(),
+            )
+            .unwrap(),
+            key_kind: arkret_wire::NotaryKeyKind::Ed25519Raw32,
+            jose_algorithm: arkret_wire::NotaryJoseAlgorithm::Ed25519,
+            frozen_public_key_b64u: "A".repeat(43),
+        },
+        0,
+    )
+    .unwrap();
+    let object = serde_json::json!({
+        "schema": "ak.schema.realm_genesis.v1",
+        "purpose": "collaboration",
+        "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "trust_domain": "ak:trust_domain:soland.test",
+        "schema_refs": ["ak.schema.realm.v1"],
+        "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+        "digest_algorithm": "sha256",
+        "security_class": "standard",
+        "encryption_profile": "none",
+        "notary": notary
+    });
+    let event = arkret_wire::test_support::raw_event(
+        "ak.realm.create",
+        ScopeRef::RealmGenesis,
+        arkret_wire::DidCoreId::new("ak:did_core:web:creator.example").unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        1,
+        arkret_wire::Hlc::new("019f00000000-0002-aabbccdd").unwrap(),
+        serde_json::json!({ "object": object }),
+    )
+    .unwrap();
+    let realm = event.realm_id.clone();
+    let cell = CellRef::new("ak:cell:ak.component.realm.genesis.v1:null").unwrap();
+    // The default Strand pointer is the one baseline singleton this Realm has
+    // to write, because a causal_register current value cannot be published as
+    // a confirmed absence: `account-current-result.schema.json` gives it no
+    // null branch and requires its `source`.
+    let strand = "ak:strand:Ab37I4k6yBlQvDmm6v80xz-BaUrFUbaPneH1V_h_N2sG";
+    let pointer_cell =
+        CellRef::new("ak:cell:ak.component.realm.set_default_strand.v1:null").unwrap();
+    let pointer = arkret_wire::test_support::raw_event(
+        "ak.realm.set_default_strand",
+        ScopeRef::Realm {
+            realm_id: realm.clone(),
+        },
+        arkret_wire::DidCoreId::new("ak:did_core:web:creator.example").unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        2,
+        arkret_wire::Hlc::new("019f00000000-0003-aabbccdd").unwrap(),
+        serde_json::json!({ "strand_id": strand }),
+    )
+    .unwrap();
+    let seal = format!("ak:seal:sha256:{}", "5a".repeat(32));
+    let mut delta = Vec::new();
+    for (index, (source, cell_id, value)) in [
+        (&event, &cell, object.clone()),
+        (&pointer, &pointer_cell, Value::String(strand.to_owned())),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let digest = source.event_id.event_digest().to_string();
+        sql_query("INSERT INTO state_control_events(event_digest,digest_suite,realm_id,event_json,ingress_class,command_unit_event_digests,is_pending) VALUES($1,'sha256',$2,$3,'{}',jsonb_build_array($1),FALSE)")
+            .bind::<Text,_>(&digest).bind::<Text,_>(realm.as_str())
+            .bind::<Jsonb,_>(serde_json::to_value(source).unwrap()).execute(&mut *conn).await.unwrap();
+        let op = serde_json::json!({"issuer_id":source.actor_id,"event_id":source.event_id,"op":{"kind":"set","value":value},"supersedes":[]});
+        sql_query("INSERT INTO state_cell_ops(realm_id,seal_id,op_index,cell_id,event_id,op_json) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(&seal).bind::<BigInt,_>(index as i64)
+            .bind::<Text,_>(cell_id.as_str()).bind::<Text,_>(source.event_id.as_str())
+            .bind::<Jsonb,_>(op).execute(&mut *conn).await.unwrap();
+        delta.push(digest);
+    }
+    let cells = BTreeMap::from([
+        (cell.clone(), ResolvedCellState::Value(object.clone())),
+        (
+            pointer_cell.clone(),
+            ResolvedCellState::Value(Value::String(strand.to_owned())),
+        ),
+    ]);
+    let winners = CurrentCausalWinners::from([(
+        pointer_cell.clone(),
+        CurrentCausalWinner {
+            event_id: pointer.event_id.clone(),
+            depth: 0,
+            value: Value::String(strand.to_owned()),
+        },
+    )]);
+    conn.transaction::<_, EventSealCommitError, _>(async |conn| {
+        register_delta_origins(conn, realm.as_str(), &delta).await?;
+        let revision = crate::current_results::next_revision(conn)
+            .await
+            .map_err(persistence_to_store)?;
+        publish(
+            conn,
+            realm.as_str(),
+            &cells,
+            revision as i64,
+            &winners,
+            true,
+        )
+        .await
+    })
+    .await
+    .unwrap();
+    let origins = sql_query(
+        "SELECT COUNT(*) AS value FROM current_selector_origins WHERE realm_id=$1 AND cell_id=ANY($2)",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .bind::<Array<Text>, _>(vec![cell.as_str().to_owned(), pointer_cell.as_str().to_owned()])
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap()
+    .value;
+    assert_eq!(origins, 2);
+    let published = sql_query("SELECT payload AS value FROM current_result_heads WHERE realm_id=$1 AND payload->'selector'->>'cell_id'=$2")
+        .bind::<Text,_>(realm.as_str()).bind::<Text,_>(cell.as_str()).get_result::<JsonRow>(&mut *conn).await.unwrap().value;
+    assert_eq!(
+        published["result"],
+        serde_json::json!({"status":"value","value":object})
+    );
+    assert_eq!(
+        published["selector"]["scope_ref"],
+        serde_json::json!({"kind":"realm","realm_id":realm})
+    );
+    assert!(!baseline_missing(&mut conn, realm.as_str()).await.unwrap());
+    let ready = sql_query(
+        "SELECT COUNT(*) AS value FROM governance_current_ready WHERE realm_id=$1 AND ready",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap()
+    .value;
+    assert_eq!(ready, 1);
+}
