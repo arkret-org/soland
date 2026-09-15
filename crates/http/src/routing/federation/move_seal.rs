@@ -608,11 +608,21 @@ fn device_generation_fenced(message: impl Into<String>) -> AppError {
     crate::app_error!(PolicyViolation, message.into()).with_wire_code("device_generation_fenced")
 }
 
+/// Load the B-model admission context for one Realm.
+///
+/// `candidate_records` overlays Events that are not durable yet. The terminal
+/// recovery commit of `security-transactions.md` section 2.3 inserts its two
+/// Events and its Seal in one transaction, so Seal admission has to read the
+/// exact candidate set the same transaction is about to insert. The overlay is
+/// the caller's own `records` value, so what admission validated and what the
+/// transaction inserts are the same bytes by construction, and the durable
+/// predecessor compare-and-swap still decides the race.
 async fn device_generation_event_seal_context(
     state: &AppState,
     realm_id: &RealmId,
+    candidate_records: &[soland_services::events::AcceptedEvent],
 ) -> Result<Option<DeviceGenerationEventSealContext>, AppError> {
-    let records = state
+    let mut records = state
         .event_queries()
         .realm_events_newest_first(realm_id.as_str())
         .await
@@ -622,6 +632,25 @@ async fn device_generation_event_seal_context(
                 format!("canonical Event store unavailable: {error}"),
             )
         })?;
+    for (index, candidate) in candidate_records.iter().enumerate() {
+        if candidate.realm_id.as_deref() != Some(realm_id.as_str()) {
+            return Err(seal_admission_error(
+                "candidate Event overlay crosses the Seal Realm boundary",
+            ));
+        }
+        if records
+            .iter()
+            .any(|record| record.event_id == candidate.event_id)
+        {
+            return Err(seal_admission_error(
+                "candidate Event overlay repeats an already accepted Event",
+            ));
+        }
+        // Candidates are the newest Events in the Realm and keep the caller's
+        // own order, so the overlaid history is exactly the history the commit
+        // produces.
+        records.insert(index, candidate.clone());
+    }
     let bootstrap = records
         .iter()
         .filter(|record| {
@@ -857,15 +886,6 @@ pub(crate) fn session_device_verification_method_matches(
     arkret_wire::project_did_to_core_id(&did).is_ok_and(|core_id| core_id.as_str() == principal_id)
 }
 
-fn first_seal_signer_matches(
-    signer_device_id: &str,
-    signer_public_key: &str,
-    required_device_id: &str,
-    required_public_key: &str,
-) -> bool {
-    signer_device_id == required_device_id && signer_public_key == required_public_key
-}
-
 fn bootstrap_first_seal_signature_matches(
     principal_id: &str,
     bootstrap_device_id: &str,
@@ -943,10 +963,50 @@ fn ordinary_event_device_id(record: &soland_services::events::AcceptedEvent) -> 
         })
 }
 
-async fn try_apply_device_generation_event_seal(
+/// Everything the durable Seal commit needs, produced by a read-only
+/// admission pass. Holding it apart from the commit is what lets the terminal
+/// recovery unit put the Seal into the same transaction as its two Events.
+pub(crate) struct PreparedDeviceGenerationSeal {
+    pub(crate) digest_suite: arkret_canonical::DigestSuite,
+    pub(crate) cas_head_ref: Option<SealId>,
+    pub(crate) new_ops: Vec<(
+        arkret_identifiers::CellRef,
+        arkret_state::state_model::ordered_log::IssuedOp,
+    )>,
+    pub(crate) target: BTreeSet<Hash>,
+    pub(crate) availability_dependency_writes: Vec<soland_storage::GovernanceDependencyWrite>,
+    pub(crate) confirmed_device_control: Option<soland_storage::ConfirmedDeviceControlProjection>,
+}
+
+pub(crate) enum DeviceGenerationSealAdmission {
+    /// The Realm is not a B-model principal-control Realm.
+    NotDeviceGeneration,
+    /// This exact Seal is already accepted; nothing further may be committed.
+    AlreadyAccepted,
+    Prepared(Box<PreparedDeviceGenerationSeal>),
+}
+
+/// Re-verify one B-model Event Seal without writing anything.
+///
+/// The caller MUST hold the principal's device-generation admission lock across
+/// this call and the commit that follows it.
+pub(crate) async fn prepare_device_generation_event_seal(
     state: &AppState,
     seal: &Seal,
-) -> Result<Option<SealEffect>, AppError> {
+    candidate_records: &[soland_services::events::AcceptedEvent],
+) -> Result<DeviceGenerationSealAdmission, AppError> {
+    // The terminal recovery commit reaches admission directly instead of
+    // through `apply_inbound_seal`, so the shape and submission-time checks
+    // every accepted Seal owes are asserted here as well. Repeating them for
+    // the inbound lane costs nothing and cannot disagree.
+    let delta_entries = seal
+        .delta
+        .iter()
+        .map(|digest| digest.as_str().to_owned())
+        .collect::<Vec<_>>();
+    validate_seal_delta_entries(&delta_entries)
+        .map_err(|(code, reason)| AppError::from_rejection(code, reason))?;
+    validate_seal_submission_time(seal.sealed_at, chrono::Utc::now())?;
     let digest_suites = state
         .projections()
         .seal_digest_suites(seal)
@@ -956,15 +1016,6 @@ async fn try_apply_device_generation_event_seal(
         .map_err(|error| seal_admission_error(format!("Seal id: {error}")))?;
     seal.validate_structural()
         .map_err(|error| seal_admission_error(format!("Seal structure: {error}")))?;
-    let Some(initial_context) = device_generation_event_seal_context(state, &seal.realm_id).await?
-    else {
-        return Ok(None);
-    };
-    let generation_lock =
-        crate::routing::identity::device_generation::device_generation_admission_lock(
-            initial_context.principal_id.as_str(),
-        );
-    let _guard = generation_lock.lock().await;
     if let Some(existing) = state
         .projections()
         .seal_by_id(&seal.id)
@@ -978,13 +1029,12 @@ async fn try_apply_device_generation_event_seal(
                 "Seal id already exists with different signature material",
             ));
         }
-        return Ok(Some(committed_seal_effect(seal)));
+        return Ok(DeviceGenerationSealAdmission::AlreadyAccepted);
     }
-    let Some(mut context) = device_generation_event_seal_context(state, &seal.realm_id).await?
+    let Some(mut context) =
+        device_generation_event_seal_context(state, &seal.realm_id, candidate_records).await?
     else {
-        return Err(seal_admission_error(
-            "principal-control Realm disappeared during Seal admission",
-        ));
+        return Ok(DeviceGenerationSealAdmission::NotDeviceGeneration);
     };
     if !state
         .projections()
@@ -1191,6 +1241,29 @@ async fn try_apply_device_generation_event_seal(
             ));
         }
         context.bootstrap_device_public_key.clone()
+    } else if recovery_first {
+        // `security-transactions.md` section 2.3 step 4 makes the replacement
+        // device `active + verified + current generation` as a *consequence* of
+        // this Seal. Requiring an already verified inventory row here would
+        // therefore be unsatisfiable by construction. The authority used instead
+        // is not weaker: the fence pins the device id and key from the accepted
+        // re-anchor unit's own replacement authorization, and no later Seal can
+        // reach this branch.
+        let requirement = context
+            .generation_fence
+            .as_ref()
+            .expect("recovery-first Seal has a generation fence");
+        if !device_verification_method_matches(
+            context.principal_id.as_str(),
+            &requirement.replacement_device_id,
+            &requirement.replacement_device_public_key,
+            signature.verification_method.as_str(),
+        ) {
+            return Err(device_generation_fenced(
+                "first new-generation Seal must be signed by the replacement recovery device",
+            ));
+        }
+        requirement.replacement_device_public_key.clone()
     } else {
         let signer = devices
             .as_ref()
@@ -1235,22 +1308,6 @@ async fn try_apply_device_generation_event_seal(
             return Err(device_generation_fenced(
                 "B-model Event Seal signer does not belong to the active device generation",
             ));
-        }
-        if recovery_first {
-            let requirement = context
-                .generation_fence
-                .as_ref()
-                .expect("recovery-first Seal has a generation fence");
-            if !first_seal_signer_matches(
-                &signer.device_id,
-                signer_public_key,
-                &requirement.replacement_device_id,
-                &requirement.replacement_device_public_key,
-            ) {
-                return Err(device_generation_fenced(
-                    "first new-generation Seal must be signed by the replacement recovery device",
-                ));
-            }
         }
         signer_public_key.to_owned()
     };
@@ -1433,7 +1490,7 @@ async fn try_apply_device_generation_event_seal(
         );
     }
 
-    let refreshed = device_generation_event_seal_context(state, &seal.realm_id)
+    let refreshed = device_generation_event_seal_context(state, &seal.realm_id, candidate_records)
         .await?
         .ok_or_else(|| {
             device_generation_fenced("B-model device generation disappeared during Seal admission")
@@ -1468,16 +1525,54 @@ async fn try_apply_device_generation_event_seal(
         )
         .await
         .map_err(|error| seal_admission_error(error.to_string()))?;
+    Ok(DeviceGenerationSealAdmission::Prepared(Box::new(
+        PreparedDeviceGenerationSeal {
+            digest_suite,
+            cas_head_ref: context.cas_head_ref.clone(),
+            new_ops,
+            target,
+            availability_dependency_writes,
+            confirmed_device_control,
+        },
+    )))
+}
+
+async fn try_apply_device_generation_event_seal(
+    state: &AppState,
+    seal: &Seal,
+) -> Result<Option<SealEffect>, AppError> {
+    let Some(initial_context) =
+        device_generation_event_seal_context(state, &seal.realm_id, &[]).await?
+    else {
+        return Ok(None);
+    };
+    let generation_lock =
+        crate::routing::identity::device_generation::device_generation_admission_lock(
+            initial_context.principal_id.as_str(),
+        );
+    let _guard = generation_lock.lock().await;
+    let prepared = match prepare_device_generation_event_seal(state, seal, &[]).await? {
+        DeviceGenerationSealAdmission::NotDeviceGeneration => {
+            return Err(seal_admission_error(
+                "principal-control Realm disappeared during Seal admission",
+            ));
+        }
+        DeviceGenerationSealAdmission::AlreadyAccepted => {
+            return Ok(Some(committed_seal_effect(seal)));
+        }
+        DeviceGenerationSealAdmission::Prepared(prepared) => *prepared,
+    };
+    let digest_suite = prepared.digest_suite;
     match state
         .projections()
         .commit_event_seal_if_head(
             seal,
             digest_suite,
-            context.cas_head_ref.as_ref(),
-            &new_ops,
-            &target,
-            &availability_dependency_writes,
-            confirmed_device_control.as_ref(),
+            prepared.cas_head_ref.as_ref(),
+            &prepared.new_ops,
+            &prepared.target,
+            &prepared.availability_dependency_writes,
+            prepared.confirmed_device_control.as_ref(),
         )
         .await
     {
@@ -2330,7 +2425,7 @@ async fn admin_sign_seal(
     } = body.into_inner();
     let realm = RealmId::new(realm_id.clone())
         .map_err(|e| crate::app_error!(SchemaViolation, format!("invalid realm_id: {e}")))?;
-    if device_generation_event_seal_context(state, &realm)
+    if device_generation_event_seal_context(state, &realm, &[])
         .await?
         .is_some()
     {
@@ -2775,19 +2870,24 @@ mod seal_delta_tests {
         );
     }
 
+    /// The replacement device is only projected as verified by the Seal this
+    /// check gates, so the recovery-first signer is bound to the key the
+    /// generation fence froze, exactly the way the bootstrap-first signer is
+    /// bound to the founding key. Any other device fails the same comparison.
     #[test]
     fn first_recovery_seal_binding_rejects_another_current_device() {
-        assert!(first_seal_signer_matches(
+        let public_key = "did:key:z6MkRecovery";
+        assert!(device_verification_method_matches(
+            "ak:did_core:web:alice.example",
             "ak:device:recovery",
-            "did:key:z6MkRecovery",
-            "ak:device:recovery",
-            "did:key:z6MkRecovery",
+            public_key,
+            "did:key:z6MkRecovery#z6MkRecovery",
         ));
-        assert!(!first_seal_signer_matches(
-            "ak:device:other",
-            "did:key:z6MkOther",
+        assert!(!device_verification_method_matches(
+            "ak:did_core:web:alice.example",
             "ak:device:recovery",
-            "did:key:z6MkRecovery",
+            public_key,
+            "did:key:z6MkOther#z6MkOther",
         ));
     }
 

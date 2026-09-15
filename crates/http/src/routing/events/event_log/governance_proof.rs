@@ -1667,6 +1667,17 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 "device_reanchor_conflict: generation Seal materialization is quarantined",
             ));
         }
+        // The fence exists for exactly the window in which the successor
+        // generation is accepted but not yet sealed. `current_device_generation`
+        // reports the Seal-confirmed generation, and a re-anchor always declares
+        // `previous + 1`, so the active fence is the re-anchor that establishes
+        // `current_ref + 1`. Once its first-generation Seal commits, the
+        // confirmed generation becomes that number and the fence releases on its
+        // own. Matching `current_ref` instead would only ever select a re-anchor
+        // whose Seal is already accepted, which is the same as no fence at all.
+        let fenced_generation = generation.current_ref.checked_add(1).ok_or_else(|| {
+            crate::app_error!(StateMismatch, "device generation counter overflow")
+        })?;
         let candidates = records
             .iter()
             .filter(|record| {
@@ -1676,7 +1687,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
                         .envelope
                         .pointer("/payload/new_device_generation")
                         .and_then(serde_json::Value::as_u64)
-                        == Some(generation.current_ref)
+                        == Some(fenced_generation)
             })
             .collect::<Vec<_>>();
         if candidates.is_empty() {
