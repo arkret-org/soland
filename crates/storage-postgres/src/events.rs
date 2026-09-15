@@ -617,7 +617,7 @@ pub(crate) async fn insert_canonical_event(
     }
     let realm_pk =
         crate::realm_identity::ensure_optional_realm_pk(conn, record.realm_id.as_deref()).await?;
-    sql_query(
+    let inserted = sql_query(
         "INSERT INTO canonical_events \
          (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, canonical_bytes, envelope, received_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING pk",
@@ -636,8 +636,23 @@ pub(crate) async fn insert_canonical_event(
     .bind::<Timestamptz, _>(record.received_at)
     .get_result::<PkRow>(conn)
     .await
-    .map(|row| CanonicalInsertOutcome::Inserted(row.pk))
-    .map_err(map_canonical_event_put_error)
+    .map_err(map_canonical_event_put_error)?;
+    // Second admission path into `canonical_events`. The Event unit of work has
+    // its own insert, and indexing only there left this one's Events out of the
+    // projection order: they then resolved as missing predecessors, which marks
+    // every causal descendant provisional and forces `preview_only` on almost
+    // every timeline window.
+    if let Some(realm_pk) = realm_pk {
+        let typed = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).map_err(
+            |error| {
+                PersistenceError::SchemaViolation(format!(
+                    "accepted Event envelope is not canonical wire: {error}"
+                ))
+            },
+        )?;
+        crate::timeline_order::commit_order_key(conn, inserted.pk, realm_pk, &typed).await?;
+    }
+    Ok(CanonicalInsertOutcome::Inserted(inserted.pk))
 }
 
 async fn preflight_canonical_events(

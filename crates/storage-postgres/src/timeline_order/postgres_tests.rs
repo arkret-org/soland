@@ -313,3 +313,85 @@ async fn a_frozen_window_scan_includes_its_head_excludes_its_continuation_and_sk
         vec![newest.event_id.as_str(), older.event_id.as_str()]
     );
 }
+
+#[tokio::test]
+async fn the_second_admission_path_also_records_the_projection_order() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"timeline second path realm"),
+    ));
+    let alice = actor("ak:did_core:web:alice.example");
+    // Admission validates `digest(suite, canonical_bytes) == canonical_digest`
+    // and that the id encodes that digest, so all three must come from the same
+    // bytes rather than from the fixture's synthetic id.
+    let authentic = |event: Event| {
+        let mut event = event;
+        let bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        let digest = arkret_canonical::digest(DigestSuite::Sha256, &bytes);
+        event.event_id = arkret_wire::EventId::from_event_digest(
+            &arkret_wire::Hash::new(digest.clone()).unwrap(),
+        )
+        .unwrap();
+        (event, bytes, digest)
+    };
+    let root = authentic(event(
+        &realm,
+        &alice,
+        1,
+        Some("01970e589d21-0000-a13f9c2e"),
+        &[],
+    ));
+    let child = authentic(event(
+        &realm,
+        &alice,
+        2,
+        Some("01970e589d22-0000-a13f9c2e"),
+        &[&root.0],
+    ));
+
+    // `CanonicalEventStore::put` is the admission path the Event unit of work
+    // does not go through: bootstrap, provisioning and replication land here.
+    // Indexing only in the unit of work left these Events out of the order
+    // index, where they resolved as missing predecessors and marked every
+    // causal descendant provisional.
+    let mut conn = pool.get().await.unwrap();
+    for (event, bytes, digest) in [&root, &child] {
+        let record = soland_storage::CanonicalEventRecord {
+            event_id: event.event_id.as_str().to_owned(),
+            actor_id: event.actor_id.canonical_key().unwrap(),
+            actor_seq: event.actor_seq,
+            realm_id: Some(event.realm_id.as_str().to_owned()),
+            kind: event.kind.as_str().to_owned(),
+            schema_id: "fixture".to_owned(),
+            digest_suite: DigestSuite::Sha256,
+            canonical_digest: digest.clone(),
+            canonical_bytes: bytes.clone(),
+            envelope: serde_json::to_value(event).unwrap(),
+            received_at: chrono::Utc::now(),
+        };
+        conn.transaction::<(), crate::PgTransactionError, _>(async |conn| {
+            crate::events::insert_canonical_event(conn, &record).await?;
+            Ok(())
+        })
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
+        .unwrap();
+    }
+
+    let rows = timeline_page(&mut conn, realm.as_str(), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2, "both Events must reach the order index");
+    let child_row = rows
+        .iter()
+        .find(|row| row.event_id == child.0.event_id.as_str())
+        .expect("the successor is indexed");
+    assert_eq!(child_row.causal_depth, 1);
+    assert!(
+        !child_row.provisional,
+        "its predecessor arrived through the same path, so the order is final"
+    );
+}
