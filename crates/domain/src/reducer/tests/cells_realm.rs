@@ -1806,11 +1806,6 @@ fn the_bundle_projects_every_registered_component() {
             "min_holders": 1,
             "applies_to": ["seal_include"]
         },
-        "audit_policy": {
-            "seal_transparency_auditor_ids": ["ak:did_core:web:witness.example"],
-            "seal_transparency_min_attestations": 1,
-            "seal_transparency_auditor_independence": "distinct_did"
-        },
         "preauth": {"consent_required": true}
     });
     serde_json::from_value::<
@@ -1837,7 +1832,6 @@ fn the_bundle_projects_every_registered_component() {
         "agent_participation",
         "account_deactivation",
         "availability_policy",
-        "audit_policy",
         "preauth",
     ] {
         assert!(
