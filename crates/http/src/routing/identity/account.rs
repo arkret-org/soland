@@ -1535,17 +1535,21 @@ async fn resolve_actor_profiles(
             .to_string(),
         )
         .await;
+    if !caller_joined {
+        // The caller's own membership is the authorization basis, so its
+        // absence is not a per-actor outcome: the request has no basis at all
+        // and gets one `not_found` that says nothing about any requested actor.
+        // A Principal Control Realm selector lands here too, indistinguishable
+        // from a Realm the caller simply is not in.
+        return Err(AppError::not_found("actor profiles unavailable"));
+    }
 
     let mut profiles = Vec::new();
     let mut failures = Vec::new();
     for actor_id in &body.actor_ids {
-        let target_joined = caller_joined
-            && crate::routing::realm_has_member(
-                state,
-                body.realm_id.as_str(),
-                &actor_id.to_string(),
-            )
-            .await;
+        let target_joined =
+            crate::routing::realm_has_member(state, body.realm_id.as_str(), &actor_id.to_string())
+                .await;
         let resolved = if target_joined {
             resolved_actor_profile_evidence(state, actor_id).await?
         } else {
