@@ -117,6 +117,17 @@ pub trait DevicePairingStore: Send + Sync {
     /// account binding and its signed target proof. Returns the stored record;
     /// a byte-identical retry returns the already finalized row unchanged, and
     /// a different proof for the same id conflicts.
+    ///
+    /// `device-lifecycle.md` 2.1.1 step 2: a transition that actually fires MUST
+    /// also move every *other* `ready_for_claim` record of the same `AccountId`
+    /// to terminal `expired` in the same durable transaction, so one account
+    /// never holds two approvable requests. The supersession key is the
+    /// `AccountId` alone — it does not depend on the candidate `device_id` or on
+    /// whether the candidate key is the same one. Superseded rows are flipped,
+    /// never deleted: the tombstone is what keeps the retired code from becoming
+    /// unknown (and therefore re-mintable) before its own `expires_at`. An
+    /// `authorized` record is never rewritten retroactively, and an exact retry
+    /// supersedes nothing a second time.
     async fn finalize(
         &self,
         device_pairing_request_id: &str,

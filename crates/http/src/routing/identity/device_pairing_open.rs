@@ -47,6 +47,13 @@ pub(crate) fn open_router() -> Router {
 const DEVICE_PAIRING_TTL_MINUTES: i64 = 10;
 /// Keep expired rows briefly so a valid status credential can distinguish an
 /// elapsed request from a typo, while ensuring opportunistic cleanup is bounded.
+///
+/// `device-lifecycle.md` 2.1.1 step 8 makes the floor normative: the tombstone
+/// MUST outlive the record's own `expires_at`, because a row retired early by
+/// the step-2 supersession still has live window left, and deleting it would
+/// let the same `pairing_code` become unknown -- and therefore mintable -- again
+/// inside that window. Pruning on `expires_at <= now - retention` keeps a whole
+/// retention period past the window, and the retention bound keeps it finite.
 const DEVICE_PAIRING_EXPIRED_RETENTION_MINUTES: i64 = 60;
 
 #[endpoint(
