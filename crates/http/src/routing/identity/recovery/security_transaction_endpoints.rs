@@ -1733,7 +1733,9 @@ async fn prepare_recovery_plan(
             "recovery unit Events belong to a different principal",
         ));
     }
-    let digest_suite_for_unit = state.projections().realm_digest_suite(realm_id.as_str());
+    // The reserved Seal id and every unit digest are derived under the Realm
+    // digest algorithm, so the suite is never taken from the caller.
+    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let reanchor_payload: arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload =
         serde_json::from_value(
             serde_json::to_value(&reanchor_submission.event.payload)
@@ -1747,7 +1749,7 @@ async fn prepare_recovery_plan(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let authorize_envelope_digest = authorize_submission
         .event
-        .event_digest_with_digest_suite(digest_suite_for_unit)
+        .event_digest_with_digest_suite(digest_suite)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let replacement_payload_digest = soland_services::events::replacement_authorize_payload_digest(
         &authorize_envelope,
@@ -1771,7 +1773,6 @@ async fn prepare_recovery_plan(
     // are checked here so the frozen plan can only ever have been derived from
     // an authorized unit.
     verify_recovery_unit_control_proposal_acks(state, &recovery_session, submissions).await?;
-    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let mut events = Vec::with_capacity(submissions.len());
     for (submission, expected_digest) in submissions.iter().zip(&seal_intent.unit_event_digests) {
         let digest = Hash::new(
@@ -1789,8 +1790,6 @@ async fn prepare_recovery_plan(
         }
         events.push((digest, submission.event.clone()));
     }
-    // The reserved Seal id is derived under the Realm digest algorithm, so the
-    // suite is never taken from the caller.
     let mut frontier = state
         .projections()
         .realm_seal_basis_leaves(realm_id)

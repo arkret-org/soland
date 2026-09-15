@@ -34,15 +34,16 @@ use super::*;
     fields(op = "ak.gate.account.command.finalize_device_pairing.v1")
 )]
 pub(super) async fn finalize_device_pairing(
-    aa: super::super::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<DevicePairingFinalizeRequestBody>,
 ) -> JsonResult<DevicePairingFinalizeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let account_id = handoff_account(state, &session).await?;
+    // The account MUST come from the pending account handoff the candidate
+    // presents, and from nothing else. See `account_handoff_bound_account`.
+    let account_id = account_handoff_bound_account(state, req).await?;
     let body = body.into_inner();
+    charge_handoff_quota(state, body.target_proof.device_id.as_str(), &account_id)?;
     let now = now();
     let record = live_pairing_record(
         state
@@ -118,8 +119,14 @@ pub(super) async fn claim_device_pairing_code(
     body: JsonBody<DevicePairingCodeClaimRequestBody>,
 ) -> JsonResult<DevicePairingCodeClaimOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    // The code claim is an ordinary authenticated device operation, so the
+    // account comes from the caller's own session credential.
     let session = aa.authenticated_session(state, req).await?;
-    let account_id = handoff_account(state, &session).await?;
+    let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
+        state, &session,
+    )
+    .await?;
+    charge_handoff_quota(state, &session.device_id, &account_id)?;
     // Claiming is reserved to an accepted, non-`revocation_pending` device of
     // the account itself. A caller that fails this gate learns nothing about
     // the code it submitted.
@@ -169,20 +176,54 @@ pub(super) async fn claim_device_pairing_code(
     })
 }
 
-async fn handoff_account(
-    state: &AppState,
-    session: &SessionRecord,
+/// Resolve the exact `AccountId` that the presented **pending account handoff
+/// grant** is bound to (`identity/account-lifecycle.md` §2.1.2, Bound
+/// `account_handoff_grant`), which finalize authenticates with as
+/// `Authorization: DPoP <account_handoff_grant>` plus a matching DPoP proof.
+///
+/// **This is deliberately unwired and fails closed.**
+///
+/// The handoff grant is minted and held by the Account Authority process
+/// (coauth); it is opaque to the Station, and soland has no introspection or
+/// verification path for it — the only mention of the kind anywhere in this
+/// repository is the `AuthGrantExchangeKind::AccountHandoff` variant that
+/// `ServiceDescribe` advertises. The two substitutes that suggest themselves
+/// are both wrong:
+///
+/// - inventing a Station-local handoff introspection protocol would be a private auth surface the
+///   spec does not register, and
+/// - authenticating finalize with an ordinary `user_session` would destroy the property finalize
+///   exists for. The candidate device is not yet a device of any account; if it could present an
+///   ordinary session it would already be one, and "the record is bound to the account this handoff
+///   proves" would degrade into "the record is bound to whichever account the caller already had".
+///
+/// The interface this needs from the Account Authority is narrow: given the
+/// presented grant and its DPoP proof, return the exact `AccountId` the grant
+/// is bound to, or reject. Everything below this call is already implemented
+/// and takes that `AccountId` as its only account input.
+async fn account_handoff_bound_account(
+    _state: &AppState,
+    _req: &mut Request,
 ) -> Result<arkret_wire::AccountId, AppError> {
-    let account_id =
-        crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(state, session)
-            .await?;
-    if state.device_pairing_handoff_rate_limited(&session.device_id, &account_id.to_string()) {
+    Err(AppError::from_rejection(
+        arkret_wire::ErrorCode::TemporarilyUnavailable,
+        "device pairing finalize requires a pending account handoff grant,          which this Station cannot yet verify",
+    )
+    .with_internal_reason("account_handoff_introspection_unwired"))
+}
+
+fn charge_handoff_quota(
+    state: &AppState,
+    caller_device_id: &str,
+    account_id: &arkret_wire::AccountId,
+) -> Result<(), AppError> {
+    if state.device_pairing_handoff_rate_limited(caller_device_id, &account_id.to_string()) {
         return Err(AppError::from_rejection(
             arkret_wire::ErrorCode::RateLimited,
             "device pairing handoff quota exhausted",
         ));
     }
-    Ok(account_id)
+    Ok(())
 }
 
 async fn ensure_claiming_device_accepted(
