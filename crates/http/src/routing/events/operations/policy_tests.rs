@@ -499,6 +499,7 @@ fn signed_device_authorize_payload(
         None,
         DeviceAuthorizationBindingKind::RegistrationAnchor,
         None,
+        None,
     )
     .expect("valid unsigned device authorization");
     let input = unsigned

@@ -2203,6 +2203,7 @@ mod tests {
                 arkret_wire::NonEmptyString::new("AA".to_owned()).unwrap(),
             ),
             recovery_session_id: None,
+            applet_id: None,
         }
     }
 

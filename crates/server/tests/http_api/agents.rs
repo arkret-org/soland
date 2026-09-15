@@ -83,6 +83,7 @@ fn controller_founding_authorize_payload(
             arkret_wire::NonEmptyString::new("pending").unwrap(),
         ),
         recovery_session_id: None,
+        applet_id: None,
     };
     let possession_input = payload.device_possession_signature_input(account).unwrap();
     payload.device_signature = SignatureMaterial::NonEmptyString(

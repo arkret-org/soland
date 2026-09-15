@@ -376,6 +376,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
             arkret_wire::NonEmptyString::new("fixture-signature").unwrap(),
         ),
         recovery_session_id: None,
+        applet_id: None,
     };
     let mut authorize = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),

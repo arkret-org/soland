@@ -250,6 +250,7 @@ fn fixture_pcr_founding_device_descriptor(
             arkret_wire::NonEmptyString::new("fixture-signature").unwrap(),
         ),
         recovery_session_id: None,
+        applet_id: None,
     };
     let authorize = serde_json::to_value(authorize).expect("fixture PCR authorize payload");
     arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {

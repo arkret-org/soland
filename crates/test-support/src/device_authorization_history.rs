@@ -49,6 +49,7 @@ pub fn possession(
             not_before: at(),
             expires_at: None,
             binding,
+            applet_id: None,
         },
     )
 }
@@ -62,6 +63,9 @@ pub struct DeviceAuthorizationSpec {
     pub not_before: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub binding: DeviceAuthorizationBindingKind,
+    /// Present on exactly `applet_managed_delegation`
+    /// (`device-lifecycle.md` 5.2.3); every other branch forbids it.
+    pub applet_id: Option<AppletId>,
 }
 
 pub fn possession_with(
@@ -88,6 +92,7 @@ pub fn possession_with(
             RecoverySessionId::new("ak:recovery_session:01904100-0000-7000-8000-000000000002")
                 .unwrap()
         }),
+        spec.applet_id,
     )
     .unwrap();
     if spec.binding == DeviceAuthorizationBindingKind::AcceptedDevice {
@@ -223,6 +228,7 @@ impl DeviceHistoryFixture {
                 not_before: options.founding_not_before,
                 expires_at: options.founding_expires_at,
                 binding: DeviceAuthorizationBindingKind::RegistrationAnchor,
+                applet_id: None,
             },
         );
         let key = SigningKey::from_bytes(&options.founding_device_signing_seed);
