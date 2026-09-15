@@ -69,27 +69,24 @@ fn authored_call_id() -> String {
 
 fn device_message_target(kind: &str, mut content: Value) -> Value {
     let expires_at = chrono::Utc::now() + chrono::Duration::minutes(10);
-    if kind == "ak.key.verification.request" {
+    if kind == "ak.secret.request" {
         let content = content
             .as_object_mut()
-            .expect("key verification fixture content is an object");
+            .expect("secret request fixture content is an object");
         content
-            .entry("transaction_id")
+            .entry("request_id")
             .or_insert_with(|| Value::String(uuid::Uuid::now_v7().to_string()));
+        content
+            .entry("secret_id")
+            .or_insert_with(|| Value::String("example_mls_account_secret".to_owned()));
         content.entry("from_device_id").or_insert_with(|| {
             Value::String("ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned())
         });
         content
-            .entry("methods")
-            .or_insert_with(|| serde_json::json!(["ak.key.verification.sas_v1"]));
-        content.entry("timestamp").or_insert_with(|| {
-            Value::String(arkret_canonical::format_timestamp_canonical(
-                chrono::Utc::now(),
-            ))
-        });
-        content.entry("expires_at").or_insert_with(|| {
-            Value::String(arkret_canonical::format_timestamp_canonical(expires_at))
-        });
+            .entry("recipient_hpke_public_key")
+            .or_insert_with(|| {
+                Value::String("9CKz3Ai9iQz0kHhZcH0H2jqvS-LcQ0YjvKq3aH9mQ0U".to_owned())
+            });
     }
     serde_json::json!({
         "device_message_id": new_prefixed_uuid7("ak:device_message:"),
@@ -456,19 +453,16 @@ async fn unauthorized_fresh_device_cannot_send_pairing_notification_body() {
     )
     .await;
     let content = serde_json::json!({
-        "transaction_id": "txn-device-pair-1",
+        "request_id": "txn-device-pair-1",
+        "secret_id": "example_mls_account_secret",
         "from_device_id": new_device,
-        "timestamp": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
-        "expires_at": arkret_canonical::format_timestamp_canonical(
-            chrono::Utc::now() + chrono::Duration::minutes(10)
-        ),
-        "methods": ["ak.key.verification.qr_v1"]
+        "recipient_hpke_public_key": "9CKz3Ai9iQz0kHhZcH0H2jqvS-LcQ0YjvKq3aH9mQ0U"
     });
     let actor_core = fixture_actor_core_id(actor).to_string();
     let mut device_targets = serde_json::Map::new();
     device_targets.insert(
         existing_device.to_owned(),
-        device_message_target("ak.key.verification.request", content),
+        device_message_target("ak.secret.request", content),
     );
     let mut actor_targets = serde_json::Map::new();
     actor_targets.insert(actor_core, Value::Object(device_targets));
@@ -508,9 +502,9 @@ async fn to_device_capacity_eviction_sets_lost_watermark_body() {
         device_targets.insert(
             bob_device.to_owned(),
             device_message_target(
-                "ak.key.verification.request",
+                "ak.secret.request",
                 serde_json::json!({
-                    "transaction_id": format!("capacity-{seq}"),
+                    "request_id": format!("capacity-{seq}"),
                     "seq": seq
                 }),
             ),

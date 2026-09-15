@@ -69,10 +69,9 @@ operator must address at boot — see
   (defaults to a value derived from the configured `service_id`) and binds
   peer authorization and recovery transcripts to this deployment.
 - **Ephemeral kinds rejected on `POST /_arkret/self/events`** — producers
-  must route the 12 ephemeral kinds (`ak.call.signal`, `ak.presence`,
-  `ak.typing`, `ak.receipt.read`, `ak.key.verification.*`) through
-  the ephemeral envelope / device-message channels; no compatibility
-  shim.
+  must route the ephemeral kinds (`ak.call.signal`, `ak.presence`,
+  `ak.typing`, `ak.receipt.read`) through the ephemeral envelope
+  channel; no compatibility shim.
 - **Realm terminal-state, presign blob fail-closed, federation
   idempotency cache, relaxed window ≤ 300 s** — see CHANGELOG for
   the full operator checklist.

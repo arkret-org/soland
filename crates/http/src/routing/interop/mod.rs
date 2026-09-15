@@ -16,11 +16,9 @@ pub(crate) use push::push_target_privacy_derivation_claim;
 ///
 /// Shared by the two interop surfaces that need a raw MAC: push target
 /// pseudonym derivation (`push.rs`) and the LiveKit JWT / TURN credential
-/// signatures (`webrtc.rs`, `bindings/livekit.md` §2). The SDK's
-/// `arkret_crypto::key_verification::hmac_sha256` is the same primitive, but
-/// reaching it would enable the `key-verification` feature and pull
-/// `x25519-dalek` into the server for a five-line MAC, so the station keeps
-/// its own call into the same audited `hmac` crate.
+/// signatures (`webrtc.rs`, `bindings/livekit.md` §2). The station calls the
+/// audited `hmac` crate directly rather than routing a five-line MAC through
+/// an SDK feature.
 pub(crate) fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
