@@ -86,10 +86,20 @@ async fn validate_encryption_context(
                     && removal.circle_id.as_deref() == scope.circle_id().map(|id| id.as_str())
             })
     {
+        // These two failures ask the client for opposite things, so they must
+        // not share a code. `frontier_unavailable` above means "the accepted
+        // group state is not readable right now" and the correct client action
+        // is to retry the identical request. Here the group state IS readable
+        // and has moved past the context the client froze: the ciphertext can
+        // never become acceptable, and the client must re-encrypt against the
+        // current epoch. That is the registered `mls_governance_binding_stale`
+        // precondition. Clients refuse to branch on detail text, so returning
+        // `frontier_unavailable` here left them retrying forever.
         return Err(crate::app_error!(
-            FrontierUnavailable,
+            FailedPrecondition,
             "frozen message encryption context is no longer applicable",
-        ));
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE));
     }
     Ok(())
 }
