@@ -205,7 +205,7 @@ fn validate_proposal_decision_append(
 }
 
 #[derive(Debug)]
-enum EventSealCommitError {
+pub(crate) enum EventSealCommitError {
     Diesel(diesel::result::Error),
     Store(StoreError),
 }
@@ -234,7 +234,7 @@ impl From<StoreError> for EventSealCommitError {
 }
 
 impl EventSealCommitError {
-    fn into_store(self) -> StoreError {
+    pub(crate) fn into_store(self) -> StoreError {
         match self {
             Self::Diesel(error) => diesel_to_store(error),
             Self::Store(error) => error,
@@ -437,7 +437,7 @@ struct StoredSealCollisionVariantRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SealInsertOutcome {
+pub(crate) enum SealInsertOutcome {
     Inserted,
     ExactRetry,
     Collision,
@@ -1089,7 +1089,7 @@ fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
     }))
 }
 
-async fn effective_state_with_new_ops(
+pub(crate) async fn effective_state_with_new_ops(
     cells: &dyn CellStore,
     registry: &dyn CellStateRegistry,
     realm_id: &RealmId,
@@ -2236,10 +2236,42 @@ impl SealStore for PgSealStore {
     }
 }
 
-#[async_trait]
-impl EventSealCommitStore for PgEventSealCommitStore {
-    async fn commit_if_head(
-        &self,
+/// One accepted state Seal, fully validated and encoded outside any
+/// transaction, ready to be committed by [`PreparedStateSealCommit::commit_in_transaction`].
+pub(crate) struct PreparedStateSealCommit {
+    cell_registry: Arc<dyn CellStateRegistry>,
+    digest_suite: arkret_canonical::DigestSuite,
+    data_closure_seal: Seal,
+    rule_context: CheckpointRuleContext,
+    seal_json: Value,
+    seal_id_preimage_bytes: Vec<u8>,
+    accepted_seal_bytes: Vec<u8>,
+    predecessor_ref: Option<String>,
+    predecessor_seal_ids: Vec<String>,
+    seal_id: String,
+    realm_id: String,
+    dependency_realm_id: RealmId,
+    dependency_source: soland_storage::GovernanceDependencySource,
+    delta: Vec<String>,
+    command_results: Vec<arkret_wire::SealCommandOutcome>,
+    sealed_at: chrono::DateTime<chrono::Utc>,
+    declared_state_root: Hash,
+    is_genesis: bool,
+    expected: Option<String>,
+    covered: BTreeSet<String>,
+    governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
+    confirmed_device_control: Option<soland_storage::ConfirmedDeviceControlProjection>,
+    new_rows: Vec<(i64, String, String, Value)>,
+}
+
+impl PreparedStateSealCommit {
+    /// Precompute and validate everything one accepted state Seal contributes
+    /// to a durable commit. Splitting this from the transaction body lets a
+    /// caller-owned transaction commit the Seal together with other
+    /// authoritative rows instead of in a second transaction of its own.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare(
+        cell_registry: Arc<dyn CellStateRegistry>,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
         expected_store_head: Option<&SealId>,
@@ -2247,7 +2279,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         covered: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> StoreResult<bool> {
+    ) -> StoreResult<Self> {
         if seal.predecessor_ref.as_ref() != expected_store_head {
             return Err(StoreError::Conflict(
                 "Seal predecessor_ref does not match the expected accepted Seal".to_owned(),
@@ -2281,8 +2313,6 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     .to_owned(),
             ));
         }
-        let pool = self.pool.clone();
-        let cell_registry = self.cell_registry.clone();
         let data_closure_seal = seal.clone();
         let rule_context = CheckpointRuleContext::capture(cell_registry.as_ref(), &seal.realm_id)?;
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
@@ -2300,7 +2330,6 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .map(|predecessor| predecessor.as_str().to_owned())
             .collect::<Vec<_>>();
         let seal_id = seal.id.as_str().to_owned();
-        let error_seal_id = seal_id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
         let dependency_realm_id = seal.realm_id.clone();
         let dependency_source = soland_storage::GovernanceDependencySource::Seal(seal.id.clone());
@@ -2332,130 +2361,184 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 ))
             })
             .collect::<StoreResult<Vec<_>>>()?;
-        let outcome = await_store!(async move {
-            let mut conn = pg_conn(&pool).await?;
-            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
-                lock_seal_identity(conn, &seal_id).await?;
-                let insert = StateSealInsert {
-                    id: &seal_id,
-                    digest_suite,
-                    realm_id: &realm_id,
-                    seal_id_preimage_bytes: &seal_id_preimage_bytes,
-                    accepted_seal_bytes: &accepted_seal_bytes,
-                    seal_json: &seal_json,
-                    predecessor_ref: predecessor_ref.as_deref(),
-                    is_genesis,
-                };
-                let outcome = preflight_state_seal(conn, &insert).await?;
-                if outcome == SealInsertOutcome::ExactRetry {
-                    let exact_dependencies =
-                        crate::governance_dependencies_match_in_transaction(
-                            conn,
-                            &dependency_realm_id,
-                            &dependency_source,
-                            &governance_dependencies,
-                        )
-                        .await
-                        .map_err(persistence_to_store)?;
-                    if !exact_dependencies {
-                        return Err(StoreError::Conflict(
-                            "duplicate_conflict: exact Seal replay has different governance dependencies"
-                                .to_owned(),
-                        )
-                        .into());
-                    }
-                    let checkpoint = sql_query(
-                        "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
+        Ok(Self {
+            cell_registry,
+            digest_suite,
+            data_closure_seal,
+            rule_context,
+            seal_json,
+            seal_id_preimage_bytes,
+            accepted_seal_bytes,
+            predecessor_ref,
+            predecessor_seal_ids,
+            seal_id,
+            realm_id,
+            dependency_realm_id,
+            dependency_source,
+            delta,
+            command_results,
+            sealed_at,
+            declared_state_root,
+            is_genesis,
+            expected,
+            covered,
+            governance_dependencies,
+            confirmed_device_control,
+            new_rows,
+        })
+    }
+
+    /// Apply the prepared Seal inside a transaction the caller already owns.
+    /// Nothing here opens a connection or a transaction of its own, so the
+    /// Seal becomes observable exactly when the caller commits.
+    pub(crate) async fn commit_in_transaction(
+        self,
+        conn: &mut AsyncPgConnection,
+    ) -> Result<SealInsertOutcome, EventSealCommitError> {
+        let Self {
+            cell_registry,
+            digest_suite,
+            data_closure_seal,
+            rule_context,
+            seal_json,
+            seal_id_preimage_bytes,
+            accepted_seal_bytes,
+            predecessor_ref,
+            predecessor_seal_ids,
+            seal_id,
+            realm_id,
+            dependency_realm_id,
+            dependency_source,
+            delta,
+            command_results,
+            sealed_at,
+            declared_state_root,
+            is_genesis,
+            expected,
+            covered,
+            governance_dependencies,
+            confirmed_device_control,
+            new_rows,
+        } = self;
+        lock_seal_identity(conn, &seal_id).await?;
+        let insert = StateSealInsert {
+            id: &seal_id,
+            digest_suite,
+            realm_id: &realm_id,
+            seal_id_preimage_bytes: &seal_id_preimage_bytes,
+            accepted_seal_bytes: &accepted_seal_bytes,
+            seal_json: &seal_json,
+            predecessor_ref: predecessor_ref.as_deref(),
+            is_genesis,
+        };
+        let outcome = preflight_state_seal(conn, &insert).await?;
+        if outcome == SealInsertOutcome::ExactRetry {
+            let exact_dependencies = crate::governance_dependencies_match_in_transaction(
+                conn,
+                &dependency_realm_id,
+                &dependency_source,
+                &governance_dependencies,
+            )
+            .await
+            .map_err(persistence_to_store)?;
+            if !exact_dependencies {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay has different governance dependencies"
+                        .to_owned(),
+                )
+                .into());
+            }
+            let checkpoint = sql_query(
+                "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
                          FROM state_seal_effective_checkpoints WHERE seal_id = $1",
-                    )
-                    .bind::<Text, _>(&seal_id)
-                    .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
-                    .await
-                    .optional()?;
-                    let Some(checkpoint) = checkpoint else {
-                        return Err(StoreError::Conflict(
+            )
+            .bind::<Text, _>(&seal_id)
+            .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
+            .await
+            .optional()?;
+            let Some(checkpoint) = checkpoint else {
+                return Err(StoreError::Conflict(
                             "duplicate_conflict: exact Seal replay is missing its effective-state checkpoint"
                                 .to_owned(),
                         )
                         .into());
-                    };
-                    if checkpoint.realm_id != realm_id
-                        || checkpoint
-                            .covered_event_digests
-                            .into_iter()
-                            .collect::<BTreeSet<_>>()
-                            != covered
-                    {
-                        return Err(StoreError::Conflict(
-                            "duplicate_conflict: exact Seal replay has different checkpoint coverage"
-                                .to_owned(),
-                        )
-                        .into());
-                    }
-                    let checkpoint_seals = checkpoint
-                        .covered_seal_ids
-                        .into_iter()
-                        .collect::<BTreeSet<_>>();
-                    if !checkpoint_seals.contains(&seal_id) {
-                        return Err(StoreError::Conflict(
-                            "duplicate_conflict: exact Seal replay checkpoint omits its Seal"
-                                .to_owned(),
-                        )
-                        .into());
-                    }
-                    let checkpoint_view = checkpoint_view_from_value(checkpoint.state_json)?;
-                    let checkpoint_root = compute_state_root(
-                        arkret_state::GovernanceView::new(&checkpoint_view.cells),
-                        digest_suite,
-                    )
-                    .map_err(|error| StoreError::Backend(error.to_string()))?;
-                    if checkpoint_root != declared_state_root {
-                        return Err(StoreError::Conflict(
+            };
+            if checkpoint.realm_id != realm_id
+                || checkpoint
+                    .covered_event_digests
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    != covered
+            {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay has different checkpoint coverage"
+                        .to_owned(),
+                )
+                .into());
+            }
+            let checkpoint_seals = checkpoint
+                .covered_seal_ids
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            if !checkpoint_seals.contains(&seal_id) {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay checkpoint omits its Seal".to_owned(),
+                )
+                .into());
+            }
+            let checkpoint_view = checkpoint_view_from_value(checkpoint.state_json)?;
+            let checkpoint_root = compute_state_root(
+                arkret_state::GovernanceView::new(&checkpoint_view.cells),
+                digest_suite,
+            )
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+            if checkpoint_root != declared_state_root {
+                return Err(StoreError::Conflict(
                             "duplicate_conflict: exact Seal replay has an invalid effective-state checkpoint"
                                 .to_owned(),
                         )
                         .into());
-                    }
-                    if let Some(projection) = &confirmed_device_control {
-                        crate::devices::confirmed_history::install_control_projection_in_transaction(
-                            conn,
-                            projection,
-                            crate::devices::confirmed_history::AtomicProjectionMode::ExactRetry,
-                        )
-                        .await
-                        .map_err(persistence_to_store)?;
-                    }
-                    for (command_index, result) in command_results.iter().enumerate() {
-                        for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
-                            record_control_event_decision_in_transaction(
-                                conn,
-                                digest.as_str(),
-                                &seal_id,
-                                &realm_id,
-                                i64::try_from(command_index).expect("Seal command bound"),
-                                i64::try_from(member_index).expect("Seal member bound"),
-                                result.outcome,
-                                result.reason_code.as_ref(),
-                                &result.unit_event_digests,
-                                sealed_at,
-                            )
-                            .await?;
-                        }
-                    }
-                    return Ok(outcome);
+            }
+            if let Some(projection) = &confirmed_device_control {
+                crate::devices::confirmed_history::install_control_projection_in_transaction(
+                    conn,
+                    projection,
+                    crate::devices::confirmed_history::AtomicProjectionMode::ExactRetry,
+                )
+                .await
+                .map_err(persistence_to_store)?;
+            }
+            for (command_index, result) in command_results.iter().enumerate() {
+                for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
+                    record_control_event_decision_in_transaction(
+                        conn,
+                        digest.as_str(),
+                        &seal_id,
+                        &realm_id,
+                        i64::try_from(command_index).expect("Seal command bound"),
+                        i64::try_from(member_index).expect("Seal member bound"),
+                        result.outcome,
+                        result.reason_code.as_ref(),
+                        &result.unit_event_digests,
+                        sealed_at,
+                    )
+                    .await?;
                 }
-                if outcome != SealInsertOutcome::Inserted {
-                    return Ok(outcome);
-                }
-                lock_seal_realm(conn, &realm_id).await?;
-                if realm_has_seal_collision(conn, &realm_id).await? {
-                    return Err(StoreError::Conflict(format!(
-                        "seal_collision_quarantine: Realm {realm_id} is blocked"
-                    ))
-                    .into());
-                }
-                let heads = sql_query(
-                    "SELECT parent.id AS value \
+            }
+            return Ok(outcome);
+        }
+        if outcome != SealInsertOutcome::Inserted {
+            return Ok(outcome);
+        }
+        lock_seal_realm(conn, &realm_id).await?;
+        if realm_has_seal_collision(conn, &realm_id).await? {
+            return Err(StoreError::Conflict(format!(
+                "seal_collision_quarantine: Realm {realm_id} is blocked"
+            ))
+            .into());
+        }
+        let heads = sql_query(
+            "SELECT parent.id AS value \
                      FROM state_seals parent \
                      WHERE parent.realm_id = $1 \
                        AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
@@ -2468,98 +2551,106 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                            AND child.predecessor_ref = parent.id \
                        ) \
                      ORDER BY parent.id ASC",
-                )
-                .bind::<Text, _>(&realm_id)
-                .load::<TextRow>(&mut *conn)
-                .await?
-                .into_iter()
-                .map(|row| row.value)
-                .collect::<Vec<_>>();
-                let actual = match heads.as_slice() {
-                    [] => None,
-                    [head] => Some(head.clone()),
-                    _ => {
-                        return Err(StoreError::Conflict(format!(
-                            "seal_chain_fork: Realm {realm_id} has multiple confirmed heads"
-                        ))
-                        .into());
-                    }
-                };
-                if actual != expected {
-                    return Ok(SealInsertOutcome::FrontierMismatch);
-                }
-                // Close ordinary-data bases before publishing derived state.
-                // Ordinary Event admission uses this same Realm advisory lock,
-                // so exactly one side of the closure race commits first.
-                apply_data_closures(conn, &data_closure_seal).await?;
-                let existing_ops = sql_query(
-                    "SELECT COUNT(*) AS value FROM state_cell_ops WHERE seal_id = $1",
-                )
+        )
+        .bind::<Text, _>(&realm_id)
+        .load::<TextRow>(&mut *conn)
+        .await?
+        .into_iter()
+        .map(|row| row.value)
+        .collect::<Vec<_>>();
+        let actual = match heads.as_slice() {
+            [] => None,
+            [head] => Some(head.clone()),
+            _ => {
+                return Err(StoreError::Conflict(format!(
+                    "seal_chain_fork: Realm {realm_id} has multiple confirmed heads"
+                ))
+                .into());
+            }
+        };
+        if actual != expected {
+            return Ok(SealInsertOutcome::FrontierMismatch);
+        }
+        // Close ordinary-data bases before publishing derived state.
+        // Ordinary Event admission uses this same Realm advisory lock,
+        // so exactly one side of the closure race commits first.
+        apply_data_closures(conn, &data_closure_seal).await?;
+        let existing_ops =
+            sql_query("SELECT COUNT(*) AS value FROM state_cell_ops WHERE seal_id = $1")
                 .bind::<Text, _>(&seal_id)
                 .get_result::<CountRow>(&mut *conn)
                 .await?
                 .value;
-                if existing_ops != 0 {
-                    return Err(StoreError::Conflict(format!(
-                        "Event Seal {seal_id} already has materialized cell effects"
-                    ))
-                    .into());
-                }
-                for (index, cell, event_id, op_json) in &new_rows {
-                    sql_query(
-                        "INSERT INTO state_cell_ops \
+        if existing_ops != 0 {
+            return Err(StoreError::Conflict(format!(
+                "Event Seal {seal_id} already has materialized cell effects"
+            ))
+            .into());
+        }
+        for (index, cell, event_id, op_json) in &new_rows {
+            sql_query(
+                "INSERT INTO state_cell_ops \
                          (realm_id, seal_id, op_index, cell_id, event_id, op_json) \
                          VALUES ($1, $2, $3, $4, $5, $6)",
-                    )
-                    .bind::<Text, _>(&realm_id)
-                    .bind::<Text, _>(&seal_id)
-                    .bind::<BigInt, _>(*index)
-                    .bind::<Text, _>(cell)
-                    .bind::<Text, _>(event_id)
-                    .bind::<Jsonb, _>(op_json)
-                    .execute(&mut *conn)
-                    .await?;
-                }
-                let mut reused = None;
-                if let [predecessor] = predecessor_seal_ids.as_slice() {
-                    let row = sql_query(
-                        "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(&seal_id)
+            .bind::<BigInt, _>(*index)
+            .bind::<Text, _>(cell)
+            .bind::<Text, _>(event_id)
+            .bind::<Jsonb, _>(op_json)
+            .execute(&mut *conn)
+            .await?;
+        }
+        let mut reused = None;
+        if let [predecessor] = predecessor_seal_ids.as_slice() {
+            let row = sql_query(
+                "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
                          FROM state_seal_effective_checkpoints WHERE seal_id = $1",
+            )
+            .bind::<Text, _>(predecessor)
+            .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
+            .await
+            .optional()?;
+            if let Some(row) = row {
+                let view = checkpoint_view_from_value(row.state_json)?;
+                if row.realm_id != realm_id || !row.covered_seal_ids.contains(predecessor) {
+                    return Err(StoreError::Backend(
+                        "invalid predecessor checkpoint identity".to_owned(),
                     )
-                    .bind::<Text, _>(predecessor)
-                    .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
-                    .await
-                    .optional()?;
-                    if let Some(row) = row {
-                        let view = checkpoint_view_from_value(row.state_json)?;
-                        if row.realm_id != realm_id
-                            || !row.covered_seal_ids.contains(predecessor)
-                        {
-                            return Err(StoreError::Backend(
-                                "invalid predecessor checkpoint identity".to_owned(),
-                            ).into());
-                        }
-                        let predecessor_coverage = row.covered_event_digests
-                            .into_iter().collect::<BTreeSet<_>>();
-                        let supplied_moves = new_rows.iter()
-                            .map(|(_, _, event_id, _)| event_id.clone()).collect::<BTreeSet<_>>();
-                        if view.rule_context.reusable_with(&rule_context)
-                            && predecessor_coverage.is_subset(&covered)
-                            && covered.difference(&predecessor_coverage)
-                                .all(|id| supplied_moves.contains(id))
-                        {
-                            reused = Some(view);
-                        }
-                    }
+                    .into());
                 }
-                let touched = reused.as_ref().map(|_| new_rows.iter()
-                    .map(|(_, cell, _, _)| cell.clone()).collect::<BTreeSet<_>>()
-                    .into_iter().collect::<Vec<_>>());
-                // The immutable rule snapshot permits reusing untouched cell
-                // values. Changed cells still replay their complete covered
-                // batches; no settled value is treated as causal sufficient state.
-                let rows = sql_query(
-                    "SELECT op.cell_id, op.seal_id, op.op_json \
+                let predecessor_coverage = row
+                    .covered_event_digests
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                let supplied_moves = new_rows
+                    .iter()
+                    .map(|(_, _, event_id, _)| event_id.clone())
+                    .collect::<BTreeSet<_>>();
+                if view.rule_context.reusable_with(&rule_context)
+                    && predecessor_coverage.is_subset(&covered)
+                    && covered
+                        .difference(&predecessor_coverage)
+                        .all(|id| supplied_moves.contains(id))
+                {
+                    reused = Some(view);
+                }
+            }
+        }
+        let touched = reused.as_ref().map(|_| {
+            new_rows
+                .iter()
+                .map(|(_, cell, ..)| cell.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        });
+        // The immutable rule snapshot permits reusing untouched cell
+        // values. Changed cells still replay their complete covered
+        // batches; no settled value is treated as causal sufficient state.
+        let rows = sql_query(
+            "SELECT op.cell_id, op.seal_id, op.op_json \
                      FROM state_cell_ops op \
                      WHERE op.realm_id = $1 AND ($3::text[] IS NULL OR op.cell_id = ANY($3)) \
                        AND (op.seal_id = $2 OR EXISTS ( \
@@ -2569,149 +2660,187 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                        ) \
                      )) \
                      ORDER BY op.cell_id ASC, op.seq ASC",
-                )
-                .bind::<Text, _>(&realm_id)
-                .bind::<Text, _>(&seal_id)
-                .bind::<Nullable<Array<Text>>, _>(&touched)
-                .load::<EventCellOpRow>(&mut *conn)
-                .await?;
-                let mut batches_by_cell =
-                    std::collections::BTreeMap::<CellRef, Vec<(String, Vec<IssuedOp>)>>::new();
-                for row in rows {
-                    let issued = sealed_op_from_value(row.op_json)?;
-                    if !covered.contains(issued.op.event_id.event_digest().as_str()) {
-                        continue;
-                    }
-                    let cell = CellRef::new(row.cell_id)
-                        .map_err(|error| StoreError::Backend(error.to_string()))?;
-                    let batches = batches_by_cell.entry(cell).or_default();
-                    if let Some((batch_seal, ops)) = batches.last_mut()
-                        && batch_seal == &row.seal_id
-                    {
-                        ops.push(issued);
-                    } else {
-                        batches.push((row.seal_id, vec![issued]));
-                    }
-                }
-                let realm = RealmId::new(realm_id.clone())
-                    .map_err(|error| StoreError::Backend(error.to_string()))?;
-                let mut joined = reused.map(|view| view.cells).unwrap_or_default();
-                // No pre-sort: joins are commutative and ordering by the typed
-                // `event_id` string would imply a tie-break `encoding.md` 4.2 forbids.
-                for (cell, batches) in batches_by_cell {
-                    let binding = cell_registry.resolve(&realm, &cell)?;
-                    let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
-                    let resolved = arkret_state::join_cell_seal_batches(
-                        binding.model.as_ref(),
-                        &cell,
-                        &batches,
-                    )
+        )
+        .bind::<Text, _>(&realm_id)
+        .bind::<Text, _>(&seal_id)
+        .bind::<Nullable<Array<Text>>, _>(&touched)
+        .load::<EventCellOpRow>(&mut *conn)
+        .await?;
+        let mut batches_by_cell =
+            std::collections::BTreeMap::<CellRef, Vec<(String, Vec<IssuedOp>)>>::new();
+        for row in rows {
+            let issued = sealed_op_from_value(row.op_json)?;
+            if !covered.contains(issued.op.event_id.event_digest().as_str()) {
+                continue;
+            }
+            let cell = CellRef::new(row.cell_id)
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            let batches = batches_by_cell.entry(cell).or_default();
+            if let Some((batch_seal, ops)) = batches.last_mut()
+                && batch_seal == &row.seal_id
+            {
+                ops.push(issued);
+            } else {
+                batches.push((row.seal_id, vec![issued]));
+            }
+        }
+        let realm = RealmId::new(realm_id.clone())
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        let mut joined = reused.map(|view| view.cells).unwrap_or_default();
+        // No pre-sort: joins are commutative and ordering by the typed
+        // `event_id` string would imply a tie-break `encoding.md` 4.2 forbids.
+        for (cell, batches) in batches_by_cell {
+            let binding = cell_registry.resolve(&realm, &cell)?;
+            let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
+            let resolved =
+                arkret_state::join_cell_seal_batches(binding.model.as_ref(), &cell, &batches)
                     .map_err(|error| {
                         StoreError::Backend(format!("cell state resolution: {error}"))
                     })?;
-                    joined.insert(cell.clone(), resolved);
-                }
-                let recomputed = compute_state_root(
-                    arkret_state::GovernanceView::new(&joined),
-                    digest_suite,
-                )
+            joined.insert(cell.clone(), resolved);
+        }
+        let recomputed =
+            compute_state_root(arkret_state::GovernanceView::new(&joined), digest_suite)
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
-                if recomputed != declared_state_root {
-                    return Err(StoreError::Conflict(format!(
+        if recomputed != declared_state_root {
+            return Err(StoreError::Conflict(format!(
                         "Event Seal state_root mismatch: declared {declared_state_root}, recomputed {recomputed}"
                     ))
                     .into());
-                }
-                let mut checkpoint_seals = BTreeSet::from([seal_id.clone()]);
-                for predecessor in &predecessor_seal_ids {
-                    let row = sql_query(
-                        "SELECT covered_seal_ids AS values \
+        }
+        let mut checkpoint_seals = BTreeSet::from([seal_id.clone()]);
+        for predecessor in &predecessor_seal_ids {
+            let row = sql_query(
+                "SELECT covered_seal_ids AS values \
                          FROM state_seal_effective_checkpoints WHERE seal_id = $1",
-                    )
-                    .bind::<Text, _>(predecessor)
-                    .get_result::<TextArrayRow>(&mut *conn)
-                    .await
-                    .optional()?;
-                    let Some(row) = row else {
-                        return Err(StoreError::Conflict(format!(
-                            "predecessor {predecessor} has no effective-state checkpoint"
-                        ))
-                        .into());
-                    };
-                    if !row.values.iter().any(|seal| seal == predecessor) {
-                        return Err(StoreError::Conflict(format!(
-                            "predecessor {predecessor} has an invalid closure checkpoint"
-                        ))
-                        .into());
-                    }
-                    checkpoint_seals.extend(row.values);
-                }
-                // The frontier CAS is the durable acceptance boundary for the
-                // delta. Cell effects, Seal lineage, and each Event's sealed
-                // marker must commit in this same transaction; otherwise a
-                // covered Event remains visible in the pending queue and can
-                // be proposed repeatedly after a restart.
-                insert_new_state_seal(conn, &insert).await?;
-                let (causal_winners, causal_ready) = current_results::advance_causal_winners(conn, &realm_id, &predecessor_seal_ids, &new_rows, &rule_context).await?;
-                let checkpoint_state_json = serde_json::to_value(StoredCheckpointView {
-                    cells: joined.clone(),
-                    rule_context: rule_context.clone(),
-                    causal_winners: causal_winners.clone(),
-                    causal_ready,
-                })
-                .map_err(serde_to_store)?;
-                let checkpoint_coverage = covered.iter().cloned().collect::<Vec<_>>();
-                let checkpoint_seal_ids = checkpoint_seals.into_iter().collect::<Vec<_>>();
-                sql_query(
-                    "INSERT INTO state_seal_effective_checkpoints \
+            )
+            .bind::<Text, _>(predecessor)
+            .get_result::<TextArrayRow>(&mut *conn)
+            .await
+            .optional()?;
+            let Some(row) = row else {
+                return Err(StoreError::Conflict(format!(
+                    "predecessor {predecessor} has no effective-state checkpoint"
+                ))
+                .into());
+            };
+            if !row.values.iter().any(|seal| seal == predecessor) {
+                return Err(StoreError::Conflict(format!(
+                    "predecessor {predecessor} has an invalid closure checkpoint"
+                ))
+                .into());
+            }
+            checkpoint_seals.extend(row.values);
+        }
+        // The frontier CAS is the durable acceptance boundary for the
+        // delta. Cell effects, Seal lineage, and each Event's sealed
+        // marker must commit in this same transaction; otherwise a
+        // covered Event remains visible in the pending queue and can
+        // be proposed repeatedly after a restart.
+        insert_new_state_seal(conn, &insert).await?;
+        let (causal_winners, causal_ready) = current_results::advance_causal_winners(
+            conn,
+            &realm_id,
+            &predecessor_seal_ids,
+            &new_rows,
+            &rule_context,
+        )
+        .await?;
+        let checkpoint_state_json = serde_json::to_value(StoredCheckpointView {
+            cells: joined.clone(),
+            rule_context: rule_context.clone(),
+            causal_winners: causal_winners.clone(),
+            causal_ready,
+        })
+        .map_err(serde_to_store)?;
+        let checkpoint_coverage = covered.iter().cloned().collect::<Vec<_>>();
+        let checkpoint_seal_ids = checkpoint_seals.into_iter().collect::<Vec<_>>();
+        sql_query(
+            "INSERT INTO state_seal_effective_checkpoints \
                      (seal_id, realm_id, covered_event_digests, covered_seal_ids, state_json) \
                      VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind::<Text, _>(&seal_id)
+        .bind::<Text, _>(&realm_id)
+        .bind::<Array<Text>, _>(&checkpoint_coverage)
+        .bind::<Array<Text>, _>(&checkpoint_seal_ids)
+        .bind::<Jsonb, _>(&checkpoint_state_json)
+        .execute(&mut *conn)
+        .await?;
+        for dependency in &governance_dependencies {
+            crate::put_governance_dependency_exact_in_transaction(conn, dependency)
+                .await
+                .map_err(persistence_to_store)?;
+        }
+        for (command_index, result) in command_results.iter().enumerate() {
+            for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
+                record_control_event_decision_in_transaction(
+                    conn,
+                    digest.as_str(),
+                    &seal_id,
+                    &realm_id,
+                    i64::try_from(command_index).expect("Seal command bound"),
+                    i64::try_from(member_index).expect("Seal member bound"),
+                    result.outcome,
+                    result.reason_code.as_ref(),
+                    &result.unit_event_digests,
+                    sealed_at,
                 )
-                .bind::<Text, _>(&seal_id)
-                .bind::<Text, _>(&realm_id)
-                .bind::<Array<Text>, _>(&checkpoint_coverage)
-                .bind::<Array<Text>, _>(&checkpoint_seal_ids)
-                .bind::<Jsonb, _>(&checkpoint_state_json)
-                .execute(&mut *conn)
                 .await?;
-                for dependency in &governance_dependencies {
-                    crate::put_governance_dependency_exact_in_transaction(conn, dependency)
-                        .await
-                        .map_err(persistence_to_store)?;
-                }
-                for (command_index, result) in command_results.iter().enumerate() {
-                    for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
-                        record_control_event_decision_in_transaction(
-                            conn,
-                            digest.as_str(),
-                            &seal_id,
-                            &realm_id,
-                            i64::try_from(command_index).expect("Seal command bound"),
-                            i64::try_from(member_index).expect("Seal member bound"),
-                            result.outcome,
-                            result.reason_code.as_ref(),
-                            &result.unit_event_digests,
-                            sealed_at,
-                        )
-                        .await?;
-                    }
-                }
-                if let Some(projection) = &confirmed_device_control {
-                    crate::devices::confirmed_history::install_control_projection_in_transaction(
-                        conn,
-                        projection,
-                        crate::devices::confirmed_history::AtomicProjectionMode::Insert,
-                    )
-                    .await
-                    .map_err(persistence_to_store)?;
-                }
-                account_summary::register_delta_members(conn, &realm_id, &delta).await?;
-                if expected.iter().all(|leaf| predecessor_seal_ids.contains(leaf)) {
-                    account_summary::publish(conn, &realm_id, &joined, &causal_winners, causal_ready).await?;
-                } else {
-                    account_summary::publish_current_frontier(conn, &realm_id, cell_registry.as_ref()).await?;
-                }
-                Ok(SealInsertOutcome::Inserted)
+            }
+        }
+        if let Some(projection) = &confirmed_device_control {
+            crate::devices::confirmed_history::install_control_projection_in_transaction(
+                conn,
+                projection,
+                crate::devices::confirmed_history::AtomicProjectionMode::Insert,
+            )
+            .await
+            .map_err(persistence_to_store)?;
+        }
+        account_summary::register_delta_members(conn, &realm_id, &delta).await?;
+        if expected
+            .iter()
+            .all(|leaf| predecessor_seal_ids.contains(leaf))
+        {
+            account_summary::publish(conn, &realm_id, &joined, &causal_winners, causal_ready)
+                .await?;
+        } else {
+            account_summary::publish_current_frontier(conn, &realm_id, cell_registry.as_ref())
+                .await?;
+        }
+        Ok(SealInsertOutcome::Inserted)
+    }
+}
+
+#[async_trait]
+impl EventSealCommitStore for PgEventSealCommitStore {
+    async fn commit_if_head(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+        expected_store_head: Option<&SealId>,
+        new_ops: &[(CellRef, IssuedOp)],
+        covered: &BTreeSet<Hash>,
+        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
+    ) -> StoreResult<bool> {
+        let prepared = PreparedStateSealCommit::prepare(
+            self.cell_registry.clone(),
+            seal,
+            digest_suite,
+            expected_store_head,
+            new_ops,
+            covered,
+            governance_dependencies,
+            confirmed_device_control,
+        )?;
+        let pool = self.pool.clone();
+        let error_seal_id = seal.id.as_str().to_owned();
+        let outcome = await_store!(async move {
+            let mut conn = pg_conn(&pool).await?;
+            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
+                prepared.commit_in_transaction(conn).await
             })
             .await
             .map_err(EventSealCommitError::into_store)

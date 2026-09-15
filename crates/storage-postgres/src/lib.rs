@@ -145,7 +145,7 @@ mod sessions;
 mod settings;
 mod sidecars;
 mod signal;
-mod state_resolution;
+pub(crate) mod state_resolution;
 mod sync_cursor;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_database;
@@ -258,6 +258,20 @@ impl PgTransactionError {
 impl From<PersistenceError> for PgTransactionError {
     fn from(error: PersistenceError) -> Self {
         Self::Storage(error)
+    }
+}
+
+/// Project a state-store error onto the persistence error the identity-anchor
+/// commit path reports. `Conflict` must stay a conflict so callers can map a
+/// lost compare-and-swap onto the wire rejection instead of a 500.
+pub(crate) fn store_error_to_persistence(
+    error: arkret_state::state::StoreError,
+) -> PersistenceError {
+    use arkret_state::state::StoreError;
+    match error {
+        StoreError::NotFound(detail) => PersistenceError::NotFound(detail),
+        StoreError::Conflict(detail) => PersistenceError::Conflict(detail),
+        StoreError::Backend(detail) => PersistenceError::Database(detail),
     }
 }
 

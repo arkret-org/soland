@@ -122,6 +122,7 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
             None,
             vec![],
             vec![],
+            None,
         )
         .await
         .unwrap();
@@ -193,6 +194,7 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
             None,
             vec![],
             vec![],
+            None,
         )
         .await
         .unwrap();
@@ -229,6 +231,7 @@ async fn registration_publishes_current_identity_before_seal_and_replay_cannot_r
             None,
             vec![],
             vec![],
+            None,
         )
         .await
         .unwrap();
@@ -269,6 +272,7 @@ async fn current_identity_survives_index_eviction_but_requires_the_initial_curre
             None,
             vec![],
             vec![],
+            None,
         )
         .await
         .unwrap();
@@ -329,7 +333,8 @@ async fn invalid_genesis_resolution_rolls_back_the_whole_registration_unit() {
                 None,
                 None,
                 vec![],
-                vec![]
+                vec![],
+                None
             )
             .await
             .is_err()

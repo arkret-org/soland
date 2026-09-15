@@ -3907,6 +3907,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
                 None,
                 Vec::new(),
                 colliding_outbox("anchor"),
+                None,
             )
             .await
             .is_err(),

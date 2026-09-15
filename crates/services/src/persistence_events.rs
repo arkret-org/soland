@@ -233,6 +233,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
         publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
         deliveries: Vec<crate::federation::FederationDeliveryRecord>,
+        recovery_terminal: Option<soland_storage::RecoveryTerminalCommitWrite>,
     ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
         let outcome = self
             .0
@@ -248,6 +249,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                 reanchor_slot,
                 publication_evidence,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
+                recovery_terminal,
             )
             .await?;
         Ok(outcome)

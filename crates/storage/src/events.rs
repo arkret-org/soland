@@ -281,6 +281,11 @@ pub trait EventStore: Send + Sync {
     /// receipt, the device projection and its federation outbox rows as one
     /// durable unit. PCR genesis carries no Control Proposal Ack; an accepted
     /// re-anchor carries one Ack per Control Move.
+    ///
+    /// `recovery_terminal` carries the rest of the terminal recovery commit.
+    /// When present, the accepted Seal, the security transaction terminal
+    /// result and the recovery session consumption MUST land in this same
+    /// transaction or none of them may become observable.
     #[allow(clippy::too_many_arguments)]
     async fn put_identity_anchor_batch_atomic(
         &self,
@@ -294,6 +299,7 @@ pub trait EventStore: Send + Sync {
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
+        recovery_terminal: Option<RecoveryTerminalCommitWrite>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome>;
     async fn batch_receipts_for_event(
         &self,
@@ -413,6 +419,31 @@ pub struct IdentityAnchorReanchorSlot {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct IdentityAnchorCommitOutcome {
     pub reanchor_conflict: bool,
+}
+
+/// Everything the terminal `commit_recovery_unit` step owes beyond the
+/// identity-anchor unit itself, so `security-transactions.md` §2.3 can commit
+/// steps 2-7 in the single transaction that inserts the two Events.
+///
+/// The Seal inputs are the already-validated outputs of B-model admission.
+/// Admission is a read-only prepare over the *candidate* Event set, so this
+/// bundle and the `records` argument beside it describe the same two Events;
+/// the durable `expected_seal_head` compare-and-swap inside the transaction is
+/// what makes the precomputation safe against a concurrent generation race.
+pub struct RecoveryTerminalCommitWrite {
+    pub cell_registry: std::sync::Arc<dyn arkret_state::state::CellStateRegistry>,
+    pub seal: arkret_wire::Seal,
+    pub seal_digest_suite: arkret_canonical::DigestSuite,
+    pub expected_seal_head: Option<arkret_identifiers::SealId>,
+    pub new_ops: Vec<(
+        arkret_identifiers::CellRef,
+        arkret_state::state_model::ordered_log::IssuedOp,
+    )>,
+    pub covered: std::collections::BTreeSet<arkret_wire::Hash>,
+    pub seal_governance_dependencies: Vec<crate::GovernanceDependencyWrite>,
+    pub confirmed_device_control: Option<crate::ConfirmedDeviceControlProjection>,
+    pub transaction: crate::SecurityTransactionRecord,
+    pub step_outcome: crate::SecurityTransactionStepOutcomeRecord,
 }
 #[derive(Clone, Debug)]
 pub struct PeerEventsPageQuery {

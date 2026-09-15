@@ -1,4 +1,6 @@
 pub(super) mod approval_publications;
+#[cfg(test)]
+mod recovery_terminal_tests;
 
 mod transaction_locks;
 use std::collections::{BTreeMap, BTreeSet};
@@ -778,6 +780,120 @@ pub(crate) async fn bind_event_outbox_rows(
         .map_err(PersistenceError::database)?;
     }
     Ok(())
+}
+
+/// The terminal recovery commit after its Seal has been validated and encoded.
+struct PreparedRecoveryTerminalCommit {
+    realm_id: String,
+    seal: crate::state_resolution::PreparedStateSealCommit,
+    transaction: soland_storage::SecurityTransactionRecord,
+    step_outcome: soland_storage::SecurityTransactionStepOutcomeRecord,
+}
+
+fn prepare_recovery_terminal_commit(
+    write: soland_storage::RecoveryTerminalCommitWrite,
+) -> PersistenceResult<PreparedRecoveryTerminalCommit> {
+    let realm_id = write.seal.realm_id.as_str().to_owned();
+    let seal = crate::state_resolution::PreparedStateSealCommit::prepare(
+        write.cell_registry,
+        &write.seal,
+        write.seal_digest_suite,
+        write.expected_seal_head.as_ref(),
+        &write.new_ops,
+        &write.covered,
+        &write.seal_governance_dependencies,
+        write.confirmed_device_control.as_ref(),
+    )
+    .map_err(crate::store_error_to_persistence)?;
+    Ok(PreparedRecoveryTerminalCommit {
+        realm_id,
+        seal,
+        transaction: write.transaction,
+        step_outcome: write.step_outcome,
+    })
+}
+
+/// `security-transactions.md` section 2.3 steps 3 to 6, inside the transaction
+/// that inserted the two Events of step 2.
+///
+/// The Seal frontier compare-and-swap is the linearization point for the whole
+/// terminal commit: a rival recovery unit that wins the same predecessor makes
+/// this return a conflict, which rolls back the Events, the device projection,
+/// the session consumption and the terminal result together.
+async fn commit_recovery_terminal_in_transaction(
+    conn: &mut AsyncPgConnection,
+    terminal: PreparedRecoveryTerminalCommit,
+) -> Result<(), PgTransactionError> {
+    let PreparedRecoveryTerminalCommit {
+        realm_id,
+        seal,
+        transaction,
+        step_outcome,
+    } = terminal;
+    // The pending Control rows were inserted above with the Events; the Seal
+    // coordinator schedule is the only part of the ordinary pending-unit write
+    // that the anchor path did not already cover.
+    control_seal_schedule::upsert_for_control_event(&mut *conn, &realm_id)
+        .await
+        .map_err(|error| {
+            PersistenceError::Database(format!("control Seal schedule unavailable: {error}"))
+        })?;
+    // Name the phase in the error: this commit spans four different stores and
+    // a bare backend message makes the failing one unidentifiable.
+    match seal.commit_in_transaction(conn).await.map_err(|error| {
+        prefixed(
+            crate::store_error_to_persistence(error.into_store()),
+            "recovery terminal Seal commit",
+        )
+    })? {
+        crate::state_resolution::SealInsertOutcome::Inserted
+        | crate::state_resolution::SealInsertOutcome::ExactRetry => {}
+        crate::state_resolution::SealInsertOutcome::FrontierMismatch => {
+            return Err(PersistenceError::Conflict(
+                "device_generation_fenced: the first-generation recovery Seal lost the atomic frontier compare-and-swap"
+                    .to_owned(),
+            )
+            .into());
+        }
+        crate::state_resolution::SealInsertOutcome::Collision => {
+            return Err(PersistenceError::Conflict(
+                "seal_hash_collision: the first-generation recovery Seal is quarantined".to_owned(),
+            )
+            .into());
+        }
+    }
+    crate::security_transactions::accept_step_in_transaction(
+        conn,
+        transaction,
+        step_outcome,
+        crate::security_transactions::StepAttemptSource::CoCommittedWithOutcome,
+    )
+    .await
+    .map_err(|error| match error {
+        PgTransactionError::Storage(error) => {
+            PgTransactionError::Storage(prefixed(error, "recovery terminal ledger"))
+        }
+        other => other,
+    })?;
+    Ok(())
+}
+
+fn prefixed(error: PersistenceError, phase: &str) -> PersistenceError {
+    match error {
+        PersistenceError::Conflict(detail) => PersistenceError::Conflict(detail),
+        PersistenceError::NotFound(detail) => {
+            PersistenceError::NotFound(format!("{phase}: {detail}"))
+        }
+        PersistenceError::SchemaViolation(detail) => {
+            PersistenceError::SchemaViolation(format!("{phase}: {detail}"))
+        }
+        PersistenceError::Database(detail) => {
+            PersistenceError::Database(format!("{phase}: {detail}"))
+        }
+        PersistenceError::Internal(detail) => {
+            PersistenceError::Internal(format!("{phase}: {detail}"))
+        }
+    }
 }
 
 async fn insert_pending_control_event(
@@ -1571,7 +1687,14 @@ impl EventStore for PgEventStore {
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
+        recovery_terminal: Option<soland_storage::RecoveryTerminalCommitWrite>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
+        // Encoding and validating the Seal before the transaction opens keeps
+        // the transaction free of work that can fail for reasons unrelated to
+        // the durable state it compares against.
+        let recovery_terminal = recovery_terminal
+            .map(prepare_recovery_terminal_commit)
+            .transpose()?;
         let command_unit_event_digests = records
             .iter()
             .map(|record| {
@@ -1881,6 +2004,16 @@ impl EventStore for PgEventStore {
                         insert_federation_outbox_row(conn, &delivery).await?;
                         bind_event_outbox_rows(conn, &event_pks, &delivery).await?;
                     }
+                }
+                if let Some(terminal) = recovery_terminal {
+                    if reanchor_conflict {
+                        return Err(PersistenceError::Conflict(
+                            "device_reanchor_conflict: the terminal recovery unit lost its generation slot"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    commit_recovery_terminal_in_transaction(conn, terminal).await?;
                 }
             Ok(StoreTransactionOutcome::Committed(IdentityAnchorCommitOutcome {
                 reanchor_conflict,

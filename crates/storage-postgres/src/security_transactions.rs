@@ -384,6 +384,145 @@ async fn lock_transaction_recovery_authority(
     Ok(())
 }
 
+/// Where the durable step attempt for an accepted step comes from.
+///
+/// Steps a coordinator drives on its own still freeze their canonical request
+/// bytes before the participant side effect, so their attempt row must already
+/// exist. `security-transactions.md` sections 2.2 and 2.5 forbid that shape for
+/// `commit_recovery_unit`: a failed re-verification MUST NOT freeze any step
+/// outcome and a corrected receipt MUST still be accepted, so its attempt row
+/// is written in the same transaction as the outcome it belongs to and
+/// disappears with it on rollback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StepAttemptSource {
+    DurablyBegun,
+    CoCommittedWithOutcome,
+}
+
+/// Accept one security-transaction step inside a transaction the caller owns.
+///
+/// This is the whole terminal ledger write: the first response bytes, the
+/// mutable resource fields and, for a completed recovery transaction, the
+/// recovery session consumption.
+pub(crate) async fn accept_step_in_transaction(
+    conn: &mut AsyncPgConnection,
+    record: SecurityTransactionRecord,
+    outcome: SecurityTransactionStepOutcomeRecord,
+    attempt_source: StepAttemptSource,
+) -> Result<SecurityTransactionStepOutcomeRecord, PgTransactionError> {
+    record
+        .resource
+        .validate_structural()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let transaction_id = record.resource.transaction_id.as_str().to_owned();
+    if outcome.transaction_id != transaction_id {
+        return Err(PersistenceError::SchemaViolation(
+            "security transaction step outcome belongs to a different transaction".to_owned(),
+        )
+        .into());
+    }
+    if let Some(existing) = load_one(conn, &transaction_id, false).await? {
+        lock_transaction_recovery_authority(conn, &existing).await?;
+    }
+    let existing = load_one(conn, &transaction_id, true)
+        .await?
+        .ok_or_else(|| {
+            PersistenceError::NotFound(format!("transaction_id `{transaction_id}` not found"))
+        })?;
+    let stored_outcome = load_step_outcome(conn, &transaction_id, outcome.step).await?;
+    match super::classify_security_transaction_first_write(
+        stored_outcome
+            .as_ref()
+            .map(|stored| stored.canonical_request.as_slice()),
+        &outcome.canonical_request,
+    )? {
+        super::SecurityTransactionFirstWriteDecision::ExactRetry => {
+            return Ok(stored_outcome.expect("exact retry has an existing outcome"));
+        }
+        super::SecurityTransactionFirstWriteDecision::Insert => {}
+    }
+    if attempt_source == StepAttemptSource::CoCommittedWithOutcome {
+        insert_step_attempt(conn, &transaction_id, &outcome).await?;
+    }
+    let attempt = load_step_attempt(conn, &transaction_id, outcome.step)
+        .await?
+        .ok_or_else(|| {
+            PersistenceError::Conflict(format!(
+                "security transaction step {:?} was not durably begun",
+                outcome.step
+            ))
+        })?;
+    super::validate_security_transaction_step_accept(&existing, &record, &attempt, &outcome)?;
+    sql_query(
+        "INSERT INTO security_transaction_step_outcomes \
+         (transaction_id, step, canonical_request, response, participant_outcome) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+    .bind::<Text, _>(enum_text(outcome.step)?)
+    .bind::<Binary, _>(&outcome.canonical_request)
+    .bind::<Jsonb, _>(&outcome.response)
+    .bind::<Nullable<Jsonb>, _>(&outcome.participant_outcome)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    update_mutable_fields(conn, &record).await?;
+    if record.resource.is_completed()
+        && let Some(binding) = record.resource.recovery_binding()
+    {
+        let affected = sql_query(
+            "UPDATE recovery_sessions SET state = 'completed', updated_at = NOW() \
+             WHERE id = $1 AND transaction_id = $2 AND state = 'verified'",
+        )
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
+            binding.recovery_session_id.as_str(),
+        ))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if affected != 1 {
+            return Err(PersistenceError::Conflict(
+                "terminal recovery transaction does not own a verified recovery session".to_owned(),
+            )
+            .into());
+        }
+    }
+    Ok(outcome)
+}
+
+/// Freeze the canonical request bytes of a step whose attempt row commits with
+/// its outcome. An exact retry re-presents the same bytes, so the insert is a
+/// no-op; different bytes for an already accepted step are refused by the
+/// outcome classification above before this is reached.
+async fn insert_step_attempt(
+    conn: &mut AsyncPgConnection,
+    transaction_id: &str,
+    outcome: &SecurityTransactionStepOutcomeRecord,
+) -> Result<(), PgTransactionError> {
+    let existing = load_step_attempt(conn, transaction_id, outcome.step).await?;
+    match super::classify_security_transaction_first_write(
+        existing
+            .as_ref()
+            .map(|stored| stored.canonical_request.as_slice()),
+        &outcome.canonical_request,
+    )? {
+        super::SecurityTransactionFirstWriteDecision::ExactRetry => return Ok(()),
+        super::SecurityTransactionFirstWriteDecision::Insert => {}
+    }
+    sql_query(
+        "INSERT INTO security_transaction_step_attempts \
+         (transaction_id, step, canonical_request) VALUES ($1, $2, $3)",
+    )
+    .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(transaction_id))
+    .bind::<Text, _>(enum_text(outcome.step)?)
+    .bind::<Binary, _>(&outcome.canonical_request)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
 #[async_trait]
 impl SecurityTransactionStore for PgSecurityTransactionStore {
     async fn create(
@@ -598,76 +737,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         }
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            if let Some(existing) = load_one(conn, &transaction_id, false).await? {
-                lock_transaction_recovery_authority(conn, &existing).await?;
-            }
-            let existing = load_one(conn, &transaction_id, true)
-                .await?
-                .ok_or_else(|| {
-                    PersistenceError::NotFound(format!(
-                        "transaction_id `{transaction_id}` not found"
-                    ))
-                })?;
-            let stored_outcome = load_step_outcome(conn, &transaction_id, outcome.step).await?;
-            match super::classify_security_transaction_first_write(
-                stored_outcome
-                    .as_ref()
-                    .map(|stored| stored.canonical_request.as_slice()),
-                &outcome.canonical_request,
-            )? {
-                super::SecurityTransactionFirstWriteDecision::ExactRetry => {
-                    return Ok(stored_outcome.expect("exact retry has an existing outcome"));
-                }
-                super::SecurityTransactionFirstWriteDecision::Insert => {}
-            }
-            let attempt = load_step_attempt(conn, &transaction_id, outcome.step)
-                .await?
-                .ok_or_else(|| {
-                    PersistenceError::Conflict(format!(
-                        "security transaction step {:?} was not durably begun",
-                        outcome.step
-                    ))
-                })?;
-            super::validate_security_transaction_step_accept(
-                &existing, &record, &attempt, &outcome,
-            )?;
-            sql_query(
-                "INSERT INTO security_transaction_step_outcomes \
-                 (transaction_id, step, canonical_request, response, participant_outcome) \
-                 VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
-            .bind::<Text, _>(enum_text(outcome.step)?)
-            .bind::<Binary, _>(&outcome.canonical_request)
-            .bind::<Jsonb, _>(&outcome.response)
-            .bind::<Nullable<Jsonb>, _>(&outcome.participant_outcome)
-            .execute(conn)
-            .await
-            .map_err(PersistenceError::database)?;
-            update_mutable_fields(conn, &record).await?;
-            if record.resource.is_completed()
-                && let Some(binding) = record.resource.recovery_binding()
-            {
-                let affected = sql_query(
-                    "UPDATE recovery_sessions SET state = 'completed', updated_at = NOW() \
-                     WHERE id = $1 AND transaction_id = $2 AND state = 'verified'",
-                )
-                .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
-                    binding.recovery_session_id.as_str(),
-                ))
-                .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
-                .execute(conn)
-                .await
-                .map_err(PersistenceError::database)?;
-                if affected != 1 {
-                    return Err(PersistenceError::Conflict(
-                        "terminal recovery transaction does not own a verified recovery session"
-                            .to_owned(),
-                    )
-                    .into());
-                }
-            }
-            Ok(outcome)
+            accept_step_in_transaction(conn, record, outcome, StepAttemptSource::DurablyBegun).await
         })
         .await
         .map_err(PgTransactionError::into_persistence)

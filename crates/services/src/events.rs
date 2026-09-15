@@ -885,6 +885,7 @@ pub trait EventReadPort: Send + Sync {
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         deliveries: Vec<FederationDeliveryRecord>,
+        recovery_terminal: Option<soland_storage::RecoveryTerminalCommitWrite>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn mls_frontier_leaves(
@@ -1254,6 +1255,7 @@ impl EventQueryService {
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         deliveries: Vec<FederationDeliveryRecord>,
+        recovery_terminal: Option<soland_storage::RecoveryTerminalCommitWrite>,
     ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
             .store_identity_anchor_batch(
@@ -1267,6 +1269,7 @@ impl EventQueryService {
                 reanchor_slot,
                 publication_evidence,
                 deliveries,
+                recovery_terminal,
             )
             .await
     }

@@ -507,6 +507,13 @@ impl ProjectionService {
         self.cell_registry.as_ref()
     }
 
+    /// A shared handle to the same registry, for durable commits that must
+    /// resolve cell bindings inside a caller-owned database transaction.
+    #[must_use]
+    pub fn cell_registry_handle(&self) -> Arc<dyn CellStateRegistry> {
+        self.cell_registry.clone()
+    }
+
     fn event_seal_committer(&self) -> &dyn EventSealCommitPort {
         self.event_seal_committer.as_ref()
     }

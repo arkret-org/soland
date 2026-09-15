@@ -125,6 +125,7 @@ async fn seed_current_principal_genesis(
             None,
             vec![],
             vec![],
+            None,
         )
         .await
         .unwrap();
@@ -585,6 +586,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
             None,
             Vec::new(),
             Vec::new(),
+            None,
         )
         .await
         .unwrap();
