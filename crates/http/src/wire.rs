@@ -307,11 +307,6 @@ fn profile_limitations() -> Vec<Value> {
             "reason": "runtime_attestation verifier/controller approval ledger is not wired; supplied attestations are rejected"
         }),
         json!({
-            "area": "extensions.tsp",
-            "status": "unmounted",
-            "reason": "TSP transport/route/audit handlers remain unmounted until real envelope verify/decrypt and persistent signed audit chain exist"
-        }),
-        json!({
             "area": "blob.presign",
             "status": "local_direct_serve",
             "reason": "presign issues a short-lived soland-signed local /blob/get URL; backend-native object-store presign is not claimed"

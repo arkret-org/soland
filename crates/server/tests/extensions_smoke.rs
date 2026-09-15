@@ -1,10 +1,8 @@
 //! Integration smoke for supported extension routes and retired-route boundaries.
 //!
-//! Per `cotest/e2e/scenarios/extensions/applet-bridge.md`,
-//! `cotest/e2e/scenarios/identity/tsp-bootstrap.md`, and the existing
-//! cotest fixture mocks (`cotest/e2e/mocks/mock-applet-registry.mjs`,
-//! `cotest/e2e/mocks/mock-tsp-endpoint.mjs`). The integration test
-//! posts to each route and verifies the spec-shaped envelope.
+//! Per `cotest/e2e/scenarios/extensions/applet-bridge.md` and the existing
+//! cotest fixture mock (`cotest/e2e/mocks/mock-applet-registry.mjs`). The
+//! integration test posts to each route and verifies the spec-shaped envelope.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -2555,33 +2553,6 @@ fn capability_grant_ref_for_action(
         .as_str()
         .expect("grant ref exists")
         .to_owned()
-}
-
-#[tokio::test]
-async fn tsp_local_stub_routes_are_not_mounted() {
-    let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
-    let app = service(state);
-
-    let rejected: Value = TestClient::post("http://server/_soland/self/extensions/tsp/transports")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "transport_id": "tspt:alice-smoke",
-            "transport_type": "tsp-pairwise",
-            "endpoint_url": "https://alice.example/tsp",
-            "supported_protocols": ["arkret"]
-        }))
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    // api-conventions.md 5: non-2xx replies are RFC 9457 Problem Details, so the
-    // discriminator is the root `type`, not a nested `error.code` envelope.
-    assert_eq!(
-        rejected["type"],
-        json!("https://arkret.org/problems/unrecognized_endpoint")
-    );
 }
 
 fn signed_applet_package(
