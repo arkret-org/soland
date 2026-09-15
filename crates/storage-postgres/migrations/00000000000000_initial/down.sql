@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS realm_timeline_order;
 DROP TABLE IF EXISTS state_seal_signing_positions;
 DROP TABLE IF EXISTS realm_join_downloads;
 DROP TABLE IF EXISTS key_backup_unlock_attempt_windows;

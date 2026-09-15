@@ -691,6 +691,53 @@ CREATE INDEX canonical_events_realm_actor_occupancy_idx
 
 CREATE INDEX canonical_events_actor_received_idx ON public.canonical_events USING btree (actor_id, received_at, id);
 
+-- Deterministic timeline projection order of one Realm's accepted Events
+-- (`conformance/encoding.md` 7.3, consumed by `sync/client-sync.md` 2.3 frozen
+-- timeline windows). The key is persisted at admission because it cannot be
+-- recovered from a row: `causal_depth` is the longest path over the Event graph
+-- and `hlc` lives inside the signed envelope. Without it the only way to answer
+-- "the newest N Events of this Realm in projection order" is to read the whole
+-- Realm and sort in memory, which section 2.3 forbids.
+--
+-- `hlc` is NULL when the Event carries none. Postgres orders NULL last ASC and
+-- first DESC, which is exactly the absent-last rule, so no substitute value is
+-- ever stored. `provisional` records that some predecessor edge was not
+-- resolvable at admission: the order is then not final and MUST NOT be claimed
+-- as such.
+CREATE TABLE public.realm_timeline_order (
+    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    realm_pk bigint NOT NULL REFERENCES public.canonical_realms(pk) ON DELETE RESTRICT,
+    realm_id text NOT NULL,
+    causal_depth bigint NOT NULL,
+    hlc text,
+    actor_id text NOT NULL,
+    actor_seq bigint NOT NULL,
+    event_id text NOT NULL,
+    kind text NOT NULL,
+    provisional boolean NOT NULL DEFAULT false,
+    CONSTRAINT realm_timeline_order_causal_depth_check
+        CHECK (causal_depth BETWEEN 0 AND 9007199254740991),
+    CONSTRAINT realm_timeline_order_actor_seq_check
+        CHECK (actor_seq BETWEEN 0 AND 9007199254740991),
+    CONSTRAINT realm_timeline_order_event_id_key UNIQUE (event_id)
+);
+
+-- Bounded keyset page of one Realm's window. Read DESC for the newest N, then
+-- deliver ASC. The order is spelled as a NULL-free tuple so the keyset
+-- predicate never compares NULL: `hlc IS NULL` sorts false before true, which
+-- is the absent-last rule, and `COALESCE(hlc, '')` only ever discriminates
+-- inside the non-absent group.
+CREATE INDEX realm_timeline_order_projection_idx
+    ON public.realm_timeline_order USING btree (
+        realm_id,
+        causal_depth,
+        (hlc IS NULL),
+        (COALESCE(hlc, '')),
+        actor_id,
+        actor_seq,
+        event_id
+    );
+
 CREATE INDEX canonical_events_kind_idx ON public.canonical_events USING btree (kind);
 
 CREATE INDEX canonical_events_kind_received_idx ON public.canonical_events USING btree (kind, received_at, id);

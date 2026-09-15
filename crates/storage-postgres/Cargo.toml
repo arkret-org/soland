@@ -58,6 +58,12 @@ tokio-postgres = { workspace = true }
 arkret-wire = { workspace = true, features = ["diesel", "test-support"] }
 soland-domain = { workspace = true }
 soland-storage = { workspace = true, features = ["test-support"] }
+# Turning on `soland-storage/test-support` above adds `seed_test_record` to the
+# DeviceInventoryStore trait, but only `cfg(test)` builds of this crate compiled
+# its impl. A `--tests` build also builds this lib plainly, as a dependency of
+# the integration tests, and that build saw the wider trait with the narrower
+# impl. Depending on ourselves with the feature on keeps both sides in step.
+soland-storage-postgres = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

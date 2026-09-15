@@ -6117,6 +6117,7 @@ dependencies = [
  "serde_json",
  "soland-domain",
  "soland-storage",
+ "soland-storage-postgres",
  "tokio",
  "tokio-postgres",
  "tracing",

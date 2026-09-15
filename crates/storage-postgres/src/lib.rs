@@ -149,6 +149,7 @@ mod state_resolution;
 mod sync_cursor;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_database;
+mod timeline_order;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;

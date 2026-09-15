@@ -1301,6 +1301,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     "schema_violation: accepted Event envelope is not canonical wire: {error}"
                 ))
             })?;
+            // Same transaction as the accepted insert: an Event that exists but
+            // has no projection-order key would be invisible to every bounded
+            // timeline window, which reads as "this Realm has no messages".
+            crate::timeline_order::commit_order_key(conn, event_pk, realm_pk, &typed_event).await?;
             commit_holder_account_data(conn, &typed_event).await?;
             if request.control_proposal_ingress.is_none() {
                 crate::current_data::commit_sources(conn, &typed_event, request.event.digest_suite).await?;
