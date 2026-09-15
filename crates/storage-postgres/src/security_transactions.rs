@@ -24,7 +24,7 @@ struct SecurityTransactionRow {
     #[diesel(sql_type = Text)]
     principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
-    coordinator_id: DidCoreId,
+    station_id: DidCoreId,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -123,8 +123,7 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
             transaction_id: TransactionId::new(ids::format_typed_uuid("transaction", &row.id))
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             kind: parse_stored("kind", Value::String(row.kind))?,
-            account_id: arkret_wire::AccountId::new(row.principal_id, row.coordinator_id.clone()),
-            coordinator_id: row.coordinator_id,
+            account_id: arkret_wire::AccountId::new(row.principal_id, row.station_id),
             expires_at: row.expires_at,
             created_at: row.created_at,
             request_digest: Hash::new(row.request_digest)
@@ -156,7 +155,7 @@ fn parse_stored<T: serde::de::DeserializeOwned>(name: &str, value: Value) -> Per
     })
 }
 
-const COLUMNS: &str = "id, kind, principal_id, coordinator_id, expires_at, created_at, \
+const COLUMNS: &str = "id, kind, principal_id, station_id, expires_at, created_at, \
     request_digest, prepared_plan, prepared_plan_digest, accepted_steps, \
     terminal_result, canonical_request";
 
@@ -217,7 +216,7 @@ async fn insert_one(
     let resource = &record.resource;
     sql_query(
         "INSERT INTO security_transactions \
-         (id, kind, principal_id, coordinator_id, expires_at, created_at, request_digest, \
+         (id, kind, principal_id, station_id, expires_at, created_at, request_digest, \
            prepared_plan, prepared_plan_digest, accepted_steps, \
            terminal_result, canonical_request) \
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
@@ -230,7 +229,7 @@ async fn insert_one(
         SecurityTransactionKind::SecurityRotation => "security_rotation",
     })
     .bind::<Text, _>(resource.account_id.principal_id.as_str())
-    .bind::<Text, _>(resource.coordinator_id.as_str())
+    .bind::<Text, _>(resource.account_id.station_id.as_str())
     .bind::<Timestamptz, _>(resource.expires_at)
     .bind::<Timestamptz, _>(resource.created_at)
     .bind::<Text, _>(resource.request_digest.as_str())

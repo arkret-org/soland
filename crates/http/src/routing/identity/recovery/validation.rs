@@ -192,6 +192,27 @@ pub(super) fn recovery_evidence_unbound_error(message: impl Into<String>) -> App
         .with_reason_code("recovery_evidence_unbound")
 }
 
+/// `security-transactions.md` §2.2 — the receipt `completed_at` is the
+/// replacement device authoring "completed if every check passes". That moment
+/// can never be later than the commit that would make it true, so a later
+/// timestamp is a deterministic rejection of the whole submission, with zero
+/// authoritative writes. v1 defines no skew allowance in either direction: the
+/// Station neither waits for the client clock nor signs a future-dated
+/// attestation.
+pub(super) fn validate_recovery_receipt_completed_at(
+    receipt_completed_at: chrono::DateTime<chrono::Utc>,
+    linearized_commit_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppError> {
+    if receipt_completed_at > linearized_commit_at {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "recovery receipt completed_at is later than the linearized commit time",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::RECOVERY_RECEIPT_COMPLETED_AT_AFTER_COMMIT));
+    }
+    Ok(())
+}
+
 // ── Small helpers ─────────────────────────────────────────────────────
 
 pub(super) fn require_const_string(
@@ -262,4 +283,30 @@ pub(super) fn require_policy_id_pattern(value: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_receipt_authored_after_the_commit_is_refused_with_its_registered_reason() {
+        let commit = chrono::Utc::now();
+        // Authored at or before the commit: "completed if every check passes"
+        // is still true at the moment the commit makes it true.
+        validate_recovery_receipt_completed_at(commit, commit).unwrap();
+        validate_recovery_receipt_completed_at(commit - chrono::Duration::hours(1), commit)
+            .unwrap();
+        // v1 defines no skew allowance, so a single millisecond later is the
+        // deterministic refusal, not a tolerated clock difference.
+        let error = validate_recovery_receipt_completed_at(
+            commit + chrono::Duration::milliseconds(1),
+            commit,
+        )
+        .expect_err("a future-dated receipt is refused");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::RECOVERY_RECEIPT_COMPLETED_AT_AFTER_COMMIT)
+        );
+    }
 }

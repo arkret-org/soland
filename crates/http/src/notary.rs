@@ -186,7 +186,6 @@ enum CandidateExecutionMode {
     /// A current device/Agent prepares a successor from retained signer evidence.
     PreparedPcrSuccessor,
     /// The closed recovery transaction admits only its exact Ackless native unit.
-    #[allow(dead_code)]
     RecoveryAnchorUnit,
 }
 
@@ -1512,6 +1511,51 @@ impl NotaryWorker {
         sealed_at: chrono::DateTime<chrono::Utc>,
         availability_receipt_digests: Vec<Hash>,
     ) -> Result<arkret_wire::UnsignedSeal, NotaryError> {
+        self.prepare_seal_body_in_mode(
+            state,
+            request,
+            events,
+            sealed_at,
+            availability_receipt_digests,
+            CandidateExecutionMode::PreparedPcrSuccessor,
+        )
+        .await
+    }
+
+    /// Replay the Realm history together with the closed recovery unit and
+    /// freeze the single signable body of a RecoveryTransaction
+    /// (`identity/security-transactions.md` §2.1 step 2).
+    ///
+    /// The two Events are supplied by the caller rather than read from the
+    /// durable Control Event store: at prepare time they are transaction-private
+    /// prepared material and MUST NOT be visible anywhere else yet.
+    pub(crate) async fn prepare_recovery_seal_body(
+        &self,
+        state: &AppState,
+        request: &arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody,
+        events: Vec<(Hash, Event)>,
+        sealed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<arkret_wire::UnsignedSeal, NotaryError> {
+        self.prepare_seal_body_in_mode(
+            state,
+            request,
+            events,
+            sealed_at,
+            Vec::new(),
+            CandidateExecutionMode::RecoveryAnchorUnit,
+        )
+        .await
+    }
+
+    async fn prepare_seal_body_in_mode(
+        &self,
+        state: &AppState,
+        request: &arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody,
+        events: Vec<(Hash, Event)>,
+        sealed_at: chrono::DateTime<chrono::Utc>,
+        availability_receipt_digests: Vec<Hash>,
+        mode: CandidateExecutionMode,
+    ) -> Result<arkret_wire::UnsignedSeal, NotaryError> {
         let realm_id = &request.realm_id;
         let sequence = self
             .next_notary_seq(state, Some(&request.predecessor_ref))
@@ -1606,7 +1650,7 @@ impl NotaryWorker {
                 // against the immutable signer evidence retained when the
                 // Event was admitted. It must not reinterpret a historical
                 // device method through the current DID document.
-                CandidateExecutionMode::PreparedPcrSuccessor,
+                mode,
             )
             .await?;
         let accepted_digests = executed

@@ -1914,6 +1914,7 @@ async fn submit_event_batch_outcome_with_leases(
             None,
             None,
             false,
+            None,
         )
         .await;
     }
@@ -2075,6 +2076,7 @@ pub(in crate::routing) async fn submit_recovery_identity_anchor_batch(
     session: &SessionRecord,
     replacement_device_id: &arkret_identifiers::DeviceId,
     submissions: Vec<arkret_wire::EventInitialSubmission>,
+    reserved_reanchor_batch_receipt_id: arkret_identifiers::ReceiptId,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     let submit_context = if submissions.len() == 2
         && submissions[0].event.kind == arkret_wire::EventKind::DeviceReanchor
@@ -2120,6 +2122,7 @@ pub(in crate::routing) async fn submit_recovery_identity_anchor_batch(
         None,
         None,
         true,
+        Some(reserved_reanchor_batch_receipt_id),
     )
     .await
 }
@@ -2218,6 +2221,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
                 })?,
         }),
         false,
+        None,
     )
     .await?;
     let outcome = existing_pcr_genesis_outcome(state, request, accepted_device_id)

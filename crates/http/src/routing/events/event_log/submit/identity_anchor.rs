@@ -70,6 +70,11 @@ pub(super) async fn submit_identity_anchor_batch(
     receipt_audience: Option<&DidCoreId>,
     pcr_genesis_pins: Option<PcrGenesisPins>,
     recovery_policy_acks_verified: bool,
+    // Receipt id the RecoveryTransaction prepare reserved for the
+    // `device_reanchor_unit` scope. The replacement device signs it inside the
+    // recovery receipt before either Event exists, so the accepted batch
+    // receipt MUST carry that exact id rather than mint a fresh one.
+    reserved_reanchor_batch_receipt_id: Option<arkret_identifiers::ReceiptId>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(unit_error(
@@ -508,8 +513,15 @@ pub(super) async fn submit_identity_anchor_batch(
         )?)
     } else if is_reanchor && !reanchor_conflict {
         Some(
-            build_reanchor_batch_receipt(state, &first, &second, &envelopes[0], received_at)
-                .await?,
+            build_reanchor_batch_receipt(
+                state,
+                &first,
+                &second,
+                &envelopes[0],
+                received_at,
+                reserved_reanchor_batch_receipt_id,
+            )
+            .await?,
         )
     } else {
         None
@@ -1872,11 +1884,12 @@ async fn build_reanchor_batch_receipt(
     authorize: &ValidatedEventEnvelope,
     reanchor_envelope: &Value,
     created_at: DateTime<Utc>,
+    reserved_receipt_id: Option<arkret_identifiers::ReceiptId>,
 ) -> Result<arkret_wire::EventBatchReceipt, SubmitOneError> {
     let payload = typed_device_reanchor_payload(reanchor_envelope)?;
-    let mut receipt = arkret_wire::EventBatchReceipt {
-        schema: arkret_wire::EventBatchReceipt::SCHEMA.to_owned(),
-        receipt_id: arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt")).map_err(
+    let receipt_id = match reserved_receipt_id {
+        Some(reserved) => reserved,
+        None => arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt")).map_err(
             |error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1885,6 +1898,10 @@ async fn build_reanchor_batch_receipt(
                 )
             },
         )?,
+    };
+    let mut receipt = arkret_wire::EventBatchReceipt {
+        schema: arkret_wire::EventBatchReceipt::SCHEMA.to_owned(),
+        receipt_id,
         issuer_id: DidCoreId::new(state.service_id().clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,

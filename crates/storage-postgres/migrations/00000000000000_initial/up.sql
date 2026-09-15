@@ -1655,7 +1655,7 @@ CREATE INDEX devices_actor_updated_idx ON public.devices USING btree (actor_id, 
 
 CREATE TABLE public.device_revocation_linearization_heads (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    coordinator_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     last_seq bigint DEFAULT 0 NOT NULL CHECK (last_seq >= 0),
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1665,7 +1665,7 @@ CREATE TABLE public.device_revocation_linearization_heads (
 CREATE TABLE public.device_revocation_targets (
     proposal_digest text PRIMARY KEY REFERENCES public.state_control_events(event_digest) ON DELETE RESTRICT,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    coordinator_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
     target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
@@ -1684,7 +1684,7 @@ CREATE INDEX device_revocation_targets_selector_idx
 
 CREATE TABLE public.device_revocation_gate_receipts (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    coordinator_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     action_class text NOT NULL CHECK (action_class = ANY (ARRAY[
         'session_grant_issue', 'session_grant_refresh', 'keypackage_claim',
@@ -1706,7 +1706,7 @@ CREATE TABLE public.device_revocation_cleanup_intents (
     proposal_event_id text NOT NULL,
     covering_seal_id text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    coordinator_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
     target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
@@ -3028,7 +3028,7 @@ CREATE TABLE public.recovery_sessions (
     session_grant_id text NOT NULL,
     session_grant_cnf_jkt text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    coordinator_id text NOT NULL,
+    station_id text NOT NULL,
     requesting_device_id text NOT NULL,
     requesting_device_public_key_did text NOT NULL,
     trust_domain text NOT NULL,
@@ -3065,7 +3065,7 @@ CREATE TABLE public.security_transactions (
     id uuid NOT NULL,
     kind text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    coordinator_id text NOT NULL,
+    station_id text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
     request_digest text NOT NULL,
@@ -3316,7 +3316,7 @@ CREATE TABLE public.principal_resolutions (
 
 CREATE TABLE public.principal_resolution_events (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    coordinator_id text NOT NULL,
+    station_id text NOT NULL,
     event_id text NOT NULL,
     previous_event_id text,
     method_history_head text NOT NULL,

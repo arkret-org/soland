@@ -1378,7 +1378,7 @@ diesel::table! {
         id -> Uuid,
         kind -> Text,
         principal_id -> Text,
-        coordinator_id -> Text,
+        station_id -> Text,
         expires_at -> Timestamptz,
         created_at -> Timestamptz,
         request_digest -> Text,
