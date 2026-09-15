@@ -220,6 +220,29 @@ pub(super) async fn validate_applet_managed_actor_liveness(
     let station_id = event_actor.route_service_id().as_str();
     let applet_id = event_string_field(object, &["applet_id"]);
     let authorization_ref = event_string_field(object, &["authorization_ref"]);
+    // `device-lifecycle.md` 5.2.3 / 15: the Applet-managed delegated device
+    // authorization is an ordinary successor Event inside the principal's own
+    // `applet_managed_control` PCR, authorized by that principal's controller
+    // method. It is not an Applet-delegated write: the Approved Capability Set
+    // has no action for it, and the install grants the Applet no say in which
+    // devices the principal it provisioned holds. Matching it here would
+    // therefore demand a grant that MUST NOT exist. Its own preconditions --
+    // self-anchor, exact `applet_id`, accepted provision and genesis, and the
+    // install revoke fence -- run in `validate_device_authorization_binding`,
+    // which also rejects the envelope authority fields whose absence selects
+    // this branch.
+    if kind == arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+        && applet_id.is_none()
+        && authorization_ref.is_none()
+        && object
+            .get("payload")
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("authorization_binding_kind"))
+            .and_then(Value::as_str)
+            == Some("applet_managed_delegation")
+    {
+        return Ok(true);
+    }
     let is_rotation = kind == arkret_wire::event_kind_str::IDENTITY_RESOLUTION_UPDATE;
     let event_scope = if is_rotation {
         None

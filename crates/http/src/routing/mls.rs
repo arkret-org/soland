@@ -349,6 +349,15 @@ async fn upload_keypackage(
                 "device_id must match the calling session",
             ));
         }
+        // `device-lifecycle.md` 15: an Applet-managed principal's delegated
+        // device loses new KeyPackage publication the moment its install is
+        // fenced, without waiting for an `ak.device.revoke`. The accepted
+        // authorize still standing in the PCR is explicitly not enough.
+        crate::routing::extensions::applet_bridge::ensure_delegated_device_not_fenced(
+            state,
+            &principal_id,
+        )
+        .await?;
         let binding =
             current_keypackage_trust_binding(state, &principal_id, device_id.as_str()).await?;
         let anchor = match (
@@ -3152,6 +3161,13 @@ async fn verify_keypackage_consumer_signature(
                     "durable recipient device must match the calling session",
                 ));
             }
+            // `device-lifecycle.md` 15: without this AND a revoked Applet's
+            // Bot keeps signing MLS durable receipts, because its delegated
+            // device's authorize is still accepted in the PCR.
+            crate::routing::extensions::applet_bridge::ensure_delegated_device_not_fenced(
+                state, owner,
+            )
+            .await?;
             verify_session_keypackage_write_signature(
                 state,
                 session,

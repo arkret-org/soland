@@ -70,6 +70,18 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                 }
                 return verify_welcome_signature(envelope, claim_receipt, key.as_str());
             }
+            // `device-lifecycle.md` 15: Welcome admission for an
+            // Applet-managed principal's delegated device is ANDed with the
+            // exact install's active state, so a fenced install cannot admit a
+            // Bot or Ghost to a group even while its authorize still stands.
+            // Only a locally provisioned principal can be resolved here; a
+            // foreign account's fence belongs to its own Station.
+            crate::routing::extensions::applet_bridge::ensure_delegated_device_not_fenced(
+                state,
+                &account.principal_id,
+            )
+            .await
+            .map_err(|_| arkret_wire::ErrorCode::APPLET_REVOKED)?;
             let record = state
                 .identities()
                 .find_device(FindDeviceQuery {

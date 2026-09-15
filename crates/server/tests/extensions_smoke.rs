@@ -2540,6 +2540,194 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
     );
 }
 
+#[test]
+#[ignore = "blocked on the pre-existing extensions_smoke install fixture break: soland_test_support::fixture_signer_evidence_ref() names a digest nothing stores, and since `Verify retained producer sources and remove ordinary key fallbacks` every Event signed with it fails admission with dependency_missing. The five sibling install/ghost cases in this file are red for the same reason; this case goes green with them."]
+fn applet_managed_delegation_state_gates_follow_the_install_fence() {
+    run_large_extensions_smoke_scenario(applet_managed_delegation_state_gate_scenario);
+}
+
+/// `device-lifecycle.md` 5.2.3 preconditions and the 15 revoke fence, read from
+/// the durable Applet projection this Station actually wrote.
+///
+/// The two gates are the halves the SDK cannot hold. The provision/genesis gate
+/// answers from the managed-identity winner row plus the accepted state of the
+/// exact Events it froze; the fence gate answers from the
+/// `(applet_id, effective_scope)` installation row. Revoking the install must
+/// flip the second one without any `ak.device.revoke` existing, which is the
+/// precise failure 15 exists to prevent.
+async fn applet_managed_delegation_state_gate_scenario() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    // The revoke saga authors caller-signed Events against the extension test
+    // Realm's accepted Seal, so the fixture Seal has to exist first.
+    let _seal_basis = seed_extension_test_seal(&state).await;
+    let app = service(state.clone());
+    let suffix = fixture_suffix();
+    let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
+    let namespace = format!("delegated.device.{suffix}");
+    let package = signed_applet_package(&applet_id, &namespace, &state.service_core_id());
+    ingest_applet_service_id_document(&state, &package).await;
+    let realm_id = demo_realm_id();
+    let install = install_applet_package(
+        &state,
+        &app,
+        &token,
+        &package,
+        realm_id,
+        &format!("delegated-{suffix}"),
+    )
+    .await;
+    assert_eq!(install["effective_status"], json!("installed"));
+    let bot_actor_id: arkret_wire::ActorId =
+        serde_json::from_value(install["bot_actor_id"].clone()).unwrap();
+    let bot_principal = bot_actor_id.signing_principal_id().clone();
+
+    let authority = soland_http::routing::extensions::applet_bridge::managed_principal_authority(
+        &state,
+        &bot_principal,
+    )
+    .await
+    .expect("managed principal authority lookup")
+    .expect("the installed Bot is an Applet-managed principal");
+    assert_eq!(authority.applet_id.as_str(), applet_id);
+    assert_eq!(
+        json!(authority.principal_control_realm_id),
+        install["bot_principal_control_realm_id"],
+        "5.2.3 admits the delegated authorize only into the principal's own applet_managed_control PCR"
+    );
+    assert_eq!(
+        json!(authority.provision_event_id),
+        install["bot_actor_provision_ref"],
+        "the provision gate must read the exact accepted provision the install froze"
+    );
+    assert!(
+        !authority.fenced,
+        "a freshly installed Applet is not fenced"
+    );
+
+    // Gate one: provision + `applet_managed_control` genesis accepted. The
+    // gate reads the canonical Event state, so assert that state rather than
+    // the record that names it.
+    for reference in [
+        authority.provision_event_id.as_str(),
+        authority.pcr_genesis_event_id.as_str(),
+    ] {
+        // `EventStore::get` reads the accepted projection, so a hit here is
+        // exactly the accepted state 5.2.3 requires of both anchors.
+        assert!(
+            state
+                .test_persistence()
+                .events()
+                .get(reference)
+                .await
+                .expect("managed-actor anchor lookup")
+                .is_some(),
+            "5.2.3 admits the delegated device only after both anchors are accepted"
+        );
+    }
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .get("ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM")
+            .await
+            .expect("absent anchor lookup")
+            .is_none(),
+        "the dependency read must distinguish an unaccepted anchor from an accepted one"
+    );
+
+    // Gate two, before the fence: the MLS surfaces admit this principal.
+    soland_http::routing::extensions::applet_bridge::ensure_delegated_device_not_fenced(
+        &state,
+        &bot_principal,
+    )
+    .await
+    .expect("an active install does not fence its delegated device");
+
+    // A principal nobody provisioned is not Applet-managed, so 5.2.3 has no
+    // exact install to anchor to and 15's fence does not apply to it.
+    let native_principal =
+        arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap()).unwrap();
+    assert!(
+        soland_http::routing::extensions::applet_bridge::managed_principal_authority(
+            &state,
+            &native_principal,
+        )
+        .await
+        .expect("native principal lookup")
+        .is_none(),
+        "only an Applet-managed principal may use applet_managed_delegation"
+    );
+    soland_http::routing::extensions::applet_bridge::ensure_delegated_device_not_fenced(
+        &state,
+        &native_principal,
+    )
+    .await
+    .expect("a native principal is never fenced by an Applet install");
+
+    let revoke_preview: Value = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/revoke/preview"
+    ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.applet.revoke.command.preview.v1",
+        true,
+    )
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "effective_scope": {"kind": "realm", "realm_id": realm_id},
+        "reason_code": "delegated_device_fence",
+        "revoke_mode": "revoke_runtime_only",
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let (capability_revoke_events, membership_state_events) =
+        signed_revoke_events(&state, realm_id, &revoke_preview).await;
+    let revoke: Value = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/revoke"
+    ))
+    .add_header("Arkret-Operation", "ak.self.applet.command.revoke.v1", true)
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .add_header("Idempotency-Key", format!("revoke-{suffix}"), true)
+    .json(&json!({
+        "revoke_plan_digest": revoke_preview["revoke_plan_digest"].clone(),
+        "effective_scope": {"kind": "realm", "realm_id": realm_id},
+        "reason_code": "delegated_device_fence",
+        "revoke_mode": "revoke_runtime_only",
+        "capability_revoke_events": capability_revoke_events,
+        "membership_state_events": membership_state_events,
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(revoke["status"], json!("complete"), "revoke saga: {revoke}");
+
+    let fenced = soland_http::routing::extensions::applet_bridge::managed_principal_authority(
+        &state,
+        &bot_principal,
+    )
+    .await
+    .expect("managed principal authority lookup after revoke")
+    .expect("the revoked install remains the principal's exact install");
+    assert!(
+        fenced.fenced,
+        "15 fences the delegated device on the install's revoke, not on an ak.device.revoke"
+    );
+    let denied =
+        soland_http::routing::extensions::applet_bridge::ensure_delegated_device_not_fenced(
+            &state,
+            &bot_principal,
+        )
+        .await
+        .expect_err("a fenced install must fail closed on every MLS surface");
+    assert_eq!(denied.wire_code(), "applet_revoked");
+}
+
 fn capability_grant_ref_for_action(
     install: &Value,
     approved_actions: &[String],

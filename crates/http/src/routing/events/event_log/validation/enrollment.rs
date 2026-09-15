@@ -133,6 +133,20 @@ pub(crate) async fn validate_device_authorization_binding(
                 ));
             }
         }
+        (
+            DeviceAuthorizationBindingKind::AppletManagedDelegation,
+            DeviceOrPrincipalRef::Principal(authorizing_principal),
+        ) => {
+            validate_applet_managed_delegation(
+                state,
+                &event,
+                &payload,
+                authorizing_principal,
+                subject_account_id,
+                actor_id,
+            )
+            .await?;
+        }
         _ => {
             return Err(device_authorization_invalid(
                 "device authorization binding is not a closed v1 variant",
@@ -147,6 +161,299 @@ pub(crate) async fn validate_device_authorization_binding(
     .map_err(device_authorization_invalid)
 }
 
+/// `device-lifecycle.md` 5.2.3 preconditions for the Applet-managed delegated
+/// device branch.
+///
+/// The SDK already refuses a payload whose `applet_id`, `expires_at`, `scopes`
+/// or `authorized_by` shape is wrong, and
+/// `device_possession_signature_input` binds the transcript's `authorized_by`
+/// to the subject account. What is left is state the SDK does not hold: the
+/// managed principal's own provision and PCR genesis, and the exact install's
+/// fence.
+async fn validate_applet_managed_delegation(
+    state: &AppState,
+    event: &arkret_wire::Event,
+    payload: &arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
+    authorizing_principal: &arkret_wire::DidCoreId,
+    subject_account_id: &arkret_wire::AccountId,
+    actor_id: &str,
+) -> Result<(), EventValidationError> {
+    // 5.2.3 self-anchor. The possession transcript carries the same equality,
+    // but only the receiver sees `Event.actor_id.account_id.principal_id`, and
+    // taking the Applet `service_id` here would invent a cross-principal
+    // authority chain 3.3 forbids.
+    if authorizing_principal.as_str() != actor_id {
+        return Err(device_authorization_invalid(
+            "applet_managed_delegation authorization must self-anchor to the managed principal",
+        ));
+    }
+    // 15 / applet-integration.md 12: authority is the principal's own
+    // controller method, never a capability the install granted the Applet, so
+    // this Event is not an Applet-delegated write and MUST NOT borrow one's
+    // envelope authority fields.
+    if event.applet_id.is_some() || event.authorization_ref.is_some() {
+        return Err(device_authorization_invalid(
+            "delegated device authorization is authorized by the managed principal itself, not by an Applet capability grant",
+        ));
+    }
+    let applet_id = payload.applet_id.as_ref().ok_or_else(|| {
+        device_authorization_invalid("applet_managed_delegation authorization requires applet_id")
+    })?;
+    let authority = crate::routing::extensions::applet_bridge::managed_principal_authority(
+        state,
+        &subject_account_id.principal_id,
+    )
+    .await
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "failed_precondition",
+            format!("Applet-managed principal lookup failed: {error}"),
+        )
+    })?
+    .ok_or_else(|| {
+        device_authorization_invalid(
+            "applet_managed_delegation authorization requires an Applet-managed principal",
+        )
+    })?;
+    // 5.2.3 makes `applet_id` the fence carrier, so it MUST name the exact
+    // install that provisioned this principal rather than any install of the
+    // same Applet.
+    if authority.applet_id != *applet_id {
+        return Err(device_authorization_invalid(
+            "applet_id does not name the exact install that provisioned this principal",
+        ));
+    }
+    // The device arrives as an ordinary successor Event in the principal's own
+    // `applet_managed_control` PCR (5.2.3, 15), never in a portal or
+    // collaboration Realm.
+    if event.realm_id != authority.principal_control_realm_id {
+        return Err(device_authorization_invalid(
+            "delegated device authorization must continue the principal's own applet_managed_control PCR",
+        ));
+    }
+    // 5.2.3 splits the two failures deliberately: an unaccepted provision or
+    // genesis is an ordinary unsatisfied dependency, not a revocation.
+    for reference in [
+        &authority.provision_event_id,
+        &authority.pcr_genesis_event_id,
+    ] {
+        let accepted = state
+            .event_queries()
+            .accepted_event(reference.as_str())
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "failed_precondition",
+                    format!("Applet-managed principal anchor lookup failed: {error}"),
+                )
+            })?;
+        if accepted.is_none() {
+            return Err(event_validation_error(
+                StatusCode::CONFLICT,
+                "dependency_missing",
+                "applet_managed_delegation requires an accepted managed-actor provision and applet_managed_control genesis",
+            ));
+        }
+    }
+    // A fenced install is the other half of that split, and 5.2.3 fixes its
+    // code.
+    if authority.fenced {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            arkret_wire::ErrorCode::APPLET_REVOKED,
+            "the Applet install that provisioned this principal has been revoked",
+        ));
+    }
+    Ok(())
+}
+
 fn device_authorization_invalid(message: impl Into<String>) -> EventValidationError {
     event_validation_error(StatusCode::FORBIDDEN, "failed_precondition", message)
+}
+
+#[cfg(test)]
+mod applet_managed_delegation_tests {
+    use arkret_models_collaboration::events_payloads::device_identity::{
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef, UnsignedDeviceAuthorizePayload,
+    };
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    use super::*;
+
+    const MANAGED_PRINCIPAL: &str = "ak:did_core:webvh:z6mkappletmanagedbot";
+    const OTHER_PRINCIPAL: &str = "ak:did_core:webvh:z6mkappletmanagedghost";
+    const STATION: &str = "ak:did_core:web:station.example";
+    const APPLET: &str = "ak:applet:01904100-0000-7000-8000-00000000a001";
+
+    fn signed_delegation_payload(
+        account: &arkret_wire::AccountId,
+        authorized_by: &arkret_wire::DidCoreId,
+    ) -> Value {
+        let key = SigningKey::from_bytes(&[0x37; 32]);
+        let public =
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes());
+        let mut hpke = vec![0xec, 0x01];
+        hpke.extend([0x44; 32]);
+        let unsigned = UnsignedDeviceAuthorizePayload::new(
+            arkret_identifiers::DeviceId::new("ak:device:01904100-0000-7000-8000-00000000d001")
+                .unwrap(),
+            arkret_wire::NonEmptyString::new(format!("did:key:{public}")).unwrap(),
+            arkret_wire::NonEmptyString::new(arkret_canonical::encode_multibase_base58btc(hpke))
+                .unwrap(),
+            vec![
+                arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1")
+                    .unwrap(),
+            ],
+            Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+            DeviceOrPrincipalRef::Principal(authorized_by.clone()),
+            Some(vec![
+                arkret_wire::NonEmptyString::new("ak.realm:ak:realm:portal").unwrap(),
+            ]),
+            "2026-09-15T00:00:00.000Z".parse().unwrap(),
+            Some(Some("2026-12-15T00:00:00.000Z".parse().unwrap())),
+            DeviceAuthorizationBindingKind::AppletManagedDelegation,
+            None,
+            Some(arkret_wire::AppletId::new(APPLET).unwrap()),
+        )
+        .expect("5.2.3 payload shape");
+        // The transcript self-anchors against the signing account, so a
+        // cross-principal case has to sign under the principal it names.
+        let anchor = arkret_wire::AccountId::new(
+            authorized_by.clone(),
+            arkret_wire::DidCoreId::new(STATION.to_owned()).unwrap(),
+        );
+        let input = unsigned
+            .device_possession_signature_input(if authorized_by == &account.principal_id {
+                account
+            } else {
+                &anchor
+            })
+            .expect("possession transcript");
+        let payload = unsigned
+            .attach_signature(
+                arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                    key.sign(&input).to_bytes(),
+                ))
+                .unwrap(),
+            )
+            .expect("signed 5.2.3 payload");
+        serde_json::to_value(payload).expect("payload serializes")
+    }
+
+    fn delegation_event(actor: &str, authorized_by: &str) -> arkret_wire::Event {
+        let station = arkret_wire::DidCoreId::new(STATION.to_owned()).unwrap();
+        let actor_id = arkret_wire::DidCoreId::new(actor.to_owned()).unwrap();
+        let account = arkret_wire::AccountId::new(actor_id.clone(), station.clone());
+        let payload = signed_delegation_payload(
+            &account,
+            &arkret_wire::DidCoreId::new(authorized_by.to_owned()).unwrap(),
+        );
+        arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::DeviceAuthorize.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::from_event_id(
+                    &arkret_identifiers::EventId::from_digest(
+                        arkret_canonical::DigestSuite::Sha256,
+                        [0x71; 32],
+                    ),
+                ),
+            },
+            actor_id,
+            station,
+            1,
+            arkret_identifiers::Hlc::new("01970e589d21-0007-a13f9c2e").unwrap(),
+            payload,
+        )
+        .expect("fixture delegated device authorize")
+    }
+
+    fn envelope(event: &arkret_wire::Event) -> serde_json::Map<String, Value> {
+        serde_json::to_value(event)
+            .expect("envelope serializes")
+            .as_object()
+            .expect("envelope is an object")
+            .clone()
+    }
+
+    /// 5.2.3 precondition: without an accepted managed-actor provision and
+    /// `applet_managed_control` genesis there is no exact install to anchor to,
+    /// so the branch has to fail closed rather than fall through to the
+    /// possession check.
+    #[tokio::test]
+    async fn delegation_fails_closed_without_a_provisioned_managed_principal() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let event = delegation_event(MANAGED_PRINCIPAL, MANAGED_PRINCIPAL);
+        let error = validate_device_authorization_binding(
+            &state,
+            &envelope(&event),
+            MANAGED_PRINCIPAL,
+            &[],
+        )
+        .await
+        .expect_err("an unprovisioned principal cannot delegate a device");
+        assert!(
+            format!("{error:?}").contains("Applet-managed principal"),
+            "unexpected rejection: {error:?}"
+        );
+    }
+
+    /// 15 / applet-integration.md 12: the authority is the principal's own
+    /// controller method, so this Event MUST NOT arrive dressed as an
+    /// Applet-delegated write.
+    #[tokio::test]
+    async fn delegation_rejects_borrowed_applet_envelope_authority() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let mut event = delegation_event(MANAGED_PRINCIPAL, MANAGED_PRINCIPAL);
+        // The envelope schema pairs the two fields, so a borrowed Applet
+        // authority can only ever arrive as the complete pair.
+        event.applet_id = Some(arkret_wire::AppletId::new(APPLET).unwrap());
+        event.authorization_ref = Some(
+            arkret_wire::GrantId::new("ak:grant:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM")
+                .unwrap()
+                .into(),
+        );
+        let error = validate_device_authorization_binding(
+            &state,
+            &envelope(&event),
+            MANAGED_PRINCIPAL,
+            &[],
+        )
+        .await
+        .expect_err("a delegated device authorization is not an Applet-delegated write");
+        assert!(
+            format!("{error:?}").contains("Applet capability grant"),
+            "unexpected rejection: {error:?}"
+        );
+    }
+
+    /// 5.2.3 self-anchor: `authorized_by` MUST be the Event's own principal,
+    /// never the Applet `service_id` or any other principal.
+    #[tokio::test]
+    async fn delegation_rejects_a_cross_principal_authorizer() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let event = delegation_event(MANAGED_PRINCIPAL, OTHER_PRINCIPAL);
+        let error = validate_device_authorization_binding(
+            &state,
+            &envelope(&event),
+            MANAGED_PRINCIPAL,
+            &[],
+        )
+        .await
+        .expect_err("applet_managed_delegation must self-anchor");
+        assert!(
+            format!("{error:?}").contains("self-anchor"),
+            "unexpected rejection: {error:?}"
+        );
+    }
 }
