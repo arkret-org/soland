@@ -58,39 +58,66 @@ struct WindowCandidateRow {
     received_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Bounded scan of Events strictly above `after`, oldest first.
+/// Bounded scan in ascending projection order.
 ///
-/// This is the live increment path. Everything accepted after a window was
-/// frozen sorts above its head, so it is delivered here instead of joining a
-/// window already in flight. It shares the window scan's expression tuple, so
-/// live and frozen delivery agree on one order; only direction and strictness
-/// differ.
-pub(crate) async fn live_scan(
+/// Window delivery walks `[floor, head]` with `inclusive` and an `upper`; live
+/// delivery walks strictly above the frozen head with neither. Both share one
+/// expression tuple with the descending selection scan, so frozen and live
+/// delivery can never disagree on an order; only direction and bounds differ.
+pub(crate) async fn ascending_scan(
     conn: &mut AsyncPgConnection,
     realm_id: &str,
-    after: &soland_storage::TimelineOrderPosition,
+    from: &soland_storage::TimelineOrderPosition,
+    inclusive: bool,
+    upper: Option<&soland_storage::TimelineOrderPosition>,
     row_limit: usize,
 ) -> PersistenceResult<soland_storage::TimelineWindowScan> {
-    let rows = sql_query(
-        "SELECT o.event_id, o.causal_depth, o.hlc, o.actor_id, o.actor_seq, o.kind, o.provisional, \
-         e.envelope, e.received_at \
-         FROM realm_timeline_order o JOIN canonical_events e ON e.pk = o.event_pk \
-         WHERE o.realm_id = $1 AND e.state = 'accepted' \
-         AND (o.causal_depth, (o.hlc IS NULL), COALESCE(o.hlc, ''), o.actor_id, o.actor_seq, o.event_id) \
-             > ($2, $3, $4, $5, $6, $7) \
-         ORDER BY o.causal_depth ASC, (o.hlc IS NULL) ASC, COALESCE(o.hlc, '') ASC, \
-         o.actor_id ASC, o.actor_seq ASC, o.event_id ASC LIMIT $8",
-    )
-    .bind::<Text, _>(realm_id)
-    .bind::<BigInt, _>(after.causal_depth)
-    .bind::<Bool, _>(after.hlc.is_none())
-    .bind::<Text, _>(after.hlc.clone().unwrap_or_default())
-    .bind::<Text, _>(&after.actor_id)
-    .bind::<BigInt, _>(after.actor_seq)
-    .bind::<Text, _>(&after.event_id)
-    .bind::<BigInt, _>(row_limit as i64)
-    .load::<WindowCandidateRow>(conn)
-    .await
+    const TUPLE: &str = "(o.causal_depth, (o.hlc IS NULL), COALESCE(o.hlc, ''), o.actor_id,          o.actor_seq, o.event_id)";
+    let comparison = if inclusive { ">=" } else { ">" };
+    let (upper_clause, limit_param) = match upper {
+        Some(_) => (
+            format!(" AND {TUPLE} <= ($8, $9, $10, $11, $12, $13)"),
+            "$14",
+        ),
+        None => (String::new(), "$8"),
+    };
+    let statement = format!(
+        "SELECT o.event_id, o.causal_depth, o.hlc, o.actor_id, o.actor_seq, o.kind, o.provisional,          e.envelope, e.received_at          FROM realm_timeline_order o JOIN canonical_events e ON e.pk = o.event_pk          WHERE o.realm_id = $1 AND e.state = 'accepted'          AND {TUPLE} {comparison} ($2, $3, $4, $5, $6, $7){upper_clause}          ORDER BY o.causal_depth ASC, (o.hlc IS NULL) ASC, COALESCE(o.hlc, '') ASC,          o.actor_id ASC, o.actor_seq ASC, o.event_id ASC LIMIT {limit_param}"
+    );
+    let rows = match upper {
+        None => {
+            sql_query(statement)
+                .bind::<Text, _>(realm_id)
+                .bind::<BigInt, _>(from.causal_depth)
+                .bind::<Bool, _>(from.hlc.is_none())
+                .bind::<Text, _>(from.hlc.clone().unwrap_or_default())
+                .bind::<Text, _>(&from.actor_id)
+                .bind::<BigInt, _>(from.actor_seq)
+                .bind::<Text, _>(&from.event_id)
+                .bind::<BigInt, _>(row_limit as i64)
+                .load::<WindowCandidateRow>(conn)
+                .await
+        }
+        Some(upper) => {
+            sql_query(statement)
+                .bind::<Text, _>(realm_id)
+                .bind::<BigInt, _>(from.causal_depth)
+                .bind::<Bool, _>(from.hlc.is_none())
+                .bind::<Text, _>(from.hlc.clone().unwrap_or_default())
+                .bind::<Text, _>(&from.actor_id)
+                .bind::<BigInt, _>(from.actor_seq)
+                .bind::<Text, _>(&from.event_id)
+                .bind::<BigInt, _>(upper.causal_depth)
+                .bind::<Bool, _>(upper.hlc.is_none())
+                .bind::<Text, _>(upper.hlc.clone().unwrap_or_default())
+                .bind::<Text, _>(&upper.actor_id)
+                .bind::<BigInt, _>(upper.actor_seq)
+                .bind::<Text, _>(&upper.event_id)
+                .bind::<BigInt, _>(row_limit as i64)
+                .load::<WindowCandidateRow>(conn)
+                .await
+        }
+    }
     .map_err(PersistenceError::database)?;
     let scan_capped = rows.len() == row_limit;
     Ok(soland_storage::TimelineWindowScan {

@@ -90,15 +90,19 @@ pub trait SyncCursorStore: Send + Sync {
         bound: Option<&super::TimelineOrderPosition>,
         row_limit: usize,
     ) -> PersistenceResult<super::TimelineWindowScan>;
-    /// Bounded scan of Events above `after` in ascending projection order.
+    /// Bounded scan in ascending projection order, from `from` and stopping at
+    /// `upper` when one is given.
     ///
-    /// This is the live increment path: everything accepted after a window was
-    /// frozen sorts above its head, so it is delivered here instead of joining
-    /// a window already in flight.
-    async fn timeline_live_scan(
+    /// Two callers share it so that frozen and live delivery can never disagree
+    /// on an order: window delivery walks `[floor, head]` with `inclusive` and
+    /// an upper bound, and live delivery walks strictly above the frozen head
+    /// with none. Direction and bounds are the only difference between them.
+    async fn timeline_ascending_scan(
         &self,
         realm_id: &str,
-        after: &super::TimelineOrderPosition,
+        from: &super::TimelineOrderPosition,
+        inclusive: bool,
+        upper: Option<&super::TimelineOrderPosition>,
         row_limit: usize,
     ) -> PersistenceResult<super::TimelineWindowScan>;
     /// Newest projection-order position of a Realm, used to freeze a window.

@@ -1,9 +1,36 @@
 //! Account detail turns reserve a whole frame for bounded current results.
 use arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame;
 use arkret_models_collaboration::sync_frames::current_results::MAX_ATOMIC_CURRENT_ENTRY_CANONICAL_BYTES;
+use arkret_models_collaboration::sync_frames::demand_sync::{
+    ACCOUNT_SYNC_MAX_FRAME_BYTES, ACCOUNT_SYNC_MAX_TIMELINE_LIMIT,
+};
 use soland_storage::{CurrentDetailOutcome, CurrentDetailRequest};
 
 use super::*;
+
+/// Required envelope of a minimal legal single-Realm detail frame, reserved by
+/// `current-results.md` 5: the top-level kind and cursor, the Realm map key,
+/// the current/entries containers and the baseline fields. 7 MiB of atomic
+/// current entry plus this reservation is the 8 MiB frame bound, so the
+/// timeline is cut against whatever is left once this reservation and the
+/// content the frame already carries are accounted for.
+const DETAIL_FRAME_ENVELOPE_RESERVATION: usize = 1024 * 1024;
+
+/// Canonical bytes the timeline may still add to this frame.
+///
+/// 2.3 makes the byte budget a segmentation decision only: it never lowers
+/// `window_limit` and never lets a window drop what it still owes in order to
+/// look complete. A round whose current results already fill the frame
+/// therefore delivers no timeline content and resumes next round, which is the
+/// same rule that lets a maximal legal Event ride an otherwise empty data
+/// frame.
+fn timeline_budget(entry: &serde_json::Map<String, Value>) -> usize {
+    let used = arkret_canonical::canonical_json_bytes(entry)
+        .map_or(ACCOUNT_SYNC_MAX_FRAME_BYTES, |bytes| bytes.len());
+    ACCOUNT_SYNC_MAX_FRAME_BYTES
+        .saturating_sub(DETAIL_FRAME_ENVELOPE_RESERVATION)
+        .saturating_sub(used)
+}
 
 pub(super) async fn frame(
     state: &AppState,
@@ -57,6 +84,15 @@ async fn frame_for_realm(
         strand_ids: filter.strand_ids.clone(),
         all_members: !filter.effective_lazy_load_members(),
         event_ids: vec![],
+        // 2.3: raising the ceiling or changing the content filter changes the
+        // window range, so it must mint a new generation rather than mutate one
+        // already in flight. Freezing them into the request digest is what makes
+        // a stored progress fail its own check and rebuild.
+        timeline_limit: filter
+            .effective_timeline_limit()
+            .min(ACCOUNT_SYNC_MAX_TIMELINE_LIMIT),
+        event_kinds: filter.event_kinds.clone(),
+        not_event_kinds: filter.not_event_kinds.clone(),
     };
     let outcome = state
         .sync()
@@ -73,6 +109,26 @@ async fn frame_for_realm(
     match outcome {
         Ok(CurrentDetailOutcome::Page(page)) => {
             let mut page = page;
+            // Current results are placed first so the timeline can be cut
+            // against what the frame actually has left, instead of against a
+            // guess made before the frame exists.
+            let single_complete=after.detail_positions.get(realm.as_str()).is_none() && page.baseline.as_ref().is_some_and(|baseline|baseline.complete && matches!(baseline.coverage.members,arkret_models_collaboration::sync_frames::current_results::CurrentMemberCoverage::All));
+            let roster = roster_from_current(realm, &page.entries, single_complete);
+            if !roster.entries.is_empty() || single_complete {
+                entry.insert(
+                    "member_roster".into(),
+                    serde_json::to_value(roster).expect("typed roster"),
+                );
+            }
+            if !page.entries.is_empty() {
+                entry.insert("current".into(), json!({"entries":page.entries}));
+            }
+            if let Some(baseline) = page.baseline.clone() {
+                entry.insert(
+                    "baseline".into(),
+                    serde_json::to_value(baseline).expect("typed baseline"),
+                );
+            }
             // The timeline window shares this generation's `snapshot_cursor`
             // (`current-results.md` 4) and advances on the same turn, so its
             // cursor is folded back into the progress this frame commits.
@@ -83,6 +139,7 @@ async fn frame_for_realm(
                 realm,
                 &page.progress.snapshot_cursor.clone(),
                 &mut page.progress.timeline,
+                timeline_budget(&entry),
             )
             .await;
             let old = positions.insert(realm.to_string(), page.progress.clone());
@@ -98,31 +155,13 @@ async fn frame_for_realm(
                     );
                 }
             }
-            if entry.is_empty() && page.entries.is_empty() && page.baseline.is_none() {
+            if entry.is_empty() {
                 if old.as_ref().and_then(|old| serde_json::to_value(old).ok())
                     == serde_json::to_value(&page.progress).ok()
                 {
                     return None;
                 }
                 frontier = true;
-            } else {
-                let single_complete=after.detail_positions.get(realm.as_str()).is_none() && page.baseline.as_ref().is_some_and(|baseline|baseline.complete && matches!(baseline.coverage.members,arkret_models_collaboration::sync_frames::current_results::CurrentMemberCoverage::All));
-                let roster = roster_from_current(realm, &page.entries, single_complete);
-                if !roster.entries.is_empty() || single_complete {
-                    entry.insert(
-                        "member_roster".into(),
-                        serde_json::to_value(roster).expect("typed roster"),
-                    );
-                }
-                if !page.entries.is_empty() {
-                    entry.insert("current".into(), json!({"entries":page.entries}));
-                }
-                if let Some(baseline) = page.baseline {
-                    entry.insert(
-                        "baseline".into(),
-                        serde_json::to_value(baseline).expect("typed baseline"),
-                    );
-                }
             }
         }
         Ok(CurrentDetailOutcome::NotFound) => {
@@ -174,7 +213,7 @@ async fn frame_for_realm(
     let frame: AccountSubscribeFrame =
         serde_json::from_value(raw).expect("typed current detail frame");
     if arkret_canonical::canonical_json_bytes(&frame)
-        .map_or(true, |bytes| bytes.len() > 8 * 1024 * 1024)
+        .map_or(true, |bytes| bytes.len() > ACCOUNT_SYNC_MAX_FRAME_BYTES)
     {
         // The fixed producer budget must make this unreachable. Never install
         // a dynamically downgraded result or acknowledge an oversized frame.

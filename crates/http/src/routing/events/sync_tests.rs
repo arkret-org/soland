@@ -456,21 +456,21 @@ fn test_config() -> crate::config::AppConfig {
     }
 }
 
-fn test_state() -> AppState {
+pub(crate) fn test_state() -> AppState {
     AppState::new(test_config(), soland_storage_postgres::Db { pool: None })
 }
 
-const ROSTER_REALM: &str = "ak:realm:AQKdkfI-I4MXIS2hxLXbb_FK57j-jE497FF66I5NPGPE";
+pub(crate) const ROSTER_REALM: &str = "ak:realm:AQKdkfI-I4MXIS2hxLXbb_FK57j-jE497FF66I5NPGPE";
 const ROSTER_ACTOR_DID: &str = "did:web:alice.example";
-const ROSTER_ACTOR: &str = "ak:did_core:web:alice.example";
+pub(crate) const ROSTER_ACTOR: &str = "ak:did_core:web:alice.example";
 const ROSTER_SUBJECT: &str = "ak:did_core:web:alice-principal.example";
-const ROSTER_CALLER: &str = "ak:did_core:web:bob.example";
+pub(crate) const ROSTER_CALLER: &str = "ak:did_core:web:bob.example";
 
 fn roster_body(_audience: &str) -> SyncRequestBody {
     SyncRequestBody::default()
 }
 
-fn roster_session(state: &AppState, actor: &str) -> SessionIdentityState {
+pub(crate) fn roster_session(state: &AppState, actor: &str) -> SessionIdentityState {
     SessionIdentityState {
         account_pk: None,
         token_hash: "token".to_owned(),
@@ -541,7 +541,10 @@ fn accepted_sync_test_operation_at(
     .expect("accepted sync fixture operation")
 }
 
-fn roster_realm(public: bool, include_caller: bool) -> crate::state::RealmDirectoryEntry {
+pub(crate) fn roster_realm(
+    public: bool,
+    include_caller: bool,
+) -> crate::state::RealmDirectoryEntry {
     let mut entry = crate::state::RealmDirectoryEntry::new(
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
         "Roster evidence",
@@ -563,7 +566,7 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
     insert_projected_membership_at(state, actor, membership, now());
 }
 
-fn insert_projected_membership_at(
+pub(crate) fn insert_projected_membership_at(
     state: &AppState,
     actor: &str,
     membership: &str,
@@ -753,7 +756,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
     }
 }
 
-fn canonical_event_record_received_at(
+pub(crate) fn canonical_event_record_received_at(
     actor_seq: u64,
     kind: impl AsRef<str>,
     payload: Value,
@@ -798,7 +801,10 @@ fn canonical_event_record_received_at(
     }
 }
 
-async fn store_canonical_event(state: &AppState, record: soland_services::events::AcceptedEvent) {
+pub(crate) async fn store_canonical_event(
+    state: &AppState,
+    record: soland_services::events::AcceptedEvent,
+) {
     state
         .event_queries()
         .store_canonical_event(record)

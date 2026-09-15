@@ -752,17 +752,25 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
             .timeline_window_scan(realm_id, head, bound, row_limit)
             .await?)
     }
-    async fn timeline_live_scan(
+    async fn timeline_ascending_scan(
         &self,
         realm_id: &str,
-        after: &soland_storage::TimelineOrderPosition,
+        from: &soland_storage::TimelineOrderPosition,
+        inclusive: bool,
+        upper: Option<&soland_storage::TimelineOrderPosition>,
         row_limit: usize,
     ) -> crate::ServiceResult<soland_storage::TimelineWindowScan> {
         Ok(self
             .0
             .sync_cursors()
-            .timeline_live_scan(realm_id, after, row_limit)
+            .timeline_ascending_scan(realm_id, from, inclusive, upper, row_limit)
             .await?)
+    }
+    async fn timeline_window_head(
+        &self,
+        realm_id: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::TimelineOrderPosition>> {
+        Ok(self.0.sync_cursors().timeline_window_head(realm_id).await?)
     }
     async fn account_summary_has_join(
         &self,

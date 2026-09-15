@@ -856,6 +856,18 @@ fn events_query_scope_digest(
     sync_filter_digest(Some(&binding))
 }
 
+/// Scope digest an `ak.self.events.read.scan.v1` backfill of one Realm's older
+/// history hashes to.
+///
+/// A window's `prev_cursor` MUST round-trip as that request's `before=`, and
+/// this path validates a presented cursor against the digest it recomputes from
+/// the request itself. Minting against the same function is what keeps the two
+/// from drifting apart: a plain Realm-scoped scan with no actor selector, no
+/// filters and the default order.
+pub(super) fn realm_history_scan_digest(realm: &RealmId) -> String {
+    events_query_scope_digest(&[realm.to_string()], &[], None, "default")
+}
+
 fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
     match error {
         SyncCursorError::Expired => crate::app_error!(CursorExpired, "cursor has expired",),

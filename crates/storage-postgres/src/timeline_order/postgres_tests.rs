@@ -395,3 +395,222 @@ async fn the_second_admission_path_also_records_the_projection_order() {
         "its predecessor arrived through the same path, so the order is final"
     );
 }
+
+#[tokio::test]
+async fn ascending_delivery_walks_the_window_inclusively_and_stops_at_the_frozen_head() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"timeline ascending realm"),
+    ));
+    let alice = actor("ak:did_core:web:alice.example");
+    // The last one carries no HLC: 7.3 sorts an absent HLC last, so it must
+    // come after its HLC-bearing siblings at the same depth in both directions.
+    let rows = [
+        event(&realm, &alice, 1, Some("01970e589d31-0000-a13f9c2e"), &[]),
+        event(&realm, &alice, 2, Some("01970e589d32-0000-a13f9c2e"), &[]),
+        event(&realm, &alice, 3, Some("01970e589d33-0000-a13f9c2e"), &[]),
+        event(&realm, &alice, 4, None, &[]),
+    ];
+    for row in &rows {
+        persist(&pool, row).await.unwrap();
+    }
+    let mut conn = pool.get().await.unwrap();
+    let head = window_head(&mut conn, realm.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(head.event_id, rows[3].event_id.as_str());
+
+    // Selection walks down and picks a floor; delivery walks back up from that
+    // floor. The floor is inclusive, so the oldest Event of the window is the
+    // first one on the wire rather than the one silently dropped.
+    let selected = window_scan(&mut conn, realm.as_str(), &head, None, 3)
+        .await
+        .unwrap();
+    let floor = selected.candidates.last().unwrap().position.clone();
+    assert_eq!(floor.event_id, rows[1].event_id.as_str());
+    let first = ascending_scan(&mut conn, realm.as_str(), &floor, true, Some(&head), 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        first
+            .candidates
+            .iter()
+            .map(|row| row.position.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![rows[1].event_id.as_str(), rows[2].event_id.as_str()]
+    );
+    assert!(first.scan_capped && !first.exhausted);
+
+    // The continuation is exclusive, and the frozen head is the inclusive upper
+    // bound: delivery ends on it and never reads past it.
+    let bound = first.candidates.last().unwrap().position.clone();
+    let second = ascending_scan(&mut conn, realm.as_str(), &bound, false, Some(&head), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        second
+            .candidates
+            .iter()
+            .map(|row| row.position.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![rows[3].event_id.as_str()],
+        "the absent-HLC row sorts last and closes the window at its head"
+    );
+    assert!(second.exhausted);
+
+    // An Event accepted after the freeze sorts above the head. It is excluded
+    // from the bounded window read and picked up by the unbounded live read.
+    let later = event(&realm, &alice, 5, None, &[&rows[3]]);
+    persist(&pool, &later).await.unwrap();
+    let after_freeze = ascending_scan(&mut conn, realm.as_str(), &floor, true, Some(&head), 10)
+        .await
+        .unwrap();
+    assert!(
+        !after_freeze
+            .candidates
+            .iter()
+            .any(|row| row.position.event_id == later.event_id.as_str())
+    );
+    let live = ascending_scan(&mut conn, realm.as_str(), &head, false, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        live.candidates
+            .iter()
+            .map(|row| row.position.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![later.event_id.as_str()]
+    );
+
+    // Quarantined rows never belonged to the window in either direction.
+    sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
+        .bind::<Binary, _>(rows[2].event_id.token_bytes().to_vec())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let filtered = ascending_scan(&mut conn, realm.as_str(), &floor, true, Some(&head), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        filtered
+            .candidates
+            .iter()
+            .map(|row| row.position.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![rows[1].event_id.as_str(), rows[3].event_id.as_str()]
+    );
+}
+
+#[derive(diesel::QueryableByName)]
+struct PlanLine {
+    #[diesel(sql_type = Text)]
+    plan: String,
+}
+
+/// `EXPLAIN` names its only column `QUERY PLAN`, which is not an identifier a
+/// `QueryableByName` field can carry. A session-local wrapper renames it
+/// without changing the plan being measured.
+async fn explain(conn: &mut crate::AsyncPgConnection, statement: &str) -> String {
+    sql_query(
+        "CREATE OR REPLACE FUNCTION pg_temp.explain_plan(statement text) \
+         RETURNS TABLE(plan text) AS $$ BEGIN \
+         RETURN QUERY EXECUTE 'EXPLAIN (ANALYZE, BUFFERS) ' || statement; \
+         END $$ LANGUAGE plpgsql",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    sql_query("SELECT plan FROM pg_temp.explain_plan($1)")
+        .bind::<Text, _>(statement)
+        .load::<PlanLine>(conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|line| line.plan)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn both_scan_directions_seek_the_projection_index_instead_of_sorting_the_realm() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"timeline explain realm"),
+    ));
+    let alice = actor("ak:did_core:web:alice.example");
+    for seq in 1..=64u64 {
+        persist(
+            &pool,
+            &event(
+                &realm,
+                &alice,
+                seq,
+                Some(&format!("01970e58{seq:04x}-0000-a13f9c2e")),
+                &[],
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let mut conn = pool.get().await.unwrap();
+    // A planner that has never seen the table falls back on defaults; the
+    // question here is which plan it picks once it knows the shape.
+    sql_query("ANALYZE realm_timeline_order")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    // A fixture Realm is small enough that a sequential read wins on cost
+    // alone. Taking that option away is what makes the plan answer the question
+    // this test asks: can the keyset predicate and the delivery order be served
+    // by one index seek, or has one of them drifted off the index?
+    sql_query("SET enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    // Both directions must be one index seek over the same NULL-free
+    // expression tuple the index is built on. A `Sort` node would mean the
+    // keyset predicate and the ordering had drifted apart, which is what turns
+    // a bounded window read back into a Realm read.
+    let tuple = "(causal_depth, (hlc IS NULL), COALESCE(hlc, ''), actor_id, actor_seq, event_id)";
+    let descending = explain(
+        &mut conn,
+        &format!(
+            "SELECT event_id FROM realm_timeline_order WHERE realm_id = '{realm}' \
+             AND {tuple} < (0, false, '01970e580020-0000-a13f9c2e', '', 0, '') \
+             ORDER BY causal_depth DESC, (hlc IS NULL) DESC, COALESCE(hlc, '') DESC, \
+             actor_id DESC, actor_seq DESC, event_id DESC LIMIT 20"
+        ),
+    )
+    .await;
+    let ascending = explain(
+        &mut conn,
+        &format!(
+            "SELECT event_id FROM realm_timeline_order WHERE realm_id = '{realm}' \
+             AND {tuple} >= (0, false, '01970e580020-0000-a13f9c2e', '', 0, '') \
+             AND {tuple} <= (0, true, '', 'zzz', 0, 'zzz') \
+             ORDER BY causal_depth ASC, (hlc IS NULL) ASC, COALESCE(hlc, '') ASC, \
+             actor_id ASC, actor_seq ASC, event_id ASC LIMIT 20"
+        ),
+    )
+    .await;
+    for (direction, plan) in [("descending", &descending), ("ascending", &ascending)] {
+        assert!(
+            plan.contains("realm_timeline_order_projection_idx"),
+            "{direction} window read must seek the projection index, got:\n{plan}"
+        );
+        assert!(
+            !plan.contains("Sort "),
+            "{direction} window read must not sort, got:\n{plan}"
+        );
+        assert!(
+            !plan.contains("Seq Scan"),
+            "{direction} window read must not scan the Realm, got:\n{plan}"
+        );
+    }
+}

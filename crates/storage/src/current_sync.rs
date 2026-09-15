@@ -16,6 +16,15 @@ pub struct CurrentDetailRequest {
     pub all_members: bool,
     /// Exact message window chosen by the server, not arbitrary client IDs.
     pub event_ids: Vec<EventId>,
+    /// Frozen timeline window shape (`client-sync.md` 2.3). These three fields
+    /// decide which Events the window contains, so they belong to the request
+    /// context frozen with the generation: raising the ceiling or changing the
+    /// content filter changes the window range and MUST mint a new generation
+    /// rather than mutate one already in flight. They reach that outcome by
+    /// being part of the request digest a stored progress is checked against.
+    pub timeline_limit: u32,
+    pub event_kinds: Option<Vec<String>>,
+    pub not_event_kinds: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,26 +53,51 @@ pub struct TimelineOrderPosition {
 
 /// Per-Realm progress of one frozen timeline window (`client-sync.md` 2.3).
 ///
-/// `head` is the newest projection-order position at freeze time and is the
-/// inclusive upper bound of the whole window, so Events accepted afterwards
-/// sort above it and stay out; they reach the client as live increments
-/// instead. `delivered` accumulates across every segment of the generation,
-/// which is what makes `window_limit` a cumulative ceiling rather than a
-/// per-frame one.
+/// The window is produced in two phases, because 5.2 makes `limited`,
+/// `preview_only` and `prev_cursor` *window-level*: every segment of one
+/// generation must repeat the same values and the same field presence. None of
+/// those can be answered while segments are still being cut, so selection runs
+/// first and settles the window's extent, and only then does delivery cut it
+/// into byte-sized segments.
+///
+/// Phase 1 (selection) walks down from `head` and keeps the oldest position it
+/// admitted in `floor`; phase 2 (delivery) walks up from `floor` to `head`. The
+/// walk is bounded in both directions by the projection-order index, so neither
+/// phase ever reads the Realm.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineWindowCursor {
+    /// Cumulative ceiling across every segment of this generation, frozen from
+    /// the request. Constant within a window, which is what stops it from
+    /// degenerating into a per-frame limit.
     pub window_limit: u32,
+    /// Newest projection-order position at freeze time and the inclusive upper
+    /// bound of the whole window. Events accepted afterwards sort above it and
+    /// stay out; they reach the client as live increments instead.
     pub head: Option<TimelineOrderPosition>,
-    pub last_delivered: Option<TimelineOrderPosition>,
-    pub delivered: u32,
-    pub complete: bool,
-    /// Window-level `timeline.limited`: earlier history exists beyond it.
-    /// Decided once, when the window is frozen, and repeated in every segment.
+    /// Descending selection continuation (exclusive), so a selection split over
+    /// rounds never re-examines a row.
+    pub select_bound: Option<TimelineOrderPosition>,
+    /// Oldest position selection admitted: the window start, and the boundary
+    /// `prev_cursor` points at.
+    pub floor: Option<TimelineOrderPosition>,
+    pub selected: u32,
+    pub selection_complete: bool,
+    /// Window-level `timeline.limited`: readable history exists below `floor`.
+    /// Decided once, when selection closes, and repeated in every segment.
     pub limited: bool,
+    /// Window-level `timeline.prev_cursor`, minted once when selection closes
+    /// and only when `limited`. It addresses the history before the *whole*
+    /// window, never before the current segment.
+    pub prev_cursor: Option<String>,
     /// Some Event in this window has a provisional depth, so 7.3 forbids
     /// claiming the order is final; the producer falls back to `preview_only`.
     pub provisional: bool,
+    /// Ascending delivery continuation (exclusive), or `None` to start at
+    /// `floor` inclusive.
+    pub deliver_bound: Option<TimelineOrderPosition>,
+    pub delivered: u32,
+    pub complete: bool,
     /// Highest position already delivered as a live increment, starting at
     /// `head` when the window completes. Live increments carry no
     /// `timeline_baseline`, never complete or reopen the frozen window, and

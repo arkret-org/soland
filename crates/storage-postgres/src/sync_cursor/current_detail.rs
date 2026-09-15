@@ -4,7 +4,9 @@ mod tests;
 use arkret_models_collaboration::sync_frames::current_results::{
     CurrentCoverage, CurrentMemberCoverage, CurrentOutcome, CurrentSelector, CurrentTarget,
 };
-use arkret_models_collaboration::sync_frames::demand_sync::RealmDetailBaseline;
+use arkret_models_collaboration::sync_frames::demand_sync::{
+    ACCOUNT_SYNC_MAX_TIMELINE_LIMIT, RealmDetailBaseline,
+};
 use arkret_wire::{CellRef, ScopeRef};
 use soland_storage::{
     CurrentDetailOutcome, CurrentDetailPage, CurrentDetailPhase, CurrentDetailProgress,
@@ -134,24 +136,39 @@ pub(super) async fn page(
     conn.transaction::<_,crate::PgTransactionError,_>(async |conn| {
         // All callers take retention before a clock lock. A clock share lock
         // keeps the verified authority generation stable while building a page.
+        // A stored progress whose frozen request shape or TTL no longer holds is
+        // an invalidated window, not a continuation: 2.3 abolishes it and
+        // rebuilds against the current authorization, and the rebuilt view MUST
+        // NOT be relabelled with the old snapshot. Dropping it here sends it
+        // down the freeze path, which mints a new generation.
+        let now=Utc::now().timestamp_millis();
+        let progress=progress.filter(|progress|progress.request_digest==request_digest
+            && (progress.phase==CurrentDetailPhase::Live || progress.expires_at_ms>now));
+        let continued=progress.is_some();
         if let Some(progress)=progress {
             retention::check(conn,Some(progress.retained_revision),None).await?;
         } else { retention::lock(conn,true).await?; }
         crate::state_resolution::refresh_current_if_expired(conn,request.realm_id.as_str(),registry).await?;
         crate::current_data::rebuild_pending_causal_registers(conn,request.realm_id.as_str(),4096).await?;
-        let cut=if progress.is_some() {
+        let mut cut=if continued {
             sql_query("SELECT revision FROM account_summary_clock WHERE singleton FOR SHARE")
                 .get_result::<SummaryWatermarkRow>(&mut *conn).await?.revision
         } else { retention::freeze_on_connection(conn).await?.0 };
         let Some(authority)=read_authority(conn,&actor,request.realm_id.as_str()).await? else { return Ok(CurrentDetailOutcome::NotFound); };
         if !authority.ready { return Ok(CurrentDetailOutcome::Unavailable); }
-        let now=Utc::now().timestamp_millis();
+        // Eligibility or permission moved under the window. Same rule: the old
+        // generation is abolished and a new one is frozen here, rather than the
+        // Realm being reported unavailable while it is still deliverable.
+        let progress=progress.filter(|progress|progress.authority_revision==authority.revision);
         let mut progress=if let Some(progress)=progress {
-            if progress.request_digest!=request_digest || progress.authority_revision!=authority.revision || (progress.phase!=CurrentDetailPhase::Live && progress.expires_at_ms<=now) {
-                return Ok(CurrentDetailOutcome::Unavailable);
-            }
             progress.clone()
         } else {
+            if continued {
+                // The continuation path took a shared retention lock and a
+                // plain watermark; a rebuilt generation needs its own frozen
+                // cut and retention reservation.
+                cut=retention::freeze_on_connection(conn).await?.0;
+            }
             let mut strands=match &request.strand_ids {
                 Some(strands)=>strands.clone(),
                 None=>authority.default_strand_id.as_ref().map(|id|id.parse()).transpose().map_err(error)?.into_iter().collect(),
@@ -166,11 +183,12 @@ pub(super) async fn page(
                 coverage:CurrentCoverage {realm:true,strand_ids:strands,members:if request.all_members {CurrentMemberCoverage::All} else {CurrentMemberCoverage::Selected {actor_ids:vec![]}},event_ids:events},
                 phase:CurrentDetailPhase::Priority,scan_revision:0,scan_selector:String::new(),
                 // Frozen in the same transaction and generation as the current
-                // cut (`current-results.md` 4). `window_limit` is filled in by
-                // the caller, which is the only side that knows the merged
-                // request ceiling; a Realm with no accepted Event freezes an
-                // explicitly empty window rather than staying pending.
+                // cut (`current-results.md` 4). `window_limit` comes from the
+                // frozen request, so it cannot move inside a generation; a Realm
+                // with no accepted Event freezes an explicitly empty window
+                // rather than staying pending.
                 timeline: soland_storage::TimelineWindowCursor {
+                    window_limit: request.timeline_limit.min(ACCOUNT_SYNC_MAX_TIMELINE_LIMIT),
                     head: crate::timeline_order::window_head(conn, request.realm_id.as_str()).await?,
                     ..Default::default()
                 },

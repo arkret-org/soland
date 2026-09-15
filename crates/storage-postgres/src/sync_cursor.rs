@@ -191,16 +191,21 @@ impl SyncCursorStore for PgSyncCursorStore {
             .map_err(PersistenceError::database)?;
         crate::timeline_order::window_scan(&mut conn, realm_id, head, bound, row_limit).await
     }
-    async fn timeline_live_scan(
+    async fn timeline_ascending_scan(
         &self,
         realm_id: &str,
-        after: &soland_storage::TimelineOrderPosition,
+        from: &soland_storage::TimelineOrderPosition,
+        inclusive: bool,
+        upper: Option<&soland_storage::TimelineOrderPosition>,
         row_limit: usize,
     ) -> PersistenceResult<soland_storage::TimelineWindowScan> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        crate::timeline_order::live_scan(&mut conn, realm_id, after, row_limit).await
+        crate::timeline_order::ascending_scan(
+            &mut conn, realm_id, from, inclusive, upper, row_limit,
+        )
+        .await
     }
     async fn timeline_window_head(
         &self,
