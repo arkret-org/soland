@@ -157,7 +157,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         &body.verification_method,
     )
     .map_err(|error| AppError::param_invalid(format!("public_key invalid: {error}")))?
-    .runtime_request_digest;
+    .public_key_digest;
     let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
     let attestation_digest =
         arkret_signatures::agent::agent_runtime_attestation_digest(runtime_attestation.as_ref())
@@ -2149,7 +2149,7 @@ pub(super) fn runtime_public_key_digest(
     let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     arkret_signatures::agent::validate_agent_runtime_public_key(public_key, &verification_method)
-        .map(|validated| validated.runtime_request_digest.as_str().to_owned())
+        .map(|validated| validated.public_key_digest.as_str().to_owned())
         .map_err(|error| AppError::param_invalid(format!("public_key is invalid: {error}")))
 }
 

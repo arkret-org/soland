@@ -1,6 +1,8 @@
 //! Account detail turns reserve a whole frame for bounded current results.
 use arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame;
-use arkret_models_collaboration::sync_frames::current_results::MAX_ATOMIC_CURRENT_ENTRY_CANONICAL_BYTES;
+use arkret_models_collaboration::sync_frames::current_results::{
+    DETAIL_FRAME_ENVELOPE_RESERVATION, MAX_ATOMIC_CURRENT_ENTRY_CANONICAL_BYTES,
+};
 use arkret_models_collaboration::sync_frames::demand_sync::{
     ACCOUNT_SYNC_MAX_FRAME_BYTES, ACCOUNT_SYNC_MAX_TIMELINE_LIMIT,
 };
@@ -14,7 +16,9 @@ use super::*;
 /// current entry plus this reservation is the 8 MiB frame bound, so the
 /// timeline is cut against whatever is left once this reservation and the
 /// content the frame already carries are accounted for.
-const DETAIL_FRAME_ENVELOPE_RESERVATION: usize = 1024 * 1024;
+///
+/// The value is normative, so it is taken from the spec-generated SDK constant
+/// rather than restated here.
 
 /// Canonical bytes the timeline may still add to this frame.
 ///
