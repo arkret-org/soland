@@ -26,6 +26,51 @@ pub enum CurrentDetailPhase {
     Live,
 }
 
+/// One position in the `conformance/encoding.md` 7.3 projection order.
+///
+/// Carried in the cursor handle so a window can resume across rounds without
+/// rereading what it already delivered. `hlc` is `None` for a genuine absent
+/// HLC and never a substitute value: 7.3 sorts absent last, and any filler
+/// would move the Event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineOrderPosition {
+    pub causal_depth: i64,
+    pub hlc: Option<String>,
+    pub actor_id: String,
+    pub actor_seq: i64,
+    pub event_id: String,
+}
+
+/// Per-Realm progress of one frozen timeline window (`client-sync.md` 2.3).
+///
+/// `head` is the newest projection-order position at freeze time and is the
+/// inclusive upper bound of the whole window, so Events accepted afterwards
+/// sort above it and stay out; they reach the client as live increments
+/// instead. `delivered` accumulates across every segment of the generation,
+/// which is what makes `window_limit` a cumulative ceiling rather than a
+/// per-frame one.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineWindowCursor {
+    pub window_limit: u32,
+    pub head: Option<TimelineOrderPosition>,
+    pub last_delivered: Option<TimelineOrderPosition>,
+    pub delivered: u32,
+    pub complete: bool,
+    /// Window-level `timeline.limited`: earlier history exists beyond it.
+    /// Decided once, when the window is frozen, and repeated in every segment.
+    pub limited: bool,
+    /// Some Event in this window has a provisional depth, so 7.3 forbids
+    /// claiming the order is final; the producer falls back to `preview_only`.
+    pub provisional: bool,
+    /// Highest position already delivered as a live increment, starting at
+    /// `head` when the window completes. Live increments carry no
+    /// `timeline_baseline`, never complete or reopen the frozen window, and
+    /// continue from here so an Event accepted mid-delivery is delivered once.
+    pub live_position: Option<TimelineOrderPosition>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CurrentDetailProgress {
@@ -39,6 +84,11 @@ pub struct CurrentDetailProgress {
     pub phase: CurrentDetailPhase,
     pub scan_revision: i64,
     pub scan_selector: String,
+    /// Timeline window state of the same frozen generation. `current-results.md`
+    /// 4 binds both to one generation, so they share this record and its
+    /// `snapshot_cursor`; their completion flags stay independent.
+    #[serde(default)]
+    pub timeline: TimelineWindowCursor,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +96,34 @@ pub struct CurrentDetailPage {
     pub progress: CurrentDetailProgress,
     pub entries: Vec<CurrentResultEntry>,
     pub baseline: Option<RealmDetailBaseline>,
+}
+
+/// One candidate row of a frozen timeline window, before the caller applies
+/// per-Event visibility.
+///
+/// Authorization is not a storage predicate here: history access, Circle scope
+/// and redaction need the session and the projection, so the reader returns
+/// candidates in projection order and the HTTP layer decides. The scan stays
+/// bounded so that decision cannot degenerate into reading the Realm.
+#[derive(Clone, Debug)]
+pub struct TimelineWindowCandidate {
+    pub position: TimelineOrderPosition,
+    pub kind: String,
+    pub provisional: bool,
+    pub envelope: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub sender: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TimelineWindowScan {
+    pub candidates: Vec<TimelineWindowCandidate>,
+    /// No further rows exist at or below the requested bound.
+    pub exhausted: bool,
+    /// The scan stopped on its own row ceiling rather than on exhaustion, so
+    /// the caller must continue from the last candidate instead of concluding
+    /// the window is finished.
+    pub scan_capped: bool,
 }
 
 #[derive(Clone, Debug)]

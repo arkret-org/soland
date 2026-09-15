@@ -203,3 +203,113 @@ async fn an_unresolved_predecessor_marks_the_order_provisional_and_propagates() 
     );
     assert_eq!(child_row.causal_depth, 1);
 }
+
+#[tokio::test]
+async fn a_frozen_window_scan_includes_its_head_excludes_its_continuation_and_skips_quarantine() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"timeline window realm"),
+    ));
+    let alice = actor("ak:did_core:web:alice.example");
+    let older = event(&realm, &alice, 1, Some("01970e589d21-0000-a13f9c2e"), &[]);
+    let middle = event(
+        &realm,
+        &alice,
+        2,
+        Some("01970e589d22-0000-a13f9c2e"),
+        &[&older],
+    );
+    let newest = event(
+        &realm,
+        &alice,
+        3,
+        Some("01970e589d23-0000-a13f9c2e"),
+        &[&middle],
+    );
+    persist(&pool, &older).await.unwrap();
+    persist(&pool, &middle).await.unwrap();
+    persist(&pool, &newest).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    let head = window_head(&mut conn, realm.as_str())
+        .await
+        .unwrap()
+        .expect("a Realm with accepted Events has a head");
+    assert_eq!(head.event_id, newest.event_id.as_str());
+
+    // The head is the inclusive upper bound of the window, so the first
+    // segment must contain it; excluding it would silently drop the newest
+    // message from every window.
+    let first = window_scan(&mut conn, realm.as_str(), &head, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        first
+            .candidates
+            .iter()
+            .map(|candidate| candidate.position.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![newest.event_id.as_str(), middle.event_id.as_str()]
+    );
+    assert!(first.scan_capped && !first.exhausted);
+    assert_eq!(first.candidates[0].kind, "ak.message.create");
+    assert!(first.candidates[0].sender.is_some());
+
+    // The continuation is exclusive, so a resumed segment never re-delivers
+    // the row the previous one ended on.
+    let bound = first.candidates.last().map(|row| row.position.clone());
+    let second = window_scan(&mut conn, realm.as_str(), &head, bound.as_ref(), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        second
+            .candidates
+            .iter()
+            .map(|candidate| candidate.position.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![older.event_id.as_str()]
+    );
+    assert!(second.exhausted);
+
+    // An Event accepted after the freeze sorts above the head and stays out of
+    // the window; it reaches the client as a live increment instead.
+    let later = event(
+        &realm,
+        &alice,
+        4,
+        Some("01970e589d24-0000-a13f9c2e"),
+        &[&newest],
+    );
+    persist(&pool, &later).await.unwrap();
+    let after_freeze = window_scan(&mut conn, realm.as_str(), &head, None, 10)
+        .await
+        .unwrap();
+    assert!(
+        !after_freeze
+            .candidates
+            .iter()
+            .any(|candidate| candidate.position.event_id == later.event_id.as_str()),
+        "the frozen head must keep later Events out of an in-flight window"
+    );
+
+    // A quarantined row never belonged to the window. Excluding it in the scan
+    // rather than above keeps a fork from eating the window's scan budget.
+    sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
+        .bind::<Binary, _>(middle.event_id.token_bytes().to_vec())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let filtered = window_scan(&mut conn, realm.as_str(), &head, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        filtered
+            .candidates
+            .iter()
+            .map(|candidate| candidate.position.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![newest.event_id.as_str(), older.event_id.as_str()]
+    );
+}

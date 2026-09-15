@@ -74,6 +74,7 @@ const ACCOUNT_DATA_CHANGE_RETENTION_DAYS: i64 = 90;
 const ACCOUNT_DATA_CHANGE_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
 
 mod snapshot;
+mod timeline_window;
 pub(crate) use snapshot::*;
 mod current_details;
 mod cursor;

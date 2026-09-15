@@ -29,6 +29,19 @@ pub trait CursorStorePort: Send + Sync {
         byte_budget: usize,
         registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> ServiceResult<soland_storage::CurrentDetailOutcome>;
+    async fn timeline_window_scan(
+        &self,
+        realm_id: &str,
+        head: &soland_storage::TimelineOrderPosition,
+        bound: Option<&soland_storage::TimelineOrderPosition>,
+        row_limit: usize,
+    ) -> ServiceResult<soland_storage::TimelineWindowScan>;
+    async fn timeline_live_scan(
+        &self,
+        realm_id: &str,
+        after: &soland_storage::TimelineOrderPosition,
+        row_limit: usize,
+    ) -> ServiceResult<soland_storage::TimelineWindowScan>;
     async fn account_summary_has_join(
         &self,
         actor_key: &str,
@@ -170,6 +183,29 @@ impl SyncService {
     ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
         self.cursors
             .current_detail_page(request, progress, byte_budget, registry)
+            .await
+    }
+
+    pub async fn timeline_window_scan(
+        &self,
+        realm_id: &str,
+        head: &soland_storage::TimelineOrderPosition,
+        bound: Option<&soland_storage::TimelineOrderPosition>,
+        row_limit: usize,
+    ) -> ServiceResult<soland_storage::TimelineWindowScan> {
+        self.cursors
+            .timeline_window_scan(realm_id, head, bound, row_limit)
+            .await
+    }
+
+    pub async fn timeline_live_scan(
+        &self,
+        realm_id: &str,
+        after: &soland_storage::TimelineOrderPosition,
+        row_limit: usize,
+    ) -> ServiceResult<soland_storage::TimelineWindowScan> {
+        self.cursors
+            .timeline_live_scan(realm_id, after, row_limit)
             .await
     }
 
@@ -340,6 +376,23 @@ mod tests {
             _: &dyn arkret_state::state::CellStateRegistry,
         ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
             Ok(soland_storage::CurrentDetailOutcome::Unavailable)
+        }
+        async fn timeline_window_scan(
+            &self,
+            _: &str,
+            _: &soland_storage::TimelineOrderPosition,
+            _: Option<&soland_storage::TimelineOrderPosition>,
+            _: usize,
+        ) -> ServiceResult<soland_storage::TimelineWindowScan> {
+            Ok(soland_storage::TimelineWindowScan::default())
+        }
+        async fn timeline_live_scan(
+            &self,
+            _: &str,
+            _: &soland_storage::TimelineOrderPosition,
+            _: usize,
+        ) -> ServiceResult<soland_storage::TimelineWindowScan> {
+            Ok(soland_storage::TimelineWindowScan::default())
         }
         async fn account_summary_has_join(&self, _: &str, _: &str) -> ServiceResult<bool> {
             Ok(false)

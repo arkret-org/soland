@@ -165,6 +165,15 @@ pub(super) async fn page(
                 expires_at_ms:now+3_600_000,
                 coverage:CurrentCoverage {realm:true,strand_ids:strands,members:if request.all_members {CurrentMemberCoverage::All} else {CurrentMemberCoverage::Selected {actor_ids:vec![]}},event_ids:events},
                 phase:CurrentDetailPhase::Priority,scan_revision:0,scan_selector:String::new(),
+                // Frozen in the same transaction and generation as the current
+                // cut (`current-results.md` 4). `window_limit` is filled in by
+                // the caller, which is the only side that knows the merged
+                // request ceiling; a Realm with no accepted Event freezes an
+                // explicitly empty window rather than staying pending.
+                timeline: soland_storage::TimelineWindowCursor {
+                    head: crate::timeline_order::window_head(conn, request.realm_id.as_str()).await?,
+                    ..Default::default()
+                },
             }
         };
         let was_baseline=progress.phase!=CurrentDetailPhase::Live;

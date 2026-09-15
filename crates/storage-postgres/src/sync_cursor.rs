@@ -179,6 +179,38 @@ impl SyncCursorStore for PgSyncCursorStore {
     ) -> PersistenceResult<soland_storage::CurrentDetailOutcome> {
         current_detail::page(&self.pool, request, progress, byte_budget, registry).await
     }
+    async fn timeline_window_scan(
+        &self,
+        realm_id: &str,
+        head: &soland_storage::TimelineOrderPosition,
+        bound: Option<&soland_storage::TimelineOrderPosition>,
+        row_limit: usize,
+    ) -> PersistenceResult<soland_storage::TimelineWindowScan> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::timeline_order::window_scan(&mut conn, realm_id, head, bound, row_limit).await
+    }
+    async fn timeline_live_scan(
+        &self,
+        realm_id: &str,
+        after: &soland_storage::TimelineOrderPosition,
+        row_limit: usize,
+    ) -> PersistenceResult<soland_storage::TimelineWindowScan> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::timeline_order::live_scan(&mut conn, realm_id, after, row_limit).await
+    }
+    async fn timeline_window_head(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Option<soland_storage::TimelineOrderPosition>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::timeline_order::window_head(&mut conn, realm_id).await
+    }
     async fn account_summary_has_join(
         &self,
         actor_key: &str,

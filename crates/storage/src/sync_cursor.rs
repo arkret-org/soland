@@ -76,6 +76,37 @@ pub trait SyncCursorStore: Send + Sync {
         byte_budget: usize,
         registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> PersistenceResult<super::CurrentDetailOutcome>;
+    /// Bounded scan of one frozen timeline window in projection order, newest
+    /// first (`client-sync.md` 2.3).
+    ///
+    /// `bound` is the exclusive continuation position, or `None` to start at
+    /// the window head. `row_limit` caps the rows examined, not the rows the
+    /// caller keeps: visibility is decided above this layer, so a window whose
+    /// newest rows are all invisible must still not turn into a Realm read.
+    async fn timeline_window_scan(
+        &self,
+        realm_id: &str,
+        head: &super::TimelineOrderPosition,
+        bound: Option<&super::TimelineOrderPosition>,
+        row_limit: usize,
+    ) -> PersistenceResult<super::TimelineWindowScan>;
+    /// Bounded scan of Events above `after` in ascending projection order.
+    ///
+    /// This is the live increment path: everything accepted after a window was
+    /// frozen sorts above its head, so it is delivered here instead of joining
+    /// a window already in flight.
+    async fn timeline_live_scan(
+        &self,
+        realm_id: &str,
+        after: &super::TimelineOrderPosition,
+        row_limit: usize,
+    ) -> PersistenceResult<super::TimelineWindowScan>;
+    /// Newest projection-order position of a Realm, used to freeze a window.
+    /// `None` when the Realm has no accepted Event at all.
+    async fn timeline_window_head(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Option<super::TimelineOrderPosition>>;
     async fn account_summary_has_join(
         &self,
         actor_key: &str,

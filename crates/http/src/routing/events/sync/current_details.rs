@@ -72,8 +72,33 @@ async fn frame_for_realm(
     let mut frontier = false;
     match outcome {
         Ok(CurrentDetailOutcome::Page(page)) => {
+            let mut page = page;
+            // The timeline window shares this generation's `snapshot_cursor`
+            // (`current-results.md` 4) and advances on the same turn, so its
+            // cursor is folded back into the progress this frame commits.
+            let window = super::timeline_window::next_segment(
+                state,
+                session,
+                filter,
+                realm,
+                &page.progress.snapshot_cursor.clone(),
+                &mut page.progress.timeline,
+            )
+            .await;
             let old = positions.insert(realm.to_string(), page.progress.clone());
-            if page.entries.is_empty() && page.baseline.is_none() {
+            if let Some(window) = window {
+                entry.insert(
+                    "timeline".into(),
+                    serde_json::to_value(window.timeline).expect("typed timeline"),
+                );
+                if let Some(baseline) = window.baseline {
+                    entry.insert(
+                        "timeline_baseline".into(),
+                        serde_json::to_value(baseline).expect("typed timeline baseline"),
+                    );
+                }
+            }
+            if entry.is_empty() && page.entries.is_empty() && page.baseline.is_none() {
                 if old.as_ref().and_then(|old| serde_json::to_value(old).ok())
                     == serde_json::to_value(&page.progress).ok()
                 {
@@ -89,7 +114,9 @@ async fn frame_for_realm(
                         serde_json::to_value(roster).expect("typed roster"),
                     );
                 }
-                entry.insert("current".into(), json!({"entries":page.entries}));
+                if !page.entries.is_empty() {
+                    entry.insert("current".into(), json!({"entries":page.entries}));
+                }
                 if let Some(baseline) = page.baseline {
                     entry.insert(
                         "baseline".into(),

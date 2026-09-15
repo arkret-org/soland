@@ -11,6 +11,166 @@
 //! replaces read every Event of a Realm and sorted by `received_at`, which
 //! 2.3 forbids for the window and 7.3 forbids as an ordering.
 
+/// Newest projection-order position of a Realm, or `None` when it holds no
+/// accepted Event. Freezing a window means pinning this value: everything
+/// accepted afterwards sorts above it and reaches the client as a live
+/// increment instead of silently joining a window already in flight.
+pub(crate) async fn window_head(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+) -> PersistenceResult<Option<soland_storage::TimelineOrderPosition>> {
+    Ok(timeline_page(conn, realm_id, None, 1)
+        .await?
+        .into_iter()
+        .next()
+        .map(position_of))
+}
+
+fn position_of(row: TimelineOrderRow) -> soland_storage::TimelineOrderPosition {
+    soland_storage::TimelineOrderPosition {
+        causal_depth: row.causal_depth,
+        hlc: row.hlc,
+        actor_id: row.actor_id,
+        actor_seq: row.actor_seq,
+        event_id: row.event_id,
+    }
+}
+
+#[derive(QueryableByName)]
+struct WindowCandidateRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = BigInt)]
+    causal_depth: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    hlc: Option<String>,
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+    #[diesel(sql_type = BigInt)]
+    actor_seq: i64,
+    #[diesel(sql_type = Text)]
+    kind: String,
+    #[diesel(sql_type = Bool)]
+    provisional: bool,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    envelope: serde_json::Value,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    received_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Bounded scan of Events strictly above `after`, oldest first.
+///
+/// This is the live increment path. Everything accepted after a window was
+/// frozen sorts above its head, so it is delivered here instead of joining a
+/// window already in flight. It shares the window scan's expression tuple, so
+/// live and frozen delivery agree on one order; only direction and strictness
+/// differ.
+pub(crate) async fn live_scan(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    after: &soland_storage::TimelineOrderPosition,
+    row_limit: usize,
+) -> PersistenceResult<soland_storage::TimelineWindowScan> {
+    let rows = sql_query(
+        "SELECT o.event_id, o.causal_depth, o.hlc, o.actor_id, o.actor_seq, o.kind, o.provisional, \
+         e.envelope, e.received_at \
+         FROM realm_timeline_order o JOIN canonical_events e ON e.pk = o.event_pk \
+         WHERE o.realm_id = $1 AND e.state = 'accepted' \
+         AND (o.causal_depth, (o.hlc IS NULL), COALESCE(o.hlc, ''), o.actor_id, o.actor_seq, o.event_id) \
+             > ($2, $3, $4, $5, $6, $7) \
+         ORDER BY o.causal_depth ASC, (o.hlc IS NULL) ASC, COALESCE(o.hlc, '') ASC, \
+         o.actor_id ASC, o.actor_seq ASC, o.event_id ASC LIMIT $8",
+    )
+    .bind::<Text, _>(realm_id)
+    .bind::<BigInt, _>(after.causal_depth)
+    .bind::<Bool, _>(after.hlc.is_none())
+    .bind::<Text, _>(after.hlc.clone().unwrap_or_default())
+    .bind::<Text, _>(&after.actor_id)
+    .bind::<BigInt, _>(after.actor_seq)
+    .bind::<Text, _>(&after.event_id)
+    .bind::<BigInt, _>(row_limit as i64)
+    .load::<WindowCandidateRow>(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let scan_capped = rows.len() == row_limit;
+    Ok(soland_storage::TimelineWindowScan {
+        exhausted: !scan_capped,
+        scan_capped,
+        candidates: rows.into_iter().map(candidate_of).collect(),
+    })
+}
+
+/// Bounded scan of one frozen window, newest first, joined to the accepted
+/// envelopes the caller needs in order to decide visibility.
+///
+/// `head` is the inclusive upper bound of the whole window; `bound` is the
+/// exclusive continuation. Quarantined rows are excluded here rather than by
+/// the caller: they never belonged to the window, so letting them consume scan
+/// budget would let a fork shrink an honest window.
+pub(crate) async fn window_scan(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    head: &soland_storage::TimelineOrderPosition,
+    bound: Option<&soland_storage::TimelineOrderPosition>,
+    row_limit: usize,
+) -> PersistenceResult<soland_storage::TimelineWindowScan> {
+    let upper = bound.unwrap_or(head);
+    let inclusive = bound.is_none();
+    let comparison = if inclusive { "<=" } else { "<" };
+    let rows = sql_query(format!(
+        "SELECT o.event_id, o.causal_depth, o.hlc, o.actor_id, o.actor_seq, o.kind, o.provisional,          e.envelope, e.received_at          FROM realm_timeline_order o JOIN canonical_events e ON e.pk = o.event_pk          WHERE o.realm_id = $1 AND e.state = 'accepted'          AND (o.causal_depth, (o.hlc IS NULL), COALESCE(o.hlc, ''), o.actor_id, o.actor_seq, o.event_id)              {comparison} ($2, $3, $4, $5, $6, $7)          ORDER BY o.causal_depth DESC, (o.hlc IS NULL) DESC, COALESCE(o.hlc, '') DESC,          o.actor_id DESC, o.actor_seq DESC, o.event_id DESC LIMIT $8"
+    ))
+    .bind::<Text, _>(realm_id)
+    .bind::<BigInt, _>(upper.causal_depth)
+    .bind::<Bool, _>(upper.hlc.is_none())
+    .bind::<Text, _>(upper.hlc.clone().unwrap_or_default())
+    .bind::<Text, _>(&upper.actor_id)
+    .bind::<BigInt, _>(upper.actor_seq)
+    .bind::<Text, _>(&upper.event_id)
+    .bind::<BigInt, _>(row_limit as i64)
+    .load::<WindowCandidateRow>(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let scan_capped = rows.len() == row_limit;
+    Ok(soland_storage::TimelineWindowScan {
+        exhausted: !scan_capped,
+        scan_capped,
+        candidates: rows.into_iter().map(candidate_of).collect(),
+    })
+}
+
+fn candidate_of(row: WindowCandidateRow) -> soland_storage::TimelineWindowCandidate {
+    // `created_at` is the producer-signed instant the visibility rules compare
+    // against. `received_at` is only the fallback for an envelope that predates
+    // the field, and never participates in ordering.
+    let created_at = row
+        .envelope
+        .get("created_at")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or(row.received_at);
+    let sender = row
+        .envelope
+        .get("actor_id")
+        .and_then(|actor| serde_json::from_value::<arkret_wire::ActorId>(actor.clone()).ok())
+        .and_then(|actor| actor.canonical_key().ok());
+    soland_storage::TimelineWindowCandidate {
+        position: soland_storage::TimelineOrderPosition {
+            causal_depth: row.causal_depth,
+            hlc: row.hlc,
+            actor_id: row.actor_id,
+            actor_seq: row.actor_seq,
+            event_id: row.event_id,
+        },
+        kind: row.kind,
+        provisional: row.provisional,
+        envelope: row.envelope,
+        created_at,
+        sender,
+    }
+}
+
 #[cfg(test)]
 mod postgres_tests;
 
