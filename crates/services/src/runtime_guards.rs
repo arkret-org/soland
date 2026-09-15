@@ -10,6 +10,16 @@ const PEER_KEYPACKAGE_CLAIM_TRACKER_MAX_ENTRIES: usize = 16_384;
 const REALM_JOIN_BOOTSTRAP_WINDOW: Duration = Duration::seconds(60);
 const REALM_JOIN_BOOTSTRAP_MAX_PER_WINDOW: u32 = 10;
 const REALM_JOIN_BOOTSTRAP_TRACKER_MAX_ENTRIES: usize = 16_384;
+/// `crypto-media/device-lifecycle.md` §2.1.1 clauses 5 and 8 require the
+/// authenticated pairing-handoff surfaces to be rate limited per caller device,
+/// per `AccountId` and for the service as a whole. The tiers are cumulative:
+/// one noisy device cannot spend the account budget, and no account can spend
+/// the service budget.
+const DEVICE_PAIRING_HANDOFF_WINDOW: Duration = Duration::seconds(60);
+const DEVICE_PAIRING_HANDOFF_MAX_PER_DEVICE_WINDOW: u32 = 10;
+const DEVICE_PAIRING_HANDOFF_MAX_PER_ACCOUNT_WINDOW: u32 = 30;
+const DEVICE_PAIRING_HANDOFF_MAX_PER_SERVICE_WINDOW: u32 = 600;
+const DEVICE_PAIRING_HANDOFF_TRACKER_MAX_ENTRIES: usize = 32_768;
 const KEY_BACKUP_DOWNLOAD_WINDOW: Duration = Duration::hours(24);
 const KEY_BACKUP_DOWNLOAD_TRACKER_MAX_ENTRIES: usize = 16_384;
 pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT: u32 = 64;
@@ -48,6 +58,7 @@ pub struct RuntimeGuardService {
 struct RuntimeGuards {
     peer_keypackage_claims: Mutex<BTreeMap<(String, String), WindowRecord>>,
     realm_join_bootstraps: Mutex<BTreeMap<(String, String), WindowRecord>>,
+    device_pairing_handoffs: Mutex<BTreeMap<String, WindowRecord>>,
     key_backup_downloads: Mutex<BTreeMap<String, WindowRecord>>,
     moderation_reports: Mutex<BTreeMap<String, WindowRecord>>,
 }
@@ -65,6 +76,7 @@ impl Default for RuntimeGuardService {
             inner: Arc::new(RuntimeGuards {
                 peer_keypackage_claims: Mutex::new(BTreeMap::new()),
                 realm_join_bootstraps: Mutex::new(BTreeMap::new()),
+                device_pairing_handoffs: Mutex::new(BTreeMap::new()),
                 key_backup_downloads: Mutex::new(BTreeMap::new()),
                 moderation_reports: Mutex::new(BTreeMap::new()),
             }),
@@ -89,6 +101,45 @@ impl RuntimeGuardService {
             PEER_KEYPACKAGE_CLAIM_WINDOW,
             PEER_KEYPACKAGE_CLAIM_TRACKER_MAX_ENTRIES,
         ) > PEER_KEYPACKAGE_CLAIM_MAX_PER_WINDOW
+    }
+
+    /// Charge one authenticated device-pairing handoff attempt (finalize or
+    /// code claim) against all three tiers. Every tier is charged on every
+    /// call so a caller cannot dodge the account ceiling by rotating devices.
+    pub fn device_pairing_handoff_rate_limited(
+        &self,
+        caller_device_id: &str,
+        account_key: &str,
+    ) -> bool {
+        let mut records = self.inner.device_pairing_handoffs.lock();
+        let now = Utc::now();
+        prune_window_records(&mut records, now - DEVICE_PAIRING_HANDOFF_WINDOW);
+        let tiers = [
+            (
+                format!("device:{caller_device_id}"),
+                DEVICE_PAIRING_HANDOFF_MAX_PER_DEVICE_WINDOW,
+            ),
+            (
+                format!("account:{account_key}"),
+                DEVICE_PAIRING_HANDOFF_MAX_PER_ACCOUNT_WINDOW,
+            ),
+            (
+                "service".to_owned(),
+                DEVICE_PAIRING_HANDOFF_MAX_PER_SERVICE_WINDOW,
+            ),
+        ];
+        let mut limited = false;
+        for (key, ceiling) in tiers {
+            let count = record_window_attempt(
+                &mut records,
+                key,
+                now,
+                DEVICE_PAIRING_HANDOFF_WINDOW,
+                DEVICE_PAIRING_HANDOFF_TRACKER_MAX_ENTRIES,
+            );
+            limited |= count > ceiling;
+        }
+        limited
     }
 
     pub fn realm_join_bootstrap_rate_limited(

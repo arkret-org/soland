@@ -133,7 +133,7 @@ async fn account_device_pair_body(state: AppState, new_device_id: &str) -> Value
     let mut stage_response = TestClient::post("http://server/_arkret/open/device-pairing/requests")
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&stage_request))
-        .send(&app_from_state(state))
+        .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(stage_response.status_code, Some(StatusCode::OK));
     let stage: arkret_models_collaboration::http_bodies::DevicePairingStageOutcome =
@@ -154,8 +154,16 @@ async fn account_device_pair_body(state: AppState, new_device_id: &str) -> Value
         arkret_wire::NonEmptyString::new("HPKE-X25519-HKDF-SHA256".to_owned()).unwrap(),
     ];
     let target_key = &pair_device_signing_key(new_device_id);
+    let account_id = arkret_wire::AccountId::new(
+        arkret_wire::project_did_to_core_id(
+            &arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+        )
+        .unwrap(),
+        state.service_core_id(),
+    );
     let target_proof = arkret_signatures::device_pairing::sign_device_pairing_target_proof(
         UnsignedDevicePairingTargetProof::new(
+            account_id.clone(),
             arkret_wire::DeviceId::new(new_device_id.to_owned()).unwrap(),
             arkret_wire::DidKey::new(format!(
                 "did:key:{}",
@@ -172,6 +180,18 @@ async fn account_device_pair_body(state: AppState, new_device_id: &str) -> Value
         target_key,
     )
     .unwrap();
+    // `staged -> ready_for_claim`: the gate only accepts a finalized record, and
+    // the fixture attaches the same proof the wire finalize call would.
+    state
+        .test_device_pairings()
+        .finalize(
+            stage.device_pairing_request_id.as_str(),
+            &account_id,
+            serde_json::to_value(&target_proof).unwrap(),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("finalize the staged device pairing fixture");
     let actor = "did:web:alice.example";
     let authorizing_device =
         arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned())

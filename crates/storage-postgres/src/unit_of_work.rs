@@ -1164,7 +1164,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                          WHERE pairing.device_pairing_request_id = $1 \
                            AND candidate.pairing_code = $2 \
                            AND candidate.new_device_pubkey = $3 \
-                           AND candidate.state = 'pending_authorization' \
+                           AND candidate.state = 'ready_for_claim' \
                            AND candidate.expires_at > $7 \
                          RETURNING 1 \
                      ) \

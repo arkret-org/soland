@@ -7,13 +7,14 @@
 //!   `ak.open.device_pairing.read.resolve.v1`
 //! - `POST /_arkret/open/device-pairing/requests/status`  — `ak.open.device_pairing.read.status.v1`
 //!
-//! Security: the staged row is account-less and grants nothing until a verified
-//! device drives the authenticated `ak.gate.account.command.pair_device.v1`. These
-//! handlers take NO `AuthArgs` and never call `authenticated_session`. `resolve`
-//! fails closed with a UNIFORM not-found for absent, wrong-code,
-//! expired, and already-authorized records. `status` uses the same not-found for
-//! absent/wrong-code credentials, while a valid credential can observe pending,
-//! authorized, or expired.
+//! Security: the staged row is account-less and grants nothing until the
+//! authenticated finalize call binds it to an exact `AccountId` and a verified
+//! device then drives `ak.gate.account.command.pair_device.v1`. These handlers
+//! take NO `AuthArgs` and never call `authenticated_session`. `resolve` fails
+//! closed with a UNIFORM not-found for absent, wrong-code, expired, still
+//! `staged`, and already-authorized records. `status` uses the same not-found
+//! for absent/wrong-code credentials, while a valid credential can observe
+//! staged, ready_for_claim, authorized, or expired.
 //! The resolve token is accepted only in the JSON body, never the URL.
 
 use arkret_identifiers::{DeviceId, EventId};
@@ -96,7 +97,9 @@ pub(super) async fn stage_device_pairing(
         server_nonce: server_nonce.as_str().to_owned(),
         display_name,
         device_metadata,
-        state: DevicePairingState::PendingAuthorization,
+        account_id: None,
+        target_proof: None,
+        state: DevicePairingState::Staged,
         device_id: None,
         authorized_by_actor_id: None,
         authorized_event_ref: None,
@@ -162,10 +165,11 @@ pub(super) async fn resolve_device_pairing(
         .map_err(|error| AppError::internal(format!("device pairing lookup failed: {error}")))?
         .ok_or_else(device_pairing_not_found)?;
 
-    // Uniform anti-enumeration masking: a wrong code, an expired window, or an
-    // already-authorized/expired row is indistinguishable from an unknown id.
+    // Uniform anti-enumeration masking: a wrong code, an expired window, a
+    // record that has not been finalized, or an already-authorized/expired row
+    // is indistinguishable from an unknown id.
     if record.pairing_code != pairing_code.as_str()
-        || record.state != DevicePairingState::PendingAuthorization
+        || record.state != DevicePairingState::ReadyForClaim
         || record.expires_at <= chrono::Utc::now()
     {
         return Err(device_pairing_not_found());
@@ -250,11 +254,11 @@ fn device_pairing_status_outcome(
     now: chrono::DateTime<chrono::Utc>,
 ) -> JsonResult<DevicePairingStatusOutcome> {
     let (state, device_id, authorized_event_ref) = match record.state {
-        DevicePairingState::PendingAuthorization => {
+        open_state @ (DevicePairingState::Staged | DevicePairingState::ReadyForClaim) => {
             if record.expires_at <= now {
                 (DevicePairingState::Expired, None, None)
             } else {
-                (DevicePairingState::PendingAuthorization, None, None)
+                (open_state, None, None)
             }
         }
         DevicePairingState::Authorized => {

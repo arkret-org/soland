@@ -858,6 +858,36 @@ impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
             .await?)
     }
 
+    async fn get_by_pairing_code(
+        &self,
+        pairing_code: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::DevicePairingState>> {
+        Ok(self
+            .0
+            .device_pairings()
+            .get_by_pairing_code(pairing_code)
+            .await?)
+    }
+
+    async fn finalize(
+        &self,
+        device_pairing_request_id: &str,
+        account_id: &arkret_wire::AccountId,
+        target_proof: serde_json::Value,
+        finalized_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<crate::identity::DevicePairingState> {
+        Ok(self
+            .0
+            .device_pairings()
+            .finalize(
+                device_pairing_request_id,
+                account_id,
+                target_proof,
+                finalized_at,
+            )
+            .await?)
+    }
+
     async fn prune_expired_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,

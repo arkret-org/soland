@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
+use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
 
 use super::{
     DevicePairingRecord, DevicePairingRow, DevicePairingStore, OptionalExtension, PersistenceError,
@@ -45,6 +45,68 @@ impl DevicePairingStore for PgDevicePairingStore {
             .map_err(PersistenceError::database)?
             .map(DevicePairingRecord::try_from)
             .transpose()
+    }
+
+    async fn get_by_pairing_code(
+        &self,
+        pairing_code: &str,
+    ) -> PersistenceResult<Option<DevicePairingRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        device_pairings::table
+            .filter(device_pairings::pairing_code.eq(pairing_code))
+            .select(DevicePairingRow::as_select())
+            .first::<DevicePairingRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .map(DevicePairingRecord::try_from)
+            .transpose()
+    }
+
+    async fn finalize(
+        &self,
+        device_pairing_request_id: &str,
+        account_id: &arkret_wire::AccountId,
+        target_proof: serde_json::Value,
+        finalized_at: DateTime<Utc>,
+    ) -> PersistenceResult<DevicePairingRecord> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let account_key = account_id.to_string();
+        // One statement carries the whole contract: the transition fires only
+        // from `staged`, and an exact retry matches the already finalized row
+        // so it returns unchanged instead of re-attaching a second proof.
+        let updated = diesel::update(
+            device_pairings::table
+                .find(device_pairing_request_id)
+                .filter(device_pairings::expires_at.gt(finalized_at))
+                .filter(
+                    device_pairings::state
+                        .eq("staged")
+                        .or(device_pairings::state
+                            .eq("ready_for_claim")
+                            .and(device_pairings::account_id.eq(account_key.clone()))
+                            .and(device_pairings::target_proof.eq(target_proof.clone()))),
+                ),
+        )
+        .set((
+            device_pairings::state.eq("ready_for_claim"),
+            device_pairings::account_id.eq(account_key),
+            device_pairings::target_proof.eq(target_proof),
+        ))
+        .returning(DevicePairingRow::as_returning())
+        .get_result::<DevicePairingRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        updated
+            .ok_or_else(|| {
+                PersistenceError::NotFound("device pairing request is not finalizable".to_owned())
+            })
+            .and_then(DevicePairingRecord::try_from)
     }
 
     async fn get_terminal(&self, request_id: &str) -> PersistenceResult<Option<serde_json::Value>> {

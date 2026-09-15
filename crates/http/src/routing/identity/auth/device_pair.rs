@@ -166,14 +166,22 @@ async fn authorize_account_device_pair(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(device_pairing_not_found)?;
-    if record.state
-        != arkret_models_collaboration::http_bodies::DevicePairingState::PendingAuthorization
+    // A record still in `staged` has no account binding and MUST NOT be
+    // admitted: the whole account half of the transcript would be missing.
+    if record.state != arkret_models_collaboration::http_bodies::DevicePairingState::ReadyForClaim
         || record.expires_at <= authorized_at
         || record.pairing_code != pairing_code
         || record.new_device_pubkey != staged_new_device_pubkey
     {
         return Err(device_pairing_not_found());
     }
+    // §5.2.2 signs over the account, so the rebuilt proof must carry the exact
+    // `AccountId` the pending record froze at finalize. Substituting the
+    // approver's own account here would verify a transcript nobody signed.
+    let bound_account_id = record
+        .account_id
+        .clone()
+        .ok_or_else(|| AppError::internal("finalized device pairing has no bound account"))?;
     let challenge = arkret_signatures::device_pairing::ServerDevicePairingChallenge {
         display_name: record
             .display_name
@@ -227,6 +235,7 @@ async fn authorize_account_device_pair(
     }
     let target_proof =
         arkret_models_collaboration::http_bodies::DevicePairingTargetProof {
+            account_id: bound_account_id.clone(),
             device_id: authorize_payload.device_id.clone(),
             device_public_key_did: arkret_wire::DidKey::new(
                 authorize_payload.device_public_key_did.as_str().to_owned(),
@@ -256,10 +265,32 @@ async fn authorize_account_device_pair(
     arkret_signatures::device_pairing::verify_server_device_pairing_target_proof(
         &body.new_device_pubkey,
         &challenge,
+        &bound_account_id,
         &target_proof,
         authorized_at,
     )
     .map_err(device_pairing_proof_failed)?;
+    // The approving device authorizes for its own account only; the record's
+    // signed account binding and the authenticated account must be the same.
+    if bound_account_id != account_id {
+        return Err(device_pairing_not_found());
+    }
+    // §2.1.1 clause 5 requires the proof every retrieval path hands out to be
+    // byte-equivalent to the one attached at finalize.
+    let stored_proof = record
+        .target_proof
+        .clone()
+        .ok_or_else(|| AppError::internal("finalized device pairing has no target proof"))?;
+    if arkret_canonical::canonical_json_bytes(&target_proof)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != arkret_canonical::canonical_json_bytes(&stored_proof)
+            .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return Err(AppError::param_invalid(
+            "pairing target proof differs from the proof attached at finalize",
+        )
+        .with_wire_code("schema_violation"));
+    }
     let authorized_by_actor_id =
         arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
             AppError::internal(format!("authenticated actor id is invalid: {error}"))
@@ -471,6 +502,10 @@ mod tests {
         );
         let unsigned =
             arkret_models_collaboration::http_bodies::UnsignedDevicePairingTargetProof::new(
+                arkret_wire::AccountId::new(
+                    arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                    arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+                ),
                 arkret_wire::DeviceId::new("ak:device:01964137-0000-7000-8000-0000000000b2")
                     .unwrap(),
                 arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap(),

@@ -21,6 +21,8 @@ pub(crate) struct DevicePairingRow {
     pub server_nonce: String,
     pub display_name: Option<String>,
     pub device_metadata: Option<Value>,
+    pub account_id: Option<String>,
+    pub target_proof: Option<Value>,
     pub state: String,
     pub device_id: Option<String>,
     pub authorized_by_actor_id: Option<DidCoreId>,
@@ -34,14 +36,15 @@ pub(crate) struct DevicePairingRow {
 /// the text-column encoding of `device_pairings.state`.
 fn device_pairing_state_label(state: DevicePairingState) -> &'static str {
     match state {
-        DevicePairingState::PendingAuthorization => "pending_authorization",
+        DevicePairingState::Staged => "staged",
+        DevicePairingState::ReadyForClaim => "ready_for_claim",
         DevicePairingState::Authorized => "authorized",
         DevicePairingState::Expired => "expired",
     }
 }
 
 macro_rules! convert_device_pairing {
-    ($source:expr, $target:ident, $state:expr) => {{
+    ($source:expr, $target:ident, $state:expr, $account_id:expr) => {{
         let source = $source;
         $target {
             device_pairing_request_id: source.device_pairing_request_id,
@@ -52,6 +55,8 @@ macro_rules! convert_device_pairing {
             server_nonce: source.server_nonce,
             display_name: source.display_name,
             device_metadata: source.device_metadata,
+            account_id: $account_id,
+            target_proof: source.target_proof,
             state: $state,
             device_id: source.device_id,
             authorized_by_actor_id: source.authorized_by_actor_id,
@@ -65,7 +70,11 @@ macro_rules! convert_device_pairing {
 impl From<DevicePairingRecord> for DevicePairingRow {
     fn from(record: DevicePairingRecord) -> Self {
         let state = device_pairing_state_label(record.state).to_owned();
-        convert_device_pairing!(record, DevicePairingRow, state)
+        let account_id = record
+            .account_id
+            .as_ref()
+            .map(|account_id| account_id.to_string());
+        convert_device_pairing!(record, DevicePairingRow, state, account_id)
     }
 }
 
@@ -79,6 +88,22 @@ impl TryFrom<DevicePairingRow> for DevicePairingRecord {
                 row.device_pairing_request_id
             ))
         })?;
-        Ok(convert_device_pairing!(row, DevicePairingRecord, state))
+        let account_id = row
+            .account_id
+            .as_deref()
+            .map(serde_json::from_str::<arkret_wire::AccountId>)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "device pairing `{}` has invalid account_id: {error}",
+                    row.device_pairing_request_id
+                ))
+            })?;
+        Ok(convert_device_pairing!(
+            row,
+            DevicePairingRecord,
+            state,
+            account_id
+        ))
     }
 }

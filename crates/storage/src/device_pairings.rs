@@ -1,5 +1,5 @@
 use arkret_models_collaboration::http_bodies::DevicePairingState;
-use arkret_wire::DidCoreId;
+use arkret_wire::{AccountId, DidCoreId};
 use chrono::{DateTime, Utc};
 
 use super::{PersistenceResult, Value, async_trait};
@@ -7,9 +7,12 @@ use super::{PersistenceResult, Value, async_trait};
 /// Durable projection of a server-mediated device-pairing short-link request.
 ///
 /// A not-yet-authorized device stages its device key here (account-less, inert)
-/// and receives a short `device_pairing_request_id` + `pairing_code`. The row is
-/// flipped to `authorized` only when a verified sibling device drives the
-/// existing authenticated `ak.gate.account.command.pair_device.v1`. Mirrors the
+/// and receives a short `device_pairing_request_id` + `pairing_code`. The
+/// authenticated finalize call binds the row one way to the exact `AccountId`
+/// its target proof signs over (`staged -> ready_for_claim`); only then can it
+/// be resolved, claimed by code, or authorized. The row is flipped to
+/// `authorized` when a verified sibling device drives the existing
+/// authenticated `ak.gate.account.command.pair_device.v1`. Mirrors the
 /// agent-pairing template but has no controller/PCR binding — it grants nothing
 /// on its own.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +25,13 @@ pub struct DevicePairingRecord {
     pub server_nonce: String,
     pub display_name: Option<String>,
     pub device_metadata: Option<Value>,
+    /// Exact `AccountId` the finalize call bound this record to. Absent while
+    /// the record is still `staged`: staging is account-less by construction.
+    pub account_id: Option<AccountId>,
+    /// The single signed `device_pairing_target_proof` attached at finalize.
+    /// Every later retrieval path returns this byte-identical value, so the
+    /// code-claim entry never becomes a weaker code-only branch.
+    pub target_proof: Option<Value>,
     /// Lifecycle state; canonical SDK enum (device-pairing.schema.json
     /// `#/$defs/device_pairing_state`), persisted as its snake_case wire name.
     pub state: DevicePairingState,
@@ -56,6 +66,8 @@ impl DevicePairingRecord {
             server_nonce,
             display_name,
             device_metadata,
+            account_id: None,
+            target_proof: None,
             state,
             device_id: None,
             authorized_by_actor_id: None,
@@ -94,6 +106,24 @@ pub trait DevicePairingStore: Send + Sync {
         device_pairing_request_id: &str,
     ) -> PersistenceResult<Option<DevicePairingRecord>>;
     async fn get_terminal(&self, request_id: &str) -> PersistenceResult<Option<Value>>;
+    /// Look a live record up by its pairing code. The code is unique across the
+    /// live pending set, so this is the sole lookup key of the authenticated
+    /// code claim.
+    async fn get_by_pairing_code(
+        &self,
+        pairing_code: &str,
+    ) -> PersistenceResult<Option<DevicePairingRecord>>;
+    /// One-way `staged -> ready_for_claim` transition that attaches the exact
+    /// account binding and its signed target proof. Returns the stored record;
+    /// a byte-identical retry returns the already finalized row unchanged, and
+    /// a different proof for the same id conflicts.
+    async fn finalize(
+        &self,
+        device_pairing_request_id: &str,
+        account_id: &AccountId,
+        target_proof: Value,
+        finalized_at: DateTime<Utc>,
+    ) -> PersistenceResult<DevicePairingRecord>;
 
     /// Prune rows whose pairing window elapsed before the supplied retention
     /// cutoff. Returns the number removed.

@@ -2451,6 +2451,16 @@ pub async fn assert_event_commit_unit_of_work_contract(
     // A response-loss retry reads the durable terminal ledger. Bypassing that
     // read and attempting a second stage consumption must fail atomically.
     let pairing_request_id = format!("device-pairing:{namespace}:{event_uuid}");
+    // The pairing code is unique across the live pending set, so two contract
+    // runs sharing a database cannot share a fixture code.
+    let pairing_code: String = event_uuid
+        .simple()
+        .to_string()
+        .chars()
+        .filter(|character| character.is_ascii_hexdigit() && !matches!(character, '0' | '1'))
+        .map(|character| character.to_ascii_uppercase())
+        .take(8)
+        .collect();
     let pairing_key_value = serde_json::json!({
         "algorithm": "Ed25519",
         "key": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
@@ -2459,21 +2469,31 @@ pub async fn assert_event_commit_unit_of_work_contract(
     });
     let pairing_key =
         serde_json::from_value(pairing_key_value.clone()).expect("contract pairing public key");
+    // The commit predicate only fires on a finalized record, so the fixture
+    // carries the account binding finalize attaches.
+    let mut pairing_record = DevicePairingRecord::new(
+        pairing_request_id.clone(),
+        pairing_code.clone(),
+        pairing_key_value,
+        "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+        "https://account.example".to_owned(),
+        "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
+        None,
+        None,
+        DevicePairingState::ReadyForClaim,
+        now,
+        now + Duration::minutes(10),
+    );
+    pairing_record.account_id = Some(arkret_wire::AccountId::new(
+        DidCoreId::new(principal_id.clone()).expect("pairing principal id"),
+        DidCoreId::new("ak:did_core:web:soland.example").expect("pairing station id"),
+    ));
+    pairing_record.target_proof = Some(serde_json::json!({
+        "pairing_challenge_transcript_digest": format!("sha256:{}", "c".repeat(64))
+    }));
     stores
         .device_pairings
-        .put(DevicePairingRecord::new(
-            pairing_request_id.clone(),
-            "7H2K9M4Q".to_owned(),
-            pairing_key_value,
-            "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
-            "https://account.example".to_owned(),
-            "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
-            None,
-            None,
-            DevicePairingState::PendingAuthorization,
-            now,
-            now + Duration::minutes(10),
-        ))
+        .put(pairing_record)
         .await
         .expect("stage contract pairing");
     let pairing_event = canonical_wire_event_record(
@@ -2495,7 +2515,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         membership_compensation_evidence: None,
         device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
             device_pairing_request_id: pairing_request_id.clone(),
-            pairing_code: "7H2K9M4Q".to_owned(),
+            pairing_code: pairing_code.clone(),
             new_device_pubkey: pairing_key,
             device_id: "ak:device:01964137-0000-7000-8000-0000000000b2".to_owned(),
             authorized_by_actor_id: arkret_wire::DidCoreId::new(principal_id.clone()).unwrap(),

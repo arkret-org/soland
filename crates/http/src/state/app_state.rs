@@ -1523,6 +1523,12 @@ impl AppState {
         &self.projections
     }
 
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_device_pairings(&self) -> &DevicePairingService {
+        &self.device_pairings
+    }
+
     pub(crate) async fn recover_confirmed_metadata_projection(
         &self,
         realm: &RealmId,
@@ -1926,6 +1932,17 @@ impl AppState {
     ) -> bool {
         self.runtime_guards
             .peer_keypackage_claim_rate_limited(source_id, target_identity_key)
+    }
+
+    /// Layered quota for the two authenticated device-pairing handoff
+    /// operations (`device-lifecycle.md` §2.1.1 clauses 5 and 8).
+    pub fn device_pairing_handoff_rate_limited(
+        &self,
+        caller_device_id: &str,
+        account_key: &str,
+    ) -> bool {
+        self.runtime_guards
+            .device_pairing_handoff_rate_limited(caller_device_id, account_key)
     }
 
     pub fn realm_join_bootstrap_rate_limited(

@@ -467,6 +467,8 @@ diesel::table! {
         server_nonce -> Text,
         display_name -> Nullable<Text>,
         device_metadata -> Nullable<Jsonb>,
+        account_id -> Nullable<Text>,
+        target_proof -> Nullable<Jsonb>,
         state -> Text,
         device_id -> Nullable<Text>,
         authorized_by_actor_id -> Nullable<Text>,

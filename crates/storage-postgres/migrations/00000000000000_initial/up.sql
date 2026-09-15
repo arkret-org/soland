@@ -1655,7 +1655,7 @@ CREATE INDEX devices_actor_updated_idx ON public.devices USING btree (actor_id, 
 
 CREATE TABLE public.device_revocation_linearization_heads (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
+    coordinator_id text NOT NULL,
     device_id text NOT NULL,
     last_seq bigint DEFAULT 0 NOT NULL CHECK (last_seq >= 0),
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1665,7 +1665,7 @@ CREATE TABLE public.device_revocation_linearization_heads (
 CREATE TABLE public.device_revocation_targets (
     proposal_digest text PRIMARY KEY REFERENCES public.state_control_events(event_digest) ON DELETE RESTRICT,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
+    coordinator_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
     target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
@@ -1684,7 +1684,7 @@ CREATE INDEX device_revocation_targets_selector_idx
 
 CREATE TABLE public.device_revocation_gate_receipts (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
+    coordinator_id text NOT NULL,
     device_id text NOT NULL,
     action_class text NOT NULL CHECK (action_class = ANY (ARRAY[
         'session_grant_issue', 'session_grant_refresh', 'keypackage_claim',
@@ -1706,7 +1706,7 @@ CREATE TABLE public.device_revocation_cleanup_intents (
     proposal_event_id text NOT NULL,
     covering_seal_id text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
+    coordinator_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
     target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
@@ -1734,7 +1734,9 @@ CREATE TABLE public.device_pairings (
     server_nonce text NOT NULL,
     display_name text,
     device_metadata jsonb,
-    state text DEFAULT 'pending_authorization' NOT NULL,
+    account_id text,
+    target_proof jsonb,
+    state text DEFAULT 'staged' NOT NULL,
     device_id text,
     authorized_by_actor_id text,
     authorized_event_ref text,
@@ -1742,11 +1744,20 @@ CREATE TABLE public.device_pairings (
     created_at timestamp with time zone NOT NULL,
     PRIMARY KEY (device_pairing_request_id),
     CONSTRAINT device_pairings_state_check
-        CHECK (state = ANY (ARRAY['pending_authorization', 'authorized', 'expired']))
+        CHECK (state = ANY (ARRAY['staged', 'ready_for_claim', 'authorized', 'expired'])),
+    -- `staged` is account-less by construction; every later state carries the
+    -- exact account its signed target proof binds.
+    CONSTRAINT device_pairings_account_binding_check
+        CHECK ((state = 'staged') = (account_id IS NULL AND target_proof IS NULL))
 );
 
 CREATE INDEX device_pairings_expiry_idx
     ON public.device_pairings (expires_at);
+
+-- The eight-character code is the sole lookup key of the authenticated code
+-- claim, so it must resolve to at most one live request.
+CREATE UNIQUE INDEX device_pairings_pairing_code_key
+    ON public.device_pairings (pairing_code);
 
 CREATE TABLE public.device_messages (
     id uuid PRIMARY KEY,
@@ -3017,7 +3028,7 @@ CREATE TABLE public.recovery_sessions (
     session_grant_id text NOT NULL,
     session_grant_cnf_jkt text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
+    coordinator_id text NOT NULL,
     requesting_device_id text NOT NULL,
     requesting_device_public_key_did text NOT NULL,
     trust_domain text NOT NULL,
@@ -3305,7 +3316,7 @@ CREATE TABLE public.principal_resolutions (
 
 CREATE TABLE public.principal_resolution_events (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
+    coordinator_id text NOT NULL,
     event_id text NOT NULL,
     previous_event_id text,
     method_history_head text NOT NULL,
