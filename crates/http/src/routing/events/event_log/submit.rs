@@ -198,6 +198,7 @@ static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = Onc
 static AGENT_MEMBERSHIP_CASCADE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 
 mod identity_anchor;
+pub(in crate::routing) use identity_anchor::RecoveryTerminalIntent;
 use identity_anchor::{
     PcrGenesisPins, batch_contains_identity_anchor, submit_identity_anchor_batch,
 };
@@ -1049,6 +1050,15 @@ impl InternalEventAdmission {
 }
 
 impl SubmitOneError {
+    /// Carry an admission rejection that was already shaped as an `AppError`
+    /// without flattening its wire code into prose.
+    pub(in crate::routing) fn from_app_error(error: AppError) -> Self {
+        Self::Rejected {
+            error: Box::new(error),
+            details: None,
+        }
+    }
+
     pub(in crate::routing) fn new(
         status: StatusCode,
         code: impl Into<String>,
@@ -1915,6 +1925,7 @@ async fn submit_event_batch_outcome_with_leases(
             None,
             false,
             None,
+            None,
         )
         .await;
     }
@@ -2077,7 +2088,9 @@ pub(in crate::routing) async fn submit_recovery_identity_anchor_batch(
     replacement_device_id: &arkret_identifiers::DeviceId,
     submissions: Vec<arkret_wire::EventInitialSubmission>,
     reserved_reanchor_batch_receipt_id: arkret_identifiers::ReceiptId,
+    recovery_terminal: RecoveryTerminalIntent,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    let recovery_terminal = Some(recovery_terminal);
     let submit_context = if submissions.len() == 2
         && submissions[0].event.kind == arkret_wire::EventKind::DeviceReanchor
         && submissions[1].event.kind == arkret_wire::EventKind::DeviceAuthorize
@@ -2123,6 +2136,7 @@ pub(in crate::routing) async fn submit_recovery_identity_anchor_batch(
         None,
         true,
         Some(reserved_reanchor_batch_receipt_id),
+        recovery_terminal,
     )
     .await
 }
@@ -2221,6 +2235,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
                 })?,
         }),
         false,
+        None,
         None,
     )
     .await?;

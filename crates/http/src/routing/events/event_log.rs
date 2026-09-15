@@ -236,7 +236,7 @@ pub(crate) use endpoints::{VerifiedActorPredecessors, load_realm_actor_frontier}
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
-    ValidatedEventEnvelope, admit_frontier_backfill_event,
+    RecoveryTerminalIntent, ValidatedEventEnvelope, admit_frontier_backfill_event,
     prepare_service_franking_proof_event_value, service_event_authoring_lock,
     submit_account_data_event_value, submit_agent_membership_cascade, submit_applet_install_batch,
     submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,

@@ -1491,67 +1491,6 @@ async fn continue_commit_recovery_unit(
     .await?;
 
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
-    state
-        .security_transactions()
-        .begin_step(SecurityTransactionStepAttemptState {
-            transaction_id: transaction_id.clone(),
-            step: SecurityTransactionStep::CommitRecoveryUnit,
-            canonical_request: canonical_request.clone(),
-        })
-        .await
-        .map_err(security_transaction_service_error)?;
-    let outcome = crate::routing::events::event_log::submit_recovery_identity_anchor_batch(
-        state,
-        session,
-        expected_device_id,
-        plan.reanchor_unit.request.events.clone(),
-        binding.reanchor_batch_receipt_id.clone(),
-    )
-    .await
-    .map_err(|error| {
-        AppError::conflict(format!("recovery unit was rejected: {}", error.message()))
-            .with_rejection_code(error.code())
-    })?;
-    let expected_ids = [reanchor_event_id.as_str(), authorize_event_id.as_str()];
-    if !outcome.rejections.is_empty()
-        || !outcome.quarantine.is_empty()
-        || outcome.accepted.len() != 2
-        || outcome
-            .accepted
-            .iter()
-            .map(|event_id| event_id.as_str())
-            .ne(expected_ids)
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "recovery unit did not atomically accept the fixed Event pair",
-        ));
-    }
-    let seal_effect =
-        crate::routing::federation::move_seal::apply_inbound_seal(state, first_generation_seal)
-            .await?;
-    if seal_effect.seal != binding.first_generation_seal_id {
-        return Err(AppError::internal(
-            "accepted first-generation Seal id differs from the reserved id",
-        ));
-    }
-    crate::routing::events::projection::publish_confirmed_seal_commands(
-        state,
-        first_generation_seal,
-    )
-    .await
-    .map_err(|error| {
-        AppError::internal(format!("confirmed principal command projection: {error}"))
-    })?;
-    state
-        .projections()
-        .reload_cells_from_store(&first_generation_seal.realm_id)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "refresh projected cells after recovery Seal acceptance: {error}"
-            ))
-        })?;
     let completion_attestation_body = arkret_wire::UnsignedRecoveryCompletionAttestationBody {
         transaction_id: transaction.resource.transaction_id.clone(),
         transaction_request_digest: transaction.resource.request_digest.clone(),
@@ -1562,7 +1501,7 @@ async fn continue_commit_recovery_unit(
         terminal_receipt_digest: receipt_digest.clone(),
         terminal_commit_digest: terminal_commit_digest.clone(),
         replacement_device_id: expected_device_id.clone(),
-        device_authorization_event_id: authorize_event_id,
+        device_authorization_event_id: authorize_event_id.clone(),
         first_generation_seal_id: binding.first_generation_seal_id.clone(),
         result_model_generation_ref: result_generation,
         completed_at: committed_at,
@@ -1627,25 +1566,74 @@ async fn continue_commit_recovery_unit(
     let participant_outcome = serde_json::to_value(terminal_commit).map_err(|error| {
         AppError::internal(format!("recovery terminal commit encode failed: {error}"))
     })?;
-    let stored = state
-        .security_transactions()
-        .accept_step(
+    let resource = transaction.resource.clone();
+    let step_outcome = SecurityTransactionStepOutcomeState {
+        transaction_id,
+        step: SecurityTransactionStep::CommitRecoveryUnit,
+        canonical_request,
+        response,
+        participant_outcome: Some(participant_outcome),
+    };
+    // §2.3 — one transaction, one set of row locks, one generation CAS. The
+    // admission lock is taken here and held across Seal re-verification and the
+    // durable commit, because the Seal is validated against Events that only
+    // this transaction will make visible.
+    let generation_lock =
+        crate::routing::identity::device_generation::device_generation_admission_lock(
+            transaction.resource.account_id.principal_id.as_str(),
+        );
+    let _generation_guard = generation_lock.lock().await;
+    let outcome = crate::routing::events::event_log::submit_recovery_identity_anchor_batch(
+        state,
+        session,
+        expected_device_id,
+        plan.reanchor_unit.request.events.clone(),
+        binding.reanchor_batch_receipt_id.clone(),
+        crate::routing::events::event_log::RecoveryTerminalIntent {
+            seal: first_generation_seal.clone(),
             transaction,
-            SecurityTransactionStepOutcomeState {
-                transaction_id,
-                step: SecurityTransactionStep::CommitRecoveryUnit,
-                canonical_request,
-                response,
-                participant_outcome: Some(participant_outcome),
-            },
-        )
-        .await
-        .map_err(security_transaction_service_error)?;
-    let resource = serde_json::from_value(stored.response).map_err(|error| {
-        AppError::internal(format!(
-            "stored security transaction response invalid: {error}"
-        ))
+            step_outcome,
+        },
+    )
+    .await
+    .map_err(|error| {
+        AppError::conflict(format!("recovery unit was rejected: {}", error.message()))
+            .with_rejection_code(error.code())
     })?;
+    let expected_ids = [reanchor_event_id.as_str(), authorize_event_id.as_str()];
+    if !outcome.rejections.is_empty()
+        || !outcome.quarantine.is_empty()
+        || outcome.accepted.len() != 2
+        || outcome
+            .accepted
+            .iter()
+            .map(|event_id| event_id.as_str())
+            .ne(expected_ids)
+    {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "recovery unit did not atomically accept the fixed Event pair",
+        ));
+    }
+    // Everything above is durable. What follows only refreshes in-memory
+    // projections derived from it, so a failure here cannot unaccept the unit.
+    crate::routing::events::projection::publish_confirmed_seal_commands(
+        state,
+        first_generation_seal,
+    )
+    .await
+    .map_err(|error| {
+        AppError::internal(format!("confirmed principal command projection: {error}"))
+    })?;
+    state
+        .projections()
+        .reload_cells_from_store(&first_generation_seal.realm_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "refresh projected cells after recovery Seal acceptance: {error}"
+            ))
+        })?;
     res.status_code(StatusCode::OK);
     json_ok(resource)
 }

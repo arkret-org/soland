@@ -61,6 +61,19 @@ fn identity_anchor_candidate_device(
     .then_some(payload))
 }
 
+/// The rest of the terminal `commit_recovery_unit` step, carried down to the
+/// identity-anchor commit so `security-transactions.md` section 2.3 steps 2-7
+/// land in one database transaction.
+///
+/// The Seal is admitted here, against the candidate Event records this very
+/// call is about to insert, and never through ordinary Seal submit.
+pub(in crate::routing) struct RecoveryTerminalIntent {
+    pub(in crate::routing) seal: arkret_wire::Seal,
+    pub(in crate::routing) transaction: soland_storage::SecurityTransactionRecord,
+    pub(in crate::routing) step_outcome: soland_storage::SecurityTransactionStepOutcomeRecord,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn submit_identity_anchor_batch(
     state: &AppState,
     session: &SessionRecord,
@@ -75,6 +88,7 @@ pub(super) async fn submit_identity_anchor_batch(
     // recovery receipt before either Event exists, so the accepted batch
     // receipt MUST carry that exact id rather than mint a fresh one.
     reserved_reanchor_batch_receipt_id: Option<arkret_identifiers::ReceiptId>,
+    recovery_terminal: Option<RecoveryTerminalIntent>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(unit_error(
@@ -598,6 +612,19 @@ pub(super) async fn submit_identity_anchor_batch(
         &publication_evidence,
     )
     .await?;
+    // Admission for the terminal recovery Seal runs here and nowhere else: the
+    // `records` value below is both what the Seal was validated against and
+    // what the transaction inserts, so the two sets are the same bytes by
+    // construction rather than by a second lookup.
+    let recovery_terminal = match recovery_terminal {
+        Some(intent) => Some(
+            recovery_terminal_commit_write(state, intent, &records)
+                .await
+                .map_err(SubmitOneError::from_app_error)?,
+        ),
+        None => None,
+    };
+    let sealed_by_recovery_terminal = recovery_terminal.is_some();
     crate::routing::events::test_chaos::pause_at(
         state,
         crate::routing::events::test_chaos::PRE_IDENTITY_ANCHOR_COMMIT,
@@ -617,6 +644,7 @@ pub(super) async fn submit_identity_anchor_batch(
             reanchor_slot,
             publication_evidence,
             deliveries,
+            recovery_terminal,
         )
         .await
         .map_err(|error| {
@@ -705,18 +733,24 @@ pub(super) async fn submit_identity_anchor_batch(
                 })
             })
             .collect::<Result<Vec<_>, SubmitOneError>>()?;
-        state
-            .projections()
-            .put_pending_control_unit(&pending_unit)
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted identity anchor pending index unavailable: {error}"),
-                )
-            })?;
-        state.wake_control_seal_coordinator();
+        // A terminal recovery commit already sealed both Control Moves in the
+        // same transaction that accepted them, so re-registering them as
+        // pending and waking the coordinator would schedule work for a unit
+        // that has no unsealed member left.
+        if !sealed_by_recovery_terminal {
+            state
+                .projections()
+                .put_pending_control_unit(&pending_unit)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("accepted identity anchor pending index unavailable: {error}"),
+                    )
+                })?;
+            state.wake_control_seal_coordinator();
+        }
         for (parsed, envelope) in [(&first, &envelopes[0]), (&second, &envelopes[1])] {
             if let Some(operation) = projection_operation_from_event(parsed, envelope) {
                 crate::routing::events::projection::project_accepted_operations_from_device(
@@ -798,6 +832,58 @@ pub(super) async fn submit_identity_anchor_batch(
         outcome.control_proposal_acks = control_proposal_acks;
         Ok(outcome)
     }
+}
+
+/// Re-verify the first-generation recovery Seal against the candidate Event
+/// set and package it for the single identity-anchor transaction.
+///
+/// Nothing here writes. The caller MUST already hold the principal's
+/// device-generation admission lock, and the durable
+/// `expected_seal_head` compare-and-swap inside the transaction is what makes
+/// this precomputation safe against a rival recovery unit.
+async fn recovery_terminal_commit_write(
+    state: &AppState,
+    intent: RecoveryTerminalIntent,
+    records: &[soland_services::events::AcceptedEvent],
+) -> Result<soland_storage::RecoveryTerminalCommitWrite, AppError> {
+    use crate::routing::federation::move_seal::DeviceGenerationSealAdmission;
+    let RecoveryTerminalIntent {
+        seal,
+        transaction,
+        step_outcome,
+    } = intent;
+    let prepared =
+        match crate::routing::federation::move_seal::prepare_device_generation_event_seal(
+            state, &seal, records,
+        )
+        .await?
+        {
+            DeviceGenerationSealAdmission::Prepared(prepared) => *prepared,
+            DeviceGenerationSealAdmission::AlreadyAccepted => {
+                return Err(AppError::conflict(
+                    "the first-generation recovery Seal is already accepted",
+                )
+                .with_wire_code("duplicate_conflict"));
+            }
+            DeviceGenerationSealAdmission::NotDeviceGeneration => {
+                return Err(crate::app_error!(
+                    FailedPrecondition,
+                    "the recovery Seal Realm is not a B-model principal-control Realm",
+                ));
+            }
+        };
+    Ok(soland_storage::RecoveryTerminalCommitWrite {
+        cell_registry: state.projections().cell_registry_handle(),
+        seal,
+        seal_digest_suite: prepared.digest_suite,
+        expected_seal_head: prepared.cas_head_ref,
+        new_ops: prepared.new_ops,
+        covered: prepared.target,
+        seal_governance_dependencies: prepared.availability_dependency_writes,
+        confirmed_device_control: prepared.confirmed_device_control,
+        transaction,
+        step_outcome,
+    })
 }
 
 /// Validate every relationship that supplies trust to the candidate device
@@ -2580,6 +2666,7 @@ mod tests {
                 None,
                 Vec::new(),
                 Vec::new(),
+                None,
             )
             .await
             .unwrap();
