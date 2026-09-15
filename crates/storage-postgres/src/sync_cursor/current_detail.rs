@@ -148,6 +148,11 @@ pub(super) async fn page(
         if let Some(progress)=progress {
             retention::check(conn,Some(progress.retained_revision),None).await?;
         } else { retention::lock(conn,true).await?; }
+        // Drain the timeline re-resolution backlog before the generation is
+        // frozen, not after: a re-resolution retires the derived generation, so
+        // running it later would leave this read looking at a Realm it had just
+        // invalidated and report it unavailable while it is still deliverable.
+        crate::timeline_order::drain_pending_timeline_edges(conn,request.realm_id.as_str(),4096).await?;
         crate::state_resolution::refresh_current_if_expired(conn,request.realm_id.as_str(),registry).await?;
         crate::current_data::rebuild_pending_causal_registers(conn,request.realm_id.as_str(),4096).await?;
         let mut cut=if continued {

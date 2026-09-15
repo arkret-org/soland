@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS realm_timeline_pending_edges;
 DROP TABLE IF EXISTS realm_timeline_order;
 DROP TABLE IF EXISTS state_seal_signing_positions;
 DROP TABLE IF EXISTS realm_join_downloads;

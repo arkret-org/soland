@@ -21,6 +21,22 @@ fn actor(principal: &str) -> ActorId {
     ))
 }
 
+/// The fixture names an Event by actor and sequence rather than by content, so
+/// a test can hold the identifier of an Event it has not written yet -- which is
+/// what an out-of-order arrival is.
+fn fixture_event_id(actor: &ActorId, seq: u64) -> arkret_wire::EventId {
+    arkret_wire::EventId::from_digest(
+        DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(
+            format!(
+                "timeline-order-fixture-{}-{seq}",
+                actor.canonical_key().unwrap()
+            )
+            .as_bytes(),
+        ),
+    )
+}
+
 fn event(realm: &RealmId, actor: &ActorId, seq: u64, hlc: Option<&str>, prev: &[&Event]) -> Event {
     let at = chrono::DateTime::parse_from_rfc3339("2026-09-15T00:00:00.000Z")
         .unwrap()
@@ -39,20 +55,19 @@ fn event(realm: &RealmId, actor: &ActorId, seq: u64, hlc: Option<&str>, prev: &[
     .unwrap();
     event.hlc = hlc.map(|hlc| Hlc::new(hlc).unwrap());
     event.prev_refs = prev.iter().map(|prev| prev.event_id.clone()).collect();
-    event.event_id = arkret_wire::EventId::from_digest(
-        DigestSuite::Sha256,
-        arkret_canonical::sha256_bytes(
-            format!(
-                "timeline-order-fixture-{}-{seq}",
-                actor.canonical_key().unwrap()
-            )
-            .as_bytes(),
-        ),
-    );
+    event.event_id = fixture_event_id(actor, seq);
     event
 }
 
 async fn persist(pool: &crate::PgPool, event: &Event) -> PersistenceResult<()> {
+    persist_within(pool, event, CASCADE_BUDGET).await
+}
+
+async fn persist_within(
+    pool: &crate::PgPool,
+    event: &Event,
+    budget: usize,
+) -> PersistenceResult<()> {
     let mut conn = pool.get().await.map_err(PersistenceError::database)?;
     conn.transaction::<(), crate::PgTransactionError, _>(async |conn| {
         let token = event.event_id.token_bytes();
@@ -76,7 +91,7 @@ async fn persist(pool: &crate::PgPool, event: &Event) -> PersistenceResult<()> {
         .get_result::<FixtureEventPk>(&mut *conn)
         .await?
         .pk;
-        commit_order_key(conn, event_pk, realm_pk, event).await?;
+        commit_order_key_within(conn, event_pk, realm_pk, event, budget).await?;
         Ok(())
     })
     .await
@@ -613,4 +628,331 @@ async fn both_scan_directions_seek_the_projection_index_instead_of_sorting_the_r
             "{direction} window read must not scan the Realm, got:\n{plan}"
         );
     }
+}
+
+#[derive(diesel::QueryableByName)]
+struct OrderStateRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = BigInt)]
+    causal_depth: i64,
+    #[diesel(sql_type = Bool)]
+    provisional: bool,
+}
+
+async fn order_state(
+    conn: &mut AsyncPgConnection,
+    realm: &RealmId,
+) -> std::collections::BTreeMap<String, (i64, bool)> {
+    sql_query(
+        "SELECT event_id, causal_depth, provisional FROM realm_timeline_order WHERE realm_id = $1",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .load::<OrderStateRow>(conn)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| (row.event_id, (row.causal_depth, row.provisional)))
+    .collect()
+}
+
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    value: i64,
+}
+
+async fn pending_edge_count(conn: &mut AsyncPgConnection, realm: &RealmId) -> i64 {
+    sql_query(
+        "SELECT count(*)::bigint AS value FROM realm_timeline_pending_edges e \
+         JOIN realm_timeline_order o ON o.event_pk = e.child_event_pk WHERE o.realm_id = $1",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .get_result::<CountRow>(conn)
+    .await
+    .unwrap()
+    .value
+}
+
+fn realm_named(name: &[u8]) -> RealmId {
+    RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(name),
+    ))
+}
+
+#[tokio::test]
+async fn a_late_predecessor_reresolves_every_successor_it_unblocks() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = realm_named(b"timeline late predecessor realm");
+    let alice = actor("ak:did_core:web:alice.example");
+
+    // Built first so the successors can name it, written last so this is a
+    // genuine out-of-order arrival rather than a reordered fixture.
+    let root = event(&realm, &alice, 1, Some("01970e589d21-0000-a13f9c2e"), &[]);
+    let child = event(
+        &realm,
+        &alice,
+        2,
+        Some("01970e589d22-0000-a13f9c2e"),
+        &[&root],
+    );
+    let grandchild = event(
+        &realm,
+        &alice,
+        3,
+        Some("01970e589d23-0000-a13f9c2e"),
+        &[&child],
+    );
+    persist(&pool, &child).await.unwrap();
+    persist(&pool, &grandchild).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    let before = order_state(&mut conn, &realm).await;
+    assert_eq!(before[child.event_id.as_str()], (0, true));
+    assert_eq!(before[grandchild.event_id.as_str()], (1, true));
+    assert_eq!(
+        pending_edge_count(&mut conn, &realm).await,
+        2,
+        "each successor keeps a reverse edge naming the predecessor it waits on"
+    );
+    drop(conn);
+
+    persist(&pool, &root).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    let after = order_state(&mut conn, &realm).await;
+    assert_eq!(after[root.event_id.as_str()], (0, false));
+    assert_eq!(
+        after[child.event_id.as_str()],
+        (1, false),
+        "the direct successor takes its depth from the predecessor that arrived"
+    );
+    assert_eq!(
+        after[grandchild.event_id.as_str()],
+        (2, false),
+        "and the correction carries transitively down the chain"
+    );
+    assert_eq!(
+        pending_edge_count(&mut conn, &realm).await,
+        0,
+        "a settled predecessor retires the reverse edge that waited on it"
+    );
+}
+
+#[tokio::test]
+async fn a_successor_stays_provisional_until_its_last_missing_edge_arrives() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = realm_named(b"timeline partial resolution realm");
+    let alice = actor("ak:did_core:web:alice.example");
+    let bob = actor("ak:did_core:web:bob.example");
+
+    let left = event(&realm, &alice, 1, Some("01970e589d21-0000-a13f9c2e"), &[]);
+    let right = event(&realm, &bob, 1, Some("01970e589d22-0000-a13f9c2e"), &[]);
+    let child = event(
+        &realm,
+        &alice,
+        2,
+        Some("01970e589d23-0000-a13f9c2e"),
+        &[&left, &right],
+    );
+    persist(&pool, &child).await.unwrap();
+    persist(&pool, &left).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    // The arriving edge raised the depth, but the other one is still missing.
+    // A patch keyed on the arriving edge would call the order final here; the
+    // recomputation reads the whole edge set and cannot.
+    assert_eq!(
+        order_state(&mut conn, &realm).await[child.event_id.as_str()],
+        (1, true)
+    );
+    assert_eq!(pending_edge_count(&mut conn, &realm).await, 1);
+    drop(conn);
+
+    persist(&pool, &right).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    assert_eq!(
+        order_state(&mut conn, &realm).await[child.event_id.as_str()],
+        (1, false),
+        "the last edge settles the order without moving the depth"
+    );
+    assert_eq!(pending_edge_count(&mut conn, &realm).await, 0);
+}
+
+#[tokio::test]
+async fn a_cascade_past_its_budget_leaves_the_rest_in_the_durable_backlog() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = realm_named(b"timeline cascade budget realm");
+    let alice = actor("ak:did_core:web:alice.example");
+
+    let first = event(&realm, &alice, 1, Some("01970e589d21-0000-a13f9c2e"), &[]);
+    let second = event(
+        &realm,
+        &alice,
+        2,
+        Some("01970e589d22-0000-a13f9c2e"),
+        &[&first],
+    );
+    let third = event(
+        &realm,
+        &alice,
+        3,
+        Some("01970e589d23-0000-a13f9c2e"),
+        &[&second],
+    );
+    let fourth = event(
+        &realm,
+        &alice,
+        4,
+        Some("01970e589d24-0000-a13f9c2e"),
+        &[&third],
+    );
+    for event in [&fourth, &third, &second] {
+        persist(&pool, event).await.unwrap();
+    }
+    // One re-resolution of budget: the direct successor is corrected and the
+    // rest of the chain is owed.
+    persist_within(&pool, &first, 1).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    let capped = order_state(&mut conn, &realm).await;
+    assert_eq!(capped[first.event_id.as_str()], (0, false));
+    assert_eq!(capped[second.event_id.as_str()], (1, false));
+    assert!(
+        capped[third.event_id.as_str()].1 && capped[fourth.event_id.as_str()].1,
+        "what the budget did not reach stays provisional rather than claiming a final order"
+    );
+    assert_eq!(
+        pending_edge_count(&mut conn, &realm).await,
+        2,
+        "the unreached successors keep the reverse edges that are their backlog entry"
+    );
+
+    // The sweep finds them by the rows themselves: an edge whose predecessor has
+    // settled is owed work, so nothing had to be enqueued and could be lost.
+    let drained = drain_pending_timeline_edges(&mut conn, realm.as_str(), 4096)
+        .await
+        .unwrap();
+    assert_eq!(
+        drained, 1,
+        "one owed successor, the rest follows by cascade"
+    );
+    let settled = order_state(&mut conn, &realm).await;
+    assert_eq!(settled[third.event_id.as_str()], (2, false));
+    assert_eq!(settled[fourth.event_id.as_str()], (3, false));
+    assert_eq!(pending_edge_count(&mut conn, &realm).await, 0);
+    assert_eq!(
+        drain_pending_timeline_edges(&mut conn, realm.as_str(), 4096)
+            .await
+            .unwrap(),
+        0,
+        "a drained backlog does not rediscover the work it just did"
+    );
+}
+
+#[tokio::test]
+async fn a_cyclic_edge_set_ends_the_cascade_instead_of_spinning_the_transaction() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = realm_named(b"timeline cycle realm");
+    let alice = actor("ak:did_core:web:alice.example");
+    let bob = actor("ak:did_core:web:bob.example");
+
+    // Content-bound identifiers make this shape infeasible to mint honestly,
+    // which is exactly why the guard has to be structural rather than a trust
+    // assumption about the graph.
+    let mut forward = event(&realm, &alice, 1, Some("01970e589d21-0000-a13f9c2e"), &[]);
+    forward.prev_refs = vec![fixture_event_id(&bob, 1)];
+    let mut backward = event(&realm, &bob, 1, Some("01970e589d22-0000-a13f9c2e"), &[]);
+    backward.prev_refs = vec![fixture_event_id(&alice, 1)];
+    persist(&pool, &forward).await.unwrap();
+    persist(&pool, &backward).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    let state = order_state(&mut conn, &realm).await;
+    // Each edge is followed at most once, so the cascade ends. Neither row can
+    // ever settle, which is the honest answer for a graph with no root.
+    assert!(state[forward.event_id.as_str()].1 && state[backward.event_id.as_str()].1);
+    // Two edges, each followed at most once, so the depths cannot run away the
+    // way `1 + max(predecessor)` would if the cycle were walked to a fixpoint.
+    assert!(state[forward.event_id.as_str()].0 <= 4 && state[backward.event_id.as_str()].0 <= 4);
+    assert_eq!(
+        drain_pending_timeline_edges(&mut conn, realm.as_str(), 4096)
+            .await
+            .unwrap(),
+        0,
+        "no edge in the cycle ever settles, so the sweep has nothing to redo either"
+    );
+}
+
+#[tokio::test]
+async fn a_reresolution_retires_the_realm_generation_instead_of_recutting_it() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let realm = realm_named(b"timeline invalidation realm");
+    let alice = actor("ak:did_core:web:alice.example");
+    let root = event(&realm, &alice, 1, Some("01970e589d21-0000-a13f9c2e"), &[]);
+    let child = event(
+        &realm,
+        &alice,
+        2,
+        Some("01970e589d22-0000-a13f9c2e"),
+        &[&root],
+    );
+    persist(&pool, &child).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    // Writing a successor whose predecessor is absent changes nothing already
+    // delivered, so it must not retire a generation on its own.
+    let quiet = sql_query("SELECT revision AS value FROM account_summary_clock WHERE singleton")
+        .get_result::<CountRow>(&mut conn)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        sql_query(
+            "SELECT count(*)::bigint AS value FROM governance_current_ready \
+             WHERE realm_id = $1 AND NOT ready"
+        )
+        .bind::<Text, _>(realm.as_str())
+        .get_result::<CountRow>(&mut conn)
+        .await
+        .unwrap()
+        .value,
+        0
+    );
+    drop(conn);
+
+    persist(&pool, &root).await.unwrap();
+
+    let mut conn = pool.get().await.unwrap();
+    // The successor moved from depth 0 to depth 1, so any window frozen against
+    // the old order has to be rebuilt as a new generation. Retiring the derived
+    // result is what makes an in-flight generation fail its authority check
+    // rather than have its already delivered order silently re-cut.
+    assert!(
+        sql_query("SELECT revision AS value FROM account_summary_clock WHERE singleton")
+            .get_result::<CountRow>(&mut conn)
+            .await
+            .unwrap()
+            .value
+            > quiet
+    );
+    assert_eq!(
+        sql_query(
+            "SELECT count(*)::bigint AS value FROM governance_current_ready \
+             WHERE realm_id = $1 AND NOT ready"
+        )
+        .bind::<Text, _>(realm.as_str())
+        .get_result::<CountRow>(&mut conn)
+        .await
+        .unwrap()
+        .value,
+        1
+    );
 }

@@ -740,6 +740,26 @@ CREATE INDEX realm_timeline_order_projection_idx
         event_id
     );
 
+-- Reverse edges of the 7.3 predecessor set, kept only while an edge is not
+-- finally resolved: the predecessor is absent from this Station, or present but
+-- itself provisional. Without it nothing can answer "who named me as a
+-- predecessor", so a predecessor that arrived late left its successors stuck at
+-- the depth and provisional flag they were first written with. A resolved edge
+-- is never stored: a non-provisional row's depth is final by induction, so it
+-- can never move its successors again.
+CREATE TABLE public.realm_timeline_pending_edges (
+    child_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    predecessor_event_id text NOT NULL,
+    realm_pk bigint NOT NULL REFERENCES public.canonical_realms(pk) ON DELETE RESTRICT,
+    PRIMARY KEY (child_event_pk, predecessor_event_id)
+);
+
+-- The arrival side of the same relation: an accepted Event asks for the rows
+-- naming it, and the durable backlog sweep asks for rows whose predecessor has
+-- since become final.
+CREATE INDEX realm_timeline_pending_edges_predecessor_idx
+    ON public.realm_timeline_pending_edges USING btree (predecessor_event_id);
+
 CREATE INDEX canonical_events_kind_idx ON public.canonical_events USING btree (kind);
 
 CREATE INDEX canonical_events_kind_received_idx ON public.canonical_events USING btree (kind, received_at, id);

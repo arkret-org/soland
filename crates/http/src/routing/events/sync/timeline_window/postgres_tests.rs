@@ -7,9 +7,9 @@
 use chrono::{DateTime, Utc};
 
 use super::super::tests::{
-    ROSTER_ACTOR, ROSTER_CALLER, ROSTER_REALM, canonical_event_record_received_at,
-    insert_projected_membership_at, roster_realm, roster_session, store_canonical_event,
-    test_state,
+    ROSTER_ACTOR, ROSTER_CALLER, ROSTER_REALM, canonical_event_record_after,
+    canonical_event_record_received_at, insert_projected_membership_at, roster_realm,
+    roster_session, store_canonical_event, test_state,
 };
 use super::*;
 
@@ -397,5 +397,97 @@ async fn zero_item_windows_complete_explicitly_and_live_increments_carry_no_base
     assert_eq!(
         cursor.delivered, 2,
         "live increments do not count against the frozen window"
+    );
+}
+
+#[tokio::test]
+async fn a_late_predecessor_takes_the_window_off_the_preview_fallback() {
+    let state = test_state();
+    state.realm_directory().upsert(roster_realm(false, true));
+    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", at(-60));
+    insert_projected_membership_at(&state, ROSTER_CALLER, "join", at(-60));
+
+    // The root is built first so its successors can name it, and written last so
+    // this is a real out-of-order arrival. Until it lands, every row this Realm
+    // holds hangs off an edge the Station cannot resolve.
+    let root = canonical_event_record_received_at(
+        1,
+        arkret_wire::EventKind::MessageCreate,
+        json!({"body": "late predecessor root"}),
+        ROSTER_ACTOR,
+        at(1),
+        at(1),
+    );
+    let root_id = arkret_wire::EventId::new(root.event_id.clone()).expect("fixture event id");
+    let child = canonical_event_record_after(
+        2,
+        arkret_wire::EventKind::MessageCreate,
+        json!({"body": "late predecessor child"}),
+        ROSTER_ACTOR,
+        at(2),
+        at(2),
+        std::slice::from_ref(&root_id),
+    );
+    let child_id = arkret_wire::EventId::new(child.event_id.clone()).expect("fixture event id");
+    let grandchild = canonical_event_record_after(
+        3,
+        arkret_wire::EventKind::MessageCreate,
+        json!({"body": "late predecessor grandchild"}),
+        ROSTER_ACTOR,
+        at(3),
+        at(3),
+        std::slice::from_ref(&child_id),
+    );
+    store_canonical_event(&state, child).await;
+    store_canonical_event(&state, grandchild).await;
+
+    let session = roster_session(&state, ROSTER_CALLER);
+    let realm = RealmId::new(ROSTER_REALM.to_owned()).expect("fixture realm id");
+    let cursor_token = snapshot_cursor();
+    let filter = filter(5);
+    let segment = next_segment(
+        &state,
+        &session,
+        &filter,
+        &realm,
+        &cursor_token,
+        &mut frozen(&state, &realm, 5).await,
+        usize::MAX,
+    )
+    .await
+    .expect("a provisional window is still delivered");
+    assert_eq!(segment.timeline.events.len(), 2);
+    assert!(!segment.timeline.limited, "the window covers all it holds");
+    assert_eq!(
+        segment.timeline.preview_only,
+        Some(true),
+        "5.2 forbids claiming a final order around an edge the Station cannot see"
+    );
+
+    store_canonical_event(&state, root).await;
+
+    let settled = next_segment(
+        &state,
+        &session,
+        &filter,
+        &realm,
+        &cursor_token,
+        &mut frozen(&state, &realm, 5).await,
+        usize::MAX,
+    )
+    .await
+    .expect("the rebuilt generation delivers");
+    assert_eq!(
+        ids(&settled),
+        vec![
+            root_id.to_string(),
+            child_id.to_string(),
+            settled.timeline.events[2].event_id.to_string()
+        ],
+        "the late root sorts ahead of the successors it unblocked"
+    );
+    assert!(
+        settled.timeline.preview_only.is_none(),
+        "re-resolving the depth takes the window off the preview fallback"
     );
 }

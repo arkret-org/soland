@@ -752,6 +752,24 @@ async fn apply_data_closures(
     Ok(())
 }
 
+/// Retire a Realm's derived generation after its projection order moved.
+///
+/// The timeline index computes `(causal_depth, provisional)` at accepted time,
+/// so a predecessor that arrives late relocates its successors in 7.3 order. A
+/// window frozen against the previous order may no longer cover the same
+/// `[floor, head]` interval, and `client-sync.md` 2.3 answers that with a new
+/// generation rather than a silent re-cut of one already in flight. Retiring the
+/// summary is exactly the rebuild path the invalidated-generation case already
+/// takes: the in-flight generation fails its authority check and is refrozen.
+pub(crate) async fn invalidate_realm_projection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+) -> soland_storage::PersistenceResult<()> {
+    account_summary::invalidate(conn, realm_id)
+        .await
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+}
+
 /// Refresh expired or unavailable derived results inside the caller's transaction.
 /// The caller acquires its retention lock before entering this Realm lock.
 pub(crate) async fn refresh_current_if_expired(

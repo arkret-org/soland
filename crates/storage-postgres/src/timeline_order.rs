@@ -202,17 +202,37 @@ fn candidate_of(row: WindowCandidateRow) -> soland_storage::TimelineWindowCandid
 mod postgres_tests;
 
 use arkret_models_collaboration::sync_frames::client_sync::timeline_predecessors;
-use diesel::sql_types::{BigInt, Bool, Nullable, Text};
-use diesel::{QueryableByName, sql_query};
+use diesel::sql_types::{Array, BigInt, Bool, Nullable, Text};
+use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use soland_storage::{PersistenceError, PersistenceResult};
 
 #[derive(QueryableByName)]
 struct PredecessorOrderRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
     #[diesel(sql_type = BigInt)]
     causal_depth: i64,
     #[diesel(sql_type = Bool)]
     provisional: bool,
+}
+
+#[derive(QueryableByName)]
+struct PendingChildRow {
+    #[diesel(sql_type = BigInt)]
+    child_event_pk: i64,
+}
+
+#[derive(QueryableByName)]
+struct OrderSubjectRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = BigInt)]
+    realm_pk: i64,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    envelope: serde_json::Value,
 }
 
 /// One Realm-scoped row of the projection order index.
@@ -278,32 +298,21 @@ pub(crate) async fn commit_order_key(
     realm_pk: i64,
     event: &arkret_wire::Event,
 ) -> PersistenceResult<()> {
-    let predecessors = timeline_predecessors(event);
-    let predecessor_ids = predecessors
-        .event_ids
-        .iter()
-        .map(|id| id.as_str().to_owned())
-        .collect::<Vec<_>>();
-    let resolved = if predecessor_ids.is_empty() {
-        Vec::new()
-    } else {
-        sql_query(
-            "SELECT causal_depth, provisional FROM realm_timeline_order WHERE event_id = ANY($1)",
-        )
-        .bind::<diesel::sql_types::Array<Text>, _>(&predecessor_ids)
-        .load::<PredecessorOrderRow>(conn)
-        .await
-        .map_err(PersistenceError::database)?
-    };
-    let causal_depth = resolved
-        .iter()
-        .map(|row| row.causal_depth.saturating_add(1))
-        .max()
-        .unwrap_or(0)
-        .min(MAX_SAFE_INTEGER);
-    let provisional = resolved.len() != predecessor_ids.len()
-        || !predecessors.unresolvable_digests.is_empty()
-        || resolved.iter().any(|row| row.provisional);
+    commit_order_key_within(conn, event_pk, realm_pk, event, CASCADE_BUDGET).await
+}
+
+/// The same commit with an explicit cascade ceiling, so the over-budget path is
+/// reachable without materializing a backlog of the production size.
+async fn commit_order_key_within(
+    conn: &mut AsyncPgConnection,
+    event_pk: i64,
+    realm_pk: i64,
+    event: &arkret_wire::Event,
+    budget: usize,
+) -> PersistenceResult<()> {
+    let resolution = resolve_edges(conn, event).await?;
+    let causal_depth = resolution.causal_depth;
+    let provisional = resolution.provisional;
     sql_query(
         "INSERT INTO realm_timeline_order \
          (event_pk, realm_pk, realm_id, causal_depth, hlc, actor_id, actor_seq, event_id, kind, provisional) \
@@ -329,10 +338,16 @@ pub(crate) async fn commit_order_key(
     .bind::<Text, _>(event.event_id.as_str())
     .bind::<Text, _>(event.kind.as_str())
     .bind::<Bool, _>(provisional)
-    .execute(conn)
+    .execute(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
-    Ok(())
+    write_pending_edges(conn, event_pk, realm_pk, &resolution.pending).await?;
+    // This Event may be the predecessor others have been waiting on. Draining
+    // them here is what turns a late arrival into a corrected order instead of
+    // leaving every out-of-order successor stuck at the depth and provisional
+    // flag it was first written with.
+    let changed = cascade(conn, vec![event.event_id.as_str().to_owned()], budget).await?;
+    invalidate_reordered_realms(conn, &changed).await
 }
 
 /// One bounded page of a Realm's timeline in 7.3 projection order.
@@ -385,4 +400,259 @@ pub(crate) async fn timeline_page(
     }
     .map_err(PersistenceError::database)?;
     Ok(rows.into_iter().map(TimelineOrderRow::from).collect())
+}
+
+/// Ceiling on how many order rows one transaction may re-resolve, the same
+/// magnitude `rebuild_pending_causal_registers` uses for the other durable
+/// projection backlog.
+///
+/// Whatever does not fit is not dropped. A pending edge whose predecessor has
+/// already settled *is* the queued unit of work, so the backlog lives in
+/// `realm_timeline_pending_edges` itself rather than in a second list that
+/// could drift out of agreement with it; `drain_pending_timeline_edges` sweeps
+/// exactly those rows.
+const CASCADE_BUDGET: usize = 4096;
+
+/// One Event's 7.3 edge set resolved against what this Station currently holds.
+struct EdgeResolution {
+    causal_depth: i64,
+    provisional: bool,
+    /// Edges that are not finally resolved: the predecessor is absent here, or
+    /// present but itself provisional, so its own depth can still move. These
+    /// are the reverse rows worth keeping; a settled predecessor's depth is
+    /// final by induction and can never move a successor again.
+    pending: Vec<String>,
+}
+
+/// Resolve the whole 7.3 edge set of one Event.
+///
+/// `timeline_predecessors` is the SDK's single enumeration point for that set
+/// (`prev_refs`, `refs` with role `after`, `causal_refs` and the payload reply
+/// edge). Computing a narrower set here would make this Station order the same
+/// batch of Events differently from every other consumer of the same rule.
+async fn resolve_edges(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+) -> PersistenceResult<EdgeResolution> {
+    let predecessors = timeline_predecessors(event);
+    let predecessor_ids = predecessors
+        .event_ids
+        .iter()
+        .map(|id| id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let resolved = if predecessor_ids.is_empty() {
+        Vec::new()
+    } else {
+        sql_query(
+            "SELECT event_id, causal_depth, provisional FROM realm_timeline_order \
+             WHERE event_id = ANY($1)",
+        )
+        .bind::<Array<Text>, _>(&predecessor_ids)
+        .load::<PredecessorOrderRow>(conn)
+        .await
+        .map_err(PersistenceError::database)?
+    };
+    let causal_depth = resolved
+        .iter()
+        .map(|row| row.causal_depth.saturating_add(1))
+        .max()
+        .unwrap_or(0)
+        .min(MAX_SAFE_INTEGER);
+    let settled = resolved
+        .iter()
+        .filter(|row| !row.provisional)
+        .map(|row| row.event_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let pending = predecessor_ids
+        .iter()
+        .filter(|id| !settled.contains(id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(EdgeResolution {
+        causal_depth,
+        // A digest that cannot even name an Event has no arrival to wait for,
+        // so it gets no reverse row; it only keeps the order provisional.
+        provisional: !pending.is_empty() || !predecessors.unresolvable_digests.is_empty(),
+        pending,
+    })
+}
+
+/// Replace one Event's reverse edges with its currently unresolved ones.
+///
+/// Rewriting the whole set rather than adding to it is what retires an edge the
+/// moment its predecessor settles, which keeps the table the size of the
+/// genuinely unsettled frontier and keeps the backlog sweep from rediscovering
+/// work it has already done.
+async fn write_pending_edges(
+    conn: &mut AsyncPgConnection,
+    event_pk: i64,
+    realm_pk: i64,
+    pending: &[String],
+) -> PersistenceResult<()> {
+    sql_query("DELETE FROM realm_timeline_pending_edges WHERE child_event_pk = $1")
+        .bind::<BigInt, _>(event_pk)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    sql_query(
+        "INSERT INTO realm_timeline_pending_edges (child_event_pk, predecessor_event_id, realm_pk) \
+         SELECT $1, predecessor, $3 FROM UNNEST($2::text[]) AS predecessor \
+         ON CONFLICT (child_event_pk, predecessor_event_id) DO NOTHING",
+    )
+    .bind::<BigInt, _>(event_pk)
+    .bind::<Array<Text>, _>(pending)
+    .bind::<BigInt, _>(realm_pk)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
+/// Recompute one indexed row's `(causal_depth, provisional)` from its entire
+/// edge set and rewrite its reverse edges. Returns `(event_id, realm_id)` when
+/// the pair actually moved.
+///
+/// The recomputation is total, never a patch keyed on the edge that just
+/// arrived: the depth is `1 + max(every edge)`, so an edge that is still
+/// missing has to keep the row provisional no matter how deep the arriving one
+/// turned out to be.
+async fn reresolve(
+    conn: &mut AsyncPgConnection,
+    event_pk: i64,
+) -> PersistenceResult<Option<(String, String)>> {
+    let Some(subject) = sql_query(
+        "SELECT o.event_id, o.realm_pk, o.realm_id, e.envelope \
+         FROM realm_timeline_order o JOIN canonical_events e ON e.pk = o.event_pk \
+         WHERE o.event_pk = $1",
+    )
+    .bind::<BigInt, _>(event_pk)
+    .get_result::<OrderSubjectRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    else {
+        return Ok(None);
+    };
+    let event = serde_json::from_value::<arkret_wire::Event>(subject.envelope)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let resolution = resolve_edges(conn, &event).await?;
+    let moved = sql_query(
+        "UPDATE realm_timeline_order SET causal_depth = $2, provisional = $3 \
+         WHERE event_pk = $1 AND (causal_depth, provisional) IS DISTINCT FROM ($2, $3)",
+    )
+    .bind::<BigInt, _>(event_pk)
+    .bind::<BigInt, _>(resolution.causal_depth)
+    .bind::<Bool, _>(resolution.provisional)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+        != 0;
+    write_pending_edges(conn, event_pk, subject.realm_pk, &resolution.pending).await?;
+    Ok(moved.then_some((subject.event_id, subject.realm_id)))
+}
+
+/// Walk outward from Events whose order just moved, re-resolving every
+/// successor that named one of them as a predecessor.
+///
+/// The visited set is keyed on the edge, not on the successor: a diamond
+/// legitimately reaches the same successor once per predecessor that moved, and
+/// every one of those visits has to land or the successor keeps a depth
+/// computed from a stale predecessor. A cycle has finitely many edges, so
+/// following each at most once ends the cascade structurally rather than by
+/// burning the whole budget on it.
+async fn cascade(
+    conn: &mut AsyncPgConnection,
+    roots: Vec<String>,
+    budget: usize,
+) -> PersistenceResult<std::collections::BTreeSet<String>> {
+    let mut frontier = std::collections::VecDeque::from(roots);
+    let mut walked = std::collections::BTreeSet::<(i64, String)>::new();
+    let mut reordered = std::collections::BTreeSet::new();
+    let mut spent = 0usize;
+    while let Some(predecessor) = frontier.pop_front() {
+        let children = sql_query(
+            "SELECT child_event_pk FROM realm_timeline_pending_edges \
+             WHERE predecessor_event_id = $1 ORDER BY child_event_pk",
+        )
+        .bind::<Text, _>(&predecessor)
+        .load::<PendingChildRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        for child in children {
+            if !walked.insert((child.child_event_pk, predecessor.clone())) {
+                continue;
+            }
+            if spent >= budget {
+                // Leave the edge row alone. Its predecessor is settled now, so
+                // this successor is exactly what the durable sweep looks for.
+                continue;
+            }
+            spent += 1;
+            if let Some((event_id, realm_id)) = reresolve(conn, child.child_event_pk).await? {
+                reordered.insert(realm_id);
+                frontier.push_back(event_id);
+            }
+        }
+    }
+    Ok(reordered)
+}
+
+/// Retire the derived generation of every Realm whose projection order moved.
+///
+/// A changed `(causal_depth, provisional)` relocates the row in 7.3 order, so a
+/// window frozen against the previous order may no longer cover the same
+/// `[floor, head]` interval. `client-sync.md` 2.3 answers that with a new
+/// generation and never with a silent re-cut of one already in flight, so this
+/// hands the case to the invalidation path: an in-flight generation fails its
+/// authority check and is rebuilt with its own cut and reservation.
+async fn invalidate_reordered_realms(
+    conn: &mut AsyncPgConnection,
+    reordered: &std::collections::BTreeSet<String>,
+) -> PersistenceResult<()> {
+    for realm_id in reordered {
+        crate::state_resolution::invalidate_realm_projection(conn, realm_id).await?;
+    }
+    Ok(())
+}
+
+/// Drain the durable backlog of re-resolutions owed to one Realm.
+///
+/// A pending edge whose predecessor has already settled is a successor written
+/// before that predecessor arrived and not recomputed since, because an arrival
+/// cascade ran out of budget or the process stopped mid-cascade. The condition
+/// is derived from the rows themselves, so nothing can be enqueued and then
+/// lost, and a crash costs at most the work of recomputing it again.
+pub(crate) async fn drain_pending_timeline_edges(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    budget: usize,
+) -> PersistenceResult<usize> {
+    let budget = budget.clamp(1, CASCADE_BUDGET);
+    let owed = sql_query(
+        "SELECT DISTINCT e.child_event_pk FROM realm_timeline_pending_edges e \
+         JOIN realm_timeline_order c ON c.event_pk = e.child_event_pk \
+         JOIN realm_timeline_order p ON p.event_id = e.predecessor_event_id \
+         WHERE c.realm_id = $1 AND NOT p.provisional ORDER BY 1 LIMIT $2",
+    )
+    .bind::<Text, _>(realm_id)
+    .bind::<BigInt, _>(budget as i64)
+    .load::<PendingChildRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut reordered = std::collections::BTreeSet::new();
+    let mut roots = Vec::new();
+    for row in &owed {
+        if let Some((event_id, realm)) = reresolve(conn, row.child_event_pk).await? {
+            reordered.insert(realm);
+            roots.push(event_id);
+        }
+    }
+    if !roots.is_empty() {
+        reordered.extend(cascade(conn, roots, CASCADE_BUDGET.saturating_sub(owed.len())).await?);
+    }
+    invalidate_reordered_realms(conn, &reordered).await?;
+    Ok(owed.len())
 }

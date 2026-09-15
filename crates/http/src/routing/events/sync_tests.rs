@@ -764,6 +764,29 @@ pub(crate) fn canonical_event_record_received_at(
     created_at: DateTime<Utc>,
     received_at: DateTime<Utc>,
 ) -> soland_services::events::AcceptedEvent {
+    canonical_event_record_after(
+        actor_seq,
+        kind,
+        payload,
+        actor_id,
+        created_at,
+        received_at,
+        &[],
+    )
+}
+
+/// The same fixture record with explicit `prev_refs`, so a test can write a
+/// successor before the Event it names and exercise an out-of-order arrival.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn canonical_event_record_after(
+    actor_seq: u64,
+    kind: impl AsRef<str>,
+    payload: Value,
+    actor_id: &str,
+    created_at: DateTime<Utc>,
+    received_at: DateTime<Utc>,
+    predecessors: &[arkret_wire::EventId],
+) -> soland_services::events::AcceptedEvent {
     let kind = kind.as_ref();
     let mut event = crate::test_event::raw_event_at(
         kind,
@@ -777,6 +800,7 @@ pub(crate) fn canonical_event_record_received_at(
         created_at,
     )
     .expect("canonical sync fixture Event");
+    event.prev_refs = predecessors.to_vec();
     crate::test_event::attach_structural_only_producer_proof(
         &mut event,
         arkret_wire::DidUrl::new(format!("{ROSTER_ACTOR_DID}#device-key")).unwrap(),
