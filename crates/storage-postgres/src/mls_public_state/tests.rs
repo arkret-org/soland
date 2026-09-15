@@ -215,6 +215,71 @@ async fn exact_public_genesis_is_atomic_restorable_and_withdrawal_is_not_readabl
     assert!(read_genesis(&mut conn, &event_id).await.unwrap().is_none());
 }
 
+#[tokio::test]
+async fn historical_genesis_authority_is_pinned_on_retry_and_withdrawal_hides_it() {
+    let db = crate::test_database::TestDatabase::lease().await;
+    let pool = db.pool();
+    let mut request = genesis();
+    let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone()).unwrap();
+    let account = event.actor_id.as_account_id().unwrap();
+    let original = "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml";
+    request.device_revocation_gate = Some(soland_storage::DeviceRevocationGateSelector {
+        principal_id: account.principal_id.clone(),
+        station_id: account.station_id.clone(),
+        device_id: request
+            .mls_public_genesis
+            .as_ref()
+            .unwrap()
+            .producer_device_id
+            .as_ref()
+            .unwrap()
+            .to_string(),
+        target_device_authorize_event_id: original.into(),
+        target_device_generation_ref: 1,
+    });
+    // This persistence fixture supplies already-verified producer input; live
+    // gate authentication is covered by the Event UoW tests, not this helper.
+    persist(&pool, &request).await.unwrap();
+    let mut conn = crate::pg_conn(&pool).await.unwrap();
+    let first = read_authorizations(&mut conn, &event.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first[0]
+            .device_authorize_event_id
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        original
+    );
+    request
+        .device_revocation_gate
+        .as_mut()
+        .unwrap()
+        .target_device_authorize_event_id =
+        "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".into();
+    persist(&pool, &request).await.unwrap();
+    assert_eq!(
+        read_authorizations(&mut conn, &event.event_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        first
+    );
+    sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
+        .bind::<Binary, _>(event.event_id.token_bytes().to_vec())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(
+        read_authorizations(&mut conn, &event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 fn successor(
     template: &EventCommitRequest,
     kind: &str,

@@ -609,7 +609,8 @@ CREATE TABLE public.mls_public_genesis_states (
     input_bytes bytea NOT NULL,
     public_state bytea NOT NULL,
     producer_signing_key text NOT NULL,
-    producer_device_authorization jsonb
+    producer_device_authorization jsonb,
+    leaf_authorizations jsonb
 );
 
 -- Public candidates stay separate from the winning epoch and membership authority.
@@ -626,6 +627,7 @@ CREATE TABLE public.mls_public_commit_states (
     public_state bytea NOT NULL,
     transition jsonb NOT NULL,
     source_available boolean NOT NULL,
+    leaf_authorizations jsonb,
     CHECK (event_pk <> base_event_pk)
 );
 CREATE TABLE public.mls_public_transition_dependencies (

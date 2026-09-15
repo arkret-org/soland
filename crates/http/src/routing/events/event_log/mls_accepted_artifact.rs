@@ -254,6 +254,14 @@ async fn materialize(
         transition_head: arkret_models_crypto::MlsAcceptedTransition::from(&transition_head),
         governance_binding: binding,
         mls_frontier_leaves: leaves,
+        mls_leaf_authorizations: state
+            .mls_commits()
+            .public_leaf_authorizations(&target_ref)
+            .await
+            .map_err(unavailable)?
+            .ok_or_else(|| {
+                unavailable("accepted MLS transition historical endpoint authority is unavailable")
+            })?,
     };
     outcome
         .validate_for_request(query)

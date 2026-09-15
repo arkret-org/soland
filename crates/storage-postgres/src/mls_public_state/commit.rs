@@ -231,6 +231,21 @@ async fn commit_candidate(
         payload.base_epoch(),
     )
     .map_err(fail)?;
+    let base_leaves = tracker
+        .leaves()
+        .map_err(fail)?
+        .into_iter()
+        .map(|leaf| (leaf.leaf_index, leaf))
+        .collect::<BTreeMap<_, _>>();
+    let original_authorizations = super::authority::retained(conn, &event.event_id, false).await?;
+    let mut leaf_authorizations = super::authority::read_authorizations(conn, &base_id)
+        .await?
+        .map(|values| {
+            values
+                .into_iter()
+                .map(|value| (value.leaf_index, value))
+                .collect::<BTreeMap<_, _>>()
+        });
     if payload.governance_binding().effective_scope() != &event.scope_ref
         || event.scope_ref.canonical_mls_group_id().map_err(fail)? != payload.mls_group_id()
     {
@@ -336,6 +351,26 @@ async fn commit_candidate(
     let added_sources = added_leaf_proposal_refs
         .into_iter()
         .collect::<BTreeMap<_, _>>();
+    if let Some(authorizations) = &mut leaf_authorizations {
+        for index in &removed_leaf_indices {
+            authorizations.remove(index);
+        }
+    }
+    let post_leaves = tracker.leaves().map_err(fail)?;
+    for leaf in &post_leaves {
+        if !added_sources.contains_key(&leaf.leaf_index) {
+            let previous = base_leaves
+                .get(&leaf.leaf_index)
+                .ok_or_else(|| fail("retained MLS leaf has no base"))?;
+            if previous.credential_ref != leaf.credential_ref
+                || previous.signature_key != leaf.signature_key
+            {
+                return Err(fail(
+                    "MLS Update cannot replace endpoint credential or signing key",
+                ));
+            }
+        }
+    }
     let mut additions = Vec::new();
     let mut used_adds = BTreeSet::new();
     for leaf in added_leaves {
@@ -350,6 +385,11 @@ async fn commit_candidate(
         {
             return Err(fail("MLS Add sources and new leaves are not a bijection"));
         }
+        // A target Actor/incarnation and a public key do not carry the exact
+        // endpoint authorization. Until verified Add provenance is retained,
+        // this candidate cannot supply a complete accepted-artifact result.
+        // In particular, never inherit an old origin after Remove+Add.
+        leaf_authorizations = None;
         additions.push(json!({"leaf":leaf,"proposal_event_ref":proposal.event_id,
             "declared_target_actor_id":value.target_actor_id,"declared_target_authorization_incarnation":value.target_authorization_incarnation}));
     }
@@ -377,6 +417,30 @@ async fn commit_candidate(
     if count != 1 {
         return Err(fail("MLS public Commit candidate changed on exact retry"));
     }
+    let leaf_authorizations = original_authorizations
+        .unwrap_or_else(|| leaf_authorizations.map(|values| values.into_values().collect()));
+    if leaf_authorizations.as_ref().is_some_and(|values| {
+        values.len() != post_leaves.len()
+            || values
+                .iter()
+                .zip(&post_leaves)
+                .any(|(authorization, leaf)| authorization.leaf_index != leaf.leaf_index)
+    }) {
+        return Err(fail(
+            "retained authority does not cover the exact public tree",
+        ));
+    }
+    sql_query("UPDATE mls_public_commit_states SET leaf_authorizations=$2 WHERE event_pk=$1")
+        .bind::<BigInt, _>(event_pk)
+        .bind::<diesel::sql_types::Nullable<Jsonb>, _>(
+            leaf_authorizations
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(fail)?,
+        )
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
     sql_query("DELETE FROM mls_public_transition_dependencies WHERE transition_event_pk=$1")
         .bind::<BigInt, _>(event_pk)
         .execute(conn)

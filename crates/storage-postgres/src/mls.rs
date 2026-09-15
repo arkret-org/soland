@@ -903,6 +903,15 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
 }
 #[async_trait]
 impl MlsCommitStore for PgMlsCommitStore {
+    async fn public_leaf_authorizations(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::mls_public_state::read_authorizations(&mut conn, event_id).await
+    }
     async fn public_genesis_candidate(
         &self,
         event_id: &arkret_wire::EventId,

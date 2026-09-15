@@ -734,6 +734,12 @@ pub struct MlsCommitGenesis<'a> {
 
 #[async_trait]
 pub trait MlsCommitStore: Send + Sync {
+    /// Frozen endpoint authority for an exact public candidate, if available.
+    async fn public_leaf_authorizations(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>>;
+
     /// Exact accepted public Genesis candidate, not a current membership result.
     async fn public_genesis_candidate(
         &self,

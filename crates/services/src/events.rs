@@ -1670,6 +1670,11 @@ pub struct AdvanceMlsEpochCommand {
 
 #[async_trait::async_trait]
 pub trait MlsCommitReadPort: Send + Sync {
+    async fn public_leaf_authorizations(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>>;
+
     async fn public_genesis_candidate(
         &self,
         event_id: &arkret_wire::EventId,
@@ -1697,6 +1702,12 @@ pub struct MlsCommitQueryService {
 }
 
 impl MlsCommitQueryService {
+    pub async fn public_leaf_authorizations(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>> {
+        self.commits.public_leaf_authorizations(event_id).await
+    }
     pub async fn public_genesis_candidate(
         &self,
         event_id: &arkret_wire::EventId,

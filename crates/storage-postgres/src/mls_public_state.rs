@@ -1,4 +1,6 @@
+mod authority;
 mod commit;
+pub(crate) use authority::read_authorizations;
 use diesel::sql_types::{BigInt, Binary, Jsonb, Nullable, Text};
 use diesel::{OptionalExtension, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -234,6 +236,22 @@ pub(crate) async fn commit_genesis(
         .map(serde_json::to_value)
         .transpose()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let leaf_authorizations = match authority::retained(conn, &event.event_id, false).await? {
+        Some(original) => original,
+        None => {
+            let leaf = arkret_wire::mls_transition::MlsSecurityFrontierLeaf {
+                leaf_index: creator.leaf_index,
+                actor_id: event
+                    .executed_by
+                    .as_ref()
+                    .unwrap_or(&event.actor_id)
+                    .clone(),
+                credential_ref: creator.credential_ref.clone(),
+            };
+            let origin = authority::genesis_origin(request, &event, &leaf, &creator.signature_key)?;
+            origin.map(|origin| vec![origin])
+        }
+    };
     sql_query("INSERT INTO mls_public_genesis_states (event_pk,input_bytes,public_state,producer_signing_key,producer_device_authorization,source_canonical_bytes,source_available) VALUES ($1,$2,$3,$4,$5,$6,TRUE) ON CONFLICT (event_pk) DO UPDATE SET source_available=TRUE,input_bytes=EXCLUDED.input_bytes,public_state=EXCLUDED.public_state,producer_signing_key=EXCLUDED.producer_signing_key,producer_device_authorization=EXCLUDED.producer_device_authorization,source_canonical_bytes=EXCLUDED.source_canonical_bytes WHERE mls_public_genesis_states.source_canonical_bytes<>EXCLUDED.source_canonical_bytes OR mls_public_genesis_states.input_bytes=EXCLUDED.input_bytes")
         .bind::<BigInt,_>(event_pk).bind::<Binary,_>(&input_bytes).bind::<Binary,_>(public_state)
         .bind::<Text,_>(input.producer_signing_key.as_str()).bind::<Nullable<Jsonb>,_>(authorization)
@@ -251,6 +269,17 @@ pub(crate) async fn commit_genesis(
             "MLS Genesis public input changed on exact retry".to_owned(),
         ));
     }
+    sql_query("UPDATE mls_public_genesis_states SET leaf_authorizations=$2 WHERE event_pk=$1")
+        .bind::<BigInt, _>(event_pk)
+        .bind::<Nullable<Jsonb>, _>(
+            leaf_authorizations
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+        )
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
     Ok(())
 }
 

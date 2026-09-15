@@ -704,6 +704,16 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
 
 #[async_trait::async_trait]
 impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
+    async fn public_leaf_authorizations(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> crate::ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>> {
+        Ok(self
+            .0
+            .mls_commits()
+            .public_leaf_authorizations(event_id)
+            .await?)
+    }
     async fn public_genesis_candidate(
         &self,
         event_id: &arkret_wire::EventId,
