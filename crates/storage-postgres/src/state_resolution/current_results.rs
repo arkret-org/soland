@@ -561,6 +561,15 @@ pub(super) async fn publish(
             {
                 serde_json::json!({"status":"value","value":[]})
             }
+            // 1506 — a register-form causal_register singleton that was never
+            // written publishes a confirmed null. The omitted `source` is what
+            // distinguishes it on the wire from a null somebody actually wrote,
+            // which still carries its source; the empty baseline is otherwise
+            // unrepresentable and the four required Realm entries never
+            // complete.
+            None if origin.unwritten && descriptor.state_model == "causal_register" => {
+                serde_json::json!({"status":"value","value":null})
+            }
             None if origin.unwritten => {
                 continue;
             }
