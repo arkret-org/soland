@@ -247,12 +247,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    publication_evidence (event_digest) {
-        event_digest -> Text,
-        realm_id -> Text,
-        authorization_lease -> Jsonb,
-        ingress_receipt -> Jsonb,
-        created_at -> Timestamptz,
+    publication_evidence (event_id) {
+        event_id -> Text,
+        committed_ref -> Jsonb,
+        accepted_at -> Timestamptz,
     }
 }
 
@@ -599,30 +597,23 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_revocation_targets (proposal_digest) {
-        proposal_digest -> Text,
-        principal_id -> Text,
-        station_id -> Text,
-        device_id -> Text,
-        target_device_authorize_event_id -> Text,
-        target_device_generation_ref -> Int8,
-        proposal_event_id -> Text,
-        accepted_at -> Timestamptz,
-        acceptance_seq -> Int8,
-        control_proposal_ack -> Jsonb,
+    device_revocation_targets (event_id) {
+        event_id -> Text,
+        selector -> Jsonb,
+        committed_ref -> Jsonb,
+        committed_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    device_revocation_gate_receipts (principal_id, station_id, device_id, target_device_authorize_event_id, target_device_generation_ref, action_class, intent_digest) {
+    device_revocation_gate_receipts (principal_id, station_id, device_id, action_class, intent_digest) {
         principal_id -> Text,
         station_id -> Text,
         device_id -> Text,
-        target_device_authorize_event_id -> Text,
-        target_device_generation_ref -> Int8,
         action_class -> Text,
         intent_digest -> Text,
-        decision_payload -> Jsonb,
+        request_json -> Jsonb,
+        status_json -> Jsonb,
         linearization_seq -> Int8,
         linearized_at -> Timestamptz,
         expires_at -> Timestamptz,
@@ -630,15 +621,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_revocation_cleanup_intents (proposal_digest) {
-        proposal_digest -> Text,
-        proposal_event_id -> Text,
-        covering_seal_id -> Text,
-        principal_id -> Text,
-        station_id -> Text,
-        device_id -> Text,
-        target_device_authorize_event_id -> Text,
-        target_device_generation_ref -> Int8,
+    device_revocation_cleanup_intents (event_id) {
+        event_id -> Text,
+        committed_ref -> Jsonb,
+        selector -> Jsonb,
         created_at -> Timestamptz,
         material_cleanup_completed_at -> Nullable<Timestamptz>,
         mls_obligation_completed_at -> Nullable<Timestamptz>,
@@ -1380,7 +1366,7 @@ diesel::table! {
         principal_id -> Text,
         station_id -> Text,
         version -> Int4,
-        acceptance_basis -> Jsonb,
+        acceptance_ref -> Jsonb,
         trust_domain -> Text,
         supersedes -> Nullable<Uuid>,
         expires_at -> Nullable<Timestamptz>,
@@ -1408,9 +1394,9 @@ diesel::table! {
         identity_model -> Text,
         current_device_generation_ref -> Int8,
         device_generation_status -> Text,
-        accepted_seal_frontier -> Jsonb,
+        accepted_stream_head -> Jsonb,
         policy_payload -> Jsonb,
-        publication_authority_context -> Jsonb,
+        authority_context -> Jsonb,
         publication_authority_context_digest -> Text,
         challenge -> Text,
         state -> Text,

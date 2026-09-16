@@ -509,14 +509,10 @@ CREATE INDEX blobs_space_created_idx ON public.blobs USING btree (realm_id, crea
 -- primary key so the first receipt for a digest is the one that stands and an
 -- idempotent retry cannot re-stamp `received_at`.
 CREATE TABLE public.publication_evidence (
-    event_digest text PRIMARY KEY,
-    realm_id text NOT NULL,
-    authorization_lease jsonb NOT NULL,
-    ingress_receipt jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    event_id text PRIMARY KEY,
+    committed_ref jsonb NOT NULL,
+    accepted_at timestamp with time zone NOT NULL
 );
-
-CREATE INDEX publication_evidence_realm_idx ON public.publication_evidence USING btree (realm_id);
 
 -- `signal_relay_position`.
 CREATE TABLE public.signal_relay (
@@ -1771,24 +1767,14 @@ CREATE TABLE public.device_revocation_linearization_heads (
 );
 
 CREATE TABLE public.device_revocation_targets (
-    proposal_digest text PRIMARY KEY REFERENCES public.state_control_events(event_digest) ON DELETE RESTRICT,
-    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
-    device_id text NOT NULL,
-    target_device_authorize_event_id text NOT NULL,
-    target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
-    proposal_event_id text NOT NULL,
-    accepted_at timestamp with time zone NOT NULL,
-    acceptance_seq bigint NOT NULL CHECK (acceptance_seq > 0),
-    control_proposal_ack jsonb NOT NULL,
-    UNIQUE (principal_id, station_id, device_id,
-            target_device_authorize_event_id, target_device_generation_ref, acceptance_seq)
+    event_id text PRIMARY KEY,
+    selector jsonb NOT NULL,
+    committed_ref jsonb NOT NULL,
+    committed_at timestamp with time zone NOT NULL
 );
 
 CREATE INDEX device_revocation_targets_selector_idx
-    ON public.device_revocation_targets
-    (principal_id, station_id, device_id,
-     target_device_authorize_event_id, target_device_generation_ref, acceptance_seq);
+    ON public.device_revocation_targets USING btree (selector, committed_at DESC);
 
 CREATE TABLE public.device_revocation_gate_receipts (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
@@ -1799,7 +1785,8 @@ CREATE TABLE public.device_revocation_gate_receipts (
         'to_device_write', 'event_write'
     ])),
     intent_digest text NOT NULL,
-    decision_payload jsonb NOT NULL,
+    request_json jsonb NOT NULL,
+    status_json jsonb NOT NULL,
     linearization_seq bigint NOT NULL CHECK (linearization_seq > 0),
     linearized_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
@@ -1810,21 +1797,16 @@ CREATE TABLE public.device_revocation_gate_receipts (
 );
 
 CREATE TABLE public.device_revocation_cleanup_intents (
-    proposal_digest text PRIMARY KEY REFERENCES public.device_revocation_targets(proposal_digest) ON DELETE RESTRICT,
-    proposal_event_id text NOT NULL,
-    covering_seal_id text NOT NULL,
-    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    station_id text NOT NULL,
-    device_id text NOT NULL,
-    target_device_authorize_event_id text NOT NULL,
-    target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
+    event_id text PRIMARY KEY REFERENCES public.device_revocation_targets(event_id) ON DELETE RESTRICT,
+    committed_ref jsonb NOT NULL,
+    selector jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     material_cleanup_completed_at timestamp with time zone,
     mls_obligation_completed_at timestamp with time zone
 );
 
-CREATE INDEX device_revocation_cleanup_pending_idx
-    ON public.device_revocation_cleanup_intents (created_at, proposal_digest)
+CREATE INDEX device_revocation_cleanup_intents_pending_idx
+    ON public.device_revocation_cleanup_intents USING btree (created_at)
     WHERE material_cleanup_completed_at IS NULL OR mls_obligation_completed_at IS NULL;
 
 CREATE TABLE public.device_pairing_outcomes (
@@ -3109,7 +3091,7 @@ CREATE TABLE public.recovery_policies (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
     version integer NOT NULL,
-    acceptance_basis jsonb NOT NULL,
+    acceptance_ref jsonb NOT NULL,
     trust_domain text NOT NULL,
     supersedes uuid,
     expires_at timestamp with time zone,
@@ -3145,9 +3127,9 @@ CREATE TABLE public.recovery_sessions (
     identity_model text NOT NULL,
     current_device_generation_ref bigint NOT NULL,
     device_generation_status text NOT NULL,
-    accepted_seal_frontier jsonb NOT NULL,
+    accepted_stream_head jsonb NOT NULL,
     policy_payload jsonb NOT NULL,
-    publication_authority_context jsonb NOT NULL,
+    authority_context jsonb NOT NULL,
     publication_authority_context_digest text NOT NULL,
     challenge text NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
