@@ -5893,15 +5893,22 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-event-draft",
+ "arkret-hlc",
  "arkret-identifiers",
+ "arkret-mls",
  "arkret-models-collaboration",
  "arkret-models-crypto",
+ "arkret-models-identity",
  "arkret-policy",
  "arkret-schema",
  "arkret-wire",
+ "base64 0.23.1",
  "chrono",
+ "parking_lot",
  "serde",
  "serde_json",
+ "thiserror",
+ "tracing",
  "uuid",
 ]
 
