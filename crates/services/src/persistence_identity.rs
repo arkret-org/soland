@@ -379,8 +379,8 @@ impl crate::identity::ConsentCellPort for PersistenceConsentCells {
         &self,
     ) -> crate::ServiceResult<
         Vec<(
-            crate::identity::ConsentCellKey,
-            crate::identity::ConsentCellRecord,
+            crate::identity::ConsentGrantKey,
+            crate::identity::ConsentGrantRecord,
         )>,
     > {
         Ok(self.0.consent_cells().snapshot_all().await?)
@@ -1477,7 +1477,7 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
     async fn step_outcome(
         &self,
         transaction_id: &str,
-        step: arkret_wire::SecurityTransactionStep,
+        step: arkret_models_crypto::security_transaction::SecurityTransactionStep,
     ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionStepOutcomeState>> {
         Ok(self
             .0
@@ -1489,7 +1489,7 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
     async fn step_attempt(
         &self,
         transaction_id: &str,
-        step: arkret_wire::SecurityTransactionStep,
+        step: arkret_models_crypto::security_transaction::SecurityTransactionStep,
     ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionStepAttemptState>> {
         Ok(self
             .0

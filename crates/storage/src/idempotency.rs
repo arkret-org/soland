@@ -21,28 +21,6 @@ pub struct IdempotencyRecord {
     pub expires_at: chrono::DateTime<Utc>,
 }
 
-/// Durable first result for one PCR Seal signing position.
-///
-/// Unlike ordinary idempotency rows, this record has no expiry. A signer may
-/// have signed the returned body while offline, so lease expiry, cache eviction
-/// and process restart can never make the position available for another body.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SealPreparationFenceRecord {
-    pub realm_id: arkret_wire::RealmId,
-    pub signer_slot: String,
-    pub predecessor_basis: String,
-    pub request_hash: String,
-    pub response_body: Value,
-    pub body_digest: String,
-    pub created_at: chrono::DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SealPreparationFenceOutcome {
-    Frozen(SealPreparationFenceRecord),
-    Replay(SealPreparationFenceRecord),
-    Fenced,
-}
 /// Durable `(authenticated actor, operation id, key) -> first response` table.
 #[async_trait]
 pub trait IdempotencyStore: Send + Sync {
@@ -69,20 +47,4 @@ pub trait IdempotencyStore: Send + Sync {
     ) -> PersistenceResult<bool>;
     /// TTL sweep: drop every row whose `expires_at` is at or before `now`.
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize>;
-
-    /// Read the immutable result for one PCR signing position, if it exists.
-    async fn seal_preparation_fence(
-        &self,
-        realm_id: &arkret_wire::RealmId,
-        signer_slot: &str,
-        predecessor_basis: &str,
-    ) -> PersistenceResult<Option<SealPreparationFenceRecord>>;
-
-    /// Atomically freeze the first complete response for a PCR signing
-    /// position. A matching request replays the landed response; a different
-    /// request is fenced without changing the durable row.
-    async fn freeze_seal_preparation(
-        &self,
-        record: &SealPreparationFenceRecord,
-    ) -> PersistenceResult<SealPreparationFenceOutcome>;
 }

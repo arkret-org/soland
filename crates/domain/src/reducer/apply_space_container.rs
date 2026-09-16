@@ -706,6 +706,8 @@ impl ProjectionState {
         }
     }
 
+    /// Whether the child scope has been irreversibly activated by its own accepted
+    /// `ak.mls.genesis`. An activated scope carries only RFC 9420 application ciphertext.
     fn child_scope_is_e2ee(
         &self,
         child_scope_circle_id: Option<&str>,
@@ -713,18 +715,9 @@ impl ProjectionState {
     ) -> bool {
         match child_scope_circle_id {
             Some(circle_id) => self.circles.get(circle_id).is_some_and(|circle| {
-                circle.state == CircleLifecycleState::Active
-                    && (encryption_profile_requires_content_encryption(Some(
-                        circle.encryption_profile.as_str(),
-                    )) || content_floor_rank(circle.content_encryption_floor.as_deref()) >= 1)
+                circle.state == CircleLifecycleState::Active && circle.mls_group_ref.is_some()
             }),
-            None => {
-                self.realm_requires_content_encryption(child_realm_id)
-                    || content_floor_rank(
-                        self.realm_content_encryption_floor(child_realm_id)
-                            .as_deref(),
-                    ) >= 1
-            }
+            None => self.realm_scope_is_mls_activated(child_realm_id),
         }
     }
 

@@ -78,7 +78,6 @@ diesel::table! {
         cleanup_intent_digest -> Text,
         realm_id -> Text,
         controller_terminal_event_id -> Text,
-        status -> Text,
         record_json -> Jsonb,
         accepted_at -> Timestamptz,
         cleanup_due_at -> Timestamptz,
@@ -426,9 +425,6 @@ diesel::table! {
 diesel::table! {
     mimi_consent_correlations (consent_id) {
         consent_id -> Text,
-        requester_id -> Text,
-        target_kind -> Text,
-        target_id -> Text,
         purpose -> Text,
         strand_id -> Nullable<Text>,
         source_id -> Nullable<Text>,
@@ -614,12 +610,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_revocation_gate_receipts (principal_id, station_id, device_id, target_device_authorize_event_id, target_device_generation_ref, action_class, intent_digest) {
+    device_revocation_gate_receipts (principal_id, station_id, device_id, action_class, intent_digest) {
         principal_id -> Text,
         station_id -> Text,
         device_id -> Text,
-        target_device_authorize_event_id -> Text,
-        target_device_generation_ref -> Int8,
         action_class -> Text,
         intent_digest -> Text,
         decision_payload -> Jsonb,
@@ -687,9 +681,11 @@ diesel::table! {
         reason -> Text,
         evidence_scope -> Jsonb,
         observed_at -> Int8,
-        resolution_kind -> Nullable<Text>,
-        resolution_digest -> Nullable<Text>,
-        resolved_at -> Nullable<Int8>,
+        local_resolution_kind -> Nullable<Text>,
+        local_resolution_digest -> Nullable<Text>,
+        local_normalized_at -> Nullable<Int8>,
+        peer_alignment_digest -> Nullable<Text>,
+        peer_aligned_at -> Nullable<Int8>,
     }
 }
 
@@ -869,7 +865,6 @@ diesel::table! {
         payload -> Jsonb,
         metadata -> Jsonb,
         last_accessed_at -> Nullable<Timestamptz>,
-        account_id -> Nullable<Text>,
         scheme -> Nullable<Text>,
         version -> Int4,
         key_material_encrypted -> Nullable<Bytea>,
@@ -1457,7 +1452,6 @@ diesel::table! {
         request_digest -> Text,
         prepared_plan -> Jsonb,
         prepared_plan_digest -> Text,
-        state -> Text,
         accepted_steps -> Jsonb,
         terminal_result -> Nullable<Jsonb>,
         canonical_request -> Binary,
@@ -1948,7 +1942,6 @@ diesel::table! {
 diesel::table! {
     sync_cursor_handles (id) {
         id -> Text,
-        principal_id -> Nullable<Text>,
         device_id -> Nullable<Text>,
         service_id -> Text,
         filter_digest -> Nullable<Text>,

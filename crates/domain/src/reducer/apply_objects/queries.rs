@@ -787,21 +787,7 @@ impl ProjectionState {
         self.capability_derived.get(grant_id)
     }
 
-    /// Read the create-locked Realm encryption profile from genesis.
-    pub fn realm_encryption_profile(&self, realm_id: &str) -> Option<String> {
-        self.realm_genesis_value(realm_id)
-            .and_then(|genesis| genesis.get("encryption_profile"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    }
-
     /// Profiles the Realm object declares in `schema_refs[]`.
-    ///
-    /// This is where a Realm declares `ak.profile.e2ee_relaxed.v1`
-    /// (`encryption-and-audit.md` §2.4.1). The Realm has no
-    /// `supported_profiles` field — that name belongs to the *service*
-    /// description — and the policy bundle deliberately does not carry the
-    /// profile either, so this create-log read is the only source.
     pub fn realm_schema_refs(&self, realm_id: &str) -> Vec<String> {
         self.realm_genesis_value(realm_id)
             .and_then(|genesis| genesis.get("schema_refs"))
@@ -824,47 +810,13 @@ impl ProjectionState {
             .map(ToOwned::to_owned)
     }
 
-    pub fn realm_requires_content_encryption(&self, realm_id: &str) -> bool {
-        encryption_profile_requires_content_encryption(
-            self.realm_encryption_profile(realm_id).as_deref(),
-        )
-    }
-
-    /// Effective Realm `content_encryption_floor` projected from the
-    /// `ak.component.realm.policy_bundle.v1` cell. `None` means the spec
-    /// default `allow_plaintext`. Independent of `encryption_profile`, which
-    /// only declares the encryption mechanism (realm-and-space.md §2.3).
-    pub fn realm_content_encryption_floor(&self, realm_id: &str) -> Option<String> {
-        let components = self.realm_policy_bundle_value(realm_id)?;
-        policy_floor_field(components, "content_encryption_floor").map(ToOwned::to_owned)
-    }
-
-    /// Effective Realm `metadata_encryption_floor` projected from the
-    /// `ak.component.realm.policy_bundle.v1` cell. `None` means the
-    /// reducer default is inferred elsewhere (`e2ee_required` for MLS /
-    /// e2ee_required Realms, else `allow_plaintext`).
-    pub fn realm_metadata_encryption_floor(&self, realm_id: &str) -> Option<String> {
-        let components = self.realm_policy_bundle_value(realm_id)?;
-        policy_floor_field(components, "metadata_encryption_floor").map(ToOwned::to_owned)
-    }
-
-    /// Effective Realm `content_scheme`, read from the governance binding the
-    /// winning `ak.component.mls.epoch.v1` tuple froze.
+    /// The canonical MLS group id an accepted `ak.mls.genesis` installed for the Realm-default
+    /// scope, if that scope is activated.
     ///
-    /// `realm-and-space.md` §2.3 fixes the scheme at the accepted MLS group
-    /// Genesis and forbids it in mutable policy state, so the policy bundle is
-    /// never consulted. `None` means this Realm has no accepted MLS group yet
-    /// and therefore no effective scheme.
-    pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
-        self.realm_group_genesis_binding(realm_id)?
-            .get("content_scheme")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    }
-
-    /// The Realm-default MLS group's accepted governance binding, if the group
-    /// exists. Circle groups are independent and carry their own binding.
-    fn realm_group_genesis_binding(&self, realm_id: &str) -> Option<&Value> {
+    /// A scope is plaintext until its own `ak.mls.genesis` is accepted; that acceptance
+    /// irreversibly activates it as standard RFC 9420 (realm-and-space.md 2.3, circle.md 7).
+    /// Realm, Circle and Sidecar scopes activate independently and activation never propagates.
+    pub fn realm_scope_mls_group_id(&self, realm_id: &str) -> Option<&str> {
         self.mls_commit_epochs
             .values()
             .find(|epoch| {
@@ -874,7 +826,45 @@ impl ProjectionState {
                         if scope_realm_id.as_str() == realm_id
                 )
             })
-            .map(|epoch| &epoch.governance_binding)
+            .map(|epoch| epoch.group_id.as_str())
+    }
+
+    /// Whether the Realm-default scope has accepted its own `ak.mls.genesis`.
+    pub fn realm_scope_is_mls_activated(&self, realm_id: &str) -> bool {
+        self.realm_scope_mls_group_id(realm_id).is_some()
+    }
+
+    /// The canonical MLS group id an accepted `ak.mls.genesis` installed for a Circle scope.
+    pub fn circle_scope_mls_group_id(&self, circle_id: &str) -> Option<&str> {
+        self.circles
+            .get(circle_id)
+            .and_then(|circle| circle.mls_group_ref.as_deref())
+    }
+
+    /// Whether the named Circle scope has accepted its own `ak.mls.genesis`.
+    pub fn circle_scope_is_mls_activated(&self, circle_id: &str) -> bool {
+        self.circle_scope_mls_group_id(circle_id).is_some()
+    }
+
+    /// Whether the scope a verified `scope_ref` / projected `effective_scope` names is activated.
+    pub fn scope_is_mls_activated(&self, effective_scope: &Value) -> bool {
+        match serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone()) {
+            Ok(arkret_wire::ScopeRef::Realm { realm_id }) => {
+                self.realm_scope_is_mls_activated(realm_id.as_str())
+            }
+            Ok(arkret_wire::ScopeRef::Circle { circle_id, .. }) => {
+                self.circle_scope_is_mls_activated(circle_id.as_str())
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the scope named by a Realm plus an optional Circle is activated.
+    pub fn scope_is_mls_activated_for(&self, realm_id: &str, circle_id: Option<&str>) -> bool {
+        match circle_id {
+            Some(circle_id) => self.circle_scope_is_mls_activated(circle_id),
+            None => self.realm_scope_is_mls_activated(realm_id),
+        }
     }
 
     /// Effective Realm `history_access` projected from its dedicated cell.

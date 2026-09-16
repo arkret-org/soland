@@ -798,8 +798,8 @@ async fn peer_account_status_submit(
 
 async fn enqueue_account_status_fanout(
     state: &AppState,
-    record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
-    receipt: &arkret_models_collaboration::account_lifecycle::AccountStatusReceipt,
+    record: &arkret_models_collaboration::account_status::AccountStatusRecord,
+    receipt: &arkret_models_collaboration::account_status::AccountStatusReceipt,
 ) -> Result<(AccountStatusPropagationState, Option<u64>), AppError> {
     if record.account_id.station_id.as_str() != state.service_id() {
         return Ok((AccountStatusPropagationState::NotRequired, None));
@@ -879,11 +879,11 @@ async fn enqueue_account_status_fanout(
 }
 
 fn publication_outcome(
-    record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
+    record: &arkret_models_collaboration::account_status::AccountStatusRecord,
     status: AccountStatusPublicationStatus,
-    current: Option<&arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+    current: Option<&arkret_models_collaboration::account_status::AccountStatusRecord>,
     required_status_seq: Option<u64>,
-    receipt: Option<arkret_models_collaboration::account_lifecycle::AccountStatusReceipt>,
+    receipt: Option<arkret_models_collaboration::account_status::AccountStatusReceipt>,
 ) -> AccountStatusPublicationOutcome {
     AccountStatusPublicationOutcome {
         status,
@@ -903,8 +903,8 @@ fn publication_outcome(
 
 fn sign_account_status_receipt(
     state: &AppState,
-    record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
-) -> Result<arkret_models_collaboration::account_lifecycle::AccountStatusReceipt, AppError> {
+    record: &arkret_models_collaboration::account_status::AccountStatusRecord,
+) -> Result<arkret_models_collaboration::account_status::AccountStatusReceipt, AppError> {
     let accepted_at = Utc::now();
     let unsigned = UnsignedAccountStatusReceipt {
         receipt_id: arkret_wire::ReceiptId::new(crate::ids::generate("receipt"))

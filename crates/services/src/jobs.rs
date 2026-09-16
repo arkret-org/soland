@@ -24,14 +24,6 @@ pub trait MaintenancePort: Send + Sync {
         key: &str,
     ) -> ServiceResult<Option<IdempotencyState>>;
     async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()>;
-    async fn control_proposal_authority_ack(
-        &self,
-        ack_key: &str,
-    ) -> ServiceResult<Option<ControlProposalAuthorityAckState>>;
-    async fn store_control_proposal_authority_ack(
-        &self,
-        record: ControlProposalAuthorityAckState,
-    ) -> ServiceResult<()>;
 }
 
 #[async_trait]
@@ -43,10 +35,7 @@ pub trait RuntimeHealthPort: Send + Sync {
     fn database_pool_in_use(&self) -> u32;
 }
 
-pub use soland_storage::{
-    ControlProposalAuthorityAckRecord as ControlProposalAuthorityAckState,
-    IdempotencyRecord as IdempotencyState,
-};
+pub use soland_storage::IdempotencyRecord as IdempotencyState;
 
 #[derive(Clone)]
 pub struct JobsService {
@@ -109,24 +98,6 @@ impl JobsService {
     pub async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()> {
         self.maintenance.store_idempotency_record(record).await
     }
-
-    pub async fn control_proposal_authority_ack(
-        &self,
-        ack_key: &str,
-    ) -> ServiceResult<Option<ControlProposalAuthorityAckState>> {
-        self.maintenance
-            .control_proposal_authority_ack(ack_key)
-            .await
-    }
-
-    pub async fn store_control_proposal_authority_ack(
-        &self,
-        record: ControlProposalAuthorityAckState,
-    ) -> ServiceResult<()> {
-        self.maintenance
-            .store_control_proposal_authority_ack(record)
-            .await
-    }
 }
 
 #[cfg(test)]
@@ -181,20 +152,6 @@ mod tests {
             Ok(None)
         }
         async fn store_idempotency_record(&self, _record: IdempotencyState) -> ServiceResult<()> {
-            Ok(())
-        }
-
-        async fn control_proposal_authority_ack(
-            &self,
-            _ack_key: &str,
-        ) -> ServiceResult<Option<ControlProposalAuthorityAckState>> {
-            Ok(None)
-        }
-
-        async fn store_control_proposal_authority_ack(
-            &self,
-            _record: ControlProposalAuthorityAckState,
-        ) -> ServiceResult<()> {
             Ok(())
         }
     }

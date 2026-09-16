@@ -181,28 +181,6 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
 
 #[async_trait]
 impl EventStore for PgEventStore {
-    async fn collision_variants(
-        &self,
-        event_id: &str,
-    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
-        let mut conn = pg_conn(&self.pool).await?;
-        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
-            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
-        })?;
-        let rows = sql_query(
-            "SELECT parent.id, parent.digest_suite, parent.digest, variant.actor_id, \
-                    variant.realm_id, variant.kind, variant.canonical_bytes, variant.envelope, \
-                    variant.received_at FROM event_collision_variants variant \
-             JOIN canonical_events parent ON parent.pk = variant.event_pk \
-             WHERE parent.id = $1 ORDER BY variant.pk",
-        )
-        .bind::<Binary, _>(event_id.to_vec())
-        .load::<CanonicalEventRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        decode_events(rows)
-    }
-
     async fn federation_outbox_for_event(
         &self,
         event_id: &str,

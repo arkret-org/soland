@@ -7,7 +7,9 @@ pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str =
     soland_domain::reducer::mls::REASON_KEYPACKAGE_ALREADY_CLAIMED;
 pub const REASON_KEYPACKAGE_REALM_MISMATCH: &str =
     soland_domain::reducer::mls::REASON_KEYPACKAGE_REALM_MISMATCH;
-pub const CHILD_ORDER_CELL_FAMILY: &str = soland_domain::reducer::CHILD_ORDER_CELL_FAMILY;
+/// Facet the Station's container-order projection settles. Space child order
+/// is a local projection coordinate, not a wire object.
+pub const CONTAINER_ORDER_FACET: &str = soland_domain::reducer::facet::CONTAINER_ORDER;
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<arkret_wire::EventKind> {
     soland_domain::kinds::canonical_kind_for_operation(operation)

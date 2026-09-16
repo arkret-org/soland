@@ -294,7 +294,7 @@ pub(crate) fn control_scope_str(scope: RealmOrganizationControlScope) -> &'stati
     match scope {
         S::OfficialBadge => "official_badge",
         S::RealmAdmin => "realm_admin",
-        S::NotaryControl => "notary_control",
+        S::RealmAuthority => "realm_authority",
         S::ModerationPolicy => "moderation_policy",
         S::RetentionPolicy => "retention_policy",
         S::DirectoryListing => "directory_listing",

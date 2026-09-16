@@ -61,19 +61,10 @@ impl PersistenceHandle {
         self.persistence.mls_welcomes().discover(query).await
     }
 
-    pub fn bind_history_authority_view_cas(
-        &self,
-        authority_view_cas: Arc<dyn soland_storage::HistoryAuthorityViewCas>,
-    ) {
-        self.persistence
-            .history_response_streams()
-            .bind_authority_view_cas(authority_view_cas);
-    }
-
     pub async fn append_account_status_record(
         &self,
-        record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
-        receipt: &arkret_models_collaboration::account_lifecycle::AccountStatusReceipt,
+        record: &arkret_models_collaboration::account_status::AccountStatusRecord,
+        receipt: &arkret_models_collaboration::account_status::AccountStatusReceipt,
     ) -> crate::ServiceResult<soland_storage::AccountStatusReplicaAppend> {
         Ok(self
             .persistence
@@ -89,7 +80,7 @@ impl PersistenceHandle {
         from_status_seq: u64,
         limit: u16,
     ) -> crate::ServiceResult<
-        Vec<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+        Vec<arkret_models_collaboration::account_status::AccountStatusRecord>,
     > {
         Ok(self
             .persistence
@@ -103,7 +94,7 @@ impl PersistenceHandle {
         account_authority_id: &str,
         account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<
-        Option<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+        Option<arkret_models_collaboration::account_status::AccountStatusRecord>,
     > {
         Ok(self
             .persistence
@@ -116,7 +107,7 @@ impl PersistenceHandle {
         &self,
         limit: u16,
     ) -> crate::ServiceResult<
-        Vec<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+        Vec<arkret_models_collaboration::account_status::AccountStatusRecord>,
     > {
         Ok(self
             .persistence
@@ -131,7 +122,7 @@ impl PersistenceHandle {
         account_id: &arkret_wire::AccountId,
         status_seq: u64,
     ) -> crate::ServiceResult<
-        Option<arkret_models_collaboration::account_lifecycle::AccountStatusReceipt>,
+        Option<arkret_models_collaboration::account_status::AccountStatusReceipt>,
     > {
         Ok(self
             .persistence
@@ -360,30 +351,6 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn seal_preparation_fence(
-        &self,
-        realm_id: &arkret_wire::RealmId,
-        signer_slot: &str,
-        predecessor_basis: &str,
-    ) -> crate::ServiceResult<Option<soland_storage::SealPreparationFenceRecord>> {
-        Ok(self
-            .persistence
-            .idempotency_keys()
-            .seal_preparation_fence(realm_id, signer_slot, predecessor_basis)
-            .await?)
-    }
-
-    pub async fn freeze_seal_preparation(
-        &self,
-        record: &soland_storage::SealPreparationFenceRecord,
-    ) -> crate::ServiceResult<soland_storage::SealPreparationFenceOutcome> {
-        Ok(self
-            .persistence
-            .idempotency_keys()
-            .freeze_seal_preparation(record)
-            .await?)
-    }
-
     pub async fn stored_service_route_keys(
         &self,
         after: Option<&soland_storage::ServiceRouteStoredKey>,
@@ -475,12 +442,11 @@ impl PersistenceHandle {
     pub async fn current_principal(
         &self,
         account_id: &arkret_wire::AccountId,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> crate::ServiceResult<soland_storage::CurrentPrincipalRead> {
         Ok(self
             .persistence
             .principal_resolutions()
-            .current_principal(account_id, registry)
+            .current_principal(account_id)
             .await?)
     }
 
@@ -718,10 +684,6 @@ impl PersistenceHandle {
         self.persistence.member_identity()
     }
 
-    pub fn governance_dependency_store(&self) -> &dyn soland_storage::GovernanceDependencyStore {
-        self.persistence.governance_dependencies()
-    }
-
     /// Server-internal seen-source ledger behind the per-holder new-source
     /// quota (`identity/consent-model.md` section 6.1.1.4). One ledger serves
     /// all three converging surfaces -- private invite delivery,
@@ -773,12 +735,6 @@ impl PersistenceHandle {
         )
     }
 
-    pub fn governance_history_service(
-        &self,
-    ) -> crate::governance_history::GovernanceHistoryService {
-        crate::governance_history::GovernanceHistoryService::new(self.persistence.clone())
-    }
-
     pub async fn hydrate_realm_directory(
         &self,
         projection: &ProjectionService,
@@ -809,24 +765,6 @@ impl PersistenceHandle {
 
 #[async_trait::async_trait]
 impl soland_storage::DeviceRevocationStore for PersistenceHandle {
-    async fn target_for_proposal(
-        &self,
-        proposal_digest: &str,
-    ) -> PersistenceResult<Option<soland_storage::DeviceRevocationTargetRecord>> {
-        self.persistence
-            .device_revocations()
-            .target_for_proposal(proposal_digest)
-            .await
-    }
-    fn bind_control_event_store(
-        &self,
-        control_events: Arc<dyn arkret_state::state::ControlEventStore>,
-    ) {
-        self.persistence
-            .device_revocations()
-            .bind_control_event_store(control_events);
-    }
-
     async fn gate_status(
         &self,
         selector: &soland_storage::DeviceRevocationGateSelector,
@@ -847,6 +785,16 @@ impl soland_storage::DeviceRevocationStore for PersistenceHandle {
             .await
     }
 
+    async fn target_for_event(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<soland_storage::DeviceRevocationTargetRecord>> {
+        self.persistence
+            .device_revocations()
+            .target_for_event(event_id)
+            .await
+    }
+
     async fn linearize_gate(
         &self,
         request: soland_storage::DeviceRevocationGateLinearizationRequest,
@@ -857,27 +805,13 @@ impl soland_storage::DeviceRevocationStore for PersistenceHandle {
             .await
     }
 
-    async fn commit_decision(
+    async fn commit_revocation(
         &self,
-        proposal_digest: &str,
-        decision: &arkret_wire::ControlProposalDecision,
-        policy: arkret_wire::ControlProposalDecisionPolicy,
-    ) -> PersistenceResult<soland_storage::ControlProposalDecisionCommitOutcome> {
+        transition: &soland_storage::DeviceRevocationTransition,
+    ) -> PersistenceResult<soland_storage::DeviceRevocationTransitionDecision> {
         self.persistence
             .device_revocations()
-            .commit_decision(proposal_digest, decision, policy)
-            .await
-    }
-
-    async fn mark_sealed(
-        &self,
-        proposal_digest: &str,
-        covering_seal_id: &str,
-        sealed_at: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<bool> {
-        self.persistence
-            .device_revocations()
-            .mark_sealed(proposal_digest, covering_seal_id, sealed_at)
+            .commit_revocation(transition)
             .await
     }
 
@@ -893,34 +827,23 @@ impl soland_storage::DeviceRevocationStore for PersistenceHandle {
 
     async fn complete_material_cleanup(
         &self,
-        proposal_digest: &str,
+        event_id: &arkret_wire::EventId,
         completed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
         self.persistence
             .device_revocations()
-            .complete_material_cleanup(proposal_digest, completed_at)
+            .complete_material_cleanup(event_id, completed_at)
             .await
     }
 
     async fn complete_mls_obligation(
         &self,
-        proposal_digest: &str,
+        event_id: &arkret_wire::EventId,
         completed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
         self.persistence
             .device_revocations()
-            .complete_mls_obligation(proposal_digest, completed_at)
-            .await
-    }
-
-    async fn complete_mls_obligation_by_event_id(
-        &self,
-        proposal_event_id: &str,
-        completed_at: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<bool> {
-        self.persistence
-            .device_revocations()
-            .complete_mls_obligation_by_event_id(proposal_event_id, completed_at)
+            .complete_mls_obligation(event_id, completed_at)
             .await
     }
 }

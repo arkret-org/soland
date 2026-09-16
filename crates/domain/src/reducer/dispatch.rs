@@ -777,42 +777,10 @@ fn apply_moderation_decision_lift_dispatch(
     s.apply_moderation_decision_lift(op, op.created_at)
 }
 
-// ── G3.S1: MLS lifecycle dispatch adapters ────────────────────────────
+// ── MLS lifecycle dispatch adapters ───────────────────────────────────
 //
-// Each adapter forwards to the free function in `reducer::mls`. The
-// inline `ProjectionState` impls stay out of `reducer.rs` so the MLS
-// module can grow independently (see top-level `pub mod mls;`).
-//
-// Canonical event kinds per
-// `arkret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
-// `ak.mls.keypackage` kind covers both publish and claim. The reducer
-// dispatches on `payload.action == "publish" | "claim"` (the publish-
-// vs-claim split lives at the HTTP operation_id layer:
-// `ak.self.keys.keypackages.upload.create.v1` vs `ak.self.keys.keypackages.command.claim.v1`).
-
-fn apply_mls_keypackage_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    match op.payload.get("action").and_then(Value::as_str) {
-        Some("claim") => mls::apply_keypackage_claim(s, op),
-        Some(other) => ProjectionEffect::Rejected {
-            reason: format!("mls_keypackage_action_unknown:{other}"),
-        },
-        None => ProjectionEffect::Rejected {
-            reason: "mls_keypackage_action_missing".to_owned(),
-        },
-    }
-}
-
-fn apply_mls_welcome_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    mls::apply_welcome_enqueue(s, op)
-}
+// Each adapter forwards to the free function in `reducer::mls`. The registry carries the two
+// MLS Event kinds: `ak.mls.genesis` and `ak.mls.commit`.
 
 fn apply_mls_genesis_dispatch(
     s: &mut ProjectionState,
@@ -820,14 +788,6 @@ fn apply_mls_genesis_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     mls::apply_group_genesis(s, op)
-}
-
-fn apply_mls_proposal_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    mls::apply_remove_proposal(s, op)
 }
 
 fn apply_mls_commit_dispatch(
@@ -1214,11 +1174,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::ModerationDecisionLift,
         apply_moderation_decision_lift_dispatch,
     );
-    // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
-    // Welcome to-device persistence, commit monotonic-epoch bump, and
-    // governance binding projection.
-    // Canonical event kinds — the publish/claim distinction lives at the
-    // HTTP operation_id layer and is conveyed inside the kind's payload
+    // MLS lifecycle: group genesis and the monotonic commit-epoch bump.
     m.insert(
         arkret_wire::EventKind::MlsGenesis,
         apply_mls_genesis_dispatch,

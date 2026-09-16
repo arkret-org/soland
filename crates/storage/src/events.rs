@@ -27,13 +27,6 @@ pub trait MessageStore: Send + Sync {
 /// collisions and must be handled by producer proof validation.
 #[async_trait]
 pub trait EventStore: Send + Sync {
-    /// Full forensic evidence for an Event identity that was quarantined after
-    /// two distinct canonical byte strings claimed the same full hash.
-    /// Ordinary Event reads MUST exclude these records.
-    async fn collision_variants(
-        &self,
-        event_id: &str,
-    ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     /// Durable fanout intents atomically associated with one accepted Event.
     /// The join is authoritative for batch rows that cover multiple Events.
     async fn federation_outbox_for_event(

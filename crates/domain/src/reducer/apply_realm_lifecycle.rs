@@ -658,7 +658,7 @@ impl ProjectionState {
             removed_circle_ids.push(circle.circle_id.clone());
             circle.updated_by = Some(updated_by.to_owned());
             circle.updated_at = Some(now);
-            if circle.encryption_profile == "mls_rfc9420" {
+            if circle.mls_group_ref.is_some() {
                 self.pending_mls_removals.push(MlsRemoveObligation {
                     realm_id: realm_id.to_owned(),
                     circle_id: Some(circle.circle_id.clone()),

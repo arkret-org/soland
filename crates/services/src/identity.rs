@@ -1,15 +1,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_identifiers::{BlobRef, CellRef, Did, DidCoreId, EventId, Hash};
+use arkret_identifiers::{BlobRef, Did, DidCoreId, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
-use arkret_wire::{
-    AccountId, DidUrl, NotaryJoseAlgorithm, NotaryKeyKind, NotarySignerDescriptor, OpaqueLocalId,
-};
+use arkret_wire::{AccountId, DidUrl, OpaqueLocalId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::Signer as _;
@@ -17,29 +15,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use soland_storage::{AccountPk, AgentRuntimeEnqueueOutcome, EnqueueAgentRuntimeMessage};
 
-/// Freeze one locally held Ed25519 notary key into the canonical Realm
-/// notary descriptor. Callers must pass the verification key belonging to the
-/// exact signer that will issue Seals; this helper never resolves or invents
-/// key material.
-pub fn ed25519_notary_signer_descriptor(
-    actor_id: DidCoreId,
-    verification_method: DidUrl,
-    public_key: &[u8; 32],
-) -> Result<NotarySignerDescriptor, String> {
-    let descriptor = NotarySignerDescriptor {
-        actor_id: arkret_wire::ActorId::service(actor_id),
-        verification_method,
-        key_kind: NotaryKeyKind::Ed25519Raw32,
-        jose_algorithm: NotaryJoseAlgorithm::Ed25519,
-        frozen_public_key_b64u: arkret_canonical::base64url_encode(public_key),
-    };
-    descriptor.validate().map_err(|error| error.to_string())?;
-    Ok(descriptor)
-}
-
-/// Sign a frozen-notary transcript with the SDK-owned detached-JWS `kid`
-/// binding required by [`arkret_wire::SealSignature`].
-pub fn sign_ed25519_frozen_notary_jws(
+/// Sign canonical payload bytes with the SDK-owned detached-JWS `kid` binding
+/// required by [`arkret_wire::PayloadSignature`].
+pub fn sign_ed25519_detached_jws(
     canonical_bytes: &[u8],
     verification_method: &DidUrl,
     signing_key: &ed25519_dalek::SigningKey,
@@ -57,14 +35,14 @@ pub fn sign_ed25519_frozen_notary_jws(
     .map_err(|error| error.to_string())
 }
 
-/// SDK [`arkret_wire::PayloadSigner`] adapter for frozen Realm-notary Seals.
-pub struct FrozenEd25519NotarySigner {
+/// SDK [`arkret_wire::PayloadSigner`] adapter over a locally held Ed25519 key.
+pub struct Ed25519PayloadSigner {
     signing_key: ed25519_dalek::SigningKey,
     signer_did: Did,
     verification_method: DidUrl,
 }
 
-impl FrozenEd25519NotarySigner {
+impl Ed25519PayloadSigner {
     #[must_use]
     pub fn from_seed(seed: [u8; 32], signer_did: Did, verification_method: DidUrl) -> Self {
         Self {
@@ -80,7 +58,7 @@ impl FrozenEd25519NotarySigner {
     }
 }
 
-impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
+impl arkret_wire::PayloadSigner for Ed25519PayloadSigner {
     fn signer_did(&self) -> &Did {
         &self.signer_did
     }
@@ -94,7 +72,7 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
         canonical_bytes: &[u8],
     ) -> arkret_wire::Result<arkret_wire::PayloadSignature> {
         let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))?;
-        let jws = sign_ed25519_frozen_notary_jws(
+        let jws = sign_ed25519_detached_jws(
             canonical_bytes,
             &self.verification_method,
             &self.signing_key,
@@ -108,29 +86,10 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
         })
     }
 
-    fn sign_notary_payload_with_digest_suite(
-        &self,
-        canonical_bytes: &[u8],
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> arkret_wire::Result<arkret_wire::PayloadSignature> {
-        let payload_digest = Hash::new(arkret_canonical::digest(digest_suite, canonical_bytes))?;
-        let jws = sign_ed25519_frozen_notary_jws(
-            canonical_bytes,
-            &self.verification_method,
-            &self.signing_key,
-        )
-        .map_err(arkret_wire::WireError::Protocol)?;
-        Ok(arkret_wire::PayloadSignature {
-            verification_method: self.verification_method.clone(),
-            payload_digest,
-            created_at: Utc::now(),
-            jws,
-        })
-    }
 }
 
 pub use soland_domain::identity::{
-    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord, ContactRequestSlotState,
+    ConsentGrantKey, ConsentGrantRecord, ConsentGrantDot, ContactRecord, ContactRequestSlotState,
 };
 pub use soland_storage::MimiConsentCorrelationRecord as MimiConsentCorrelation;
 
@@ -387,7 +346,7 @@ pub struct AccountDataService {
 /// source of truth for replicated cell state.
 #[async_trait]
 pub trait ConsentCellPort: Send + Sync {
-    async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
+    async fn cells(&self) -> ServiceResult<Vec<(ConsentGrantKey, ConsentGrantRecord)>>;
 }
 
 #[async_trait]
@@ -400,7 +359,7 @@ pub trait MimiConsentCorrelationPort: Send + Sync {
 pub struct ConsentService {
     consent_cells: Arc<dyn ConsentCellPort>,
     mimi_correlations: Arc<dyn MimiConsentCorrelationPort>,
-    runtime_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+    runtime_cells: Arc<Mutex<BTreeMap<ConsentGrantKey, ConsentGrantRecord>>>,
     runtime_reload: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -683,16 +642,17 @@ impl ConsentService {
 
     pub fn replace_runtime_cells(
         &self,
-        cells: impl IntoIterator<Item = (ConsentCellKey, ConsentCellRecord)>,
+        cells: impl IntoIterator<Item = (ConsentGrantKey, ConsentGrantRecord)>,
     ) {
         *self.runtime_cells.lock() = cells.into_iter().collect();
     }
 
-    /// Publish one durably committed consent cell into the runtime
-    /// projection. Its exact Seal command already committed, so this only refreshes
-    /// the working view a restart would rebuild from `hydrate_runtime`.
-    pub fn install_committed_cell(&self, cell: ConsentCellRecord) {
-        let key = consent_cell_key(&cell.holder_account_id, &cell.cell_id);
+    /// Publish one durably committed consent grant into the runtime
+    /// projection. The Event already reached its `RealmCommit`, so this only
+    /// refreshes the working view a restart would rebuild from
+    /// `hydrate_runtime`.
+    pub fn install_committed_cell(&self, cell: ConsentGrantRecord) {
+        let key = consent_cell_key(&cell.holder_account_id, &cell.consent_id);
         self.runtime_cells.lock().insert(key, cell);
     }
 
@@ -702,7 +662,7 @@ impl ConsentService {
     pub fn holder_cells(
         &self,
         holder_account_id: &arkret_wire::AccountId,
-    ) -> Vec<ConsentCellRecord> {
+    ) -> Vec<ConsentGrantRecord> {
         self.runtime_cells
             .lock()
             .values()
@@ -714,16 +674,16 @@ impl ConsentService {
     pub fn holder_cell(
         &self,
         holder_account_id: &arkret_wire::AccountId,
-        cell_id: impl AsRef<str>,
-    ) -> Option<ConsentCellRecord> {
-        let cell_id = CellRef::new(cell_id.as_ref().to_owned()).ok()?;
+        consent_id: impl AsRef<str>,
+    ) -> Option<ConsentGrantRecord> {
+        let consent_id = arkret_identifiers::ConsentId::new(consent_id.as_ref().to_owned()).ok()?;
         self.runtime_cells
             .lock()
-            .get(&consent_cell_key(holder_account_id, &cell_id))
+            .get(&consent_cell_key(holder_account_id, &consent_id))
             .cloned()
     }
 
-    /// Holder cells whose frozen peer matches an authenticated counterparty.
+    /// Holder grants whose frozen peer matches an authenticated counterparty.
     ///
     /// Matching is the kind-dispatched exact comparison of
     /// `consent-model.md` section 6.1 query step 1: an ordinary Actor
@@ -735,13 +695,13 @@ impl ConsentService {
     pub fn cells_for_counterparty(
         &self,
         holder_account_id: &arkret_wire::AccountId,
-        counterparty: &arkret_models_collaboration::account_lifecycle::ConsentCounterparty,
-    ) -> Vec<ConsentCellRecord> {
+        counterparty: &arkret_models_collaboration::events_payloads::consent::ConsentPeer,
+    ) -> Vec<ConsentGrantRecord> {
         self.runtime_cells
             .lock()
             .values()
             .filter(|cell| {
-                &cell.holder_account_id == holder_account_id && cell.peer.matches(counterparty)
+                &cell.holder_account_id == holder_account_id && &cell.peer == counterparty
             })
             .cloned()
             .collect()
@@ -751,9 +711,9 @@ impl ConsentService {
     pub fn cells_for_intent(
         &self,
         holder_account_id: &arkret_wire::AccountId,
-        peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
+        peer: &arkret_models_collaboration::events_payloads::consent::ConsentPeer,
         consent_scope: &str,
-    ) -> Vec<ConsentCellRecord> {
+    ) -> Vec<ConsentGrantRecord> {
         self.runtime_cells
             .lock()
             .values()
@@ -769,11 +729,11 @@ impl ConsentService {
 
 fn consent_cell_key(
     holder_account_id: &arkret_wire::AccountId,
-    cell_id: &CellRef,
-) -> ConsentCellKey {
-    ConsentCellKey {
+    consent_id: &arkret_identifiers::ConsentId,
+) -> ConsentGrantKey {
+    ConsentGrantKey {
         holder_account_id: holder_account_id.clone(),
-        cell_id: cell_id.clone(),
+        consent_id: consent_id.clone(),
     }
 }
 
@@ -1041,12 +1001,15 @@ pub struct ActivateAgentRuntimeCommand {
     pub authorized_public_key_digest: String,
     /// Exact controller Event retained with its producer proof.
     pub frozen_authorize_event: arkret_wire::Event,
-    pub expected_accepted_basis: arkret_wire::SealBasis,
-    pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
+    /// Authority-signed commit that admitted `frozen_authorize_event`. It is
+    /// the sole activation precondition: one `RealmCommit` carries exactly one
+    /// `event_ref`, so this names the Event and the commit that settled it.
+    pub authorize_ref: arkret_wire::CommittedEventRef,
+    pub status: AgentLifecycleState,
     pub authorized_key_event: arkret_wire::Event,
     pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
     pub current_signer_evidence:
-        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
+        Option<arkret_models_identity::authenticated_signer_resolution_evidence::AuthenticatedSignerResolutionEvidence>,
     pub authorized_at: DateTime<Utc>,
 }
 
@@ -1091,7 +1054,7 @@ pub struct AgentPairingState {
     pub runtime_proof_verified_at: Option<DateTime<Utc>>,
     pub approval_notification_id: Option<uuid::Uuid>,
     pub runtime_key_request:
-        Option<arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody>,
+        Option<arkret_models_collaboration::agent_scope::AgentRuntimeApprovalRequestBody>,
     pub approval_requested_at: Option<DateTime<Utc>>,
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
@@ -1099,7 +1062,7 @@ pub struct AgentPairingState {
     pub authorized_key_event: Option<arkret_wire::Event>,
     pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
     pub current_signer_evidence:
-        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
+        Option<arkret_models_identity::authenticated_signer_resolution_evidence::AuthenticatedSignerResolutionEvidence>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1111,7 +1074,7 @@ pub struct OpenAgentPairingHandle {
     pub pairing_code: String,
     pub expires_at: DateTime<Utc>,
     pub pending_runtime_key_request:
-        Option<arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody>,
+        Option<arkret_models_collaboration::agent_scope::AgentRuntimeApprovalRequestBody>,
 }
 
 impl OpenAgentPairingHandle {
@@ -1129,7 +1092,7 @@ pub struct ActiveAgentRuntimeBinding {
     pub key_authorization_event: arkret_wire::Event,
     pub signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef,
     pub current_signer_evidence:
-        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence,
+        arkret_models_identity::authenticated_signer_resolution_evidence::AuthenticatedSignerResolutionEvidence,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1237,14 +1200,14 @@ impl AgentPairingState {
                     self.current_signer_evidence.clone().ok_or_else(|| {
                         "active Agent runtime binding is missing current signer evidence".to_owned()
                     })?;
-                let (signer_root, _) = current_signer_evidence
-                    .hydrate_complete_agent()
-                    .map_err(|error| error.to_string())?;
-                if arkret::signer_evidence_ref(&signer_root).map_err(|error| error.to_string())?
-                    != signer_resolution_evidence_ref
+                // The evidence is content-addressed: recompute the address from
+                // the carried bytes instead of trusting the stored sibling.
+                if !current_signer_evidence
+                    .matches_ref(&signer_resolution_evidence_ref)
+                    .map_err(|error| error.to_string())?
                 {
                     return Err(
-                        "active Agent runtime signer evidence reference does not match its closure"
+                        "active Agent runtime signer evidence reference does not address its evidence"
                             .to_owned(),
                     );
                 }
@@ -1429,7 +1392,7 @@ pub struct StoreAgentRuntimeApprovalCommand {
     pub runtime_public_key_digest: String,
     pub runtime_attestation_digest: String,
     pub runtime_key_request:
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody,
+        arkret_models_collaboration::agent_scope::AgentRuntimeApprovalRequestBody,
 }
 
 #[async_trait]
@@ -1699,12 +1662,12 @@ pub trait SecurityTransactionPort: Send + Sync {
     async fn step_outcome(
         &self,
         transaction_id: &str,
-        step: arkret_wire::SecurityTransactionStep,
+        step: arkret_models_crypto::security_transaction::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepOutcomeState>>;
     async fn step_attempt(
         &self,
         transaction_id: &str,
-        step: arkret_wire::SecurityTransactionStep,
+        step: arkret_models_crypto::security_transaction::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepAttemptState>>;
     async fn begin_step(
         &self,
@@ -1760,7 +1723,7 @@ impl SecurityTransactionService {
     pub async fn step_outcome(
         &self,
         transaction_id: &str,
-        step: arkret_wire::SecurityTransactionStep,
+        step: arkret_models_crypto::security_transaction::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepOutcomeState>> {
         self.transactions.step_outcome(transaction_id, step).await
     }
@@ -1768,7 +1731,7 @@ impl SecurityTransactionService {
     pub async fn step_attempt(
         &self,
         transaction_id: &str,
-        step: arkret_wire::SecurityTransactionStep,
+        step: arkret_models_crypto::security_transaction::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepAttemptState>> {
         self.transactions.step_attempt(transaction_id, step).await
     }
@@ -3627,14 +3590,14 @@ mod consent_reload_tests {
     use super::*;
 
     struct DelayedConsentRows {
-        cell: ConsentCellRecord,
+        cell: ConsentGrantRecord,
         reads: AtomicUsize,
         started: tokio::sync::Notify,
         release: tokio::sync::Semaphore,
     }
     #[async_trait]
     impl ConsentCellPort for DelayedConsentRows {
-        async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
+        async fn cells(&self) -> ServiceResult<Vec<(ConsentGrantKey, ConsentGrantRecord)>> {
             let index = self.reads.fetch_add(1, Ordering::SeqCst);
             let mut cell = self.cell.clone();
             if index == 0 {
@@ -3668,10 +3631,10 @@ mod consent_reload_tests {
         );
         let now = Utc::now();
         let rows = Arc::new(DelayedConsentRows {
-            cell: ConsentCellRecord {
+            cell: ConsentGrantRecord {
                 cell_id: "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-000000000041".parse().unwrap(),
                 holder_account_id: holder.clone(),
-                peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor { actor_id: arkret_wire::ActorId::account(holder.clone()) },
+                peer: arkret_models_collaboration::events_payloads::consent::ConsentPeer::Actor { actor_id: arkret_wire::ActorId::account(holder.clone()) },
                 consent_scope: "messages".into(),
                 active_grants: BTreeMap::from([("grant".into(), ConsentGrantDot { dot:"grant".into(), not_before:None, expires_at:None, granted_at:now })]),
                 revoked_grants: Default::default(), updated_at:now,

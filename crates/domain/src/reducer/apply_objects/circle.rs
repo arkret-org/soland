@@ -98,85 +98,6 @@ impl ProjectionState {
             .get("profile_ref")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let content_encryption_floor = object
-            .get("content_encryption_floor")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let metadata_encryption_floor = object
-            .get("metadata_encryption_floor")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let encryption_profile = object
-            .get("encryption_profile")
-            .and_then(Value::as_str)
-            .unwrap_or("mls_rfc9420")
-            .to_owned();
-        let content_scheme = object
-            .get("content_scheme")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let durability_policy = object
-            .get("durability_policy")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        // realm-and-space.md §2.3.1: a non-`none` durability binding is only
-        // defined on an mls_exporter_aead_v1 scope; any other pairing is a
-        // registered durability_scheme_incompatible rejection.
-        if durability_policy
-            .as_deref()
-            .is_some_and(|mode| mode != "none")
-            && content_scheme.as_deref() != Some("mls_exporter_aead_v1")
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE.to_owned(),
-            };
-        }
-        let scheme_valid = match (encryption_profile.as_str(), content_scheme.as_deref()) {
-            ("none", None) => durability_policy.is_none(),
-            ("mls_rfc9420", Some("mls_rfc9420")) => durability_policy.is_none(),
-            ("mls_rfc9420", Some("mls_exporter_aead_v1")) => matches!(
-                durability_policy.as_deref(),
-                Some("none" | "organization_recovery_key")
-            ),
-            _ => false,
-        };
-        if !scheme_valid {
-            return ProjectionEffect::Rejected {
-                reason: "circle create encryption_profile/content_scheme combination is not a \
-                         registered v1 pairing"
-                    .to_owned(),
-            };
-        }
-        if content_scheme.as_deref() == Some("mls_rfc9420") && history_access != "since_join" {
-            return ProjectionEffect::Rejected {
-                reason: "history_access_requires_history_capable_scheme".to_owned(),
-            };
-        }
-        if !encryption_profile_requires_content_encryption(Some(encryption_profile.as_str()))
-            && self.realm_requires_content_encryption(&realm_id)
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
-            };
-        }
-        // circle.md §7: a Circle content floor MUST NOT be below the effective
-        // parent Realm floor, and `e2ee_required` is only valid on an
-        // MLS-backed Circle (a `none` Circle has no scope to carry ciphertext).
-        if content_encryption_floor.as_deref().is_some_and(|floor| {
-            content_floor_rank(Some(floor))
-                < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
-        }) {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
-            };
-        }
-        if content_floor_rank(content_encryption_floor.as_deref()) >= 1
-            && !encryption_profile_requires_content_encryption(Some(encryption_profile.as_str()))
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
-            };
-        }
         let created_by = object
             .get("created_by")
             .and_then(Value::as_str)
@@ -191,11 +112,6 @@ impl ProjectionState {
             directory_visibility,
             join_rule,
             history_access: history_access.clone(),
-            content_encryption_floor,
-            metadata_encryption_floor,
-            encryption_profile,
-            content_scheme,
-            durability_policy,
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
@@ -206,14 +122,11 @@ impl ProjectionState {
             members: BTreeSet::new(),
         };
         self.circles.insert(circle_id.to_owned(), projection);
-        if let Ok(cell) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.circle.history_access.v1:{circle_id}"
-        )) {
-            self.cells.insert(
-                cell,
-                ResolvedCellState::Value(Value::String(history_access)),
-            );
-        }
+        self.set_facet(
+            &realm_id,
+            FacetRef::new(facet::CIRCLE_HISTORY_ACCESS, circle_id),
+            Value::String(history_access),
+        );
         ProjectionEffect::CircleLifecycle {
             circle_id: circle_id.to_owned(),
             new_state: CircleLifecycleState::Active,
@@ -235,9 +148,6 @@ impl ProjectionState {
                 reason: "circle_update_missing_circle_id".to_owned(),
             };
         };
-        // Read the current Circle state and parent Realm floor immutably first
-        // so the floor-ratchet validation below does not conflict with the
-        // later mutable borrow.
         let Some(circle_ro) = self.circles.get(&circle_id) else {
             return ProjectionEffect::Ignored;
         };
@@ -246,60 +156,18 @@ impl ProjectionState {
                 reason: "circle_not_active".to_owned(),
             };
         }
-        if operation_touches_encryption_profile(operation) {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED.to_owned(),
-            };
-        }
-        let realm_id = circle_ro.realm_id.clone();
-        let circle_profile = circle_ro.encryption_profile.clone();
-        let current_content_floor = circle_ro.content_encryption_floor.clone();
-        let current_metadata_floor = circle_ro.metadata_encryption_floor.clone();
-        let realm_content_floor = self.realm_content_encryption_floor(&realm_id);
-        // Validate the patched floors against the parent Realm floor and the
-        // one-way ratchet (circle.md §7) before applying any mutation.
+        // The Circle's plaintext / ciphertext state is decided solely by whether this Circle's own
+        // `ak.mls.genesis` has been accepted, so `mls_group_id` is reducer-managed; and
+        // `history_access` has a dedicated transition Event of its own (circle.md 7).
         if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
+            if let Err(reason) = validate_patch_semantic_safety(patch, Some("circle")) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
             if patch.contains_key("history_access") {
                 return ProjectionEffect::Rejected {
                     reason: "history_access_requires_dedicated_transition".to_owned(),
-                };
-            }
-            if let Some(new_floor) = patch
-                .get("content_encryption_floor")
-                .map(|v| v.as_str().map(ToOwned::to_owned))
-            {
-                let new_rank = content_floor_rank(new_floor.as_deref());
-                if new_rank < content_floor_rank(realm_content_floor.as_deref()) {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR
-                            .to_owned(),
-                    };
-                }
-                if new_rank < content_floor_rank(current_content_floor.as_deref()) {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
-                            .to_owned(),
-                    };
-                }
-                if new_rank >= 1
-                    && !encryption_profile_requires_content_encryption(Some(
-                        circle_profile.as_str(),
-                    ))
-                {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR
-                            .to_owned(),
-                    };
-                }
-            }
-            if let Some(new_floor) = patch
-                .get("metadata_encryption_floor")
-                .map(|v| v.as_str().map(ToOwned::to_owned))
-                && metadata_floor_rank(new_floor.as_deref())
-                    < metadata_floor_rank(current_metadata_floor.as_deref())
-            {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
                 };
             }
         }
@@ -318,12 +186,6 @@ impl ProjectionState {
             }
             if let Some(join_rule) = patch.get("join_rule").and_then(Value::as_str) {
                 circle.join_rule = join_rule.to_owned();
-            }
-            if let Some(floor) = patch.get("content_encryption_floor") {
-                circle.content_encryption_floor = floor.as_str().map(ToOwned::to_owned);
-            }
-            if let Some(floor) = patch.get("metadata_encryption_floor") {
-                circle.metadata_encryption_floor = floor.as_str().map(ToOwned::to_owned);
             }
         }
         circle.updated_by = Some(operation.context.sender.to_string());
@@ -381,7 +243,7 @@ impl ProjectionState {
         circle.updated_by = Some(operation.context.sender.to_string());
         circle.updated_at = Some(now);
         let tombstoned_mls_scope = if target == CircleLifecycleState::Tombstoned {
-            let members = if circle.encryption_profile == "mls_rfc9420" {
+            let members = if circle.mls_group_ref.is_some() {
                 circle.members.iter().cloned().collect::<Vec<_>>()
             } else {
                 Vec::new()
@@ -534,7 +396,7 @@ impl ProjectionState {
             "leave" | "ban" => {
                 self.circle_member_join_refs
                     .remove(&(circle_id.clone(), actor.clone()));
-                if circle.members.remove(&actor) && circle.encryption_profile == "mls_rfc9420" {
+                if circle.members.remove(&actor) && circle.mls_group_ref.is_some() {
                     removed_mls_member =
                         Some((circle.realm_id.clone(), circle.mls_group_ref.clone()));
                 }

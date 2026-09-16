@@ -579,20 +579,9 @@ pub struct CircleProjection {
     pub directory_visibility: String,
     pub join_rule: String,
     pub history_access: String,
-    /// Optional Circle-local content-encryption floor; `None` inherits the
-    /// parent Realm `content_encryption_floor`. effective = max(parent Realm,
-    /// Circle). Reducer enforces "MAY only tighten" + one-way ratchet, and
-    /// rejects `e2ee_required` on an `encryption_profile=none` Circle.
-    pub content_encryption_floor: Option<String>,
-    /// Optional tightening of metadata-encryption floor; `None` inherits
-    /// parent Realm. Reducer enforces "MAY only tighten" against the
-    /// projected Realm floor.
-    pub metadata_encryption_floor: Option<String>,
-    pub encryption_profile: String,
-    pub content_scheme: Option<String>,
-    pub durability_policy: Option<String>,
-    /// Reducer-derived MLS group binding. Populated when the independent
-    /// Circle MLS group is set up; the wire actor MUST NOT submit this.
+    /// Reducer-derived MLS group binding, installed by this Circle's own accepted
+    /// `ak.mls.genesis`. `None` means the Circle scope is still plaintext; once set, the Circle is
+    /// irreversibly activated as standard RFC 9420 and the wire actor MUST NOT submit this.
     pub mls_group_ref: Option<String>,
     pub state: CircleLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
