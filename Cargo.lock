@@ -195,6 +195,7 @@ dependencies = [
  "arkret-models-integration",
  "arkret-policy",
  "arkret-push-policy",
+ "arkret-retry",
  "arkret-schema",
  "arkret-signatures",
  "arkret-state",
@@ -550,6 +551,10 @@ dependencies = [
 
 [[package]]
 name = "arkret-rate-limit"
+version = "0.3.0"
+
+[[package]]
+name = "arkret-retry"
 version = "0.3.0"
 
 [[package]]

@@ -266,17 +266,6 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
     })
 }
 const CONTACT_COLUMNS: &str = "requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, pending_incoming_admitted, request_event_ref, request_slot_states, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_host_id, peer_service_resolution, created_at, updated_at";
-pub(super) async fn lock_contact(
-    conn: &mut diesel_async::AsyncPgConnection,
-    requester: &ActorId,
-    target: &ActorId,
-) -> PersistenceResult<Option<ContactRecord>> {
-    let row = sql_query(format!("SELECT {CONTACT_COLUMNS} FROM contacts WHERE (requester_id=$1 AND target_id=$2) OR (requester_id=$2 AND target_id=$1) FOR UPDATE"))
-        .bind::<Text, _>(requester.to_string()).bind::<Text, _>(target.to_string())
-        .get_result::<ContactRow>(conn).await.optional().map_err(PersistenceError::database)?;
-    row.map(contact_record_from_row).transpose()
-}
-
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn completion_for_request(
@@ -806,18 +795,6 @@ impl ConsentGrantRow {
 }
 const CONSENT_GRANT_COLUMNS: &str =
     "consent_id, holder_account_id, peer, consent_scope, active_grants, revoked_grants, updated_at";
-pub(super) async fn lock_consent_grant(
-    conn: &mut diesel_async::AsyncPgConnection,
-    holder: &arkret_wire::AccountId,
-    consent_id: &ConsentId,
-) -> PersistenceResult<Option<ConsentGrantRecord>> {
-    let row = sql_query(format!("SELECT {CONSENT_GRANT_COLUMNS} FROM consent_grants WHERE holder_account_id=$1 AND consent_id=$2 FOR UPDATE"))
-        .bind::<Jsonb, _>(serde_json::to_value(holder).map_err(|e| PersistenceError::Internal(e.to_string()))?)
-        .bind::<Text, _>(consent_id.as_str()).get_result::<ConsentGrantRow>(conn).await.optional().map_err(PersistenceError::database)?;
-    row.map(|row| row.into_pair().map(|(_, record)| record))
-        .transpose()
-}
-
 #[async_trait]
 impl ConsentGrantStore for PgConsentGrantStore {
     async fn get(
