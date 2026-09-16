@@ -3,7 +3,7 @@ use arkret_models_collaboration::objects::read_receipts::{
     NotificationSource, NotificationSourceRef, OrdinaryProjectionContent,
 };
 use arkret_models_collaboration::sync_frames::account_subscribe::{
-    NotificationDelta, NotificationDeltaAction,
+    NotificationData, NotificationDelta, NotificationDeltaAction,
 };
 use arkret_wire::events::EventKind;
 use arkret_wire::{
@@ -205,22 +205,51 @@ impl NotificationRow {
             )
         })?;
         let action: NotificationDeltaAction = decode_enum("projection_action", action.clone())?;
+        // The `id` form is the only discriminator between the two notification
+        // branches, and `expired`/`superseded` appear in both removal
+        // vocabularies. Decode the stored payload into the branch the id
+        // selects rather than letting an untagged decoder pick, or an ordinary
+        // removal reason lands on an Agent approval row.
         let id = if let Some(projection_id) = self.projection_id.as_ref() {
-            projection_id.clone()
+            NotificationIdentity::new(projection_id.clone())
         } else {
-            NotificationId::new(ids::format_typed_uuid(
+            NotificationIdentity::new(ids::format_typed_uuid(
                 "notification",
                 &self.notification_id,
             ))
-            .map(|id| id.to_string())
-            .map_err(|error| {
-                PersistenceError::Internal(format!("account notification id is invalid: {error}"))
-            })?
+        }
+        .map_err(|error| {
+            PersistenceError::Internal(format!("account notification id is invalid: {error}"))
+        })?;
+        let data = match (&id, action, self.projection_data.clone()) {
+            (_, _, None) | (_, _, Some(Value::Null)) => None,
+            (NotificationIdentity::Projection(_), NotificationDeltaAction::Upsert, Some(value)) => {
+                Some(NotificationData::OrdinaryProjection(Box::new(
+                    decode_notification_data(value)?,
+                )))
+            }
+            (NotificationIdentity::Projection(_), NotificationDeltaAction::Remove, Some(value)) => {
+                Some(NotificationData::OrdinaryRemoval(decode_notification_data(
+                    value,
+                )?))
+            }
+            (
+                NotificationIdentity::AgentApproval(_),
+                NotificationDeltaAction::Upsert,
+                Some(value),
+            ) => Some(NotificationData::AgentRuntimeApproval(
+                decode_notification_data(value)?,
+            )),
+            (
+                NotificationIdentity::AgentApproval(_),
+                NotificationDeltaAction::Remove,
+                Some(value),
+            ) => Some(NotificationData::AgentRuntimeApprovalRemoval(
+                decode_notification_data(value)?,
+            )),
         };
-        Ok(NotificationDelta {
-            id,
-            action,
-            data: self.projection_data.clone().unwrap_or(Value::Null),
+        NotificationDelta::try_new(id, action, data).map_err(|error| {
+            PersistenceError::Internal(format!("account notification delta is invalid: {error}"))
         })
     }
 
@@ -406,13 +435,23 @@ impl NotificationStore for PgNotificationStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        if record.delta.id.trim().is_empty() {
+        if record.delta.id.as_str().trim().is_empty() {
             return Err(PersistenceError::SchemaViolation(
                 "account notification delta id is empty".to_owned(),
             ));
         }
         let action = encode_enum("projection_action", &record.delta.action)?;
-        let data = &record.delta.data;
+        let data = record
+            .delta
+            .data
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "account notification data is not serializable: {error}"
+                ))
+            })?;
         sql_query(
             "INSERT INTO notifications \
              (id, recipient_actor_id, controller_account_pk, recipient_id, \
@@ -433,13 +472,13 @@ impl NotificationStore for PgNotificationStore {
               END, \
               updated_at = NOW()",
         )
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.delta.id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(record.delta.id.as_str()))
         .bind::<Text, _>(record.recipient_actor_id.to_string())
         .bind::<BigInt, _>(record.controller_account_pk.get())
         .bind::<Text, _>(record.recipient_id.as_str())
         .bind::<Text, _>(&record.source_account_artifact_id)
         .bind::<Text, _>(&action)
-        .bind::<Nullable<Jsonb>, _>(Some(data))
+        .bind::<Nullable<Jsonb>, _>(data)
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -614,4 +653,12 @@ mod tests {
             )
         );
     }
+}
+
+/// Decode one stored notification payload into the branch its `id` form
+/// selected. Used only by `into_delta`, which has already chosen the branch.
+fn decode_notification_data<T: serde::de::DeserializeOwned>(value: Value) -> PersistenceResult<T> {
+    serde_json::from_value(value).map_err(|error| {
+        PersistenceError::Internal(format!("account notification data is invalid: {error}"))
+    })
 }
