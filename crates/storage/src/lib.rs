@@ -16,7 +16,7 @@ pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use serde_json::Value;
 pub use soland_domain::identity::{
-    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord, ContactRequestSlotState,
+    ConsentGrantDot, ConsentGrantKey, ConsentGrantRecord, ContactRecord, ContactRequestSlotState,
 };
 pub(crate) use uuid::Uuid;
 
@@ -32,20 +32,18 @@ mod accounts;
 mod agents;
 mod applets;
 mod audit;
+mod authority_commit;
 mod blobs;
 mod contacts;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 #[doc(hidden)]
 pub mod contract_tests;
-mod control_proposal_acks;
 mod device_pairings;
 mod device_revocations;
 mod devices;
 mod events;
 mod federation;
 mod governance;
-mod governance_history;
-mod history_response_stream;
 mod idempotency;
 #[doc(hidden)]
 pub mod ids;
@@ -81,17 +79,15 @@ pub use accounts::*;
 pub use agents::*;
 pub use applets::*;
 pub use audit::*;
+pub use authority_commit::*;
 pub use blobs::*;
 pub use contacts::*;
-pub use control_proposal_acks::*;
 pub use device_pairings::*;
 pub use device_revocations::*;
 pub use devices::*;
 pub use events::*;
 pub use federation::*;
 pub use governance::*;
-pub use governance_history::*;
-pub use history_response_stream::*;
 pub use idempotency::*;
 pub use invite_locators::*;
 pub use invite_new_source_ledger::*;
@@ -336,7 +332,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
     fn invite_locators(&self) -> &dyn InviteLocatorStore;
     fn invite_new_source_ledger(&self) -> &dyn InviteNewSourceLedgerStore;
-    fn consent_cells(&self) -> &dyn ConsentCellStore;
+    fn consent_grants(&self) -> &dyn ConsentGrantStore;
     fn mimi_consent_correlations(&self) -> &dyn MimiConsentCorrelationStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;
     fn messages(&self) -> &dyn MessageStore;
@@ -350,7 +346,6 @@ pub trait IdentityStoreRegistry: Send + Sync {
 /// Federation, retention, organization, and audit persistence registry.
 pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn federation_outbox(&self) -> &dyn FederationOutboxStore;
-    fn federation_frontier_exchange(&self) -> &dyn FederationFrontierExchangeStore;
     fn handle_releases(&self) -> &dyn HandleReleaseStore;
     fn retention_policies(&self) -> &dyn RetentionPolicyStore;
     fn retention_tombstones(&self) -> &dyn RetentionTombstoneStore;
@@ -359,10 +354,6 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn realm_organizations(&self) -> &dyn RealmOrganizationStore;
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore;
     fn audit(&self) -> &dyn AuditStore;
-    fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore;
-    fn history_traversal_retentions(&self) -> &dyn HistoryTraversalRetentionStore;
-    fn pending_rhrk_acquisitions(&self) -> &dyn PendingRhrkAcquisitionStore;
-    fn history_response_streams(&self) -> &dyn HistoryResponseStreamStore;
 }
 
 /// Delivery, policy, recovery, and service identity persistence registry.
@@ -420,7 +411,6 @@ pub trait MlsAgentStoreRegistry: Send + Sync {
 pub trait SyncStoreRegistry: Send + Sync {
     fn sync_cursors(&self) -> &dyn SyncCursorStore;
     fn idempotency_keys(&self) -> &dyn IdempotencyStore;
-    fn control_proposal_authority_acks(&self) -> &dyn ControlProposalAuthorityAckStore;
     /// `ak.profile.binding.websocket.v1` challenge + replay ledger.
     fn websocket_auth(&self) -> &dyn WebsocketAuthStore;
     fn account_status_replicas(&self) -> &dyn AccountStatusReplicaStore;
@@ -445,6 +435,7 @@ pub trait PersistenceStore:
     + Send
     + Sync
 {
+    fn authority_commits(&self) -> &dyn AuthorityCommitStore;
 }
 
 #[cfg(test)]

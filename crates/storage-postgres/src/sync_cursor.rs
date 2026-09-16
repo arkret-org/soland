@@ -3,10 +3,9 @@ use super::{
     PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SyncCursorRecord, SyncCursorStore,
     Text, Timestamptz, Utc, Value, async_trait, pg_conn, sql_query, sql_types,
 };
-mod current_detail;
 mod retention;
-use arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly;
 use diesel_async::AsyncConnection;
+use soland_storage::{AuthorityCommitStore, RealmJoinDownload};
 pub struct PgSyncCursorStore {
     pub pool: PgPool,
 }
@@ -122,10 +121,7 @@ impl From<SyncCursorRow> for SyncCursorRecord {
 }
 #[async_trait]
 impl SyncCursorStore for PgSyncCursorStore {
-    async fn realm_join_download(
-        &self,
-        key: &str,
-    ) -> PersistenceResult<Option<RealmJoinBootstrapAssembly>> {
+    async fn realm_join_download(&self, key: &str) -> PersistenceResult<Option<RealmJoinDownload>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -139,9 +135,9 @@ impl SyncCursorStore for PgSyncCursorStore {
     async fn save_realm_join_download(
         &self,
         key: &str,
-        assembly: &RealmJoinBootstrapAssembly,
+        assembly: &RealmJoinDownload,
     ) -> PersistenceResult<()> {
-        if assembly.first.expires_at <= Utc::now() {
+        if assembly.expires_at <= Utc::now() {
             return Err(PersistenceError::Conflict(
                 "bootstrap download expired".into(),
             ));
@@ -156,12 +152,11 @@ impl SyncCursorStore for PgSyncCursorStore {
             let written = sql_query(
                 "INSERT INTO realm_join_downloads (context_key, assembly, expires_at) VALUES ($1, $2, $3) \
                  ON CONFLICT (context_key) DO UPDATE SET assembly = EXCLUDED.assembly \
-                 WHERE realm_join_downloads.assembly->'first' = EXCLUDED.assembly->'first' \
-                   AND ((realm_join_downloads.assembly->>'next_page')::bigint < (EXCLUDED.assembly->>'next_page')::bigint \
-                        AND realm_join_downloads.assembly->'next_cursor' <> 'null'::jsonb \
+                 WHERE realm_join_downloads.assembly->'snapshot' = EXCLUDED.assembly->'snapshot' \
+                   AND (realm_join_downloads.assembly->'items' <@ EXCLUDED.assembly->'items' \
                         OR realm_join_downloads.assembly = EXCLUDED.assembly)"
             ).bind::<Text, _>(key).bind::<Jsonb, _>(&value)
-                .bind::<Timestamptz, _>(assembly.first.expires_at)
+                .bind::<Timestamptz, _>(assembly.expires_at)
                 .execute(conn).await.map_err(PersistenceError::database)?;
             if written != 1 {
                 return Err(PersistenceError::Conflict("bootstrap download context or progress changed".into()).into());
@@ -175,46 +170,91 @@ impl SyncCursorStore for PgSyncCursorStore {
         request: &soland_storage::CurrentDetailRequest,
         progress: Option<&soland_storage::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> PersistenceResult<soland_storage::CurrentDetailOutcome> {
-        current_detail::page(&self.pool, request, progress, byte_budget, registry).await
-    }
-    async fn timeline_window_scan(
-        &self,
-        realm_id: &str,
-        head: &soland_storage::TimelineOrderPosition,
-        bound: Option<&soland_storage::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> PersistenceResult<soland_storage::TimelineWindowScan> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        crate::timeline_order::window_scan(&mut conn, realm_id, head, bound, row_limit).await
-    }
-    async fn timeline_ascending_scan(
-        &self,
-        realm_id: &str,
-        from: &soland_storage::TimelineOrderPosition,
-        inclusive: bool,
-        upper: Option<&soland_storage::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> PersistenceResult<soland_storage::TimelineWindowScan> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        crate::timeline_order::ascending_scan(
-            &mut conn, realm_id, from, inclusive, upper, row_limit,
-        )
-        .await
-    }
-    async fn timeline_window_head(
-        &self,
-        realm_id: &str,
-    ) -> PersistenceResult<Option<soland_storage::TimelineOrderPosition>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        crate::timeline_order::window_head(&mut conn, realm_id).await
+        let authority = crate::PgAuthorityCommitStore {
+            pool: self.pool.clone(),
+        };
+        let Some(snapshot) = authority.latest_snapshot(&request.realm_id).await? else {
+            return Ok(soland_storage::CurrentDetailOutcome::Unavailable);
+        };
+        let request_digest = arkret_canonical::canonical_sha256(request)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let now = Utc::now();
+        let mut progress = match progress {
+            Some(progress)
+                if progress.request_digest == request_digest
+                    && progress.snapshot_id == snapshot.snapshot_id
+                    && progress.expires_at_ms > now.timestamp_millis() =>
+            {
+                progress.clone()
+            }
+            Some(_) => return Ok(soland_storage::CurrentDetailOutcome::Unavailable),
+            None => {
+                let stream_heads = authority.realm_stream_heads(&request.realm_id).await?;
+                let snapshot_positions = snapshot
+                    .visible_stream_heads
+                    .iter()
+                    .map(|head| (head.stream_ref.clone(), head.stream_position))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                soland_storage::CurrentDetailProgress {
+                    request_digest,
+                    snapshot_cursor: arkret_wire::Cursor::new(format!(
+                        "ak:cursor:{}",
+                        uuid::Uuid::now_v7()
+                    ))
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+                    expires_at_ms: now.timestamp_millis() + 300_000,
+                    snapshot_id: snapshot.snapshot_id.clone(),
+                    stream_heads,
+                    next_positions: snapshot_positions,
+                    complete: false,
+                }
+            }
+        };
+        let mut entries = Vec::new();
+        let item_limit = usize::try_from(request.timeline_limit.min(1000).max(1))
+            .expect("timeline limit is bounded to 1000");
+        for head in progress.stream_heads.clone() {
+            if entries.len() >= item_limit {
+                break;
+            }
+            let after = progress.next_positions.get(&head.stream_ref).copied();
+            let remaining = item_limit - entries.len();
+            let scan = authority
+                .scan_stream(&arkret_wire::StreamScanRequest {
+                    realm_id: request.realm_id.clone(),
+                    stream_ref: head.stream_ref.clone(),
+                    after_position: after,
+                    limit: u16::try_from(remaining).unwrap_or(1000),
+                })
+                .await?;
+            for item in scan.commits {
+                progress
+                    .next_positions
+                    .insert(head.stream_ref.clone(), item.commit.stream_position);
+                entries.push(item);
+            }
+        }
+        progress.complete = progress.stream_heads.iter().all(|head| {
+            progress
+                .next_positions
+                .get(&head.stream_ref)
+                .is_some_and(|position| *position >= head.stream_position)
+        });
+        let encoded = arkret_canonical::canonical_json_bytes(&entries)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if encoded.len() > byte_budget {
+            return Err(PersistenceError::Conflict(
+                "snapshot tail page exceeds byte budget".to_owned(),
+            ));
+        }
+        Ok(soland_storage::CurrentDetailOutcome::Page(
+            soland_storage::CurrentDetailPage {
+                progress,
+                entries,
+                snapshot: Some(snapshot),
+            },
+        ))
     }
     async fn account_summary_has_join(
         &self,

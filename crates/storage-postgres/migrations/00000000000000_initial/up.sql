@@ -28,12 +28,12 @@ CREATE TABLE public.soland_schema_contract (
     contract_version text NOT NULL,
     CONSTRAINT soland_schema_contract_singleton_check CHECK (singleton),
     CONSTRAINT soland_schema_contract_version_check CHECK (
-        contract_version = 'control-seal-scheduler-v1'
+        contract_version = 'authority-commit-v1'
     )
 );
 
 INSERT INTO public.soland_schema_contract (singleton, contract_version)
-VALUES (true, 'control-seal-scheduler-v1');
+VALUES (true, 'authority-commit-v1');
 
 -- Realm wire identities are event-derived protocol values, not
 -- database primary keys.  Intern them once and use the monotonic `pk` for
@@ -573,16 +573,24 @@ CREATE TABLE public.canonical_events (
     digest_suite smallint NOT NULL,
     digest bytea NOT NULL,
     actor_id text NOT NULL,
-    actor_seq bigint NOT NULL,
+    actor_seq bigint DEFAULT 0 NOT NULL,
     realm_id text,
     realm_pk bigint REFERENCES public.canonical_realms(pk) ON DELETE RESTRICT,
+    scope_ref jsonb NOT NULL,
     kind text NOT NULL,
-    schema_id text NOT NULL,
+    schema_id text DEFAULT 'ak.schema.event.v1' NOT NULL,
     canonical_bytes bytea NOT NULL,
     envelope jsonb NOT NULL,
-    state text DEFAULT 'accepted' NOT NULL,
+    state text DEFAULT 'queued' NOT NULL,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT canonical_events_state_check CHECK (state IN ('accepted', 'quarantined')),
+    committed_at timestamp with time zone,
+    rejection_reason text,
+    CONSTRAINT canonical_events_state_check CHECK (state IN ('queued', 'committed', 'rejected')),
+    CONSTRAINT canonical_events_state_fields_check CHECK (
+        (state = 'queued' AND committed_at IS NULL AND rejection_reason IS NULL)
+        OR (state = 'committed' AND committed_at IS NOT NULL AND rejection_reason IS NULL)
+        OR (state = 'rejected' AND committed_at IS NULL AND rejection_reason IS NOT NULL)
+    ),
     CONSTRAINT canonical_events_id_length_check CHECK (octet_length(id) = 33),
     CONSTRAINT canonical_events_reserved_nibble_check CHECK ((get_byte(id, 0) >> 4) = 0),
     CONSTRAINT canonical_events_digest_suite_check CHECK (digest_suite IN (1, 2)),
@@ -593,6 +601,109 @@ CREATE TABLE public.canonical_events (
     CONSTRAINT canonical_events_id_key UNIQUE (id),
     CONSTRAINT canonical_events_identity_key UNIQUE (digest_suite, digest)
 );
+
+CREATE INDEX canonical_events_realm_state_idx
+    ON public.canonical_events (realm_id, state, received_at);
+
+-- Single current write authority per Realm. This row is the write-serialization
+-- fence: every append locks it before inspecting a stream tail, so a Station
+-- that lost a completed handoff can never commit behind the new one.
+CREATE TABLE public.realm_authorities (
+    realm_id text PRIMARY KEY,
+    generation bigint NOT NULL CHECK (generation >= 0),
+    service_id text NOT NULL,
+    authority_ref jsonb NOT NULL,
+    last_handoff_ref text,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT realm_authorities_handoff_shape CHECK (
+        (generation = 0 AND last_handoff_ref IS NULL)
+        OR (generation > 0 AND last_handoff_ref IS NOT NULL)
+    )
+);
+
+-- One chain per serialized CommitStreamRef. Realm, Circle and Sidecar
+-- positions are intentionally incomparable: there is no global chain and no
+-- global position.
+CREATE TABLE public.realm_commits (
+    commit_id text PRIMARY KEY,
+    realm_id text NOT NULL,
+    stream_key text NOT NULL,
+    stream_ref jsonb NOT NULL,
+    stream_position bigint NOT NULL CHECK (stream_position >= 0),
+    previous_commit_ref text,
+    event_pk bigint NOT NULL UNIQUE REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    authority_generation bigint NOT NULL CHECK (authority_generation >= 0),
+    commit_json jsonb NOT NULL,
+    committed_at timestamptz NOT NULL,
+    CONSTRAINT realm_commits_position_key UNIQUE (stream_key, stream_position),
+    CONSTRAINT realm_commits_predecessor_shape CHECK (
+        (stream_position = 0 AND previous_commit_ref IS NULL)
+        OR (stream_position > 0 AND previous_commit_ref IS NOT NULL)
+    )
+);
+
+CREATE INDEX realm_commits_realm_stream_tail_idx
+    ON public.realm_commits (realm_id, stream_key, stream_position DESC);
+
+-- Planned old/new double-signed handoffs only. Consecutive generations are a
+-- CHECK, so a gap cannot be introduced by an unplanned election.
+CREATE TABLE public.realm_authority_handoffs (
+    handoff_id text PRIMARY KEY,
+    realm_id text NOT NULL,
+    from_generation bigint NOT NULL CHECK (from_generation >= 0),
+    to_generation bigint NOT NULL,
+    from_service_id text NOT NULL,
+    to_service_id text NOT NULL,
+    handoff_json jsonb NOT NULL,
+    installed_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT realm_authority_handoffs_consecutive CHECK (to_generation = from_generation + 1),
+    CONSTRAINT realm_authority_handoffs_generation_key UNIQUE (realm_id, to_generation)
+);
+
+-- Signed typed snapshot served by join/bootstrap and bound by every handoff.
+CREATE TABLE public.realm_state_snapshots (
+    snapshot_id text PRIMARY KEY,
+    realm_id text NOT NULL,
+    authority_generation bigint NOT NULL CHECK (authority_generation >= 0),
+    snapshot_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL
+);
+
+CREATE INDEX realm_state_snapshots_latest_idx
+    ON public.realm_state_snapshots (realm_id, authority_generation DESC, created_at DESC);
+
+-- The staged OpenMLS successor is installed in the same transaction that
+-- commits its producer Event and queues every recipient Welcome.
+CREATE TABLE public.mls_group_states (
+    group_id text PRIMARY KEY,
+    realm_id text NOT NULL,
+    effective_scope jsonb NOT NULL,
+    epoch bigint NOT NULL CHECK (epoch >= 0),
+    state_bytes bytea NOT NULL CHECK (octet_length(state_bytes) > 0),
+    commit_event_pk bigint NOT NULL UNIQUE REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    updated_at timestamptz NOT NULL
+);
+
+-- A Welcome is a producer-signed recipient delivery object, not an Event. Its
+-- row is enqueued inside the MLS Commit transaction: all of it commits, or
+-- none of it does.
+CREATE TABLE public.mls_welcome_deliveries (
+    welcome_id text PRIMARY KEY,
+    realm_id text NOT NULL,
+    commit_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    recipient_actor_id text NOT NULL,
+    delivery_json jsonb NOT NULL,
+    state text DEFAULT 'queued' NOT NULL CHECK (state IN ('queued', 'delivered')),
+    queued_at timestamptz DEFAULT now() NOT NULL,
+    delivered_at timestamptz,
+    CONSTRAINT mls_welcome_deliveries_state_fields CHECK (
+        (state = 'queued' AND delivered_at IS NULL)
+        OR (state = 'delivered' AND delivered_at IS NOT NULL)
+    )
+);
+
+CREATE INDEX mls_welcome_deliveries_recipient_idx
+    ON public.mls_welcome_deliveries (recipient_actor_id, state, queued_at);
 
 -- Exact public leaf intent atomically retained with MLS Event admission.
 CREATE TABLE public.mls_frontier_inputs (
@@ -1511,25 +1622,22 @@ CREATE INDEX state_cell_ops_seal_idx ON public.state_cell_ops USING btree (realm
 -- Holder-private consent cells. `consent_id` is the cell subject
 -- (`consent-model.md` section 3.1), so the natural key is (holder, cell_id);
 -- peer_id and consent_scope are the intent frozen by the cell's first grant.
-CREATE TABLE public.consent_cells (
-    id uuid PRIMARY KEY,
-    cell_id text NOT NULL,
+CREATE TABLE public.consent_grants (
+    consent_id text NOT NULL,
     holder_account_id jsonb NOT NULL,
     peer jsonb NOT NULL,
     consent_scope text NOT NULL,
     active_grants jsonb DEFAULT '{}'::jsonb NOT NULL,
     revoked_grants jsonb DEFAULT '{}'::jsonb NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT consent_grants_holder_consent_key PRIMARY KEY (holder_account_id, consent_id)
 );
 
-ALTER TABLE ONLY public.consent_cells
-    ADD CONSTRAINT consent_cells_holder_cell_key UNIQUE (holder_account_id, cell_id);
+CREATE INDEX consent_grants_holder_intent_idx
+    ON public.consent_grants USING btree (holder_account_id, consent_scope);
 
-CREATE INDEX consent_cells_holder_intent_idx
-    ON public.consent_cells USING btree (holder_account_id, consent_scope);
-
--- Private service-local MIMI request correlation. These rows are not consent
--- cells and do not represent accepted protocol state; they only bind the
+-- Private service-local MIMI request correlation. These rows are not accepted
+-- protocol state; they only bind the
 -- opaque consent_id returned by request_consent to a later caller-authored
 -- Event submission.
 CREATE TABLE public.mimi_consent_correlations (

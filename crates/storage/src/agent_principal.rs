@@ -1,6 +1,5 @@
-use arkret_models_collaboration::agent_operations::{
-    AgentLifecycleState, AgentRuntimeApprovalRequestBody,
-};
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_collaboration::agent_scope::AgentRuntimeApprovalRequestBody;
 use arkret_wire::{DidUrl, OpaqueLocalId};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -54,8 +53,9 @@ pub struct AgentPrincipalRecord {
     pub authorized_public_key_digest: Option<String>,
     pub authorized_key_event: Option<arkret_wire::Event>,
     pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
-    pub current_signer_evidence:
-        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
+    /// Station-local signer-resolution snapshot retained for audit/debugging.
+    /// Protocol authorization is bound by `signer_resolution_evidence_ref`.
+    pub current_signer_evidence: Option<Value>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

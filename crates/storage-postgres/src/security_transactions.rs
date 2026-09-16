@@ -1,7 +1,5 @@
-use arkret_wire::{
-    DidCoreId, Hash, SecurityTransaction, SecurityTransactionKind, SecurityTransactionStep,
-    TransactionId,
-};
+use arkret_models_crypto::{SecurityTransaction, SecurityTransactionKind, SecurityTransactionStep};
+use arkret_wire::{DidCoreId, Hash, TransactionId};
 
 use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
@@ -361,10 +359,10 @@ async fn lock_transaction_recovery_authority(
     conn: &mut AsyncPgConnection,
     record: &SecurityTransactionRecord,
 ) -> Result<(), PgTransactionError> {
-    if record.resource.is_completed() {
+    if record.resource.terminal_result.is_some() {
         return Ok(());
     }
-    if let Some(binding) = record.resource.recovery_binding() {
+    if let Some(binding) = record.resource.recovery_plan().map(|plan| &plan.binding) {
         let session = crate::recovery::lock_recovery_session_authority(
             conn,
             binding.recovery_session_id.as_str(),
@@ -467,8 +465,10 @@ pub(crate) async fn accept_step_in_transaction(
     .await
     .map_err(PersistenceError::database)?;
     update_mutable_fields(conn, &record).await?;
-    if record.resource.is_completed()
-        && let Some(binding) = record.resource.recovery_binding()
+    if matches!(
+        record.resource.terminal_result,
+        Some(arkret_models_crypto::SecurityTransactionTerminalOutcome::Completed { .. })
+    ) && let Some(binding) = record.resource.recovery_plan().map(|plan| &plan.binding)
     {
         let affected = sql_query(
             "UPDATE recovery_sessions SET state = 'completed', updated_at = NOW() \
@@ -540,7 +540,8 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         let recovery_session_id = record
             .resource
-            .recovery_binding()
+            .recovery_plan()
+            .map(|plan| &plan.binding)
             .map(|binding| binding.recovery_session_id.as_str().to_owned());
         let transaction_id = record.resource.transaction_id.as_str().to_owned();
         let principal_id = record.resource.account_id.principal_id.clone();

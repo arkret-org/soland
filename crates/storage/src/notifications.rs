@@ -1,5 +1,5 @@
 use arkret_models_collaboration::objects::read_receipts::Notification;
-use arkret_models_collaboration::sync_frames::account_sync::NotificationDelta;
+use arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta;
 use arkret_wire::events::EventKind;
 use arkret_wire::{ActorId, DidCoreId};
 
@@ -12,7 +12,7 @@ pub struct RecipientNotificationRecord {
     pub source_actor_id: Option<ActorId>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct AccountNotificationDeltaWrite {
     pub delta: NotificationDelta,
     pub recipient_actor_id: ActorId,
@@ -21,7 +21,7 @@ pub struct AccountNotificationDeltaWrite {
     pub source_account_artifact_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct StoredAccountNotificationDelta {
     pub record: AccountNotificationDeltaWrite,
     pub projection_position: i64,

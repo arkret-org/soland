@@ -1,6 +1,15 @@
-use arkret_models_collaboration::agent_operations::AgentSidecarState;
-
 use super::{PersistenceResult, Value, async_trait};
+
+/// Service-local lifecycle of a Sidecar projection. Creation/attachment is
+/// committed on the Sidecar's own stream; lifecycle is not a producer Event
+/// ordering field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarLifecycleState {
+    Active,
+    Suspended,
+    Tombstoned,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentSidecarRecord {
@@ -9,7 +18,7 @@ pub struct AgentSidecarRecord {
     pub controller_account_id: arkret_wire::AccountId,
     /// Lifecycle state; canonical SDK enum, persisted as its snake_case wire
     /// name (`active` | `suspended` | `tombstoned`).
-    pub state: AgentSidecarState,
+    pub state: SidecarLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,

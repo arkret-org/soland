@@ -1,4 +1,4 @@
-use arkret_models_collaboration::http_bodies::DevicePairingState;
+use arkret_models_collaboration::device_pairing::DevicePairingState;
 use arkret_wire::{AccountId, DidCoreId};
 use chrono::{DateTime, Utc};
 

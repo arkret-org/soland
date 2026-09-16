@@ -1,82 +1,11 @@
-use arkret_canonical::DigestSuite;
-use arkret_models_collaboration::governance_dependencies::{
-    GovernanceDependency, GovernanceDependencySelector,
-};
-use arkret_models_identity::PrincipalRegistrationAnchor;
-use arkret_wire::{Event, Seal};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use super::{
     DeviceInventoryRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord,
-    DeviceRevocationGateSelector, PersistenceError, PersistenceResult, Utc, Uuid, Value,
-    async_trait,
+    DeviceRevocationGateSelector, PersistenceResult, Utc, Uuid, Value, async_trait,
 };
-
-/// Receiver-verified PCR history and the immutable generic-Control signer
-/// roots derived from it.
-///
-/// Construction deliberately replays every exact Event/Seal prefix through
-/// the SDK. Persistence never accepts a caller-authored root, a current-head
-/// alias, or a Station-attested `account_device` shortcut at the Seal CAS
-/// boundary.
-#[derive(Clone, Debug)]
-pub struct ConfirmedDeviceControlProjection {
-    history: arkret::DeviceAuthorizationHistory,
-    roots: Vec<GovernanceDependency>,
-}
-
-impl ConfirmedDeviceControlProjection {
-    /// Build the complete immutable root set for every successfully confirmed
-    /// authorization visible in `history`. Each root freezes the
-    /// authorization's first confirmation Seal even when `history` has since
-    /// advanced to a later head or revocation.
-    pub fn from_verified_history(
-        history: arkret::DeviceAuthorizationHistory,
-        principal_registration_anchor: &PrincipalRegistrationAnchor,
-        seals: &[Seal],
-        events: &[Event],
-        suite: DigestSuite,
-    ) -> PersistenceResult<Self> {
-        let mut roots = Vec::with_capacity(history.authorizations().len());
-        for authorization in history.authorizations() {
-            let evidence = history
-                .account_device_control_evidence(
-                    authorization.authorization_event_id(),
-                    principal_registration_anchor,
-                    seals,
-                    events,
-                    suite,
-                )
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            let evidence_ref = evidence
-                .evidence_ref()
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            let item = GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-                    content_digest: evidence_ref
-                        .content_digest()
-                        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
-                },
-                authenticated_signer_resolution_evidence: Box::new(evidence),
-            };
-            let canonical = crate::governance_signer_evidence_canonical(&item)?;
-            roots.push((canonical.selector_value, item));
-        }
-        roots.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
-        let roots = roots.into_iter().map(|(_, item)| item).collect();
-        Ok(Self { history, roots })
-    }
-
-    pub fn history(&self) -> &arkret::DeviceAuthorizationHistory {
-        &self.history
-    }
-
-    pub fn roots(&self) -> &[GovernanceDependency] {
-        &self.roots
-    }
-}
 /// Local presentation/activity fields. Protocol authorization is deliberately
 /// absent: only authenticated history may install it.
 #[derive(Clone, Debug)]
@@ -92,14 +21,6 @@ pub struct DeviceInventoryMetadata {
 /// Trait for durable device inventory operations.
 #[async_trait]
 pub trait DeviceInventoryStore: Send + Sync {
-    /// Legacy fixture helper for storage tests that predate portable Control
-    /// roots. Production code must install a [`ConfirmedDeviceControlProjection`]
-    /// through the atomic Seal commit boundary instead.
-    #[doc(hidden)]
-    async fn seed_test_confirmed_history_without_control_roots(
-        &self,
-        history: &arkret::DeviceAuthorizationHistory,
-    ) -> PersistenceResult<()>;
     async fn get(
         &self,
         actor: &str,

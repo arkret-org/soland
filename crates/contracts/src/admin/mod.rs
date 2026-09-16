@@ -6,7 +6,6 @@ pub mod invite_tokens;
 pub mod media;
 pub mod policy;
 pub mod queries;
-pub mod seal;
 pub mod server;
 pub mod service_routes;
 

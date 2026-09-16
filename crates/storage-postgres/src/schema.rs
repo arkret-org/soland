@@ -310,12 +310,89 @@ diesel::table! {
         actor_seq -> Int8,
         realm_id -> Nullable<Text>,
         realm_pk -> Nullable<Int8>,
+        scope_ref -> Jsonb,
         kind -> Text,
         schema_id -> Text,
         canonical_bytes -> Bytea,
         envelope -> Jsonb,
         state -> Text,
         received_at -> Timestamptz,
+        committed_at -> Nullable<Timestamptz>,
+        rejection_reason -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    realm_authorities (realm_id) {
+        realm_id -> Text,
+        generation -> Int8,
+        service_id -> Text,
+        authority_ref -> Jsonb,
+        last_handoff_ref -> Nullable<Text>,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    realm_commits (commit_id) {
+        commit_id -> Text,
+        realm_id -> Text,
+        stream_key -> Text,
+        stream_ref -> Jsonb,
+        stream_position -> Int8,
+        previous_commit_ref -> Nullable<Text>,
+        event_pk -> Int8,
+        authority_generation -> Int8,
+        commit_json -> Jsonb,
+        committed_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    realm_authority_handoffs (handoff_id) {
+        handoff_id -> Text,
+        realm_id -> Text,
+        from_generation -> Int8,
+        to_generation -> Int8,
+        from_service_id -> Text,
+        to_service_id -> Text,
+        handoff_json -> Jsonb,
+        installed_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    realm_state_snapshots (snapshot_id) {
+        snapshot_id -> Text,
+        realm_id -> Text,
+        authority_generation -> Int8,
+        snapshot_json -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    mls_group_states (group_id) {
+        group_id -> Text,
+        realm_id -> Text,
+        effective_scope -> Jsonb,
+        epoch -> Int8,
+        state_bytes -> Bytea,
+        commit_event_pk -> Int8,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    mls_welcome_deliveries (welcome_id) {
+        welcome_id -> Text,
+        realm_id -> Text,
+        commit_event_pk -> Int8,
+        recipient_actor_id -> Text,
+        delivery_json -> Jsonb,
+        state -> Text,
+        queued_at -> Timestamptz,
+        delivered_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -335,9 +412,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    consent_cells (id) {
-        id -> Uuid,
-        cell_id -> Text,
+    consent_grants (holder_account_id, consent_id) {
+        consent_id -> Text,
         holder_account_id -> Jsonb,
         peer -> Jsonb,
         consent_scope -> Text,
@@ -1958,7 +2034,13 @@ diesel::allow_tables_to_appear_in_same_query!(
     blobs,
     canonical_events,
     canonical_realms,
-    consent_cells,
+    realm_authorities,
+    realm_commits,
+    realm_authority_handoffs,
+    realm_state_snapshots,
+    mls_group_states,
+    mls_welcome_deliveries,
+    consent_grants,
     mimi_consent_correlations,
     contacts,
     contact_verified_mirrors,

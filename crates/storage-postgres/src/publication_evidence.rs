@@ -4,8 +4,6 @@ use super::{
     async_trait, pg_conn, sql_query,
 };
 
-/// PostgreSQL-backed publication evidence keyed by Event canonical digest
-/// (`authz/offline-publication.md` §2.1).
 pub struct PgPublicationEvidenceStore {
     pub pool: PgPool,
 }
@@ -13,13 +11,11 @@ pub struct PgPublicationEvidenceStore {
 #[derive(QueryableByName)]
 struct PublicationEvidenceRow {
     #[diesel(sql_type = Text)]
-    event_digest: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    event_id: String,
     #[diesel(sql_type = Jsonb)]
-    authorization_lease: Value,
-    #[diesel(sql_type = Jsonb)]
-    ingress_receipt: Value,
+    committed_ref: Value,
+    #[diesel(sql_type = super::Timestamptz)]
+    accepted_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl TryFrom<PublicationEvidenceRow> for PublicationEvidenceRecord {
@@ -27,26 +23,19 @@ impl TryFrom<PublicationEvidenceRow> for PublicationEvidenceRecord {
 
     fn try_from(row: PublicationEvidenceRow) -> PersistenceResult<Self> {
         Ok(Self {
-            event_digest: row.event_digest,
-            realm_id: row.realm_id,
-            authorization_lease: serde_json::from_value(row.authorization_lease).map_err(
-                |error| {
-                    PersistenceError::SchemaViolation(format!(
-                        "stored authorization_lease is invalid: {error}"
-                    ))
-                },
-            )?,
-            ingress_receipt: serde_json::from_value(row.ingress_receipt).map_err(|error| {
+            event_id: arkret_wire::EventId::new(row.event_id)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            committed_ref: serde_json::from_value(row.committed_ref).map_err(|error| {
                 PersistenceError::SchemaViolation(format!(
-                    "stored ingress_receipt is invalid: {error}"
+                    "stored publication committed_ref is invalid: {error}"
                 ))
             })?,
+            accepted_at: row.accepted_at,
         })
     }
 }
 
-const PUBLICATION_EVIDENCE_COLUMNS: &str =
-    "event_digest, realm_id, authorization_lease, ingress_receipt";
+const COLUMNS: &str = "event_id, committed_ref, accepted_at";
 
 #[async_trait]
 impl PublicationEvidenceStore for PgPublicationEvidenceStore {
@@ -54,37 +43,28 @@ impl PublicationEvidenceStore for PgPublicationEvidenceStore {
         &self,
         record: PublicationEvidenceRecord,
     ) -> PersistenceResult<PublicationEvidenceRecord> {
-        let lease = serde_json::to_value(&record.authorization_lease).map_err(|error| {
-            PersistenceError::Internal(format!("failed to encode authorization_lease: {error}"))
-        })?;
-        let receipt = serde_json::to_value(&record.ingress_receipt).map_err(|error| {
-            PersistenceError::Internal(format!("failed to encode ingress_receipt: {error}"))
-        })?;
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        // `DO NOTHING` then read back: the first receipt for a digest is the
-        // one that stands, so an idempotent retry observes the original
-        // `received_at` instead of a re-stamped one.
+        if record.committed_ref.event_id != record.event_id {
+            return Err(PersistenceError::SchemaViolation(
+                "publication evidence must bind the same Event id".to_owned(),
+            ));
+        }
+        let committed_ref =
+            serde_json::to_value(&record.committed_ref).map_err(PersistenceError::database)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO publication_evidence \
-             (event_digest, realm_id, authorization_lease, ingress_receipt, created_at) \
-             VALUES ($1, $2, $3, $4, NOW()) \
-             ON CONFLICT (event_digest) DO NOTHING",
+            "INSERT INTO publication_evidence (event_id,committed_ref,accepted_at) \
+             VALUES ($1,$2,$3) ON CONFLICT (event_id) DO NOTHING",
         )
-        .bind::<Text, _>(&record.event_digest)
-        .bind::<Text, _>(&record.realm_id)
-        .bind::<Jsonb, _>(&lease)
-        .bind::<Jsonb, _>(&receipt)
+        .bind::<Text, _>(record.event_id.as_str())
+        .bind::<Jsonb, _>(committed_ref)
+        .bind::<super::Timestamptz, _>(record.accepted_at)
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-
         let row = sql_query(format!(
-            "SELECT {PUBLICATION_EVIDENCE_COLUMNS} FROM publication_evidence \
-             WHERE event_digest = $1"
+            "SELECT {COLUMNS} FROM publication_evidence WHERE event_id=$1"
         ))
-        .bind::<Text, _>(&record.event_digest)
+        .bind::<Text, _>(record.event_id.as_str())
         .get_result::<PublicationEvidenceRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -93,51 +73,48 @@ impl PublicationEvidenceStore for PgPublicationEvidenceStore {
 
     async fn get(
         &self,
-        event_digest: &str,
+        event_id: &arkret_wire::EventId,
     ) -> PersistenceResult<Option<PublicationEvidenceRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let row = sql_query(format!(
-            "SELECT {PUBLICATION_EVIDENCE_COLUMNS} FROM publication_evidence \
-             WHERE event_digest = $1"
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(format!(
+            "SELECT {COLUMNS} FROM publication_evidence WHERE event_id=$1"
         ))
-        .bind::<Text, _>(event_digest)
+        .bind::<Text, _>(event_id.as_str())
         .get_result::<PublicationEvidenceRow>(&mut *conn)
         .await
         .optional()
-        .map_err(PersistenceError::database)?;
-        row.map(PublicationEvidenceRecord::try_from).transpose()
+        .map_err(PersistenceError::database)?
+        .map(PublicationEvidenceRecord::try_from)
+        .transpose()
     }
 
     async fn get_many(
         &self,
-        event_digests: &[String],
+        event_ids: &[arkret_wire::EventId],
     ) -> PersistenceResult<Vec<PublicationEvidenceRecord>> {
-        if event_digests.is_empty() {
+        if event_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
+        let values = event_ids
+            .iter()
+            .map(|event_id| event_id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(format!(
-            "SELECT {PUBLICATION_EVIDENCE_COLUMNS} FROM publication_evidence \
-             WHERE event_digest = ANY($1)"
+            "SELECT {COLUMNS} FROM publication_evidence WHERE event_id=ANY($1)"
         ))
-        .bind::<diesel::sql_types::Array<Text>, _>(event_digests.to_vec())
+        .bind::<diesel::sql_types::Array<Text>, _>(values)
         .load::<PublicationEvidenceRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        let mut by_digest = std::collections::BTreeMap::new();
+        let mut by_id = std::collections::BTreeMap::new();
         for row in rows {
             let record = PublicationEvidenceRecord::try_from(row)?;
-            by_digest.insert(record.event_digest.clone(), record);
+            by_id.insert(record.event_id.clone(), record);
         }
-        // Preserve the caller's order: it is the Event order of the federation
-        // batch being assembled.
-        Ok(event_digests
+        Ok(event_ids
             .iter()
-            .filter_map(|digest| by_digest.get(digest).cloned())
+            .filter_map(|event_id| by_id.get(event_id).cloned())
             .collect())
     }
 }

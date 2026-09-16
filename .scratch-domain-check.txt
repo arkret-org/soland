@@ -1,0 +1,1532 @@
+    Checking uuid v1.26.0
+    Checking arkret-identifiers v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\identifiers)
+    Checking arkret-wire v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\wire)
+    Checking arkret-models-crypto v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\models-crypto)
+    Checking arkret-schema v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\schema)
+    Checking arkret-state v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\state)
+    Checking arkret-hlc v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\hlc)
+    Checking arkret-models-identity v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\models-identity)
+    Checking arkret-signatures v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\signatures)
+    Checking arkret-crypto v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\crypto)
+    Checking arkret-models-collaboration v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\models-collaboration)
+    Checking arkret-models-integration v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\models-integration)
+    Checking arkret-event-draft v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\event-draft)
+    Checking arkret-policy v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\policy)
+    Checking arkret-mls v0.3.0 (D:\Works\arkret-org\arkret-rust-sdk\crates\mls)
+    Checking soland-domain v0.3.0 (D:\Works\arkret-org\soland\crates\domain)
+error[E0432]: unresolved import `arkret_identifiers::CellRef`
+ --> crates\domain\src\identity.rs:3:26
+  |
+3 | use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
+  |                          ^^^^^^^ no `CellRef` in the root
+
+error[E0432]: unresolved import `arkret_models_collaboration::account_lifecycle`
+ --> crates\domain\src\identity.rs:4:34
+  |
+4 | use arkret_models_collaboration::account_lifecycle::ConsentPeer;
+  |                                  ^^^^^^^^^^^^^^^^^ could not find `account_lifecycle` in `arkret_models_collaboration`
+
+error[E0432]: unresolved import `arkret_wire::CORE_REDUCER_PROFILE`
+ --> crates\domain\src\kinds.rs:2:19
+  |
+2 | use arkret_wire::{CORE_REDUCER_PROFILE, EventKind, ProfileId};
+  |                   ^^^^^^^^^^^^^^^^^^^^ no `CORE_REDUCER_PROFILE` in the root
+
+error[E0432]: unresolved import `arkret_state::state_model`
+  --> crates\domain\src\reducer\apply_audit_session.rs:24:19
+   |
+24 | use arkret_state::state_model::ResolvedCellState;
+   |                   ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0432]: unresolved import `arkret_wire::cbs`
+  --> crates\domain\src\reducer\apply_audit_session.rs:25:18
+   |
+25 | use arkret_wire::cbs::{LatticeOpType, ProjectedOp};
+   |                  ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0432]: unresolved imports `arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile`, `arkret_models_collaboration::agent_operations::AgentSidecarState`
+ --> crates\domain\src\reducer\apply_objects\sidecar.rs:2:5
+  |
+2 |     AgentSidecarEncryptionProfile, AgentSidecarState,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^ no `AgentSidecarState` in `agent_operations`
+  |     |
+  |     no `AgentSidecarEncryptionProfile` in `agent_operations`
+  |
+help: a similar name exists in the module
+  |
+2 -     AgentSidecarEncryptionProfile, AgentSidecarState,
+2 +     AgentSidecarEncryptionProfile, AgentSidecarList,
+  |
+
+error[E0432]: unresolved import `arkret_wire::CORE_REDUCER_PROFILE`
+  --> crates\domain\src\reducer\mls.rs:24:19
+   |
+24 | use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
+   |                   ^^^^^^^^^^^^^^^^^^^^ no `CORE_REDUCER_PROFILE` in the root
+
+error[E0432]: unresolved import `arkret_identifiers::CellRef`
+ --> crates\domain\src\reducer\state_model_kinds.rs:5:26
+  |
+5 | use arkret_identifiers::{CellRef, RealmId};
+  |                          ^^^^^^^ no `CellRef` in the root
+
+error[E0432]: unresolved import `arkret_lattice_registry`
+ --> crates\domain\src\reducer\state_model_kinds.rs:6:9
+  |
+6 | pub use arkret_lattice_registry::default_cell_family_registry;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+  |
+  = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `arkret_lattice_registry`
+ --> crates\domain\src\reducer\state_model_kinds.rs:7:5
+  |
+7 | use arkret_lattice_registry::{
+  |     ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+  |
+  = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `arkret_state::state`
+  --> crates\domain\src\reducer\state_model_kinds.rs:11:19
+   |
+11 | use arkret_state::state::MemoryCellStateRegistry;
+   |                   ^^^^^ could not find `state` in `arkret_state`
+
+error[E0432]: unresolved import `arkret_identifiers::CellRef`
+  --> crates\domain\src\reducer\capability_derivation.rs:10:5
+   |
+10 | use arkret_identifiers::CellRef;
+   |     ^^^^^^^^^^^^^^^^^^^^-------
+   |                         |
+   |                         no `CellRef` in the root
+
+error[E0432]: unresolved import `arkret_identifiers::CellRef`
+  --> crates\domain\src\reducer\projection_state.rs:13:26
+   |
+13 | use arkret_identifiers::{CellRef, RealmId};
+   |                          ^^^^^^^ no `CellRef` in the root
+
+error[E0432]: unresolved import `arkret_models_collaboration::governance::agent_membership_cascade`
+  --> crates\domain\src\reducer\projection_state.rs:15:46
+   |
+15 | use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
+   |                                              ^^^^^^^^^^^^^^^^^^^^^^^^ could not find `agent_membership_cascade` in `governance`
+
+error[E0432]: unresolved import `arkret_state::state`
+  --> crates\domain\src\reducer\projection_state.rs:16:19
+   |
+16 | use arkret_state::state::{CellStateRegistry, CellStore, StoreError};
+   |                   ^^^^^ could not find `state` in `arkret_state`
+
+error[E0432]: unresolved import `arkret_state::state_model`
+  --> crates\domain\src\reducer\projection_state.rs:17:19
+   |
+17 | use arkret_state::state_model::ResolvedCellState;
+   |                   ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0432]: unresolved import `arkret_wire::cbs`
+  --> crates\domain\src\reducer\projection_state.rs:18:18
+   |
+18 | use arkret_wire::cbs::ProjectedCellWrite;
+   |                  ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0432]: unresolved import `arkret_identifiers::CellRef`
+  --> crates\domain\src\reducer.rs:66:5
+   |
+66 | use arkret_identifiers::CellRef;
+   |     ^^^^^^^^^^^^^^^^^^^^-------
+   |                         |
+   |                         no `CellRef` in the root
+
+error[E0432]: unresolved imports `arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation`, `arkret_models_collaboration::objects::read_receipts::ReadCursorPosition`
+  --> crates\domain\src\reducer.rs:69:5
+   |
+69 |     ReadCursorCausalRelation, ReadCursorPosition, ReadMarkerOutcome,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^ no `ReadCursorPosition` in `objects::read_receipts`
+   |     |
+   |     no `ReadCursorCausalRelation` in `objects::read_receipts`
+   |
+help: a similar name exists in the module
+   |
+69 -     ReadCursorCausalRelation, ReadCursorPosition, ReadMarkerOutcome,
+69 +     ReadCursorCausalRelation, ReadCursorList, ReadMarkerOutcome,
+   |
+
+error[E0432]: unresolved import `arkret_state::state_model`
+  --> crates\domain\src\reducer.rs:71:19
+   |
+71 | use arkret_state::state_model::ResolvedCellState;
+   |                   ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0432]: unresolved import `arkret_wire::cbs`
+  --> crates\domain\src\reducer.rs:73:18
+   |
+73 | use arkret_wire::cbs::ProjectedCellWrite;
+   |                  ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_audit_session.rs:43:25
+   |
+43 |     arkret_identifiers::CellRef::new(format!(
+   |                         ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_audit_session.rs:45:22
+   |
+45 |         arkret_wire::CellFamilyId::AUDIT_SESSION_V1
+   |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_audit_session.rs:51:25
+   |
+51 |     arkret_identifiers::CellRef::new(format!(
+   |                         ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_audit_session.rs:53:22
+   |
+53 |         arkret_wire::CellFamilyId::AUDIT_RELEASE_V1
+   |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_audit_session.rs:63:42
+   |
+63 |         let config = arkret_identifiers::CellRef::new(format!(
+   |                                          ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_audit_session.rs:65:26
+   |
+65 |             arkret_wire::CellFamilyId::AUDIT_BINDING_V1
+   |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_audit_session.rs:68:45
+   |
+68 |         let lifecycle = arkret_identifiers::CellRef::new(format!(
+   |                                             ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_audit_session.rs:70:26
+   |
+70 |             arkret_wire::CellFamilyId::AUDIT_BINDING_STATE_V1
+   |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_capability.rs:1321:35
+     |
+1321 |         let write = arkret_state::state_model::StateWrite::new(
+     |                                   ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `LatticeOpType` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1324:39
+     |
+1324 |                 op_type: arkret_wire::LatticeOpType::Add,
+     |                                       ^^^^^^^^^^^^^ could not find `LatticeOpType` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_capability.rs:1334:27
+     |
+1334 |             arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+     |                           ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `EventCellValueShape` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1334:73
+     |
+1334 |             arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+     |                                                                         ^^^^^^^^^^^^^^^^^^^ could not find `EventCellValueShape` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_capability.rs:1445:27
+     |
+1445 |             arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+     |                           ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `EventCellValueShape` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1445:73
+     |
+1445 |             arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+     |                                                                         ^^^^^^^^^^^^^^^^^^^ could not find `EventCellValueShape` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_capability.rs:1453:39
+     |
+1453 |             let write = arkret_state::state_model::StateWrite::new(
+     |                                       ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `LatticeOpType` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1456:43
+     |
+1456 |                     op_type: arkret_wire::LatticeOpType::Remove,
+     |                                           ^^^^^^^^^^^^^ could not find `LatticeOpType` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1521:34
+     |
+1521 |     ) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, arkret_schema::EventCellContractError>
+     |                                  ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+ --> crates\domain\src\reducer\apply_history_access.rs:4:57
+  |
+4 | const CIRCLE_HISTORY_ACCESS_FAMILY: &str = arkret_wire::CellFamilyId::CIRCLE_HISTORY_ACCESS_V1;
+  |                                                         ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_history_access.rs:126:44
+    |
+126 |         let Ok(cell) = arkret_identifiers::CellRef::new(format!(
+    |                                            ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_identity_resolution.rs:13:26
+   |
+13 |             arkret_wire::CellFamilyId::IDENTITY_RESOLUTION_V1,
+   |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_identity_resolution.rs:71:62
+   |
+71 |             || preconditions[0].predicate.op != arkret_wire::cbs::PredicateOp::HeadEq
+   |                                                              ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_identity_resolution.rs:96:56
+   |
+96 |             || projected[0].op.op_type != arkret_wire::cbs::LatticeOpType::Set
+   |                                                        ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+ --> crates\domain\src\reducer\apply_key_backup.rs:3:18
+  |
+3 |     arkret_wire::CellFamilyId::KEY_BACKUP_ACTIVE_SERIES_V1;
+  |                  ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_key_backup.rs:67:50
+   |
+67 |         if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+   |                                                  ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `poll` in `arkret_models_collaboration`
+   --> crates\domain\src\reducer\apply_messages.rs:200:59
+    |
+200 |         let selected = match arkret_models_collaboration::poll::validate_poll_selections(
+    |                                                           ^^^^ could not find `poll` in `arkret_models_collaboration`
+
+error[E0433]: cannot find `poll` in `arkret_models_collaboration`
+   --> crates\domain\src\reducer\apply_messages.rs:221:49
+    |
+221 |         let fact = arkret_models_collaboration::poll::PollResponseFact {
+    |                                                 ^^^^ could not find `poll` in `arkret_models_collaboration`
+
+error[E0433]: cannot find `poll` in `arkret_models_collaboration`
+   --> crates\domain\src\reducer\apply_messages.rs:222:53
+    |
+222 |             partition: arkret_models_collaboration::poll::PollPartition {
+    |                                                     ^^^^ could not find `poll` in `arkret_models_collaboration`
+
+error[E0433]: cannot find `LatticeOp` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_messages.rs:654:43
+    |
+654 |                 let mut op = arkret_wire::LatticeOp::empty();
+    |                                           ^^^^^^^^^ could not find `LatticeOp` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_messages.rs:661:31
+    |
+661 |                 arkret_state::state_model::StateWrite::superseding(
+    |                               ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_messages.rs:668:44
+    |
+668 |         let resolved = match arkret_state::state_model::causal_register_state(&state_writes) {
+    |                                            ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_objects\circle.rs:209:47
+    |
+209 |         if let Ok(cell) = arkret_identifiers::CellRef::new(format!(
+    |                                               ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:15:30
+   |
+15 |                 arkret_wire::CellFamilyId::REALM_JOIN_RULE_V1
+   |                              ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:16:36
+   |
+16 |                     | arkret_wire::CellFamilyId::REALM_HISTORY_ACCESS_V1
+   |                                    ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:17:36
+   |
+17 |                     | arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1
+   |                                    ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:18:36
+   |
+18 |                     | arkret_wire::CellFamilyId::REALM_POLICY_BUNDLE_V1
+   |                                    ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:19:36
+   |
+19 |                     | arkret_wire::CellFamilyId::REALM_PLAINTEXT_VISIBLE_SERVICES_V1
+   |                                    ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:30:22
+   |
+30 |         arkret_wire::CellFamilyId::MEMBER_STATE_V1
+   |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:31:28
+   |
+31 |             | arkret_wire::CellFamilyId::MEMBER_IDENTITY_V1
+   |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:32:28
+   |
+32 |             | arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1
+   |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:33:28
+   |
+33 |             | arkret_wire::CellFamilyId::DEVICE_AUTHORIZATION_V1
+   |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:34:28
+   |
+34 |             | arkret_wire::CellFamilyId::DEVICE_LIST_UPDATE_V1
+   |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_objects\queries.rs:35:28
+   |
+35 |             | arkret_wire::CellFamilyId::DEVICE_REANCHOR_V1
+   |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `agent_membership_cascade` in `governance`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:270:51
+    |
+270 |         &arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding,
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^ could not find `agent_membership_cascade` in `governance`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:317:43
+    |
+317 |         let cell_id = arkret_identifiers::CellRef::new(format!(
+    |                                           ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:346:26
+    |
+346 |             arkret_wire::CellFamilyId::REALM_READ_RECEIPT_POLICY_V1,
+    |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:355:26
+    |
+355 |             arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1,
+    |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:381:67
+    |
+381 |         self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_GENESIS_V1)
+    |                                                                   ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:397:67
+    |
+397 |         self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_DESTROY_V1)
+    |                                                                   ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:403:67
+    |
+403 |         self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_TOMBSTONE_V1)
+    |                                                                   ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:434:56
+    |
+434 |         self.realm_facet_blocks(realm_id, arkret_wire::CellFamilyId::REALM_FREEZE_V1)
+    |                                                        ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:438:56
+    |
+438 |         self.realm_facet_blocks(realm_id, arkret_wire::CellFamilyId::REALM_ARCHIVE_V1)
+    |                                                        ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:809:26
+    |
+809 |             arkret_wire::CellFamilyId::REALM_SEARCH_POLICY_V1,
+    |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:928:54
+    |
+928 |             let Ok(state_cell) = arkret_identifiers::CellRef::new(format!(
+    |                                                      ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:955:42
+    |
+955 |     ) -> BTreeMap<CellRef, arkret_state::state_model::ResolvedCellState> {
+    |                                          ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:957:63
+    |
+957 |         let mut insert = |wire: String, state: &arkret_state::state_model::ResolvedCellState| {
+    |                                                               ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:960:31
+    |
+960 |                 arkret_state::state_model::ResolvedCellState::Bottom(_)
+    |                               ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `cell` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1005:30
+     |
+1005 |                 arkret_wire::cell::CellId::from_ref(cell)
+     |                              ^^^^ could not find `cell` in `arkret_wire`
+
+error[E0433]: cannot find `cell` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1037:44
+     |
+1037 |                 let cell_id = arkret_wire::cell::CellId::from_ref(cell_ref).ok()?;
+     |                                            ^^^^ could not find `cell` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1041:39
+     |
+1041 |                         arkret_state::state_model::ResolvedCellState::Bottom(_)
+     |                                       ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `cell` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1070:30
+     |
+1070 |                 arkret_wire::cell::CellId::from_ref(cell)
+     |                              ^^^^ could not find `cell` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1078:31
+     |
+1078 |                 arkret_state::state_model::ResolvedCellState::Bottom(_)
+     |                               ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `cell` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1082:44
+     |
+1082 |             let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell_ref) else {
+     |                                            ^^^^ could not find `cell` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1088:61
+     |
+1088 |                     && (cell_id.component() != arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+     |                                                             ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1092:56
+     |
+1092 |                 || cell_id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1)
+     |                                                        ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1104:49
+     |
+1104 |         cells: &BTreeMap<CellRef, arkret_state::state_model::ResolvedCellState>,
+     |                                                 ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1114:26
+     |
+1114 |             arkret_wire::CellFamilyId::REALM_DIGEST_SUITE_V1,
+     |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1184:26
+     |
+1184 |             arkret_wire::CellFamilyId::REALM_HISTORY_ACCESS_V1,
+     |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_realm_lifecycle.rs:12:56
+   |
+12 | const REALM_AUTHORITY_ROOT_FAMILY: &str = arkret_wire::CellFamilyId::REALM_AUTHORITY_ROOT_V1;
+   |                                                        ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `RealmAuthorityRootValue` in `realm_bootstrap`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:121:41
+    |
+121 |         arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(created_by.clone()),
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^ could not find `RealmAuthorityRootValue` in `realm_bootstrap`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:176:34
+    |
+176 |                     arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
+    |                                  ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:447:40
+    |
+447 |         let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
+    |                                        ^^^^^^ could not find `CellId` in `arkret_wire`
+    |
+help: a struct with a similar name exists
+    |
+447 -         let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
+447 +         let Ok(cell_id) = arkret_wire::CallId::from_ref(&write.cell_id) else {
+    |
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:452:48
+    |
+452 |         if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
+    |                                                ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:456:30
+    |
+456 |                 arkret_wire::cbs::ProjectedOp::TransitionTo { to }
+    |                              ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:520:40
+    |
+520 |         let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
+    |                                        ^^^^^^ could not find `CellId` in `arkret_wire`
+    |
+help: a struct with a similar name exists
+    |
+520 -         let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
+520 +         let Ok(cell_id) = arkret_wire::CallId::from_ref(&write.cell_id) else {
+    |
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:525:48
+    |
+525 |         if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
+    |                                                ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:529:30
+    |
+529 |                 arkret_wire::cbs::ProjectedOp::TransitionTo { to }
+    |                              ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:675:54
+    |
+675 |             && let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+    |                                                      ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1008:50
+     |
+1008 |             let cell = match arkret_identifiers::CellRef::new(format!(
+     |                                                  ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1010:30
+     |
+1010 |                 arkret_wire::CellFamilyId::AGENT_STATUS_V1
+     |                              ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1030:61
+     |
+1030 |             if projected_transition.op_type != arkret_wire::cbs::LatticeOpType::Transition
+     |                                                             ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1369:46
+     |
+1369 | ...                   arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
+     |                                    ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_realm_organization.rs:137:31
+    |
+137 |                 arkret_state::state_model::ResolvedCellState::Value(value),
+    |                               ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_organization.rs:188:29
+    |
+188 |         arkret_identifiers::CellRef::new(format!(
+    |                             ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_realm_policy.rs:12:47
+   |
+12 |         let config_cell = arkret_identifiers::CellRef::new(format!(
+   |                                               ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_realm_policy.rs:16:46
+   |
+16 |         let state_cell = arkret_identifiers::CellRef::new(format!(
+   |                                              ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_realm_policy.rs:31:64
+   |
+31 |             .filter(|direct| direct.op.op_type == arkret_wire::cbs::LatticeOpType::Set)
+   |                                                                ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+  --> crates\domain\src\reducer\apply_realm_policy.rs:43:53
+   |
+43 |         if state_transition.op_type != arkret_wire::cbs::LatticeOpType::Transition
+   |                                                     ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_realm_policy.rs:93:51
+   |
+93 |         let Ok(config_cell) = arkret_identifiers::CellRef::new(format!(
+   |                                                   ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:100:50
+    |
+100 |         let Ok(state_cell) = arkret_identifiers::CellRef::new(format!(
+    |                                                  ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:137:39
+    |
+137 |         if op.op_type != arkret_wire::cbs::LatticeOpType::Transition || !legal {
+    |                                       ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:217:40
+    |
+217 |         let Ok(cell_id) = arkret_wire::CellId::from_ref(&wire_cell) else {
+    |                                        ^^^^^^ could not find `CellId` in `arkret_wire`
+    |
+help: a struct with a similar name exists
+    |
+217 -         let Ok(cell_id) = arkret_wire::CellId::from_ref(&wire_cell) else {
+217 +         let Ok(cell_id) = arkret_wire::CallId::from_ref(&wire_cell) else {
+    |
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:468:26
+    |
+468 |             arkret_wire::CellFamilyId::REALM_SEARCH_POLICY_V1,
+    |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:502:26
+    |
+502 |             arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
+    |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:528:52
+    |
+528 |         let state_cell = match arkret_identifiers::CellRef::new(format!(
+    |                                                    ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:549:39
+    |
+549 |         if op.op_type != arkret_wire::cbs::LatticeOpType::Transition
+    |                                       ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:563:26
+    |
+563 |             arkret_wire::CellFamilyId::CALL_STATE_V1,
+    |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:612:50
+    |
+612 |             let state_cell = arkret_identifiers::CellRef::new(format!(
+    |                                                  ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:701:30
+    |
+701 |                 arkret_wire::cbs::LatticeOpType::Transition => {
+    |                              ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:718:30
+    |
+718 |                 arkret_wire::cbs::LatticeOpType::Set => {
+    |                              ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:719:35
+    |
+719 |                     arkret_state::state_model::SequencedState::new(
+    |                                   ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `EventCellValueShape` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:720:38
+    |
+720 |                         arkret_wire::EventCellValueShape::Register,
+    |                                      ^^^^^^^^^^^^^^^^^^^ could not find `EventCellValueShape` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:724:40
+    |
+724 |                         &arkret_state::state_model::StateWrite::new(
+    |                                        ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:731:30
+    |
+731 |                 arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => {
+    |                              ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:731:69
+    |
+731 |                 arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => {
+    |                                                                     ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:732:35
+    |
+732 |                     arkret_state::state_model::SequencedState::new(
+    |                                   ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `EventCellValueShape` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:733:38
+    |
+733 |                         arkret_wire::EventCellValueShape::Set,
+    |                                      ^^^^^^^^^^^^^^^^^^^ could not find `EventCellValueShape` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:737:40
+    |
+737 |                         &arkret_state::state_model::StateWrite::new(
+    |                                        ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:751:39
+    |
+751 |             if family == arkret_wire::CellFamilyId::CALL_FOCUS_V1
+    |                                       ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:802:55
+    |
+802 |         let call_state_terminal = arkret_identifiers::CellRef::new(format!(
+    |                                                       ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:817:50
+    |
+817 |         if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+    |                                                  ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1021:50
+     |
+1021 |         if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+     |                                                  ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1157:47
+     |
+1157 |         let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+     |                                               ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1175:27
+     |
+1175 |             arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+     |                           ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `EventCellValueShape` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1175:73
+     |
+1175 |             arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
+     |                                                                         ^^^^^^^^^^^^^^^^^^^ could not find `EventCellValueShape` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1176:41
+     |
+1176 |         let state_write = arkret_state::state_model::StateWrite::new(
+     |                                         ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1213:26
+     |
+1213 |             arkret_wire::CellFamilyId::CALL_RECORDING_V1
+     |                          ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1214:32
+     |
+1214 |                 | arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1
+     |                                ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1215:32
+     |
+1215 |                 | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1
+     |                                ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1216:32
+     |
+1216 |                 | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_RESULT_V1
+     |                                ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1221:22
+     |
+1221 |         arkret_wire::CellFamilyId::CALL_STATE_V1
+     |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1222:28
+     |
+1222 |             | arkret_wire::CellFamilyId::CALL_FOCUS_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1223:28
+     |
+1223 |             | arkret_wire::CellFamilyId::CALL_RECORDING_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1224:28
+     |
+1224 |             | arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1225:28
+     |
+1225 |             | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1226:28
+     |
+1226 |             | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_RESULT_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1227:28
+     |
+1227 |             | arkret_wire::CellFamilyId::CALL_MODERATION_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1228:28
+     |
+1228 |             | arkret_wire::CellFamilyId::CALL_ROSTER_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1229:28
+     |
+1229 |             | arkret_wire::CellFamilyId::CALL_MUTE_OVERRIDE_V1
+     |                            ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1237:23
+     |
+1237 |     op: &arkret_wire::cbs::LatticeOp,
+     |                       ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1265:39
+     |
+1265 |             if family == arkret_wire::CellFamilyId::CALL_STATE_V1
+     |                                       ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1271:50
+     |
+1271 |             return Err(if family == arkret_wire::CellFamilyId::CALL_STATE_V1 {
+     |                                                  ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `state_model` in `arkret_state`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1280:23
+     |
+1280 |         arkret_state::state_model::SequencedStateValue {
+     |                       ^^^^^^^^^^^ could not find `state_model` in `arkret_state`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1294:22
+     |
+1294 |         arkret_wire::CellFamilyId::CALL_STATE_V1 => {
+     |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1321:22
+     |
+1321 |         arkret_wire::CellFamilyId::CALL_RECORDING_V1 => {
+     |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1335:22
+     |
+1335 |         arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1 => {
+     |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1356:23
+     |
+1356 |     op: &arkret_wire::cbs::LatticeOp,
+     |                       ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1359:35
+     |
+1359 |     if op.op_type != arkret_wire::cbs::LatticeOpType::Remove {
+     |                                   ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1383:22
+     |
+1383 |         arkret_wire::CellFamilyId::CALL_ROSTER_V1 => {
+     |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1395:22
+     |
+1395 |         arkret_wire::CellFamilyId::CALL_MODERATION_V1 => {
+     |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellRef` in `arkret_identifiers`
+  --> crates\domain\src\reducer\realm_links.rs:53:25
+   |
+53 |     arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.realm.link.v1:{subject}")).ok()
+   |                         ^^^^^^^ could not find `CellRef` in `arkret_identifiers`
+
+error[E0433]: cannot find `state` in `arkret_state`
+  --> crates\domain\src\reducer\state_model_kinds.rs:45:37
+   |
+45 |         let binding = arkret_state::state::CellStateRegistry::resolve(registry, &realm, &cell)
+   |                                     ^^^^^ could not find `state` in `arkret_state`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\capability_derivation.rs:221:22
+    |
+221 |         arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+    |                      ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `ResolvedCellState` in `arkret_state`
+   --> crates\domain\src\reducer\capability_derivation.rs:224:23
+    |
+224 |     let arkret_state::ResolvedCellState::Sequenced(current) = state.cells.get(&cell_ref)? else {
+    |                       ^^^^^^^^^^^^^^^^^ could not find `ResolvedCellState` in `arkret_state`
+
+error[E0433]: cannot find `poll` in `arkret_models_collaboration`
+  --> crates\domain\src\reducer\projection_state.rs:56:54
+   |
+56 |     pub poll_responses: arkret_models_collaboration::poll::PollResponseSet,
+   |                                                      ^^^^ could not find `poll` in `arkret_models_collaboration`
+
+error[E0433]: cannot find module or crate `arkret_lattice_registry` in this scope
+   --> crates\domain\src\reducer\projection_state.rs:590:17
+    |
+590 |                 arkret_lattice_registry::ActorPrivateMergeOutcome::Accepted(_)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+    |
+    = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `arkret_lattice_registry` in this scope
+   --> crates\domain\src\reducer\projection_state.rs:591:19
+    |
+591 |                 | arkret_lattice_registry::ActorPrivateMergeOutcome::Unchanged(_),
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+    |
+    = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `arkret_lattice_registry` in this scope
+   --> crates\domain\src\reducer\projection_state.rs:593:16
+    |
+593 |             Ok(arkret_lattice_registry::ActorPrivateMergeOutcome::Conflict) => {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+    |
+    = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find `CellId` in `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:704:52
+    |
+704 |                 let is_null_subject = arkret_wire::CellId::from_ref(cell_id)
+    |                                                    ^^^^^^ could not find `CellId` in `arkret_wire`
+    |
+help: a struct with a similar name exists
+    |
+704 -                 let is_null_subject = arkret_wire::CellId::from_ref(cell_id)
+704 +                 let is_null_subject = arkret_wire::CallId::from_ref(cell_id)
+    |
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:728:58
+    |
+728 |             if precondition.predicate.op != arkret_wire::cbs::PredicateOp::HeadEq {
+    |                                                          ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:753:56
+    |
+753 |         const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
+    |                                                        ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `CellId` in `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:930:42
+    |
+930 |             if let Ok(id) = arkret_wire::CellId::from_ref(&cell)
+    |                                          ^^^^^^ could not find `CellId` in `arkret_wire`
+    |
+help: a struct with a similar name exists
+    |
+930 -             if let Ok(id) = arkret_wire::CellId::from_ref(&cell)
+930 +             if let Ok(id) = arkret_wire::CallId::from_ref(&cell)
+    |
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:931:51
+    |
+931 |                 && id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+    |                                                   ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0433]: cannot find `cbs` in `arkret_wire`
+  --> crates\domain\src\reducer\projections.rs:34:39
+   |
+34 |     pub cell_writes: Vec<arkret_wire::cbs::ProjectedCellWrite>,
+   |                                       ^^^ could not find `cbs` in `arkret_wire`
+
+error[E0433]: cannot find `poll` in `arkret_models_collaboration`
+   --> crates\domain\src\reducer\projections.rs:972:76
+    |
+972 |     pub votes: BTreeMap<arkret_wire::ActorId, arkret_models_collaboration::poll::PollOutcome>,
+    |                                                                            ^^^^ could not find `poll` in `arkret_models_collaboration`
+
+error[E0433]: cannot find `CellFamilyId` in `arkret_wire`
+  --> crates\domain\src\reducer.rs:78:56
+   |
+78 | pub const CHILD_ORDER_CELL_FAMILY: &str = arkret_wire::CellFamilyId::CONTAINER_ORDER_V1;
+   |                                                        ^^^^^^^^^^^^ could not find `CellFamilyId` in `arkret_wire`
+
+error[E0425]: cannot find type `CellRef` in crate `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_audit_session.rs:42:65
+   |
+42 | fn session_cell(session_id: &str) -> Option<arkret_identifiers::CellRef> {
+   |                                                                 ^^^^^^^ not found in `arkret_identifiers`
+
+error[E0425]: cannot find type `CellRef` in crate `arkret_identifiers`
+  --> crates\domain\src\reducer\apply_audit_session.rs:50:65
+   |
+50 | fn release_cell(session_id: &str) -> Option<arkret_identifiers::CellRef> {
+   |                                                                 ^^^^^^^ not found in `arkret_identifiers`
+
+error[E0425]: cannot find function `or_set_dot` in crate `arkret_schema`
+   --> crates\domain\src\reducer\apply_capability.rs:412:25
+    |
+412 |     Some(arkret_schema::or_set_dot(
+    |                         ^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0425]: cannot find function `derive_capability_authority_audit` in crate `arkret_schema`
+   --> crates\domain\src\reducer\apply_capability.rs:516:20
+    |
+516 |     arkret_schema::derive_capability_authority_audit(body, &|grant_id| {
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0422]: cannot find struct, variant or union type `CapabilityAuthorityAudit` in crate `arkret_schema`
+   --> crates\domain\src\reducer\apply_capability.rs:518:28
+    |
+518 |             arkret_schema::CapabilityAuthorityAudit {
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0425]: cannot find value `REALM_AUTHORITY_ROOT_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_capability.rs:975:53
+    |
+975 |                         && cell_ref == arkret_wire::REALM_AUTHORITY_ROOT_CELL
+    |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find value `REALM_AUTHORITY_ROOT_CELL` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1160:46
+     |
+1160 |                     cell_ref == arkret_wire::REALM_AUTHORITY_ROOT_CELL
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0422]: cannot find struct, variant or union type `LatticeOp` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1323:26
+     |
+1323 |             arkret_wire::LatticeOp {
+     |                          ^^^^^^^^^ not found in `arkret_wire`
+
+error[E0422]: cannot find struct, variant or union type `LatticeOp` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_capability.rs:1455:30
+     |
+1455 |                 arkret_wire::LatticeOp {
+     |                              ^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find type `CapabilityAuthorityAudit` in crate `arkret_schema`
+    --> crates\domain\src\reducer\apply_capability.rs:1506:32
+     |
+1506 |     ) -> Option<arkret_schema::CapabilityAuthorityAudit> {
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0422]: cannot find struct, variant or union type `CapabilityAuthorityAudit` in crate `arkret_schema`
+    --> crates\domain\src\reducer\apply_capability.rs:1509:73
+     |
+1509 |                 |(authority_depth, authority_root_refs)| arkret_schema::CapabilityAuthorityAudit {
+     |                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0425]: cannot find type `EventCellContractError` in crate `arkret_schema`
+    --> crates\domain\src\reducer\apply_capability.rs:1521:75
+     |
+1521 |     ) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, arkret_schema::EventCellContractError>
+     |                                                                           ^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0425]: cannot find function `project_registered_cell_writes_with_authority_resolver` in crate `arkret_schema`
+    --> crates\domain\src\reducer\apply_capability.rs:1523:24
+     |
+1523 |         arkret_schema::project_registered_cell_writes_with_authority_resolver(
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_key_backup.rs:140:18
+    |
+140 |     arkret_wire::composite_subject(&[actor_id, backup_kind])
+    |                  ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `or_set_dot` in crate `arkret_schema`
+  --> crates\domain\src\reducer\apply_moderation.rs:54:25
+   |
+54 |     Some(arkret_schema::or_set_dot(
+   |                         ^^^^^^^^^^ not found in `arkret_schema`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_objects\queries.rs:316:36
+    |
+316 |         let subject = arkret_wire::composite_subject(&[actor_key]).ok()?;
+    |                                    ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `value_frontier_digest` in crate `arkret_state`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1012:45
+     |
+1012 |             .and_then(|suite| arkret_state::value_frontier_digest(&cells, suite).ok())
+     |                                             ^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_state`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1025:42
+     |
+1025 |         let actor_subject = arkret_wire::composite_subject(&[actor.canonical_key().ok()?]).ok()?;
+     |                                          ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1064:42
+     |
+1064 |         let actor_subject = arkret_wire::composite_subject(&[actor.canonical_key().ok()?]).ok()?;
+     |                                          ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `value_frontier_digest` in crate `arkret_state`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1108:45
+     |
+1108 |             .and_then(|suite| arkret_state::value_frontier_digest(cells, suite).ok())
+     |                                             ^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_state`
+
+error[E0425]: cannot find type `DurabilityPolicy` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_objects\queries.rs:1201:82
+     |
+1201 |     pub fn realm_durability_policy(&self, realm_id: &str) -> Option<arkret_wire::DurabilityPolicy> {
+     |                                                                                  ^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find value `REALM_AUTHORITY_ROOT_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:131:62
+    |
+131 |         .find(|write| write.cell_id.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL)
+    |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find value `CORE_REDUCER_PROFILE` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:164:35
+    |
+164 |         if target != arkret_wire::CORE_REDUCER_PROFILE
+    |                                   ^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `can_upgrade_reducer_profile` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:165:30
+    |
+165 |             || !arkret_wire::can_upgrade_reducer_profile(&current, target)
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find type `RealmAuthorityRootValue` in module `arkret_policy::realm_bootstrap`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:196:49
+    |
+196 |     ) -> Option<arkret_policy::realm_bootstrap::RealmAuthorityRootValue> {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_policy::realm_bootstrap`
+
+error[E0425]: cannot find type `RealmAuthorityReset` in module `arkret_wire::event_spec`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:285:72
+    |
+285 |                     operation.typed_payload::<arkret_wire::event_spec::RealmAuthorityReset>();
+    |                                                                        ^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire::event_spec`
+
+error[E0425]: cannot find value `REALM_AUTHORITY_ROOT_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:322:30
+    |
+322 |                 arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:427:42
+    |
+427 |             .and_then(|key| arkret_wire::composite_subject(&[key]))
+    |                                          ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:500:42
+    |
+500 |             .and_then(|key| arkret_wire::composite_subject(&[key]))
+    |                                          ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_lifecycle.rs:674:47
+    |
+674 |             && let Ok(subject) = arkret_wire::composite_subject(&[actor_key])
+    |                                               ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1000:52
+     |
+1000 |             let actor_subject = match arkret_wire::composite_subject(&[actor_key.as_str()]) {
+     |                                                    ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find value `CORE_REDUCER_PROFILE` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1057:40
+     |
+1057 |             if profile != arkret_wire::CORE_REDUCER_PROFILE
+     |                                        ^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `is_reducer_profile_id` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1058:34
+     |
+1058 |                 || !arkret_wire::is_reducer_profile_id(profile)
+     |                                  ^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find value `REALM_GENESIS_CELL` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1321:57
+     |
+1321 |                         (realm_id.clone(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
+     |                                                         ^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find value `REALM_AUTHORITY_ROOT_CELL` in crate `arkret_wire`
+    --> crates\domain\src\reducer\apply_realm_lifecycle.rs:1358:42
+     |
+1358 | ...                   arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+     |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find type `CellRef` in crate `arkret_identifiers`
+   --> crates\domain\src\reducer\apply_realm_organization.rs:185:37
+    |
+185 |     ) -> Option<arkret_identifiers::CellRef> {
+    |                                     ^^^^^^^ not found in `arkret_identifiers`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_organization.rs:187:26
+    |
+187 |             arkret_wire::composite_subject(&[organization_id.as_str(), relationship]).ok()?;
+    |                          ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find value `NULL_SUBJECT` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:222:46
+    |
+222 |         if cell_id.subject() != arkret_wire::NULL_SUBJECT {
+    |                                              ^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find type `RealmNotary` in module `arkret_wire::event_spec`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:271:80
+    |
+271 |         let payload = match operation.typed_payload::<arkret_wire::event_spec::RealmNotary>() {
+    |                                                                                ^^^^^^^^^^^ not found in `arkret_wire::event_spec`
+
+error[E0425]: cannot find type `RealmDigestSuiteTransition` in module `arkret_wire::event_spec`
+   --> crates\domain\src\reducer\apply_realm_policy.rs:308:55
+    |
+308 |             .typed_payload::<arkret_wire::event_spec::RealmDigestSuiteTransition>()
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire::event_spec`
+
+error[E0425]: cannot find type `CellRef` in crate `arkret_identifiers`
+    --> crates\domain\src\reducer\apply_realm_policy.rs:1235:35
+     |
+1235 |     cell_id: &arkret_identifiers::CellRef,
+     |                                   ^^^^^^^ not found in `arkret_identifiers`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\apply_relations.rs:758:32
+    |
+758 |     let subject = arkret_wire::composite_subject(&[container_ref, item_ref]).ok()?;
+    |                                ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find type `MlsWelcomePayload` in module `arkret_models_collaboration::events_payloads`
+   --> crates\domain\src\reducer\mls.rs:303:55
+    |
+303 |         arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+    |                                                       ^^^^^^^^^^^^^^^^^ not found in `arkret_models_collaboration::events_payloads`
+
+error[E0425]: cannot find type `MlsWelcomeClaimEnvelope` in module `arkret_models_collaboration::events_payloads`
+    --> crates\domain\src\reducer\mls.rs:1265:55
+     |
+1265 |         arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope,
+     |                                                       ^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_models_collaboration::events_payloads`
+
+error[E0425]: cannot find type `CellRef` in crate `arkret_identifiers`
+  --> crates\domain\src\reducer\realm_links.rs:50:33
+   |
+50 | ) -> Option<arkret_identifiers::CellRef> {
+   |                                 ^^^^^^^ not found in `arkret_identifiers`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+  --> crates\domain\src\reducer\realm_links.rs:52:22
+   |
+52 |         arkret_wire::composite_subject(&[source_realm_id, target_realm_id, link_kind]).ok()?;
+   |                      ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `reducer_managed_patch_reason` in module `arkret_wire::patch`
+   --> crates\domain\src\reducer\patch_helpers.rs:191:36
+    |
+191 |         return arkret_wire::patch::reducer_managed_patch_reason(object_kind, &subject).is_some();
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire::patch`
+
+error[E0425]: cannot find value `REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS` in module `arkret_wire::generated`
+   --> crates\domain\src\reducer\patch_helpers.rs:193:29
+    |
+193 |     arkret_wire::generated::REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_wire::generated`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:532:32
+    |
+532 |             match arkret_wire::composite_subject(&[&account_id, device_id, push_route]) {
+    |                                ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0531]: cannot find unit struct, unit variant or constant `REALM_PROFILE_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:686:26
+    |
+686 |             arkret_wire::REALM_PROFILE_CELL => self.realm_profile_cells.get(realm_id),
+    |                          ^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0531]: cannot find unit struct, unit variant or constant `REALM_CREATE_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:687:26
+    |
+687 |             arkret_wire::REALM_CREATE_CELL => self.realm_create_cells.get(realm_id),
+    |                          ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0531]: cannot find unit struct, unit variant or constant `REALM_NOTARY_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:688:26
+    |
+688 |             arkret_wire::REALM_NOTARY_CELL => self.realm_notary_cells.get(realm_id),
+    |                          ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `composite_subject` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:771:48
+    |
+771 |                     let subject = arkret_wire::composite_subject(&[actor_key]).ok()?;
+    |                                                ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find function `join_cell` in crate `arkret_state`
+   --> crates\domain\src\reducer\projection_state.rs:912:42
+    |
+912 |             let resolved = arkret_state::join_cell(binding.model.as_ref(), &cell, &ops)
+    |                                          ^^^^^^^^^ not found in `arkret_state`
+
+error[E0531]: cannot find unit struct, unit variant or constant `REALM_PROFILE_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:951:30
+    |
+951 |                 arkret_wire::REALM_PROFILE_CELL => {
+    |                              ^^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0531]: cannot find unit struct, unit variant or constant `REALM_CREATE_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:955:30
+    |
+955 |                 arkret_wire::REALM_CREATE_CELL => {
+    |                              ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0531]: cannot find unit struct, unit variant or constant `REALM_NOTARY_CELL` in crate `arkret_wire`
+   --> crates\domain\src\reducer\projection_state.rs:959:30
+    |
+959 |                 arkret_wire::REALM_NOTARY_CELL => {
+    |                              ^^^^^^^^^^^^^^^^^ not found in `arkret_wire`
+
+error[E0425]: cannot find type `AgentSidecarEncryptionProfile` in module `arkret_models_collaboration::agent_operations`
+   --> crates\domain\src\reducer\projections.rs:664:56
+    |
+664 |         arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile,
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `arkret_models_collaboration::agent_operations`
+
+error[E0425]: cannot find type `AgentSidecarState` in module `arkret_models_collaboration::agent_operations`
+   --> crates\domain\src\reducer\projections.rs:665:63
+    |
+665 |     pub state: arkret_models_collaboration::agent_operations::AgentSidecarState,
+    |                                                               ^^^^^^^^^^^^^^^^^
+    |
+   ::: D:\Works\arkret-org\arkret-rust-sdk\crates\models-collaboration\src\agent_operations.rs:146:1
+    |
+146 | pub struct AgentSidecarList {
+    | --------------------------- similarly named struct `AgentSidecarList` defined here
+    |
+help: a struct with a similar name exists
+    |
+665 -     pub state: arkret_models_collaboration::agent_operations::AgentSidecarState,
+665 +     pub state: arkret_models_collaboration::agent_operations::AgentSidecarList,
+    |
+
+error[E0433]: cannot find module or crate `arkret_lattice_registry` in this scope
+   --> crates\domain\src\reducer\projection_state.rs:511:38
+    |
+511 |         let private_registry = match arkret_lattice_registry::build_actor_private_registry() {
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+    |
+    = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `arkret_lattice_registry` in this scope
+   --> crates\domain\src\reducer\projection_state.rs:558:13
+    |
+558 |             arkret_lattice_registry::ActorPrivateCandidate {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+    |
+    = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `arkret_lattice_registry` in this scope
+   --> crates\domain\src\reducer\projection_state.rs:576:24
+    |
+576 |         let incoming = arkret_lattice_registry::ActorPrivateCandidate {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+    |
+    = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `arkret_lattice_registry` in this scope
+    --> crates\domain\src\reducer\projection_state.rs:1106:20
+     |
+1106 |         registry: &arkret_lattice_registry::CellFamilyRegistry,
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `arkret_lattice_registry`
+     |
+     = help: if you wanted to use a crate named `arkret_lattice_registry`, use `cargo add arkret_lattice_registry` to add it to your `Cargo.toml`
+
+Some errors have detailed explanations: E0422, E0425, E0432, E0433, E0531.
+For more information about an error, try `rustc --explain E0422`.
+error: could not compile `soland-domain` (lib) due to 239 previous errors

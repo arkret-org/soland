@@ -6,6 +6,41 @@ use super::{
 pub struct PgIdempotencyStore {
     pub pool: PgPool,
 }
+
+/// Write one idempotency reservation on a caller-owned connection.
+///
+/// The Event commit unit of work calls this inside its single transaction so a
+/// rolled-back commit never leaves a reservation that would replay a response
+/// for an Event that was never committed.
+pub(crate) async fn record_idempotency_in_connection(
+    conn: &mut diesel_async::AsyncPgConnection,
+    record: &IdempotencyRecord,
+) -> PersistenceResult<()> {
+    let actor_key = actor_key(&record.authenticated_actor)?;
+    let actor_value = actor_value(&record.authenticated_actor)?;
+    // First-writer-wins under a concurrent race: the earliest row stays,
+    // and a racer's later read returns it as a Replay.
+    sql_query(
+        "INSERT INTO idempotency_keys \
+         (actor_key, authenticated_actor, operation_id, idempotency_key, request_hash, response_status, \
+          response_body, created_at, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+         ON CONFLICT (actor_key, operation_id, idempotency_key) DO NOTHING",
+    )
+    .bind::<Text, _>(&actor_key)
+    .bind::<Jsonb, _>(&actor_value)
+    .bind::<Text, _>(&record.operation_id)
+    .bind::<Text, _>(&record.idempotency_key)
+    .bind::<Text, _>(&record.request_hash)
+    .bind::<Integer, _>(record.response_status)
+    .bind::<Jsonb, _>(&record.response_body)
+    .bind::<Timestamptz, _>(record.created_at)
+    .bind::<Timestamptz, _>(record.expires_at)
+    .execute(conn)
+    .await
+    .map(|_| ())
+    .map_err(PersistenceError::database)
+}
 #[derive(QueryableByName)]
 struct IdempotencyRow {
     #[diesel(sql_type = Jsonb)]
@@ -129,30 +164,7 @@ impl IdempotencyStore for PgIdempotencyStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let actor_key = actor_key(&record.authenticated_actor)?;
-        let actor_value = actor_value(&record.authenticated_actor)?;
-        // First-writer-wins under a concurrent race: the earliest row stays,
-        // and a racer's later read returns it as a Replay.
-        sql_query(
-            "INSERT INTO idempotency_keys \
-             (actor_key, authenticated_actor, operation_id, idempotency_key, request_hash, response_status, \
-              response_body, created_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (actor_key, operation_id, idempotency_key) DO NOTHING",
-        )
-        .bind::<Text, _>(&actor_key)
-        .bind::<Jsonb, _>(&actor_value)
-        .bind::<Text, _>(&record.operation_id)
-        .bind::<Text, _>(&record.idempotency_key)
-        .bind::<Text, _>(&record.request_hash)
-        .bind::<Integer, _>(record.response_status)
-        .bind::<Jsonb, _>(&record.response_body)
-        .bind::<Timestamptz, _>(record.created_at)
-        .bind::<Timestamptz, _>(record.expires_at)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        record_idempotency_in_connection(&mut conn, record).await
     }
 
     async fn complete_reservation(

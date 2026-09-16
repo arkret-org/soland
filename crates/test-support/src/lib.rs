@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
-pub mod cbs_basis;
 pub mod confirmed_device_history_commit;
 pub mod device_authorization_history;
 pub mod fault_injection;
-pub mod sealed_grant;
 pub mod signed_event;
 
 pub fn fixture_signer_evidence_ref() -> arkret_wire::SignerEvidenceRef {

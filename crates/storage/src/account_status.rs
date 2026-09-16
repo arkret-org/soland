@@ -1,4 +1,4 @@
-use arkret_models_collaboration::account_lifecycle::{AccountStatusReceipt, AccountStatusRecord};
+use arkret_models_collaboration::account_status::{AccountStatusReceipt, AccountStatusRecord};
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 
 use crate::{PersistenceResult, async_trait};

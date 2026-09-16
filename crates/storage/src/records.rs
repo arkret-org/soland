@@ -3,13 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{BlobRef, Hash};
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::blob::BlobVisibility;
-use arkret_models_crypto::{
-    DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
-    SessionState,
-};
+use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
 use arkret_wire::{
-    ActorId, DeviceReanchorPreFenceSealFrontier, DidCoreId, EventId, FreshnessState, LeaseBasisRef,
-    PlaintextDataClassKind, RealmId,
+    ActorId, CommitStreamHead, CommittedEventRef, DidCoreId, EventId, FreshnessState,
+    PlaintextDataClassKind, RealmCommitAuthorityRef, RealmId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -135,7 +132,7 @@ pub struct RecoveryPolicyRecord {
     pub policy_id: String,
     pub account_id: arkret_wire::AccountId,
     pub version: u32,
-    pub acceptance_basis: LeaseBasisRef,
+    pub acceptance_ref: CommittedEventRef,
     pub trust_domain: String,
 
     pub supersedes: Option<String>,
@@ -148,6 +145,26 @@ pub struct RecoveryPolicyRecord {
     /// `TODO(R4): wire accepted recovery-policy key resolver + signature
     /// validation through DidResolver chain`.
     pub verification_method: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoverySessionLifecycle {
+    Pending,
+    Verified,
+    Completed,
+    Rejected,
+    Expired,
+}
+
+/// Authority snapshot frozen when the recovery session is opened. Recovery
+/// completion is valid only while this generation remains current.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryAuthorityContext {
+    pub realm_id: RealmId,
+    pub authority_generation: u64,
+    pub authority_ref: RealmCommitAuthorityRef,
+    pub realm_stream_head: CommitStreamHead,
 }
 
 /// C-P2 (REC-1) — recovery session lifecycle record.
@@ -174,19 +191,19 @@ pub struct RecoverySessionRecord {
     pub identity_model: RecoveryIdentityModel,
     pub current_device_generation_ref: u64,
     pub device_generation_status: DeviceGenerationStatus,
-    pub accepted_seal_frontier: DeviceReanchorPreFenceSealFrontier,
+    pub accepted_stream_head: CommitStreamHead,
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).
     pub policy_payload: Value,
     /// Immutable publication authority derived from the policy's accepted
     /// basis and the identity model at session creation.
-    pub publication_authority_context: RecoveryPublicationAuthorityContext,
+    pub authority_context: RecoveryAuthorityContext,
     pub publication_authority_context_digest: Hash,
     /// Server-issued anti-replay challenge the proof transcript MUST bind.
     pub challenge: String,
     /// Lifecycle state; canonical SDK enum (recovery-session.schema.json
     /// `#/$defs/session_state`), persisted as its snake_case wire name.
-    pub state: SessionState,
+    pub state: RecoverySessionLifecycle,
     /// The submitted proof payload (recorded on `/proofs`; verified in C-P3).
     pub proof_payload: Option<Value>,
     pub transaction_id: Option<String>,
@@ -198,7 +215,7 @@ pub struct RecoverySessionRecord {
 #[derive(Clone, Debug)]
 pub struct SecurityTransactionRecord {
     pub canonical_request: Vec<u8>,
-    pub resource: arkret_wire::SecurityTransaction,
+    pub resource: arkret_models_crypto::SecurityTransaction,
 }
 
 /// First durable request bytes for one security-transaction step.
@@ -209,7 +226,7 @@ pub struct SecurityTransactionRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecurityTransactionStepAttemptRecord {
     pub transaction_id: String,
-    pub step: arkret_wire::SecurityTransactionStep,
+    pub step: arkret_models_crypto::SecurityTransactionStep,
     pub canonical_request: Vec<u8>,
 }
 
@@ -221,7 +238,7 @@ pub struct SecurityTransactionStepAttemptRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecurityTransactionStepOutcomeRecord {
     pub transaction_id: String,
-    pub step: arkret_wire::SecurityTransactionStep,
+    pub step: arkret_models_crypto::SecurityTransactionStep,
     pub canonical_request: Vec<u8>,
     pub response: Value,
     pub participant_outcome: Option<Value>,
@@ -236,7 +253,9 @@ pub struct SecurityTransactionStepOutcomeRecord {
 pub struct BackupSeriesEraseProgressRecord {
     pub transaction_id: String,
     pub canonical_request: Vec<u8>,
-    pub outcome: arkret_models_crypto::BackupSeriesEraseOutcome,
+    /// Provider-specific deletion progress. The current protocol keeps backup
+    /// deletion local to the authority and does not expose a history carrier.
+    pub outcome: Value,
 }
 
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor.v1`.
@@ -409,7 +428,6 @@ pub struct MessageRecord {
 pub struct CanonicalEventRecord {
     pub event_id: String,
     pub actor_id: String,
-    pub actor_seq: u64,
     pub realm_id: Option<String>,
     pub kind: String,
     pub schema_id: String,

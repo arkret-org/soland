@@ -1,4 +1,4 @@
-use arkret_models_collaboration::agent_operations::AgentSidecarState;
+use soland_storage::SidecarLifecycleState;
 
 use super::{
     AgentSidecarContextRecord, AgentSidecarRecord, AsyncPgConnection, BigInt, Binary, Jsonb,
@@ -73,13 +73,13 @@ impl TryFrom<SidecarRow> for AgentSidecarRecord {
     }
 }
 
-/// Snake_case wire name of the canonical SDK [`AgentSidecarState`], matching
+/// Snake_case name of the local Sidecar lifecycle projection, matching
 /// the text-column encoding of `agent_sidecars.state`.
-fn sidecar_state_label(state: AgentSidecarState) -> &'static str {
+fn sidecar_state_label(state: SidecarLifecycleState) -> &'static str {
     match state {
-        AgentSidecarState::Active => "active",
-        AgentSidecarState::Suspended => "suspended",
-        AgentSidecarState::Tombstoned => "tombstoned",
+        SidecarLifecycleState::Active => "active",
+        SidecarLifecycleState::Suspended => "suspended",
+        SidecarLifecycleState::Tombstoned => "tombstoned",
     }
 }
 

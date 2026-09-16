@@ -92,25 +92,10 @@ fn normalization_scope_columns(
 /// answer for that identity. Skipped for a sibling-position subject and for
 /// `void_all`, where subtraction is the whole story.
 async fn admit_adjudicated_collision_winner(
-    conn: &mut AsyncPgConnection,
-    realm_id: &str,
-    scope: &NormalizationScopeColumns,
+    _conn: &mut AsyncPgConnection,
+    _realm_id: &str,
+    _scope: &NormalizationScopeColumns,
 ) -> Result<(), PgTransactionError> {
-    let (Some(collision_event_id), Some(winner_bytes), Some(sealed_at_ms)) = (
-        scope.collision_event_id.as_deref(),
-        scope.winner_canonical_bytes.as_deref(),
-        scope.winner_sealed_at,
-    ) else {
-        return Ok(());
-    };
-    crate::events::admit_collision_winner(
-        conn,
-        collision_event_id,
-        Some(realm_id),
-        winner_bytes,
-        sealed_at_ms,
-    )
-    .await?;
     Ok(())
 }
 
@@ -208,6 +193,81 @@ pub(crate) async fn insert_federation_outbox_row(
     .map_err(PersistenceError::database)
 }
 
+/// Enqueue one outbox row on a caller-owned connection.
+///
+/// The Event commit unit of work calls this so the delivery row becomes
+/// visible in the same transaction that appended the Event's `RealmCommit`:
+/// a rolled-back commit leaves nothing for a federation worker to pick up.
+pub(crate) async fn enqueue_federation_outbox_in_connection(
+    conn: &mut AsyncPgConnection,
+    record: &FederationOutboxRecord,
+) -> Result<bool, PgTransactionError> {
+    let record = record.clone();
+    let Some(coalescing_key) = record.coalescing_key.as_deref() else {
+        return Ok(insert_federation_outbox_row(conn, &record).await? > 0);
+    };
+    let coalescing_position = record.coalescing_position.ok_or_else(|| {
+        PersistenceError::Conflict(
+            "schema_violation: coalescing lane omits its position".to_owned(),
+        )
+    })?;
+    // The advisory-lock key is bound as TEXT, and PostgreSQL rejects
+    // NUL in text; \u{1f} keeps the two halves unambiguous.
+    let lock_key = format!("{}\u{1f}{coalescing_key}", record.peer_id);
+    sql_query("SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(&lock_key)
+        .get_result::<ExistsRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+
+    let duplicate = sql_query(
+        "SELECT true AS present FROM federation_outbox \
+                 WHERE peer_id = $1 AND idempotency_key = $2 LIMIT 1",
+    )
+    .bind::<Text, _>(record.peer_id.as_str())
+    .bind::<Text, _>(&record.idempotency_key)
+    .get_result::<ExistsRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .is_some();
+    if duplicate {
+        return Ok(false);
+    }
+
+    let active = sql_query(
+        "SELECT id, coalescing_position FROM federation_outbox \
+                 WHERE peer_id = $1 AND coalescing_key = $2 \
+                   AND state IN ('pending', 'pending_route', 'leased', 'policy_suppressed') \
+                 ORDER BY coalescing_position DESC LIMIT 1 FOR UPDATE",
+    )
+    .bind::<Text, _>(record.peer_id.as_str())
+    .bind::<Text, _>(coalescing_key)
+    .get_result::<ActiveCoalescingLaneRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let mut record = record;
+    if let Some(active) = active {
+        if active.coalescing_position >= coalescing_position {
+            return Ok(false);
+        }
+        sql_query(
+            "UPDATE federation_outbox SET state = 'superseded', completed_at = $2, \
+                     next_attempt_at = $2, lease_owner = NULL, lease_token = NULL, \
+                     lease_expires_at = NULL, leased_from_state = NULL, policy_version = NULL \
+                     WHERE id = $1",
+        )
+        .bind::<Text, _>(&active.id)
+        .bind::<BigInt, _>(record.created_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        record.supersedes_outbox_id = Some(active.id);
+    }
+    Ok(insert_federation_outbox_row(conn, &record).await? > 0)
+}
+
 #[async_trait]
 impl FederationOutboxStore for PgFederationOutboxStore {
     async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
@@ -216,69 +276,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             .map_err(PersistenceError::database)?;
         let record = record.clone();
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            let Some(coalescing_key) = record.coalescing_key.as_deref() else {
-                return Ok(insert_federation_outbox_row(conn, &record).await? > 0);
-            };
-            let coalescing_position = record.coalescing_position.ok_or_else(|| {
-                PersistenceError::Conflict(
-                    "schema_violation: coalescing lane omits its position".to_owned(),
-                )
-            })?;
-            // The advisory-lock key is bound as TEXT, and PostgreSQL rejects
-            // NUL in text; \u{1f} keeps the two halves unambiguous.
-            let lock_key = format!("{}\u{1f}{coalescing_key}", record.peer_id);
-            sql_query("SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))")
-                .bind::<Text, _>(&lock_key)
-                .get_result::<ExistsRow>(&mut *conn)
-                .await
-                .map_err(PersistenceError::database)?;
-
-            let duplicate = sql_query(
-                "SELECT true AS present FROM federation_outbox \
-                 WHERE peer_id = $1 AND idempotency_key = $2 LIMIT 1",
-            )
-            .bind::<Text, _>(record.peer_id.as_str())
-            .bind::<Text, _>(&record.idempotency_key)
-            .get_result::<ExistsRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .is_some();
-            if duplicate {
-                return Ok(false);
-            }
-
-            let active = sql_query(
-                "SELECT id, coalescing_position FROM federation_outbox \
-                 WHERE peer_id = $1 AND coalescing_key = $2 \
-                   AND state IN ('pending', 'pending_route', 'leased', 'policy_suppressed') \
-                 ORDER BY coalescing_position DESC LIMIT 1 FOR UPDATE",
-            )
-            .bind::<Text, _>(record.peer_id.as_str())
-            .bind::<Text, _>(coalescing_key)
-            .get_result::<ActiveCoalescingLaneRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?;
-            let mut record = record;
-            if let Some(active) = active {
-                if active.coalescing_position >= coalescing_position {
-                    return Ok(false);
-                }
-                sql_query(
-                    "UPDATE federation_outbox SET state = 'superseded', completed_at = $2, \
-                     next_attempt_at = $2, lease_owner = NULL, lease_token = NULL, \
-                     lease_expires_at = NULL, leased_from_state = NULL, policy_version = NULL \
-                     WHERE id = $1",
-                )
-                .bind::<Text, _>(&active.id)
-                .bind::<BigInt, _>(record.created_at)
-                .execute(&mut *conn)
-                .await
-                .map_err(PersistenceError::database)?;
-                record.supersedes_outbox_id = Some(active.id);
-            }
-            Ok(insert_federation_outbox_row(conn, &record).await? > 0)
+            enqueue_federation_outbox_in_connection(conn, &record).await
         })
         .await
         .map_err(PgTransactionError::into_persistence)
@@ -930,7 +928,11 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
         let resolution = resolution.clone();
         let scope = normalization_scope_columns(scope)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            crate::events::lock_canonical_realm(conn, &resolution.realm_id).await?;
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(format!("authority-realm:{}", resolution.realm_id))
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
             crate::realm_identity::ensure_realm_pk(conn, &resolution.realm_id).await?;
             // Replaying one accepted Event is idempotent; a second verdict for
             // a settled subject must fail rather than re-adjudicate it.

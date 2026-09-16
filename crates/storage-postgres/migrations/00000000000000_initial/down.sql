@@ -1,3 +1,9 @@
+DROP TABLE IF EXISTS mls_welcome_deliveries CASCADE;
+DROP TABLE IF EXISTS mls_group_states CASCADE;
+DROP TABLE IF EXISTS realm_state_snapshots CASCADE;
+DROP TABLE IF EXISTS realm_authority_handoffs CASCADE;
+DROP TABLE IF EXISTS realm_commits CASCADE;
+DROP TABLE IF EXISTS realm_authorities CASCADE;
 DROP TABLE IF EXISTS realm_timeline_pending_edges;
 DROP TABLE IF EXISTS realm_timeline_order;
 DROP TABLE IF EXISTS state_seal_signing_positions;
@@ -112,7 +118,7 @@ DROP FUNCTION IF EXISTS complete_control_event_pending();
 DROP TABLE IF EXISTS state_seals CASCADE;
 DROP TABLE IF EXISTS state_seal_signing_leases CASCADE;
 DROP TABLE IF EXISTS state_cell_ops CASCADE;
-DROP TABLE IF EXISTS consent_cells CASCADE;
+DROP TABLE IF EXISTS consent_grants CASCADE;
 DROP TABLE IF EXISTS mimi_consent_correlations CASCADE;
 DROP TABLE IF EXISTS contact_verified_mirrors CASCADE;
 DROP TABLE IF EXISTS contacts CASCADE;

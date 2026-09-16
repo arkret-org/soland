@@ -1,5 +1,5 @@
-use arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord;
 use arkret_wire::Hash;
+use soland_storage::AgentCleanupRecord;
 
 use super::*;
 

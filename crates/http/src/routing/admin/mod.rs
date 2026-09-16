@@ -2,16 +2,13 @@ use salvo::prelude::*;
 
 mod actors;
 pub(crate) mod audit;
-mod cells;
 mod collection;
-mod control;
 mod handles;
 mod introspect;
 mod media;
 mod moderation;
 mod queries;
 mod retention;
-mod seal;
 mod server_ops;
 mod service_routes;
 mod settings;

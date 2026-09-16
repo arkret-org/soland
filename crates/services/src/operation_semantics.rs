@@ -1,7 +1,6 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 
-pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = soland_domain::kinds::AUDIT_COMPLIANCE_PROFILES;
 pub const REASON_KEYPACKAGE_NOT_FOUND: &str =
     soland_domain::reducer::mls::REASON_KEYPACKAGE_NOT_FOUND;
 pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str =

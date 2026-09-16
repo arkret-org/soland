@@ -12,6 +12,7 @@ use crate::*;
 /// nothing delegates to a process-local memory store, so all planes survive
 /// restart and are shared across replicas.
 pub struct PgPersistenceStore {
+    authority_commits: PgAuthorityCommitStore,
     event_commits: PgEventCommitUnitOfWork,
     agent_membership_cascades: PgAgentMembershipCascadeStore,
     accounts: PgAccountStore,
@@ -25,7 +26,7 @@ pub struct PgPersistenceStore {
     invite_receive_policies: PgInviteReceivePolicyStore,
     invite_locators: PgInviteLocatorStore,
     invite_new_source_ledger: PgInviteNewSourceLedgerStore,
-    consent_cells: PgConsentCellStore,
+    consent_grants: PgConsentGrantStore,
     mimi_consent_correlations: PgMimiConsentCorrelationStore,
     realm_meta: PgRealmMetaStore,
     messages: PgMessageStore,
@@ -34,7 +35,6 @@ pub struct PgPersistenceStore {
     device_pairings: PgDevicePairingStore,
     device_revocations: PgDeviceRevocationStore,
     federation_outbox: PgFederationOutboxStore,
-    federation_frontier_exchange: PgFederationFrontierExchangeStore,
     handle_releases: PgHandleReleaseStore,
     retention_policies: PgRetentionPolicyStore,
     retention_tombstones: PgRetentionTombstoneStore,
@@ -42,10 +42,6 @@ pub struct PgPersistenceStore {
     organization_registrations: PgOrganizationRegistrationStore,
     realm_organizations: PgRealmOrganizationStore,
     realm_organization_statements: PgRealmOrganizationStatementStore,
-    governance_dependencies: PgGovernanceDependencyStore,
-    history_traversal_retentions: PgHistoryTraversalRetentionStore,
-    history_response_streams: PgHistoryResponseStreamStore,
-    pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore,
     audit: PgAuditStore,
     push_devices: PgPushDeviceStore,
     events: PgEventStore,
@@ -84,7 +80,6 @@ pub struct PgPersistenceStore {
     sync_cursors: PgSyncCursorStore,
     idempotency_keys: PgIdempotencyStore,
     websocket_auth: PgWebsocketAuthStore,
-    control_proposal_authority_acks: PgControlProposalAuthorityAckStore,
     /// The leased test database this store reads and writes, when a fixture
     /// built it. Holding the lease here ties it to the store's lifetime, so a
     /// fixture that keeps the store keeps its database, and a restart fixture
@@ -96,6 +91,7 @@ pub struct PgPersistenceStore {
 impl PgPersistenceStore {
     pub fn new(pool: PgPool) -> Self {
         Self {
+            authority_commits: PgAuthorityCommitStore { pool: pool.clone() },
             event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
             agent_membership_cascades: PgAgentMembershipCascadeStore { pool: pool.clone() },
             accounts: PgAccountStore { pool: pool.clone() },
@@ -109,7 +105,7 @@ impl PgPersistenceStore {
             invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
             invite_locators: PgInviteLocatorStore { pool: pool.clone() },
             invite_new_source_ledger: PgInviteNewSourceLedgerStore { pool: pool.clone() },
-            consent_cells: PgConsentCellStore { pool: pool.clone() },
+            consent_grants: PgConsentGrantStore { pool: pool.clone() },
             mimi_consent_correlations: PgMimiConsentCorrelationStore { pool: pool.clone() },
             realm_meta: PgRealmMetaStore { pool: pool.clone() },
             messages: PgMessageStore { pool: pool.clone() },
@@ -118,7 +114,6 @@ impl PgPersistenceStore {
             device_pairings: PgDevicePairingStore { pool: pool.clone() },
             device_revocations: PgDeviceRevocationStore { pool: pool.clone() },
             federation_outbox: PgFederationOutboxStore { pool: pool.clone() },
-            federation_frontier_exchange: PgFederationFrontierExchangeStore { pool: pool.clone() },
             handle_releases: PgHandleReleaseStore { pool: pool.clone() },
             retention_policies: PgRetentionPolicyStore { pool: pool.clone() },
             retention_tombstones: PgRetentionTombstoneStore { pool: pool.clone() },
@@ -126,10 +121,6 @@ impl PgPersistenceStore {
             organization_registrations: PgOrganizationRegistrationStore::new(pool.clone()),
             realm_organizations: PgRealmOrganizationStore { pool: pool.clone() },
             realm_organization_statements: PgRealmOrganizationStatementStore { pool: pool.clone() },
-            governance_dependencies: PgGovernanceDependencyStore { pool: pool.clone() },
-            history_traversal_retentions: PgHistoryTraversalRetentionStore { pool: pool.clone() },
-            history_response_streams: PgHistoryResponseStreamStore { pool: pool.clone() },
-            pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
             push_devices: PgPushDeviceStore { pool: pool.clone() },
             events: PgEventStore { pool: pool.clone() },
@@ -167,9 +158,6 @@ impl PgPersistenceStore {
             sync_cursors: PgSyncCursorStore { pool: pool.clone() },
             idempotency_keys: PgIdempotencyStore { pool: pool.clone() },
             websocket_auth: PgWebsocketAuthStore { pool: pool.clone() },
-            control_proposal_authority_acks: PgControlProposalAuthorityAckStore {
-                pool: pool.clone(),
-            },
             notifications: PgNotificationStore { pool },
             #[cfg(any(test, feature = "test-support"))]
             lease: None,
@@ -245,8 +233,8 @@ impl IdentityStoreRegistry for PgPersistenceStore {
         &self.invite_new_source_ledger
     }
 
-    fn consent_cells(&self) -> &dyn ConsentCellStore {
-        &self.consent_cells
+    fn consent_grants(&self) -> &dyn ConsentGrantStore {
+        &self.consent_grants
     }
 
     fn mimi_consent_correlations(&self) -> &dyn MimiConsentCorrelationStore {
@@ -283,28 +271,8 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 }
 
 impl FederationGovernanceStoreRegistry for PgPersistenceStore {
-    fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore {
-        &self.governance_dependencies
-    }
-
-    fn history_traversal_retentions(&self) -> &dyn HistoryTraversalRetentionStore {
-        &self.history_traversal_retentions
-    }
-
-    fn pending_rhrk_acquisitions(&self) -> &dyn PendingRhrkAcquisitionStore {
-        &self.pending_rhrk_acquisitions
-    }
-
-    fn history_response_streams(&self) -> &dyn HistoryResponseStreamStore {
-        &self.history_response_streams
-    }
-
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
-    }
-
-    fn federation_frontier_exchange(&self) -> &dyn FederationFrontierExchangeStore {
-        &self.federation_frontier_exchange
     }
 
     fn handle_releases(&self) -> &dyn HandleReleaseStore {
@@ -487,10 +455,6 @@ impl SyncStoreRegistry for PgPersistenceStore {
         &self.websocket_auth
     }
 
-    fn control_proposal_authority_acks(&self) -> &dyn ControlProposalAuthorityAckStore {
-        &self.control_proposal_authority_acks
-    }
-
     fn account_status_replicas(&self) -> &dyn AccountStatusReplicaStore {
         &self.account_status_replicas
     }
@@ -506,4 +470,8 @@ impl ResolutionStoreRegistry for PgPersistenceStore {
     }
 }
 
-impl PersistenceStore for PgPersistenceStore {}
+impl PersistenceStore for PgPersistenceStore {
+    fn authority_commits(&self) -> &dyn AuthorityCommitStore {
+        &self.authority_commits
+    }
+}

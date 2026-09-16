@@ -14,6 +14,8 @@ pub(crate) use diesel::{OptionalExtension, QueryableByName, sql_query, sql_types
 pub(crate) use diesel_async::pooled_connection::deadpool::Object;
 pub(crate) use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 pub(crate) use serde_json::Value;
+pub(crate) use soland_storage::*;
+#[cfg(any())]
 pub(crate) use soland_storage::{
     AccountDataCasResult, AccountDataChangeRecord, AccountDataRecord, AccountDataStore,
     AccountLifecycleRecord, AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore,
@@ -101,12 +103,9 @@ mod agent_principal_row;
 mod agents;
 mod applets;
 mod audit;
+mod authority_commit;
 mod blobs;
 mod contacts;
-mod control_proposal_acks;
-mod control_seal_schedule;
-mod current_data;
-mod current_results;
 mod device_pairing_row;
 mod device_pairings;
 mod device_revocations;
@@ -115,8 +114,6 @@ mod event_notifications;
 mod events;
 mod federation;
 mod governance;
-mod governance_history;
-mod history_response_stream;
 mod idempotency;
 mod invite_locators;
 mod invite_new_source_ledger;
@@ -124,7 +121,6 @@ mod key_backup;
 mod key_backup_unlock;
 mod member_identity;
 mod mls;
-mod mls_public_state;
 mod mls_welcome_discovery;
 mod moderation;
 mod notifications;
@@ -145,11 +141,9 @@ mod sessions;
 mod settings;
 mod sidecars;
 mod signal;
-pub(crate) mod state_resolution;
 mod sync_cursor;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_database;
-mod timeline_order;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;
@@ -161,19 +155,20 @@ pub(crate) use agent_principal_row::{AgentPrincipalRow, pack_runtime_key_materia
 pub use agents::*;
 pub use applets::*;
 pub use audit::*;
+pub use authority_commit::*;
 pub use blobs::*;
 pub use contacts::*;
-pub use control_proposal_acks::*;
 pub(crate) use device_pairing_row::DevicePairingRow;
 pub use device_pairings::*;
 pub use device_revocations::*;
+pub(crate) use device_revocations::{
+    ensure_gate_allowed_in_transaction, gate_status_in_transaction,
+};
 pub use devices::*;
 pub use event_notifications::*;
 pub use events::*;
 pub use federation::*;
 pub use governance::*;
-pub use governance_history::*;
-pub use history_response_stream::*;
 pub use idempotency::*;
 pub use invite_locators::*;
 pub use invite_new_source_ledger::*;
@@ -198,7 +193,6 @@ pub use sessions::*;
 pub use settings::*;
 pub use sidecars::*;
 pub use signal::*;
-pub use state_resolution::*;
 pub use sync_cursor::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_database::TestDatabase;
@@ -258,20 +252,6 @@ impl PgTransactionError {
 impl From<PersistenceError> for PgTransactionError {
     fn from(error: PersistenceError) -> Self {
         Self::Storage(error)
-    }
-}
-
-/// Project a state-store error onto the persistence error the identity-anchor
-/// commit path reports. `Conflict` must stay a conflict so callers can map a
-/// lost compare-and-swap onto the wire rejection instead of a 500.
-pub(crate) fn store_error_to_persistence(
-    error: arkret_state::state::StoreError,
-) -> PersistenceError {
-    use arkret_state::state::StoreError;
-    match error {
-        StoreError::NotFound(detail) => PersistenceError::NotFound(detail),
-        StoreError::Conflict(detail) => PersistenceError::Conflict(detail),
-        StoreError::Backend(detail) => PersistenceError::Database(detail),
     }
 }
 

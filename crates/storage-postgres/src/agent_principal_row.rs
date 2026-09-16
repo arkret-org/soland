@@ -86,16 +86,13 @@ struct AuthorizedKeyMaterial {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    current_signer_evidence:
-        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
+    current_signer_evidence: Option<Value>,
 }
 
 pub(crate) fn pack_authorized_key_material(
     event: Option<arkret_wire::Event>,
     signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
-    current_signer_evidence: Option<
-        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence,
-    >,
+    current_signer_evidence: Option<Value>,
 ) -> Result<Option<Value>, PersistenceError> {
     let presence = [
         event.is_some(),
@@ -206,7 +203,15 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
             display_name: record.display_name,
             agent_slug: record.agent_slug,
             avatar_blob_ref: record.avatar_blob_ref,
-            state: record.state.as_wire_str().to_owned(),
+            state: serde_json::to_value(record.state)
+                .map_err(PersistenceError::database)?
+                .as_str()
+                .ok_or_else(|| {
+                    PersistenceError::Internal(
+                        "Agent lifecycle state is not serialized as text".to_owned(),
+                    )
+                })?
+                .to_owned(),
             requested_scope: record.requested_scope,
             accountability: record.accountability,
             provision_event_refs: record.provision_event_refs,
@@ -315,9 +320,9 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
             display_name: row.display_name,
             agent_slug: row.agent_slug,
             avatar_blob_ref: row.avatar_blob_ref,
-            state: AgentLifecycleState::from_wire_str(&row.state).ok_or_else(|| {
+            state: serde_json::from_value(Value::String(row.state.clone())).map_err(|error| {
                 PersistenceError::SchemaViolation(format!(
-                    "stored Agent lifecycle state is invalid: {}",
+                    "stored Agent lifecycle state is invalid ({}): {error}",
                     row.state
                 ))
             })?,

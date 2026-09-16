@@ -40,12 +40,13 @@ pub struct AgentRuntimeActivation {
     pub authorized_public_key_digest: String,
     /// Exact controller Event retained with its producer proof.
     pub frozen_authorize_event: arkret_wire::Event,
-    pub expected_accepted_basis: arkret_wire::SealBasis,
-    pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
+    /// Realm stream head observed while the authorization command was
+    /// validated. The authority commit must extend this exact head.
+    pub expected_stream_head: arkret_wire::CommitStreamHead,
+    pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairOutcome,
     pub authorized_key_event: arkret_wire::Event,
     pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
-    pub current_signer_evidence:
-        Option<arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidence>,
+    pub current_signer_evidence: Option<serde_json::Value>,
     pub authorized_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]
@@ -72,7 +73,7 @@ pub struct AgentRuntimeApprovalWrite {
     pub runtime_public_key_digest: String,
     pub runtime_attestation_digest: String,
     pub runtime_key_request:
-        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalRequestBody,
+        arkret_models_collaboration::agent_scope::AgentRuntimeApprovalRequestBody,
 }
 
 /// Exact active-runtime snapshot that a durable Agent inbox write is allowed
@@ -123,8 +124,7 @@ pub struct AgentPairingReceipt {
     pub controller_principal_id: String,
     pub request_digest: String,
     pub authorize_event_ref: String,
-    pub activation_state:
-        arkret_models_collaboration::agent_operations::AgentKeyPairActivationState,
+    pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairOutcome,
 }
 #[async_trait]
 pub trait AgentStore: Send + Sync {

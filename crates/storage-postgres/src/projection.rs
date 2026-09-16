@@ -708,7 +708,46 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
         }
     }
 }
-async fn append_projection_event_in_transaction(
+/// Append a projection batch on a caller-owned connection.
+///
+/// The complete lock set is acquired in canonical Event-id order before the
+/// first write, so two concurrent batches that share an Event can never
+/// deadlock against each other. Member order stays the confirmed command
+/// order of `records`.
+pub(crate) async fn append_projection_batch_in_connection(
+    conn: &mut diesel_async::AsyncPgConnection,
+    records: Vec<ProjectionEventRecord>,
+) -> PersistenceResult<Vec<ProjectionEventAppendOutcome>> {
+    let mut identities = records
+        .iter()
+        .map(|record| {
+            ids::parse_event_id(&record.event_id).ok_or_else(|| {
+                PersistenceError::SchemaViolation("malformed projection Event id".into())
+            })
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    identities.sort();
+    identities.dedup();
+    for id in identities {
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+            .bind::<Binary, _>(id.to_vec())
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+    }
+    let mut outcomes = Vec::with_capacity(records.len());
+    for record in records {
+        outcomes.push(append_projection_event_in_transaction(conn, record).await?);
+    }
+    Ok(outcomes)
+}
+
+/// Append one projection row on a caller-owned connection.
+///
+/// The Event commit unit of work reuses this so business projection and the
+/// authority-signed `RealmCommit` share one transaction: a reader can never see
+/// a committed Event whose current-result projection is missing.
+pub(crate) async fn append_projection_event_in_transaction(
     conn: &mut diesel_async::AsyncPgConnection,
     record: ProjectionEventRecord,
 ) -> PersistenceResult<ProjectionEventAppendOutcome> {
@@ -799,30 +838,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            // Acquire the complete lock set in canonical order before writing.
-            // Member order remains the confirmed command order below.
-            let mut identities = records
-                .iter()
-                .map(|record| {
-                    ids::parse_event_id(&record.event_id).ok_or_else(|| {
-                        PersistenceError::SchemaViolation("malformed projection Event id".into())
-                    })
-                })
-                .collect::<PersistenceResult<Vec<_>>>()?;
-            identities.sort();
-            identities.dedup();
-            for id in identities {
-                sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
-                    .bind::<Binary, _>(id.to_vec())
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(PersistenceError::database)?;
-            }
-            let mut outcomes = Vec::with_capacity(records.len());
-            for record in records {
-                outcomes.push(append_projection_event_in_transaction(conn, record).await?);
-            }
-            Ok(outcomes)
+            Ok(append_projection_batch_in_connection(conn, records).await?)
         })
         .await
         .map_err(PgTransactionError::into_persistence)

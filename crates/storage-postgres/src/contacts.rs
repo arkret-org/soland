@@ -1,11 +1,11 @@
 pub(crate) mod completion;
 
-use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
+use arkret_identifiers::{ConsentId, DidCoreId, EventId, Hash};
 use arkret_wire::ActorId;
 use diesel::sql_types::{BigInt, Binary};
 
 use super::{
-    Array, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord, ContactStore,
+    Array, ConsentGrantKey, ConsentGrantRecord, ConsentGrantStore, ContactRecord, ContactStore,
     ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore, InviteReceivePolicyStore, Jsonb,
     MimiConsentCorrelationRecord, MimiConsentCorrelationStore, Nullable, OptionalExtension,
     PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
@@ -743,20 +743,18 @@ mod invite_policy_tests {
     }
 }
 
-// ── Pg-backed consent-cell store ─────────────────────────────────────────
-// Durable backing for the holder-private consent-cell projection, keyed by
-// (holder, cell_id) because `consent_id` is the cell subject. Column order
-// mirrors `ConsentCellRecord`; `active_grants` is persisted as a JSONB object
+// Durable backing for holder-private consent grants, keyed by
+// `(holder, consent_id)`. `active_grants` is persisted as a JSONB object
 // `{dot -> {dot, not_before, expires_at, granted_at}}` and `revoked_grants` as a
 // audit map, so only `active_grants` participates in gate decisions. Both maps round-trip
-// losslessly. Writes happen only inside the exact committed Seal transaction.
-pub struct PgConsentCellStore {
+// losslessly. Writes happen only with the authority-committed source Event.
+pub struct PgConsentGrantStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
-struct ConsentCellRow {
+struct ConsentGrantRow {
     #[diesel(sql_type = Text)]
-    cell_id: CellRef,
+    consent_id: String,
     #[diesel(sql_type = Jsonb)]
     holder_account_id: Value,
     #[diesel(sql_type = Jsonb)]
@@ -770,18 +768,21 @@ struct ConsentCellRow {
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
-impl ConsentCellRow {
-    fn into_pair(self) -> PersistenceResult<(ConsentCellKey, ConsentCellRecord)> {
+impl ConsentGrantRow {
+    fn into_pair(self) -> PersistenceResult<(ConsentGrantKey, ConsentGrantRecord)> {
         let holder_account_id: arkret_wire::AccountId =
             serde_json::from_value(self.holder_account_id).map_err(|error| {
                 PersistenceError::SchemaViolation(format!("invalid consent holder: {error}"))
             })?;
-        let key = ConsentCellKey {
+        let consent_id = ConsentId::new(self.consent_id).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("invalid consent id: {error}"))
+        })?;
+        let key = ConsentGrantKey {
             holder_account_id: holder_account_id.clone(),
-            cell_id: self.cell_id.clone(),
+            consent_id: consent_id.clone(),
         };
-        let record = ConsentCellRecord {
-            cell_id: self.cell_id,
+        let record = ConsentGrantRecord {
+            consent_id,
             holder_account_id,
             peer: serde_json::from_value(self.peer).map_err(|error| {
                 PersistenceError::SchemaViolation(format!("invalid consent peer: {error}"))
@@ -803,38 +804,38 @@ impl ConsentCellRow {
         Ok((key, record))
     }
 }
-const CONSENT_CELL_COLUMNS: &str =
-    "cell_id, holder_account_id, peer, consent_scope, active_grants, revoked_grants, updated_at";
-pub(super) async fn lock_consent_cell(
+const CONSENT_GRANT_COLUMNS: &str =
+    "consent_id, holder_account_id, peer, consent_scope, active_grants, revoked_grants, updated_at";
+pub(super) async fn lock_consent_grant(
     conn: &mut diesel_async::AsyncPgConnection,
     holder: &arkret_wire::AccountId,
-    cell: &CellRef,
-) -> PersistenceResult<Option<ConsentCellRecord>> {
-    let row = sql_query(format!("SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells WHERE holder_account_id=$1 AND cell_id=$2 FOR UPDATE"))
+    consent_id: &ConsentId,
+) -> PersistenceResult<Option<ConsentGrantRecord>> {
+    let row = sql_query(format!("SELECT {CONSENT_GRANT_COLUMNS} FROM consent_grants WHERE holder_account_id=$1 AND consent_id=$2 FOR UPDATE"))
         .bind::<Jsonb, _>(serde_json::to_value(holder).map_err(|e| PersistenceError::Internal(e.to_string()))?)
-        .bind::<Text, _>(cell).get_result::<ConsentCellRow>(conn).await.optional().map_err(PersistenceError::database)?;
+        .bind::<Text, _>(consent_id.as_str()).get_result::<ConsentGrantRow>(conn).await.optional().map_err(PersistenceError::database)?;
     row.map(|row| row.into_pair().map(|(_, record)| record))
         .transpose()
 }
 
 #[async_trait]
-impl ConsentCellStore for PgConsentCellStore {
+impl ConsentGrantStore for PgConsentGrantStore {
     async fn get(
         &self,
         holder_account_id: &arkret_wire::AccountId,
-        cell_id: &CellRef,
-    ) -> PersistenceResult<Option<ConsentCellRecord>> {
+        consent_id: &ConsentId,
+    ) -> PersistenceResult<Option<ConsentGrantRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(format!(
-            "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells WHERE holder_account_id = $1 AND cell_id = $2"
+            "SELECT {CONSENT_GRANT_COLUMNS} FROM consent_grants WHERE holder_account_id = $1 AND consent_id = $2"
         ))
         .bind::<Jsonb, _>(serde_json::to_value(holder_account_id).map_err(|error| {
             PersistenceError::SchemaViolation(format!("consent holder account is not serializable: {error}"))
         })?)
-        .bind::<Text, _>(cell_id)
-        .get_result::<ConsentCellRow>(&mut *conn)
+        .bind::<Text, _>(consent_id.as_str())
+        .get_result::<ConsentGrantRow>(&mut *conn)
         .await
         .optional()
         .map_err(PersistenceError::database)?;
@@ -842,14 +843,16 @@ impl ConsentCellStore for PgConsentCellStore {
             .transpose()
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentGrantKey, ConsentGrantRecord)>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let rows = sql_query(format!("SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells"))
-            .get_results::<ConsentCellRow>(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
-        rows.into_iter().map(ConsentCellRow::into_pair).collect()
+        let rows = sql_query(format!(
+            "SELECT {CONSENT_GRANT_COLUMNS} FROM consent_grants"
+        ))
+        .get_results::<ConsentGrantRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        rows.into_iter().map(ConsentGrantRow::into_pair).collect()
     }
 }

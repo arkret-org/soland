@@ -2,9 +2,8 @@ use arkret_models_collaboration::objects::read_receipts::{
     Notification, NotificationEventSource, NotificationIdentity, NotificationSchema,
     NotificationSource, NotificationSourceRef, OrdinaryProjectionContent,
 };
-use arkret_models_collaboration::sync_frames::account_sync::{
-    AgentRuntimeApprovalNotificationData, AgentRuntimeApprovalNotificationRemovalData,
-    NotificationData, NotificationDelta, NotificationDeltaAction, OrdinaryNotificationRemovalData,
+use arkret_models_collaboration::sync_frames::account_subscribe::{
+    NotificationDelta, NotificationDeltaAction,
 };
 use arkret_wire::events::EventKind;
 use arkret_wire::{
@@ -207,75 +206,22 @@ impl NotificationRow {
         })?;
         let action: NotificationDeltaAction = decode_enum("projection_action", action.clone())?;
         let id = if let Some(projection_id) = self.projection_id.as_ref() {
-            NotificationIdentity::new(projection_id.clone()).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "ordinary notification projection id is invalid: {error}"
-                ))
-            })?
+            projection_id.clone()
         } else {
             NotificationId::new(ids::format_typed_uuid(
                 "notification",
                 &self.notification_id,
             ))
-            .map(NotificationIdentity::from)
+            .map(|id| id.to_string())
             .map_err(|error| {
                 PersistenceError::Internal(format!("account notification id is invalid: {error}"))
             })?
         };
-        let data = match (&id, action, self.projection_data.clone()) {
-            (NotificationIdentity::Projection(_), NotificationDeltaAction::Upsert, Some(value)) => {
-                Some(NotificationData::OrdinaryProjection(Box::new(
-                    serde_json::from_value::<OrdinaryProjectionContent>(value).map_err(
-                        |error| {
-                            PersistenceError::Internal(format!(
-                                "ordinary notification projection_data is invalid: {error}"
-                            ))
-                        },
-                    )?,
-                )))
-            }
-            (NotificationIdentity::Projection(_), NotificationDeltaAction::Remove, Some(value)) => {
-                Some(NotificationData::OrdinaryRemoval(
-                    serde_json::from_value::<OrdinaryNotificationRemovalData>(value).map_err(
-                        |error| {
-                            PersistenceError::Internal(format!(
-                                "ordinary notification removal data is invalid: {error}"
-                            ))
-                        },
-                    )?,
-                ))
-            }
-            (
-                NotificationIdentity::AgentApproval(_),
-                NotificationDeltaAction::Upsert,
-                Some(value),
-            ) => Some(NotificationData::AgentRuntimeApproval(
-                serde_json::from_value::<AgentRuntimeApprovalNotificationData>(value).map_err(
-                    |error| {
-                        PersistenceError::Internal(format!(
-                            "account notification projection_data is invalid: {error}"
-                        ))
-                    },
-                )?,
-            )),
-            (
-                NotificationIdentity::AgentApproval(_),
-                NotificationDeltaAction::Remove,
-                Some(value),
-            ) => Some(NotificationData::AgentRuntimeApprovalRemoval(
-                serde_json::from_value::<AgentRuntimeApprovalNotificationRemovalData>(value)
-                    .map_err(|error| {
-                        PersistenceError::Internal(format!(
-                            "account notification removal data is invalid: {error}"
-                        ))
-                    })?,
-            )),
-            (_, _, None) => None,
-        };
-        let delta = NotificationDelta::try_new(id, action, data).map_err(|error| {
-            PersistenceError::Internal(format!("account notification delta is invalid: {error}"))
-        })?;
-        Ok(delta)
+        Ok(NotificationDelta {
+            id,
+            action,
+            data: self.projection_data.clone().unwrap_or(Value::Null),
+        })
     }
 
     fn into_account_record(self) -> PersistenceResult<StoredAccountNotificationDelta> {
@@ -460,21 +406,13 @@ impl NotificationStore for PgNotificationStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        record.delta.validate_shape().map_err(|error| {
-            PersistenceError::Internal(format!("account notification delta is invalid: {error}"))
-        })?;
+        if record.delta.id.trim().is_empty() {
+            return Err(PersistenceError::SchemaViolation(
+                "account notification delta id is empty".to_owned(),
+            ));
+        }
         let action = encode_enum("projection_action", &record.delta.action)?;
-        let data = record
-            .delta
-            .data
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "account notification data serialization failed: {error}"
-                ))
-            })?;
+        let data = &record.delta.data;
         sql_query(
             "INSERT INTO notifications \
              (id, recipient_actor_id, controller_account_pk, recipient_id, \
@@ -495,15 +433,13 @@ impl NotificationStore for PgNotificationStore {
               END, \
               updated_at = NOW()",
         )
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
-            record.delta.id.as_str(),
-        ))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.delta.id))
         .bind::<Text, _>(record.recipient_actor_id.to_string())
         .bind::<BigInt, _>(record.controller_account_pk.get())
         .bind::<Text, _>(record.recipient_id.as_str())
         .bind::<Text, _>(&record.source_account_artifact_id)
         .bind::<Text, _>(&action)
-        .bind::<Nullable<Jsonb>, _>(data.as_ref())
+        .bind::<Nullable<Jsonb>, _>(Some(data))
         .execute(&mut *conn)
         .await
         .map(|_| ())

@@ -50,7 +50,6 @@ uuid = { workspace = true }
 rand_chacha = "0.10.0"
 rand_core = "0.10.1"
 arkret-bootstrap.workspace = true
-arkret-lattice-registry.workspace = true
 arkret-signatures = { workspace = true, features = ["signer"] }
 ed25519-dalek.workspace = true
 arkret-mls = { workspace = true, features = ["test-utils"] }

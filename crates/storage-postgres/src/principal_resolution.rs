@@ -10,9 +10,6 @@ use soland_storage::{
 
 use crate::{PgPool, async_trait, pg_conn};
 
-mod current;
-pub(crate) mod genesis;
-
 pub struct PgPrincipalResolutionStore {
     pub pool: PgPool,
 }
@@ -135,10 +132,14 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
     async fn current_principal(
         &self,
         account_id: &AccountId,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> PersistenceResult<soland_storage::CurrentPrincipalRead> {
-        current::refresh(&self.pool, account_id, registry).await?;
-        current::read(&self.pool, account_id).await
+        Ok(match self.load_by_account_id(account_id).await? {
+            Some(record) => soland_storage::CurrentPrincipalRead::Ready {
+                pcr_realm_id: record.pcr_realm_id,
+                projection: record.projection,
+            },
+            None => soland_storage::CurrentPrincipalRead::Missing,
+        })
     }
     async fn by_account_id(
         &self,

@@ -1,22 +1,19 @@
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
-use arkret_models_collaboration::account_lifecycle::ConsentPeer;
+use arkret_identifiers::{ConsentId, DidCoreId, EventId, Hash};
 use arkret_models_collaboration::contact_operations::{
     ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
     RequestAcceptanceReceipt,
 };
+use arkret_models_collaboration::events_payloads::ConsentPeer;
 use arkret_wire::{AccountId, ActorId};
 use chrono::{DateTime, Utc};
 
-/// A consent cell is addressed by its subject: `consent_id` is the cell
-/// subject of exactly one holder (`consent-model.md` section 3.1), so the
-/// durable key is `(holder, cell_id)`. `(peer, consent_scope)` is the intent
-/// carried by the cell's dots, not part of its address.
+/// Durable address of one holder's consent grant set.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ConsentCellKey {
+pub struct ConsentGrantKey {
     pub holder_account_id: AccountId,
-    pub cell_id: CellRef,
+    pub consent_id: ConsentId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -38,15 +35,15 @@ impl ConsentGrantDot {
     }
 }
 
-/// Local audit/read mirror of the confirmed consent security cell.
+/// Local audit/read mirror of confirmed consent grants.
 /// Retained revoked tags are audit history, not protocol tombstone state.
 ///
-/// `peer` and `consent_scope` are the intent frozen by the cell's first
+/// `peer` and `consent_scope` are the intent frozen by the first
 /// accepted grant; every later dot on the same `consent_id` MUST carry that
 /// same intent (`consent-model.md` sections 3.1 and 3.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConsentCellRecord {
-    pub cell_id: CellRef,
+pub struct ConsentGrantRecord {
+    pub consent_id: ConsentId,
     pub holder_account_id: AccountId,
     pub peer: ConsentPeer,
     pub consent_scope: String,
@@ -57,7 +54,7 @@ pub struct ConsentCellRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-impl ConsentCellRecord {
+impl ConsentGrantRecord {
     /// Apply an exact committed removal to the active set. The returned audit
     /// is retained only for the holder's existing consent query contract.
     pub fn revoke_grants(&mut self, tags: impl IntoIterator<Item = String>) {
@@ -108,10 +105,9 @@ mod consent_time_tests {
             DidCoreId::new("ak:did_core:web:holder.example").unwrap(),
             DidCoreId::new("ak:did_core:web:station.example").unwrap(),
         );
-        let mut cell = ConsentCellRecord {
-            cell_id: CellRef::new(
-                "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-000000000001"
-                    .to_owned(),
+        let mut grants = ConsentGrantRecord {
+            consent_id: ConsentId::new(
+                "ak:consent:01964137-0000-7000-8000-000000000001".to_owned(),
             )
             .unwrap(),
             holder_account_id: holder,
@@ -126,19 +122,19 @@ mod consent_time_tests {
             revoked_grants: BTreeMap::new(),
             updated_at: at(10),
         };
-        assert!(!cell.has_active_grant_at(at(25)));
-        cell.active_grants.insert("event:0".to_owned(), dot());
-        assert!(cell.has_active_grant_at(at(25)));
-        cell.revoke_grants(["event:0".to_owned()]);
-        assert!(!cell.has_active_grant_at(at(25)));
-        assert!(cell.active_grants.is_empty());
-        assert_eq!(cell.revoked_grants.len(), 1);
+        assert!(!grants.has_active_grant_at(at(25)));
+        grants.active_grants.insert("event:0".to_owned(), dot());
+        assert!(grants.has_active_grant_at(at(25)));
+        grants.revoke_grants(["event:0".to_owned()]);
+        assert!(!grants.has_active_grant_at(at(25)));
+        assert!(grants.active_grants.is_empty());
+        assert_eq!(grants.revoked_grants.len(), 1);
         // Audit retention does not prevent a separately signed regrant.
         let mut regrant = dot();
         regrant.dot = "later:0".to_owned();
-        cell.active_grants.insert(regrant.dot.clone(), regrant);
-        assert!(cell.has_active_grant_at(at(25)));
-        assert_eq!(cell.revoked_grants.len(), 1);
+        grants.active_grants.insert(regrant.dot.clone(), regrant);
+        assert!(grants.has_active_grant_at(at(25)));
+        assert_eq!(grants.revoked_grants.len(), 1);
     }
 }
 

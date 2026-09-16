@@ -1,6 +1,15 @@
-use arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly;
-
 use super::{CursorRevocation, PersistenceResult, Utc, Value, async_trait};
+
+/// Resumable join bootstrap assembled from the current authority snapshot and
+/// the independent Realm/Circle/Sidecar stream tails after that snapshot.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RealmJoinDownload {
+    pub snapshot: arkret_wire::RealmStateSnapshot,
+    pub stream_heads: Vec<arkret_wire::CommitStreamHead>,
+    pub items: Vec<arkret_wire::StreamItem>,
+    pub next_cursor: Option<String>,
+    pub expires_at: chrono::DateTime<Utc>,
+}
 /// Private durable account summary read position; never a wire cursor.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AccountSummaryKey {
@@ -60,57 +69,18 @@ pub struct SyncCursorRecord {
 #[async_trait]
 pub trait SyncCursorStore: Send + Sync {
     /// Mutable private download progress, separate from immutable wire cursors.
-    async fn realm_join_download(
-        &self,
-        key: &str,
-    ) -> PersistenceResult<Option<RealmJoinBootstrapAssembly>>;
+    async fn realm_join_download(&self, key: &str) -> PersistenceResult<Option<RealmJoinDownload>>;
     async fn save_realm_join_download(
         &self,
         key: &str,
-        assembly: &RealmJoinBootstrapAssembly,
+        assembly: &RealmJoinDownload,
     ) -> PersistenceResult<()>;
     async fn current_detail_page(
         &self,
         request: &super::CurrentDetailRequest,
         progress: Option<&super::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> PersistenceResult<super::CurrentDetailOutcome>;
-    /// Bounded scan of one frozen timeline window in projection order, newest
-    /// first (`client-sync.md` 2.3).
-    ///
-    /// `bound` is the exclusive continuation position, or `None` to start at
-    /// the window head. `row_limit` caps the rows examined, not the rows the
-    /// caller keeps: visibility is decided above this layer, so a window whose
-    /// newest rows are all invisible must still not turn into a Realm read.
-    async fn timeline_window_scan(
-        &self,
-        realm_id: &str,
-        head: &super::TimelineOrderPosition,
-        bound: Option<&super::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> PersistenceResult<super::TimelineWindowScan>;
-    /// Bounded scan in ascending projection order, from `from` and stopping at
-    /// `upper` when one is given.
-    ///
-    /// Two callers share it so that frozen and live delivery can never disagree
-    /// on an order: window delivery walks `[floor, head]` with `inclusive` and
-    /// an upper bound, and live delivery walks strictly above the frozen head
-    /// with none. Direction and bounds are the only difference between them.
-    async fn timeline_ascending_scan(
-        &self,
-        realm_id: &str,
-        from: &super::TimelineOrderPosition,
-        inclusive: bool,
-        upper: Option<&super::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> PersistenceResult<super::TimelineWindowScan>;
-    /// Newest projection-order position of a Realm, used to freeze a window.
-    /// `None` when the Realm has no accepted Event at all.
-    async fn timeline_window_head(
-        &self,
-        realm_id: &str,
-    ) -> PersistenceResult<Option<super::TimelineOrderPosition>>;
     async fn account_summary_has_join(
         &self,
         actor_key: &str,

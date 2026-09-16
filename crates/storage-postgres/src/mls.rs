@@ -66,7 +66,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             let device = record.device_id.as_deref().ok_or_else(||PersistenceError::SchemaViolation("human KeyPackage omits device".into()))?;
             let binding = crate::device_revocations::local_device_binding_in_transaction(conn,&record.actor_id,device).await?
                 .ok_or_else(||PersistenceError::Conflict("device_unauthorized".into()))?;
-            if binding.target_device_authorize_event_id != *original_authorize {
+            if binding.authorization_ref.event_id.as_str() != original_authorize {
                 return Err(PersistenceError::Conflict("device authorization changed since upload verification".into()).into());
             }
             #[derive(QueryableByName)]
@@ -386,8 +386,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                     })?;
                     match crate::gate_status_in_transaction(conn, selector).await? {
                         soland_storage::DeviceRevocationGateStatus::Active => {}
-                        soland_storage::DeviceRevocationGateStatus::Pending { .. }
-                        | soland_storage::DeviceRevocationGateStatus::Revoked { .. }
+                        soland_storage::DeviceRevocationGateStatus::Revoked { .. }
                         | soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
                         | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
                             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
@@ -903,25 +902,6 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
 }
 #[async_trait]
 impl MlsCommitStore for PgMlsCommitStore {
-    async fn public_leaf_authorizations(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        crate::mls_public_state::read_authorizations(&mut conn, event_id).await
-    }
-    async fn public_genesis_candidate(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<Option<soland_storage::MlsPublicGenesisRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        crate::mls_public_state::read_genesis(&mut conn, event_id).await
-    }
-
     async fn get(
         &self,
         effective_scope: &Value,

@@ -1,4 +1,3 @@
-pub(crate) mod confirmed_history;
 mod queue_authority;
 
 use super::{
@@ -254,9 +253,6 @@ impl DeviceMessageStore for PgDeviceMessageStore {
             if let Some(selector) = batch.device_revocation_gate.as_ref() {
             match crate::gate_status_in_transaction(conn, selector).await? {
                 DeviceRevocationGateStatus::Active => {}
-                DeviceRevocationGateStatus::Pending { .. } => {
-                    return Ok(DeviceMessageBatchCommitOutcome::DeviceRevocationPending);
-                }
                 DeviceRevocationGateStatus::Revoked { .. } => {
                     return Ok(DeviceMessageBatchCommitOutcome::DeviceRevoked);
                 }
@@ -557,13 +553,6 @@ pub struct PgDeviceInventoryStore {
 }
 #[async_trait]
 impl DeviceInventoryStore for PgDeviceInventoryStore {
-    async fn seed_test_confirmed_history_without_control_roots(
-        &self,
-        history: &arkret::DeviceAuthorizationHistory,
-    ) -> PersistenceResult<()> {
-        confirmed_history::install(&self.pool, history).await
-    }
-
     async fn get(
         &self,
         actor: &str,
@@ -759,7 +748,3 @@ impl From<DeviceRow> for DeviceInventoryRecord {
 /// PostgreSQL-backed device key bundle store (`keys/upload`).
 mod key_material;
 pub use key_material::{PgDeviceKeyStore, PgOneTimeKeyStore};
-
-#[cfg(test)]
-#[path = "devices/confirmed_history_tests.rs"]
-mod confirmed_history_tests;

@@ -1,4 +1,4 @@
-use arkret_models_collaboration::account_lifecycle::{AccountStatusReceipt, AccountStatusRecord};
+use arkret_models_collaboration::account_status::{AccountStatusReceipt, AccountStatusRecord};
 use soland_storage::classify_account_status_replica_append;
 
 use super::{

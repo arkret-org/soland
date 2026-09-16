@@ -30,7 +30,7 @@ arc-swap.workspace = true
 arkret.workspace = true
 arkret-bootstrap.workspace = true
 arkret-canonical.workspace = true
-arkret-crypto = { workspace = true, features = ["account-data", "secret-share"] }
+arkret-crypto = { workspace = true, features = ["account-data"] }
 arkret-egress-policy.workspace = true
 arkret-egress-reqwest.workspace = true
 arkret-event-draft = { workspace = true, features = ["openapi"] }
@@ -39,7 +39,6 @@ arkret-http-client.workspace = true
 arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
-arkret-lattice-registry.workspace = true
 arkret-mls.workspace = true
 arkret-models-collaboration = { workspace = true, features = ["openapi"] }
 arkret-models-crypto = { workspace = true, features = ["openapi"] }

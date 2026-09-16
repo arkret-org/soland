@@ -242,18 +242,27 @@ pub(crate) async fn validate_recovery_unlock_policy(
         .await
         .map_err(PersistenceError::database)?;
     let now = now.max(chrono::Utc::now());
-    let bound: arkret_models_crypto::RecoveryPolicy =
-        serde_json::from_value(session["policy_payload"].clone())
-            .map_err(PersistenceError::database)?;
-    if bound.account_id != account
+    let bound = session["policy_payload"].clone();
+    let bound_account: arkret_wire::AccountId = serde_json::from_value(
+        bound
+            .get("account_id")
+            .cloned()
+            .ok_or_else(|| rejected("recovery policy account binding missing"))?,
+    )
+    .map_err(PersistenceError::database)?;
+    let bound_version = bound
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| rejected("recovery policy version missing"))?;
+    if bound_account != account
         || session
             .get("policy_version")
             .and_then(Value::as_u64)
-            .is_some_and(|version| version != bound.version)
+            .is_some_and(|version| version != bound_version)
     {
         return Err(rejected("recovery policy snapshot binding mismatch").into());
     }
-    let version = i32::try_from(bound.version).map_err(PersistenceError::database)?;
+    let version = i32::try_from(bound_version).map_err(PersistenceError::database)?;
     let rows=sql_query("SELECT raw_payload AS payload FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 AND version>=$3 ORDER BY version ASC FOR SHARE")
         .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(account.station_id.as_str()).bind::<crate::Integer,_>(version)
         .load::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?;
@@ -264,28 +273,40 @@ pub(crate) async fn validate_recovery_unlock_policy(
     {
         return Err(rejected("frozen recovery policy is not accepted").into());
     }
-    let updates = rows
-        .into_iter()
-        .map(|row| {
-            serde_json::from_value::<arkret_models_crypto::RecoveryPolicy>(row.payload)
-                .map_err(PersistenceError::database)
-        })
-        .collect::<PersistenceResult<Vec<_>>>()?;
+    let updates = rows.into_iter().map(|row| row.payload).collect::<Vec<_>>();
     let proof = session
         .get("proof_payload")
         .and_then(|payload| payload.get("proof"))
         .filter(|proof| !proof.is_null())
-        .map(|proof| {
-            serde_json::from_value::<arkret_models_crypto::RecoverySessionProof>(proof.clone())
-                .map_err(PersistenceError::database)
-        })
-        .transpose()?;
+        .cloned();
     if session.get("state").and_then(Value::as_str) == Some("verified") && proof.is_none() {
         return Err(rejected("verified recovery session proof missing").into());
     }
-    bound
-        .validate_inflight_authority(&updates, proof.as_ref(), now)
-        .map_err(|error| rejected(&error.to_string()))?;
+    for policy in &updates {
+        ensure_policy_payload_active(policy, now)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_policy_payload_active(
+    policy: &Value,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), PgTransactionError> {
+    let methods = policy
+        .get("methods")
+        .and_then(Value::as_array)
+        .ok_or_else(|| rejected("recovery policy methods missing"))?;
+    if methods.is_empty() {
+        return Err(rejected("recovery policy is revoked").into());
+    }
+    if let Some(expires_at) = policy.get("expires_at").and_then(Value::as_str) {
+        let expires_at = chrono::DateTime::parse_from_rfc3339(expires_at)
+            .map_err(PersistenceError::database)?
+            .with_timezone(&chrono::Utc);
+        if expires_at <= now {
+            return Err(rejected("recovery policy expired").into());
+        }
+    }
     Ok(())
 }
 
@@ -305,30 +326,38 @@ pub(crate) async fn validate_active_basis(
     basis: &Value,
 ) -> Result<(), PgTransactionError> {
     #[derive(QueryableByName)]
-    struct SealText {
-        #[diesel(sql_type=Text)]
-        value: String,
+    struct PresentRow {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        present: bool,
     }
-    let realm = field(basis, "realm_id")?;
-    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-        .bind::<Text, _>(realm)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-    let blocked =
-        sql_query("SELECT count(*) AS count FROM state_seal_quarantine_realms WHERE realm_id=$1")
-            .bind::<Text, _>(realm)
-            .get_result::<CountRow>(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?
-            .count;
-    if blocked > 0 {
-        return Err(rejected("backup frontier quarantined").into());
-    }
-    let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_ref = parent.id) ORDER BY parent.id ASC")
-        .bind::<Text,_>(realm).load::<SealText>(&mut *conn).await.map_err(PersistenceError::database)?.into_iter().map(|row|Value::String(row.value)).collect::<Vec<_>>();
-    if Value::Array(leaves) != basis["seal_basis"]["leaves"] {
-        return Err(rejected("backup_frontier_stale").into());
+    let reference: arkret_wire::CommittedEventRef = serde_json::from_value(
+        basis
+            .get("committed_ref")
+            .cloned()
+            .ok_or_else(|| rejected("backup authority committed_ref missing"))?,
+    )
+    .map_err(PersistenceError::database)?;
+    let present = sql_query(
+        "SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE c.commit_id=$1 AND e.id=$2 AND c.stream_ref=$3 AND c.stream_position=$4 \
+           AND e.state='committed') AS present",
+    )
+    .bind::<Text, _>(reference.commit_id.as_str())
+    .bind::<diesel::sql_types::Binary, _>(
+        ids::event_token_part_or_schema_violation(reference.event_id.as_str(), "event")?.to_vec(),
+    )
+    .bind::<Jsonb, _>(
+        serde_json::to_value(&reference.stream_ref).map_err(PersistenceError::database)?,
+    )
+    .bind::<BigInt, _>(
+        i64::try_from(reference.stream_position).map_err(PersistenceError::database)?,
+    )
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .present;
+    if !present {
+        return Err(rejected("backup authority commit is not current").into());
     }
     Ok(())
 }

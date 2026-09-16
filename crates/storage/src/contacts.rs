@@ -1,9 +1,11 @@
 mod completion_plan;
 
-use arkret_identifiers::CellRef;
+use arkret_identifiers::ConsentId;
 use arkret_models_collaboration::contact_operations::RequestAcceptanceReceipt;
 use arkret_wire::ActorId;
-use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
+use soland_domain::identity::{
+    ConsentGrantDot, ConsentGrantKey, ConsentGrantRecord, ContactRecord,
+};
 
 use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
 
@@ -245,7 +247,7 @@ impl ContactCompletionIntent {
 #[derive(Clone, Debug)]
 pub struct CommittedContactCompletionIntent {
     pub event_digest: arkret_wire::Hash,
-    pub deciding_seal_id: arkret_wire::SealId,
+    pub committed_ref: arkret_wire::CommittedEventRef,
     pub intent: ContactCompletionIntent,
 }
 
@@ -348,13 +350,13 @@ pub fn validate_invite_policy_account(
 /// projection. `active_grants` / `revoked_grants` are persisted as JSONB so the
 /// `BTreeMap`/`BTreeSet` round-trip losslessly.
 #[async_trait]
-pub trait ConsentCellStore: Send + Sync {
+pub trait ConsentGrantStore: Send + Sync {
     async fn get(
         &self,
         holder_account_id: &arkret_wire::AccountId,
-        cell_id: &CellRef,
-    ) -> PersistenceResult<Option<ConsentCellRecord>>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
+        consent_id: &ConsentId,
+    ) -> PersistenceResult<Option<ConsentGrantRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentGrantKey, ConsentGrantRecord)>>;
 }
 
 /// Service-local correlation retained by the MIMI consent facade.

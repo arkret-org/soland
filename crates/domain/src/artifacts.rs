@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
 
 use arkret_wire::{EventKind, EventWireScope, ServiceOperationId};
@@ -8,24 +8,8 @@ pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF: &str = "deployment-probes
 
 static ACTIVE_DURABLE_EVENT_KINDS: OnceLock<BTreeSet<String>> = OnceLock::new();
 static ACTIVE_LOCAL_OPERATION_EVENT_KINDS: OnceLock<BTreeSet<String>> = OnceLock::new();
-static ACTIVE_DURABLE_CELL_BINDINGS: OnceLock<Vec<EventKindCellBinding>> = OnceLock::new();
-static CELL_FAMILY_BINDINGS: OnceLock<Vec<CellFamilyBinding>> = OnceLock::new();
 static OPERATION_IDS: OnceLock<BTreeSet<String>> = OnceLock::new();
 static ID_KIND_FORMS: OnceLock<HashMap<String, String>> = OnceLock::new();
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EventKindCellBinding {
-    pub event_kind: String,
-    pub cell_family: String,
-    pub state_model: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CellFamilyBinding {
-    pub cell_family: String,
-    pub state_model: String,
-    pub event_kinds: Vec<String>,
-}
 
 pub const fn pq_hybrid_tls_required_group() -> &'static str {
     arkret_schema::PQ_HYBRID_TLS_REQUIRED_GROUP
@@ -54,46 +38,6 @@ pub fn active_local_operation_event_kinds() -> &'static BTreeSet<String> {
             .map(|kind| kind.as_str().to_owned())
             .collect()
     })
-}
-
-pub fn active_durable_cell_bindings() -> &'static [EventKindCellBinding] {
-    ACTIVE_DURABLE_CELL_BINDINGS
-        .get_or_init(|| {
-            EventKind::ALL
-                .iter()
-                .filter(|kind| kind.wire_scope() == EventWireScope::DurableEvent)
-                .filter_map(EventKind::descriptor)
-                .flat_map(|descriptor| {
-                    descriptor.cell_writes.iter().filter_map(|write| {
-                        Some(EventKindCellBinding {
-                            event_kind: descriptor.kind.to_owned(),
-                            cell_family: write.cell_family?.as_str().to_owned(),
-                            state_model: write.state_model?.as_str().to_owned(),
-                        })
-                    })
-                })
-                .collect()
-        })
-        .as_slice()
-}
-
-pub fn cell_family_bindings() -> &'static [CellFamilyBinding] {
-    CELL_FAMILY_BINDINGS
-        .get_or_init(|| {
-            let mut by_family = BTreeMap::<String, CellFamilyBinding>::new();
-            for binding in active_durable_cell_bindings() {
-                let entry = by_family
-                    .entry(binding.cell_family.clone())
-                    .or_insert_with(|| CellFamilyBinding {
-                        cell_family: binding.cell_family.clone(),
-                        state_model: binding.state_model.clone(),
-                        event_kinds: Vec::new(),
-                    });
-                entry.event_kinds.push(binding.event_kind.clone());
-            }
-            by_family.into_values().collect()
-        })
-        .as_slice()
 }
 
 pub fn schema_ids() -> BTreeSet<String> {
@@ -185,8 +129,6 @@ pub fn registry_summary() -> Value {
         "versions": registry_versions(),
         "counts": {
             "active_durable_event_kinds": active_durable_event_kinds().len(),
-            "active_durable_cell_bindings": active_durable_cell_bindings().len(),
-            "cell_families": cell_family_bindings().len(),
             "schemas": arkret_schema::REGISTERED_SCHEMA_IDS.len(),
             "operation_surface_groups": arkret_schema::REGISTERED_OPERATION_SURFACE_GROUPS.len(),
             "operations": operation_ids().len(),
@@ -206,18 +148,5 @@ mod tests {
         assert!(operation_ids().contains("ak.self.events.command.submit.v1"));
         assert!(schema_ids().contains(arkret_wire::SchemaId::EVENT_V1));
         assert_eq!(pq_hybrid_tls_required_group(), "X25519MLKEM768");
-    }
-
-    #[test]
-    fn event_cell_binding_uses_generated_lattice_metadata() {
-        let member = active_durable_cell_bindings()
-            .iter()
-            .find(|binding| binding.event_kind == "ak.member.state")
-            .expect("member state binding is generated");
-        assert_eq!(
-            member.cell_family,
-            arkret_wire::CellFamilyId::MEMBER_STATE_V1
-        );
-        assert_eq!(member.state_model, "sequenced_state");
     }
 }

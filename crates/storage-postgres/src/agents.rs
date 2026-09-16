@@ -432,9 +432,18 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let state = serde_json::to_value(state)
+            .map_err(PersistenceError::database)?
+            .as_str()
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "Agent lifecycle state is not serialized as text".to_owned(),
+                )
+            })?
+            .to_owned();
         let updated = diesel::update(agent_principals::table.find(agent_id))
             .set((
-                agent_principals::state.eq(state.as_wire_str()),
+                agent_principals::state.eq(state),
                 agent_principals::state_changed_at.eq(changed_at),
                 agent_principals::updated_at.eq(changed_at),
             ))
@@ -451,8 +460,8 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let authorized_key_event = (activation.outcome
-            == arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active)
+        let authorized_key_event = (activation.outcome.status
+            == arkret_models_collaboration::agent_operations::AgentLifecycleState::Active)
             .then(|| {
                 crate::agent_principal_row::pack_authorized_key_material(
                     Some(activation.authorized_key_event.clone()),
@@ -472,10 +481,6 @@ impl AgentStore for PgAgentStore {
                 "encode pending Agent pairing commit intent: {error}"
             ))
         })?;
-        let active_basis = serde_json::json!({
-            "realm_id": activation.frozen_authorize_event.realm_id,
-            "seal_basis": activation.expected_accepted_basis,
-        });
         let key_expires_at: Option<chrono::DateTime<Utc>> = activation
             .authorized_key_event
             .payload
@@ -485,26 +490,13 @@ impl AgentStore for PgAgentStore {
             .transpose()
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            // The same Realm advisory lock serializes accepted Seal publication.
-            // Validate the exact snapshot before acquiring the Agent row lock.
-            crate::key_backup_unlock::validate_active_basis(conn, &active_basis).await?;
-            if activation.outcome == arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Cancelled {
-                let rows = diesel::update(agent_principals::table
-                    .filter(agent_principals::id.eq(&activation.agent_id))
-                    .filter(agent_principals::approval_request_id.eq(activation.approval_request_id.as_str()))
-                    .filter(agent_principals::runtime_key_binding_digest.eq(&activation.runtime_key_binding_digest))
-                    .filter(agent_principals::pairing_request_id.eq(activation.pairing_request_id.as_str()))
-                    .filter(agent_principals::pending_pairing_commit_intent.eq(&pending_intent)))
-                    .set((agent_principals::pending_pairing_commit_intent.eq(None::<Value>),
-                        agent_principals::approval_request_id.eq(None::<String>),
-                        agent_principals::approval_requested_at.eq(None::<chrono::DateTime<Utc>>),
-                        agent_principals::runtime_key_binding_digest.eq(None::<String>),
-                        agent_principals::runtime_key_material.eq(None::<Value>)))
-                    .execute(&mut *conn).await.map_err(PersistenceError::database)?;
-                return Ok(rows == 1);
-            }
-            if activation.outcome != arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active {
-                return Err(PersistenceError::SchemaViolation("pairing reconciliation requires a terminal outcome".into()).into());
+            if activation.outcome.status
+                != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+            {
+                return Err(PersistenceError::SchemaViolation(
+                    "Agent runtime activation requires an active authority outcome".into(),
+                )
+                .into());
             }
             let authorized_key_event = authorized_key_event.as_ref().ok_or_else(|| {
                 PersistenceError::SchemaViolation(
@@ -528,10 +520,11 @@ impl AgentStore for PgAgentStore {
                             .eq(activation.pairing_request_id.as_str()),
                     )
                     .filter(agent_principals::pending_pairing_commit_intent.eq(&pending_intent))
-                    .filter(
-                        agent_principals::pairing_expires_at
-                            .gt(diesel::dsl::sql::<Nullable<Timestamptz>>("clock_timestamp()")),
-                    )
+                    .filter(agent_principals::pairing_expires_at.gt(diesel::dsl::sql::<
+                        Nullable<Timestamptz>,
+                    >(
+                        "clock_timestamp()"
+                    )))
                     .filter(
                         diesel::dsl::sql::<Bool>("(")
                             .bind::<Nullable<Timestamptz>, _>(key_expires_at)

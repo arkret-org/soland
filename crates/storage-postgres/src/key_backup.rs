@@ -114,7 +114,13 @@ impl KeyBackupStore for PgKeyBackupStore {
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
         let typed: arkret_models_crypto::KeyBackup =
             serde_json::from_value(payload.clone()).map_err(PersistenceError::database)?;
-        let metadata = serde_json::to_value(typed.summary()).map_err(PersistenceError::database)?;
+        typed
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let mut metadata = payload.clone();
+        if let Some(object) = metadata.as_object_mut() {
+            object.remove("ciphertext");
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -388,8 +394,7 @@ impl KeyBackupStore for PgKeyBackupStore {
                     .get_result::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?.payload;
                 let now=chrono::Utc::now();
                 if &current!=expected {return Err(PersistenceError::Conflict("device quorum policy changed".into()).into());}
-                let policy:arkret_models_crypto::RecoveryPolicy=serde_json::from_value(current).map_err(PersistenceError::database)?;
-                policy.validate_inflight_authority(&[],None,now).map_err(|e|PersistenceError::Conflict(e.to_string()))?;
+                super::key_backup_unlock::ensure_policy_payload_active(&current, now)?;
             }
             if let Some(id)=recovery_session_id {
                 super::key_backup_unlock::lock_recovery_policy_for_session(conn,id,now).await?;

@@ -3,9 +3,9 @@ use soland_storage::ConflictCode;
 
 use super::{
     Integer, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord,
-    RecoverySessionStore, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
-    sql_query, sql_types,
+    QueryableByName, RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionLifecycle,
+    RecoverySessionRecord, RecoverySessionStore, RunQueryDsl, Text, Timestamptz, Uuid, Value,
+    async_trait, ids, pg_conn, sql_query, sql_types,
 };
 // ── Phase 2 in-memory sub-stores ────────────────────────────────────────────
 
@@ -23,7 +23,7 @@ struct RecoveryPolicyRow {
     #[diesel(sql_type = Integer)]
     version: i32,
     #[diesel(sql_type = Jsonb)]
-    acceptance_basis: Value,
+    acceptance_ref: Value,
     #[diesel(sql_type = Text)]
     trust_domain: String,
 
@@ -50,9 +50,9 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
                 row.policy_id, row.version
             ))
         })?;
-        let acceptance_basis = serde_json::from_value(row.acceptance_basis).map_err(|error| {
+        let acceptance_ref = serde_json::from_value(row.acceptance_ref).map_err(|error| {
             PersistenceError::Internal(format!(
-                "recovery policy `{}` has invalid acceptance_basis: {error}",
+                "recovery policy `{}` has invalid acceptance_ref: {error}",
                 row.policy_id
             ))
         })?;
@@ -60,7 +60,7 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             account_id: arkret_wire::AccountId::new(row.principal_id, row.station_id),
             version,
-            acceptance_basis,
+            acceptance_ref,
             trust_domain: row.trust_domain,
             supersedes: row.supersedes.map(|u| ids::format_typed_uuid("policy", &u)),
             expires_at: row.expires_at,
@@ -81,7 +81,7 @@ impl PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 AND version = $3",
         )
@@ -105,7 +105,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE id = $1",
         )
@@ -125,7 +125,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC LIMIT 1",
@@ -147,7 +147,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC",
@@ -242,7 +242,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         sql_query(
             "INSERT INTO recovery_policies \
              (id, principal_id, station_id, version, trust_domain, supersedes, \
-              acceptance_basis, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
+              acceptance_ref, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
@@ -257,9 +257,9 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
                 .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Jsonb, _>(
-            serde_json::to_value(&record.acceptance_basis).map_err(|error| {
+            serde_json::to_value(&record.acceptance_ref).map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "recovery policy acceptance_basis encode failed: {error}"
+                    "recovery policy acceptance_ref encode failed: {error}"
                 ))
             })?,
         )
@@ -316,11 +316,11 @@ struct RecoverySessionRow {
     #[diesel(sql_type = Text)]
     device_generation_status: String,
     #[diesel(sql_type = Jsonb)]
-    accepted_seal_frontier: Value,
+    accepted_stream_head: Value,
     #[diesel(sql_type = Jsonb)]
     policy_payload: Value,
     #[diesel(sql_type = Jsonb)]
-    publication_authority_context: Value,
+    authority_context: Value,
     #[diesel(sql_type = Text)]
     publication_authority_context_digest: String,
     #[diesel(sql_type = Text)]
@@ -373,20 +373,19 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 row.recovery_session_id
             ))
         })?;
-        let accepted_seal_frontier =
-            serde_json::from_value(row.accepted_seal_frontier).map_err(|error| {
+        let accepted_stream_head =
+            serde_json::from_value(row.accepted_stream_head).map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "recovery session `{}` has invalid accepted_seal_frontier: {error}",
+                    "recovery session `{}` has invalid accepted_stream_head: {error}",
                     row.recovery_session_id
                 ))
             })?;
-        let publication_authority_context =
-            serde_json::from_value(row.publication_authority_context).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "recovery session `{}` has invalid publication_authority_context: {error}",
-                    row.recovery_session_id
-                ))
-            })?;
+        let authority_context = serde_json::from_value(row.authority_context).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` has invalid authority_context: {error}",
+                row.recovery_session_id
+            ))
+        })?;
         let publication_authority_context_digest = arkret_identifiers::Hash::new(
             row.publication_authority_context_digest,
         )
@@ -421,9 +420,9 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             identity_model,
             current_device_generation_ref,
             device_generation_status,
-            accepted_seal_frontier,
+            accepted_stream_head,
             policy_payload: row.policy_payload,
-            publication_authority_context,
+            authority_context,
             publication_authority_context_digest,
             challenge: row.challenge,
             state,
@@ -439,19 +438,19 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 }
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, \
      trust_domain, policy_id, policy_version, identity_model, \
-     current_device_generation_ref, device_generation_status, accepted_seal_frontier, \
-     policy_payload, publication_authority_context, publication_authority_context_digest, \
+     current_device_generation_ref, device_generation_status, accepted_stream_head, \
+     policy_payload, authority_context, publication_authority_context_digest, \
      challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
 
 /// Snake_case wire name of the canonical SDK `SessionState`, matching the
 /// `identity_model` / `device_generation_status` text-column encoding above.
-fn session_state_label(state: arkret_models_crypto::SessionState) -> &'static str {
+fn session_state_label(state: RecoverySessionLifecycle) -> &'static str {
     match state {
-        arkret_models_crypto::SessionState::Pending => "pending",
-        arkret_models_crypto::SessionState::Verified => "verified",
-        arkret_models_crypto::SessionState::Completed => "completed",
-        arkret_models_crypto::SessionState::Rejected => "rejected",
-        arkret_models_crypto::SessionState::Expired => "expired",
+        RecoverySessionLifecycle::Pending => "pending",
+        RecoverySessionLifecycle::Verified => "verified",
+        RecoverySessionLifecycle::Completed => "completed",
+        RecoverySessionLifecycle::Rejected => "rejected",
+        RecoverySessionLifecycle::Expired => "expired",
     }
 }
 #[async_trait]
@@ -540,8 +539,8 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             "INSERT INTO recovery_sessions \
              (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
-              device_generation_status, accepted_seal_frontier, policy_payload, \
-              publication_authority_context, publication_authority_context_digest, challenge, \
+              device_generation_status, accepted_stream_head, policy_payload, \
+              authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
         )
@@ -573,17 +572,17 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         })?))
         .bind::<Nullable<Text>, _>(Some(device_generation_status))
         .bind::<Nullable<Jsonb>, _>(Some(
-            serde_json::to_value(&record.accepted_seal_frontier).map_err(|error| {
+            serde_json::to_value(&record.accepted_stream_head).map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "recovery session accepted_seal_frontier encode failed: {error}"
+                    "recovery session accepted_stream_head encode failed: {error}"
                 ))
             })?,
         ))
         .bind::<Jsonb, _>(&record.policy_payload)
         .bind::<Jsonb, _>(
-            serde_json::to_value(&record.publication_authority_context).map_err(|error| {
+            serde_json::to_value(&record.authority_context).map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "recovery session publication_authority_context encode failed: {error}"
+                    "recovery session authority_context encode failed: {error}"
                 ))
             })?,
         )
@@ -611,7 +610,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         record: RecoverySessionRecord,
         manifest: Value,
     ) -> PersistenceResult<()> {
-        if record.state != arkret_models_crypto::SessionState::Verified {
+        if record.state != RecoverySessionLifecycle::Verified {
             return Err(PersistenceError::Conflict(
                 "unlock manifest requires verified transition".to_owned(),
             ));

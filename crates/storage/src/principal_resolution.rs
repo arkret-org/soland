@@ -56,15 +56,12 @@ pub enum CurrentPrincipalRead {
     },
 }
 
-/// Durable, rebuildable read index over one PCR's canonical resolution Events.
-/// Canonical Event/Seal storage remains the authority; this trait only gives
-/// current/history reads an atomic head and bounded ordered history.
+/// Durable, rebuildable read index over one PCR's committed resolution Events.
 #[async_trait]
 pub trait PrincipalResolutionStore: Send + Sync {
     async fn current_principal(
         &self,
         account_id: &AccountId,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> PersistenceResult<CurrentPrincipalRead>;
     async fn by_account_id(
         &self,
