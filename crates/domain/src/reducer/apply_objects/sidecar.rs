@@ -1,6 +1,4 @@
-use arkret_models_collaboration::agent_operations::{
-    AgentSidecarEncryptionProfile, AgentSidecarState,
-};
+use arkret_models_collaboration::agent_sidecar::AgentSidecarState;
 use arkret_models_collaboration::sidecar_operations::SidecarContextRef;
 
 use super::*;
@@ -8,6 +6,30 @@ use super::*;
 fn event_derived_sidecar_id(event_ref: &str) -> Option<String> {
     let event_id = arkret_identifiers::EventId::new(event_ref.to_owned()).ok()?;
     Some(arkret_identifiers::SidecarId::from_event_id(&event_id).into_string())
+}
+
+/// Outer wire payload of `ak.sidecar.context.attach`
+/// (`event-payload.schema.json#/$defs/sidecar_context_attach_payload`).
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SidecarContextAttachPayload {
+    sidecar_id: arkret_wire::SidecarId,
+    source_context_ref: SidecarContextRef,
+    version: u64,
+    #[serde(default)]
+    predecessor_event_ref: Option<arkret_wire::EventId>,
+}
+
+/// Outer wire payload of `ak.agent.sidecar.exchange.control`
+/// (`event-payload.schema.json#/$defs/agent_sidecar_exchange_control_payload`).
+/// The plaintext inside `encrypted_payload` is
+/// [`AgentSidecarExchangeControl`], which only the controller can open.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSidecarExchangeControlPayload {
+    sidecar_id: arkret_wire::SidecarId,
+    source_context_ref: SidecarContextRef,
+    encrypted_payload: arkret_models_crypto::EncryptedEnvelope,
 }
 
 fn context_key(context_ref: &SidecarContextRef) -> String {
@@ -36,18 +58,11 @@ impl ProjectionState {
                 reason: "sidecar_create_invalid".to_owned(),
             };
         };
-        let encryption_profile = serde_json::from_value::<AgentSidecarEncryptionProfile>(
-            payload
-                .get("encryption_profile")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-        if payload.len() != 1
-            || !matches!(
-                encryption_profile,
-                Ok(AgentSidecarEncryptionProfile::MlsRfc9420)
-            )
-        {
+        // `sidecar_create_payload` is the empty closed object: the id comes
+        // from the Event id, the rest is reducer-derived, and the Sidecar scope
+        // activates standard RFC 9420 through its own accepted `ak.mls.genesis`
+        // rather than through a declared profile.
+        if !payload.is_empty() {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_create_invalid".to_owned(),
             };
@@ -71,7 +86,6 @@ impl ProjectionState {
                 sidecar_id: sidecar_id.clone(),
                 realm_id: operation.realm_id.to_string(),
                 controller_account_id: controller_account_id.clone(),
-                encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
                 state: AgentSidecarState::Active,
                 state_changed_at: None,
                 created_at: operation.created_at,
@@ -94,13 +108,15 @@ impl ProjectionState {
             };
         }
         let Ok(payload) =
-            operation.typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()
+            serde_json::from_value::<SidecarContextAttachPayload>(operation.payload.clone())
         else {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_context_attach_invalid".to_owned(),
             };
         };
-        if payload.validate().is_err() {
+        // `version` 1 opens the chain and carries no predecessor; every later
+        // version names the attach Event it supersedes.
+        if (payload.version == 1) != payload.predecessor_event_ref.is_none() {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_context_attach_invalid".to_owned(),
             };
@@ -182,7 +198,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         const REASON: &str = "sidecar_exchange_control_forbidden";
         let Ok(payload) =
-            operation.typed_payload::<arkret_wire::event_spec::AgentSidecarExchangeControl>()
+            serde_json::from_value::<AgentSidecarExchangeControlPayload>(operation.payload.clone())
         else {
             return ProjectionEffect::Rejected {
                 reason: REASON.to_owned(),

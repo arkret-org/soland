@@ -111,7 +111,6 @@ pub struct SpaceContainerProjectionRecord {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -139,7 +138,6 @@ pub struct StrandProjectionRecord {
     pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// AKP-0007 — the Circle (`ak:circle:…`) this Strand is scoped to, if any.
@@ -171,7 +169,6 @@ pub struct MorphProjectionRecord {
     pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }

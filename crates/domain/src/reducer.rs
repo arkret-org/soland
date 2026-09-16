@@ -59,31 +59,33 @@ pub use crate::hlc::ServerHlc;
 
 pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
-pub use apply_capability::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
+pub use apply_capability::{engine_grant_from_capability_facet, engine_grant_from_cell_body};
 pub use capability_derivation::inheritance_allowed_policies;
 pub(crate) use capability_derivation::*;
 pub use commit_stream::{CommitStreamEffect, CommitStreamProjection};
-pub use facets::{FacetRef, facet};
 pub(crate) use dispatch::{APPLY_REGISTRY, upsert_realm_link};
 pub use dispatch::{ApplyFn, default_apply_registry};
 pub use effects::{MlsEffect, ProjectionEffect};
 pub(crate) use effects::{ObjectLifecycleTransition, SpaceContainerLifecycleTransition};
+pub use facets::{FacetRef, SettledFacet, facet};
 pub(crate) use message_helpers::*;
 pub use message_helpers::{
     message_id_from_event_id, message_id_from_payload_or_event_id, message_redaction_target_ref,
 };
-pub use patch_helpers::REALM_DESTROY_FANOUT_WINDOW_DAYS;
 pub(crate) use patch_helpers::*;
-pub use patch_helpers::{morph_document_body, validate_patch_semantic_safety};
+pub use patch_helpers::{
+    REALM_DESTROY_FANOUT_WINDOW_DAYS, morph_document_body, validate_patch_semantic_safety,
+};
 pub use policy_validation::validate_join_policy_payload;
 pub(crate) use policy_validation::*;
 pub use projection_state::ProjectionState;
+pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
-    AppletProjection, AuditSessionProjection, CapabilityDerivedState, CircleLifecycleState,
-    CircleMembershipState, CircleProjection, DocumentVersionProjection, ErasureReceiptRecord,
-    InviteProjection, KeyPackageLifetimeProjection, MessageState, MlsCommitEpoch,
-    MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
+    AppletProjection, CapabilityDerivedState, CircleLifecycleState, CircleMembershipState,
+    CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, InviteProjection,
+    KeyPackageLifetimeProjection, MessageState, MlsCommitEpoch, MlsCommitEpochKey,
+    MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
     MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
     PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
     RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
@@ -92,7 +94,6 @@ pub use projections::{
     SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
-pub(crate) use projections::space_container_id_from_payload;
 
 #[cfg(test)]
 mod tests;

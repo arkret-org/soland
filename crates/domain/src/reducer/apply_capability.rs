@@ -189,20 +189,19 @@ pub fn engine_grant_from_cell_body(
     })
 }
 
-pub fn engine_grant_from_capability_cell_state(
+/// Resolve one settled `capability.grant` facet value into the engine shape.
+///
+/// A revoked or relinquished grant keeps its facet with a JSON `null` value so
+/// a replay of the original grant Event cannot revive it; that tombstone
+/// resolves to `None`.
+pub fn engine_grant_from_capability_facet(
     grant_id: &str,
-    cell_state: &ResolvedCellState,
+    value: &Value,
 ) -> Option<crate::capability::Grant> {
-    let ResolvedCellState::Sequenced(state) = cell_state else {
-        return None;
-    };
-    let items = state.value.as_array()?;
-    if items.is_empty() {
+    if value.is_null() {
         return None;
     }
-    let last = items.last()?;
-    let body = last.get("value").unwrap_or(last);
-    engine_grant_from_cell_body(grant_id, body, false)
+    engine_grant_from_cell_body(grant_id, value, false)
 }
 
 /// The single active-grant predicate for the accepted capability projection.
@@ -389,32 +388,6 @@ fn grant_action_covers(grant: &crate::capability::Grant, action: &str) -> bool {
         .any(|holder| arkret_policy::action_covers_event_kinds(holder, action).unwrap_or(false))
 }
 
-/// The 0-based index of `ak.component.capability.grant.v1` in the
-/// `ak.capability.grant` registry `cell_writes[]`. The contract declares
-/// exactly one write, so the dot's third segment is `0`.
-const CAPABILITY_GRANT_WRITE_INDEX: usize = 0;
-
-/// or_set add dot for a capability grant.
-///
-/// `event-and-patch.md` §2.4.2 fixes the dot to
-/// `ak:event:<event_id>:<write_index>` and states outright that reading the
-/// third segment as anything else — a payload index, arrival order, or a local
-/// counter — produces different dot sets across implementations. This used to
-/// return the soland-local `ak:operation:<uuid>` handle, which is not that
-/// value at all: a peer folding the same Event derived a different tag, so the
-/// two OR-Sets could never converge and an `or_set_remove_observed` issued
-/// elsewhere could not name soland's add.
-///
-/// The format itself is pinned by `ak.vector.encoding.or_set_dot_and_batch_tag.v1`,
-/// so it is read from the SDK rather than re-spelled here.
-fn capability_add_dot(operation: &Operation) -> Option<String> {
-    let event_id = operation.context.event_id.as_str();
-    Some(arkret_schema::or_set_dot(
-        event_id,
-        CAPABILITY_GRANT_WRITE_INDEX,
-    ))
-}
-
 /// Pull the canonical grant body out of an `ak.capability.grant` payload.
 /// Accepts the canonical genesis wrapper `{grant: {…}}` and a flat payload
 /// that already *is* the grant body.
@@ -460,26 +433,7 @@ fn engine_authority_refs_from_body(body: &Value) -> Vec<crate::capability::Issue
                             grant_id: id.to_owned(),
                         }
                     }),
-                    Some("realm_root") => Some(crate::capability::IssuerAuthorityRef::RealmRoot {
-                        realm_id: entry
-                            .get("realm_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                        cell_ref: entry
-                            .get("cell_ref")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                        controller_epoch_at_issuance: entry
-                            .get("controller_epoch_at_issuance")
-                            .and_then(Value::as_u64)
-                            .unwrap_or_default(),
-                        authority_generation: entry
-                            .get("authority_generation")
-                            .and_then(Value::as_u64)
-                            .unwrap_or_default(),
-                    }),
+                    Some("realm_authority") => serde_json::from_value(entry.clone()).ok(),
                     _ => None,
                 })
                 .collect()
@@ -513,16 +467,38 @@ pub fn derive_authority_audit(
     body: &Value,
     resolve: &dyn Fn(&str) -> Option<(u64, Vec<Value>)>,
 ) -> Option<(u64, Vec<Value>)> {
-    arkret_schema::derive_capability_authority_audit(body, &|grant_id| {
-        resolve(grant_id).map(|(authority_depth, authority_root_refs)| {
-            arkret_schema::CapabilityAuthorityAudit {
-                authority_depth,
-                authority_root_refs,
+    let refs = body.get("issuer_authority_refs")?.as_array()?;
+    if refs.is_empty() {
+        return None;
+    }
+    let mut depth = 0_u64;
+    let mut roots: Vec<Value> = Vec::new();
+    for entry in refs {
+        match entry.get("kind").and_then(Value::as_str) {
+            Some("realm_authority") => {
+                depth = depth.max(0);
+                if !roots.contains(entry) {
+                    roots.push(entry.clone());
+                }
             }
-        })
-    })
-    .ok()
-    .map(|audit| (audit.authority_depth, audit.authority_root_refs))
+            Some("grant") => {
+                let grant_id = entry.get("grant_id").and_then(Value::as_str)?;
+                let (parent_depth, parent_roots) = resolve(grant_id)?;
+                depth = depth.max(parent_depth.checked_add(1)?);
+                for root in parent_roots {
+                    if !roots.contains(&root) {
+                        roots.push(root);
+                    }
+                }
+            }
+            _ => return None,
+        }
+    }
+    if roots.is_empty() {
+        return None;
+    }
+    roots.sort_by_key(|root| root.to_string());
+    Some((depth, roots))
 }
 
 fn grant_realm_id<'a>(body: &'a Value, operation: &'a Operation) -> &'a str {
@@ -600,30 +576,29 @@ fn grant_metadata_value(operation: &Operation, grant_id: &str) -> Value {
 }
 
 impl ProjectionState {
-    fn capability_grant_cell_ref(grant_id: &str) -> Option<CellRef> {
-        CellRef::new(format!(
-            "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-        ))
-        .ok()
+    /// Settled body of one grant facet, in whichever Realm projected it.
+    /// `None` covers both "never projected" and "revoked".
+    pub(crate) fn capability_grant_value(&self, grant_id: &str) -> Option<&Value> {
+        self.facets
+            .iter()
+            .find(|(key, _)| {
+                key.1.facet() == facet::CAPABILITY_GRANT && key.1.subject() == grant_id
+            })
+            .map(|(_, settled)| &settled.value)
+            .filter(|value| !value.is_null())
     }
 
-    /// Read the current active safety-set entries. Removed grants are absent.
-    fn capability_cell_items(&self, cell_ref: &CellRef) -> Vec<Value> {
-        let Some(ResolvedCellState::Sequenced(state)) = self.cells.get(cell_ref) else {
-            return Vec::new();
-        };
-        state.value.as_array().cloned().unwrap_or_default()
-    }
-
-    /// Every grant currently projected on a `ak.component.capability.grant.v1`
-    /// cell, resolved to its effective engine shape (current active body). No realm / action /
-    /// resource / temporal filtering happens here — that is [`projected_grant_is_active_for`]'s
+    /// Every grant currently projected on a `capability.grant` facet, resolved
+    /// to its effective engine shape. No realm / action / resource / temporal
+    /// filtering happens here — that is [`projected_grant_is_active_for`]'s
     /// single responsibility.
     fn projected_capability_grants(&self) -> impl Iterator<Item = crate::capability::Grant> + '_ {
-        const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
-        self.cells.iter().filter_map(|(cell_ref, cell_state)| {
-            let grant_id = cell_ref.as_str().strip_prefix(CELL_PREFIX)?;
-            let mut grant = engine_grant_from_capability_cell_state(grant_id, cell_state)?;
+        self.facets.iter().filter_map(|(key, settled)| {
+            if key.1.facet() != facet::CAPABILITY_GRANT {
+                return None;
+            }
+            let grant_id = key.1.subject();
+            let mut grant = engine_grant_from_capability_facet(grant_id, &settled.value)?;
             if grant.realm_id.is_empty() {
                 grant.realm_id = self
                     .capability_grant_metadata
@@ -718,9 +693,11 @@ impl ProjectionState {
         actor: &arkret_wire::ActorId,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
+        let actor_value = serde_json::to_value(actor).unwrap_or(Value::Null);
         if self
             .realm_authority_root(realm_id)
-            .is_some_and(|root| &root.controller_actor_id == actor)
+            .and_then(|root| root.get("controller_actor_id"))
+            == Some(&actor_value)
         {
             return true;
         }
@@ -962,21 +939,24 @@ impl ProjectionState {
         if resources.is_empty() {
             return Err("capability_grant_resources_empty");
         }
+        let issuer_value = serde_json::to_value(&issuer).unwrap_or(Value::Null);
         let root_ref_valid = engine_authority_refs_from_body(body)
             .iter()
             .any(|authority_ref| match authority_ref {
-                crate::capability::IssuerAuthorityRef::RealmRoot {
+                crate::capability::IssuerAuthorityRef::RealmAuthority {
                     realm_id: root_realm_id,
-                    cell_ref,
-                    controller_epoch_at_issuance,
+                    governance_station_id,
                     authority_generation,
+                    ..
                 } => {
                     root_realm_id == realm_id
-                        && cell_ref == arkret_wire::REALM_AUTHORITY_ROOT_CELL
                         && self.realm_authority_root(realm_id).is_some_and(|root| {
-                            root.controller_actor_id == issuer
-                                && root.controller_epoch == *controller_epoch_at_issuance
-                                && root.authority_generation == *authority_generation
+                            root.get("controller_actor_id")
+                                .is_some_and(|value| value == &issuer_value)
+                                && root.get("governance_station_id").and_then(Value::as_str)
+                                    == Some(governance_station_id.as_str())
+                                && root.get("authority_generation").and_then(Value::as_u64)
+                                    == Some(*authority_generation)
                         })
                 }
                 crate::capability::IssuerAuthorityRef::Grant { .. } => false,
@@ -1076,18 +1056,9 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Materialize a grant only while its canonical safety set is active.
+    /// Materialize a grant only while it is still live.
     pub fn effective_engine_grant(&self, grant_id: &str) -> Option<crate::capability::Grant> {
-        let cell_ref = Self::capability_grant_cell_ref(grant_id)?;
-        let items = self.capability_cell_items(&cell_ref);
-        if items.is_empty() {
-            return None;
-        }
-        // Use the most recent add's body for the live grant attributes
-        // (actions / resource / subject / issuer). All adds for a grant_id
-        // describe the same grant; the last one wins on attributes.
-        let last = items.last()?;
-        let body = last.get("value").unwrap_or(last);
+        let body = self.capability_grant_value(grant_id)?;
         let mut grant = engine_grant_from_cell_body(grant_id, body, false)?;
         if grant.realm_id.is_empty() {
             grant.realm_id = self
@@ -1151,17 +1122,16 @@ impl ProjectionState {
             .issuer_authority_refs
             .iter()
             .any(|authority_ref| match authority_ref {
-                crate::capability::IssuerAuthorityRef::RealmRoot {
+                crate::capability::IssuerAuthorityRef::RealmAuthority {
                     realm_id,
-                    cell_ref,
                     authority_generation,
                     ..
                 } => {
-                    cell_ref == arkret_wire::REALM_AUTHORITY_ROOT_CELL
-                        && !self.realm_is_in_terminal_state(realm_id)
-                        && self
-                            .realm_authority_root(realm_id)
-                            .is_some_and(|root| root.authority_generation == *authority_generation)
+                    !self.realm_is_in_terminal_state(realm_id)
+                        && self.realm_authority_root(realm_id).is_some_and(|root| {
+                            root.get("authority_generation").and_then(Value::as_u64)
+                                == Some(*authority_generation)
+                        })
                 }
                 crate::capability::IssuerAuthorityRef::Grant { grant_id } => {
                     let Some(parent) = self.effective_engine_grant(grant_id) else {
@@ -1238,14 +1208,11 @@ impl ProjectionState {
             .into_iter()
             .find(|authority_grant_id| self.effective_engine_grant(authority_grant_id).is_none())
         {
-            let known_removed = Self::capability_grant_cell_ref(&unresolved_grant_id)
-                .and_then(|cell| self.cells.get(&cell))
-                .is_some_and(|state| {
-                    let ResolvedCellState::Sequenced(state) = state else {
-                        return false;
-                    };
-                    state.value.as_array().is_some_and(Vec::is_empty)
-                });
+            let known_removed = self.facets.iter().any(|(key, settled)| {
+                key.1.facet() == facet::CAPABILITY_GRANT
+                    && key.1.subject() == unresolved_grant_id
+                    && settled.value.is_null()
+            });
             if known_removed {
                 return ProjectionEffect::Rejected {
                     reason: "grant_revoked_upstream".to_owned(),
@@ -1263,23 +1230,15 @@ impl ProjectionState {
             };
         }
         let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::capability_grant_cell_ref(&grant_id) else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_grant_cell_ref_invalid".to_owned(),
-            };
-        };
+        let target = FacetRef::new(facet::CAPABILITY_GRANT, &grant_id);
 
-        // A confirmed removal retains a revision and an empty active set.
-        // Replaying the original grant Event must not revive that grant.
-        if let Some(current) = self.cells.get(&cell_ref) {
-            let ResolvedCellState::Sequenced(current) = current else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            };
-            if current.value.as_array().is_some_and(Vec::is_empty) {
-                return ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id };
-            }
+        // A removal keeps the facet with a null value. Replaying the original
+        // grant Event must not revive that grant.
+        if self
+            .facet_value(&realm_id, &target)
+            .is_some_and(Value::is_null)
+        {
+            return ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id };
         }
         let mut value = operation.payload.clone();
         // capabilities.md §10 — `authority_depth` and `authority_root_refs[]`
@@ -1311,33 +1270,7 @@ impl ProjectionState {
                 Value::Array(authority_root_refs),
             );
         }
-        // Fail closed rather than invent a tag: an add whose dot is not the
-        // registered one is unremovable by any conforming observed-remove.
-        let Some(tag) = capability_add_dot(operation) else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_add_dot_unresolved".to_owned(),
-            };
-        };
-        let write = arkret_state::state_model::StateWrite::new(
-            operation.context.event_id.clone(),
-            arkret_wire::LatticeOp {
-                op_type: arkret_wire::LatticeOpType::Add,
-                tag: Some(tag),
-                value: Some(value.clone()),
-                from: None,
-                to: None,
-                reason: None,
-                issuer_seq: None,
-            },
-        );
-        let model =
-            arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
-        let Ok(next) = model.apply(self.cells.get(&cell_ref), &write) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        self.cells.insert(cell_ref, next);
+        self.set_facet(&realm_id, target, grant_body(&value).clone());
         let mut metadata = grant_metadata_value(operation, &grant_id);
         if let Some(object) = metadata.as_object_mut() {
             object.insert(
@@ -1384,9 +1317,11 @@ impl ProjectionState {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
         let actor_is_target_issuer = operation.context.sender == target.issuer_id;
+        let sender_value = serde_json::to_value(&operation.context.sender).unwrap_or(Value::Null);
         let actor_is_target_realm_controller = self
             .realm_authority_root(&target.realm_id)
-            .is_some_and(|root| root.controller_actor_id == operation.context.sender);
+            .and_then(|root| root.get("controller_actor_id"))
+            == Some(&sender_value);
         if !actor_is_target_issuer && !actor_is_target_realm_controller {
             return ProjectionEffect::Rejected {
                 reason: "grant_revoke_not_authorized".to_owned(),
@@ -1434,46 +1369,13 @@ impl ProjectionState {
         _now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_revoke_cell_ref_invalid".to_owned(),
-            };
-        };
-
-        let items = self.capability_cell_items(&cell_ref);
-        let model =
-            arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
-        let mut next = self.cells.get(&cell_ref).cloned();
-        for item in &items {
-            let Some(tag) = item.get("tag_id").and_then(Value::as_str) else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            };
-            let write = arkret_state::state_model::StateWrite::new(
-                operation.context.event_id.clone(),
-                arkret_wire::LatticeOp {
-                    op_type: arkret_wire::LatticeOpType::Remove,
-                    tag: Some(tag.to_owned()),
-                    value: None,
-                    from: None,
-                    to: None,
-                    reason: None,
-                    issuer_seq: None,
-                },
-            );
-            match model.apply(next.as_ref(), &write) {
-                Ok(state) => next = Some(state),
-                Err(_) => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                    };
-                }
-            }
-        }
-        if let Some(next) = next {
-            self.cells.insert(cell_ref, next);
-        }
+        // The facet survives the removal carrying a JSON `null`: a replay of
+        // the original grant Event must not revive what was revoked.
+        self.set_facet(
+            &realm_id,
+            FacetRef::new(facet::CAPABILITY_GRANT, grant_id),
+            Value::Null,
+        );
         if let Some(grant) = self.capability_grant_metadata.get_mut(grant_id) {
             grant.revoked = true;
         }
@@ -1499,32 +1401,9 @@ impl ProjectionState {
         self.projected_authority_audit_inner(grant_id, &std::collections::BTreeSet::new())
     }
 
-    /// Resolve the immutable authority audit used by the registry projector.
-    pub fn capability_authority_audit(
-        &self,
-        grant_id: &str,
-    ) -> Option<arkret_schema::CapabilityAuthorityAudit> {
+    /// Resolve the immutable authority audit of a projected grant.
+    pub fn capability_authority_audit(&self, grant_id: &str) -> Option<(u64, Vec<Value>)> {
         self.projected_authority_audit(grant_id)
-            .map(
-                |(authority_depth, authority_root_refs)| arkret_schema::CapabilityAuthorityAudit {
-                    authority_depth,
-                    authority_root_refs,
-                },
-            )
-    }
-
-    /// Project one Event using this deterministic projection's authority basis.
-    pub fn project_registered_cell_writes(
-        &self,
-        event: &arkret_wire::Event,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, arkret_schema::EventCellContractError>
-    {
-        arkret_schema::project_registered_cell_writes_with_authority_resolver(
-            event,
-            digest_suite,
-            &|grant_id| self.capability_authority_audit(grant_id),
-        )
     }
 
     fn projected_authority_audit_inner(
@@ -1537,10 +1416,7 @@ impl ProjectionState {
         }
         let mut visiting = visiting.clone();
         visiting.insert(grant_id.to_owned());
-        let cell_ref = Self::capability_grant_cell_ref(grant_id)?;
-        let items = self.capability_cell_items(&cell_ref);
-        let last = items.last()?;
-        let body = last.get("value").unwrap_or(last);
+        let body = self.capability_grant_value(grant_id)?;
         let stored_depth = body.get("authority_depth").and_then(Value::as_u64);
         let stored_roots = body
             .get("authority_root_refs")
@@ -1557,18 +1433,12 @@ impl ProjectionState {
     }
 
     /// The grant ids a projected grant names as `kind="grant"` authority refs.
-    /// A grant that only names `realm_root` refs returns an empty set, which
-    /// terminates a walk: a root is a terminal, never an edge.
+    /// A grant that only names `realm_authority` refs returns an empty set,
+    /// which terminates a walk: a root is a terminal, never an edge.
     fn authority_grant_refs_of(&self, grant_id: &str) -> Vec<String> {
-        let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
-            return Vec::new();
-        };
-        let items = self.capability_cell_items(&cell_ref);
-        let Some(last) = items.last() else {
-            return Vec::new();
-        };
-        let body = last.get("value").unwrap_or(last);
-        grant_authority_grant_refs_in(body)
+        self.capability_grant_value(grant_id)
+            .map(grant_authority_grant_refs_in)
+            .unwrap_or_default()
     }
 
     /// capabilities.md §10.2 — DFS the authority graph of an incoming
@@ -1760,13 +1630,7 @@ impl ProjectionState {
     ) -> Vec<(String, String)> {
         self.grant_locations_for_subject(subject_id)
             .into_iter()
-            .filter(|(grant_id, _)| {
-                let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
-                    return false;
-                };
-                let items = self.capability_cell_items(&cell_ref);
-                !items.is_empty()
-            })
+            .filter(|(grant_id, _)| self.capability_grant_value(grant_id).is_some())
             .collect()
     }
 

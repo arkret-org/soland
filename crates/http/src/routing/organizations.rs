@@ -559,7 +559,7 @@ mod tests {
             expires_at: None,
             supersedes_statement_id: None,
             revokes_statement_id: None,
-            realm_frontier_digest: None,
+            realm_commit_ref: None,
             proof_digest: None,
             delegation_ref: None,
             issuer_role: "organization".to_owned(),

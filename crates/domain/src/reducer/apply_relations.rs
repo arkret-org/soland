@@ -105,7 +105,6 @@ impl ProjectionState {
             source_event_id,
             source_event_digest,
             created_at: now,
-            history_basis_seals: operation_history_basis_seals(operation),
             updated_at: now,
         };
         let cardinality = registered_relation_cardinality(&state.relation_kind);
@@ -658,21 +657,14 @@ impl ProjectionState {
                 };
             }
         };
-        let cell_id = match container_position_cell_id(&payload.container_ref, &payload.item_ref) {
-            Some(cell_id) => cell_id,
-            None => {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            }
-        };
-        if matches!(self.cells.get(&cell_id), Some(ResolvedCellState::Bottom(_))) {
-            return ProjectionEffect::Rejected {
-                reason: "cell_in_bottom_state".to_owned(),
-            };
-        }
+        let realm_id = operation.realm_id.to_string();
+        let position = FacetRef::composite(
+            facet::CONTAINER_POSITION,
+            &[&payload.container_ref, &payload.item_ref],
+        );
         if let Some(expected) = &payload.expected_position_digest
-            && container_cell_digest(self.cells.get(&cell_id)).as_deref() != Some(expected.as_str())
+            && container_facet_digest(self.facet_value(&realm_id, &position)).as_deref()
+                != Some(expected.as_str())
         {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
@@ -681,21 +673,26 @@ impl ProjectionState {
 
         if let Some(from_container_ref) = &payload.from_container_ref
             && from_container_ref != &payload.container_ref
-            && let Some(previous_cell_id) =
-                container_position_cell_id(from_container_ref, &payload.item_ref)
         {
-            self.cells.remove(&previous_cell_id);
+            self.clear_facet(
+                &realm_id,
+                &FacetRef::composite(
+                    facet::CONTAINER_POSITION,
+                    &[from_container_ref, &payload.item_ref],
+                ),
+            );
         }
         let container_ref = payload.container_ref.clone();
         let item_ref = payload.item_ref.clone();
-        self.cells.insert(
-            cell_id,
-            ResolvedCellState::Value(serde_json::json!({
+        self.set_facet(
+            &realm_id,
+            position,
+            serde_json::json!({
                 "item_ref": payload.item_ref,
                 "container_ref": payload.container_ref,
                 "relation_kind": payload.relation_kind,
                 "rank": payload.rank
-            })),
+            }),
         );
         ProjectionEffect::ContainerPositionProjected {
             container_ref,
@@ -713,23 +710,9 @@ impl ProjectionState {
                 };
             }
         };
-        let order_cell_id = match container_order_cell_id(&payload.container_ref) {
-            Some(cell_id) => cell_id,
-            None => {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            }
-        };
-        if matches!(
-            self.cells.get(&order_cell_id),
-            Some(ResolvedCellState::Bottom(_))
-        ) {
-            return ProjectionEffect::Rejected {
-                reason: "cell_in_bottom_state".to_owned(),
-            };
-        }
-        if container_cell_digest(self.cells.get(&order_cell_id)).as_deref()
+        let realm_id = operation.realm_id.to_string();
+        let order = FacetRef::new(facet::CONTAINER_ORDER, &payload.container_ref);
+        if container_facet_digest(self.facet_value(&realm_id, &order)).as_deref()
             != Some(payload.expected_order_digest.as_str())
         {
             return ProjectionEffect::Rejected {
@@ -739,13 +722,14 @@ impl ProjectionState {
 
         let container_ref = payload.container_ref.clone();
         let position_count = payload.positions.len();
-        self.cells.insert(
-            order_cell_id,
-            ResolvedCellState::Value(serde_json::json!({
+        self.set_facet(
+            &realm_id,
+            order,
+            serde_json::json!({
                 "container_ref": payload.container_ref,
                 "relation_kind": payload.relation_kind,
                 "positions": payload.positions
-            })),
+            }),
         );
         ProjectionEffect::ContainerOrderProjected {
             container_ref,
@@ -754,27 +738,10 @@ impl ProjectionState {
     }
 }
 
-fn container_position_cell_id(container_ref: &str, item_ref: &str) -> Option<CellRef> {
-    let subject = arkret_wire::composite_subject(&[container_ref, item_ref]).ok()?;
-    CellRef::new(format!(
-        "ak:cell:ak.component.container.position.v1:{subject}"
-    ))
-    .ok()
-}
-
-fn container_order_cell_id(container_ref: &str) -> Option<CellRef> {
-    CellRef::new(format!(
-        "ak:cell:ak.component.container.order.v1:{container_ref}"
-    ))
-    .ok()
-}
-
-fn container_cell_digest(state: Option<&ResolvedCellState>) -> Option<String> {
-    let value = match state {
-        Some(state) => state.settled_value()?,
-        None => &Value::Null,
-    };
-    arkret_canonical::canonical_json_bytes(value)
+/// JCS SHA-256 of a container facet value, with an absent facet digesting as
+/// JSON `null` so a first placement can name a digest too.
+fn container_facet_digest(value: Option<&Value>) -> Option<String> {
+    arkret_canonical::canonical_json_bytes(value.unwrap_or(&Value::Null))
         .ok()
         .map(arkret_canonical::sha256_digest)
 }
@@ -950,7 +917,6 @@ mod cross_realm_relation_tests {
             stage_changed_at: None,
             created_by: String::new(),
             created_at: chrono::Utc::now(),
-            history_basis_seals: Vec::new(),
             updated_by: None,
             updated_at: None,
             schema_refs: Vec::new(),
@@ -1467,7 +1433,6 @@ mod cross_realm_relation_tests {
                 source_event_id: None,
                 source_event_digest: None,
                 created_at: now,
-                history_basis_seals: Vec::new(),
                 updated_at: now,
             },
         );
@@ -1865,7 +1830,6 @@ mod cross_realm_relation_tests {
                 source_event_id: None,
                 source_event_digest: None,
                 created_at: now,
-                history_basis_seals: Vec::new(),
                 updated_at: now,
             },
         );
@@ -1918,7 +1882,6 @@ mod cross_realm_relation_tests {
                 source_event_id: None,
                 source_event_digest: None,
                 created_at: now,
-                history_basis_seals: Vec::new(),
                 updated_at: now,
             },
         );

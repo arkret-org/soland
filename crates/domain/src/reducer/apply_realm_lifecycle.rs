@@ -4,14 +4,6 @@ use arkret_models_collaboration::governance::erasure::{
 
 use super::*;
 
-/// Cell family of the registered Realm authority-root singleton.
-///
-/// `realm_null_subject_cells` keys the Realm-scoped `null`-subject families by
-/// their family id, so the wire cell ref constant is split here rather than
-/// re-spelled.
-const REALM_AUTHORITY_ROOT_FAMILY: &str = arkret_wire::CellFamilyId::REALM_AUTHORITY_ROOT_V1;
-pub const PRINCIPAL_RESOLUTION_CELL: &str = "ak:cell:ak.component.identity.resolution.v1:null";
-
 fn erasure_subject_kind_name(kind: ErasureSubjectKind) -> &'static str {
     match kind {
         ErasureSubjectKind::Principal => "principal",
@@ -116,111 +108,73 @@ fn genesis_authority_root_value(
     payload_object: Option<&serde_json::Map<String, Value>>,
     created_by: &arkret_wire::ActorId,
 ) -> Result<Value, &'static str> {
-    let _object = payload_object.ok_or("realm_authority_root_missing")?;
-    serde_json::to_value(
-        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(created_by.clone()),
-    )
-    .map_err(|_| "realm_authority_root_conflict")
-}
-
-/// The registry-projected authority-root write of this create Event, when the
-/// caller supplied the contract projection.
-fn registered_authority_root_write(writes: &[ProjectedCellWrite]) -> Option<Value> {
-    writes
-        .iter()
-        .find(|write| write.cell_id.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL)
-        .and_then(|write| write.as_direct())
-        .and_then(|effect| effect.op.value)
-}
-
-fn registered_principal_resolution_write(writes: &[ProjectedCellWrite]) -> Option<Value> {
-    writes
-        .iter()
-        .find(|write| write.cell_id.as_str() == PRINCIPAL_RESOLUTION_CELL)
-        .and_then(|write| write.as_direct())
-        .and_then(|effect| effect.op.value)
+    let object = payload_object.ok_or("realm_authority_root_missing")?;
+    let governance_station_id = object
+        .get("governance_station_id")
+        .and_then(Value::as_str)
+        .ok_or("realm_authority_root_missing")?;
+    Ok(serde_json::json!({
+        "controller_actor_id": created_by,
+        "controller_epoch": 0,
+        "governance_station_id": governance_station_id,
+        "authority_generation": 0,
+    }))
 }
 
 impl ProjectionState {
-    /// Apply `ak.realm.upgrade` to the canonical reducer-profile singleton.
-    /// The current profile interprets the Event and must register the target
-    /// as a direct upgrade edge before the cell can change.
-    pub(crate) fn apply_realm_upgrade(&mut self, operation: &Operation) -> ProjectionEffect {
-        let realm_id = operation.realm_id.to_string();
-        let Some(current) = self.realm_reducer_profile(&realm_id).map(ToOwned::to_owned) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::DEPENDENCY_MISSING.to_owned(),
-            };
-        };
-        let Some(target) = operation
-            .payload
-            .get("target_reducer_profile")
-            .and_then(Value::as_str)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        };
-        if target != arkret_wire::CORE_REDUCER_PROFILE
-            || !arkret_wire::can_upgrade_reducer_profile(&current, target)
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::UNSUPPORTED_PROFILE.to_owned(),
-            };
-        }
-        self.realm_null_subject_cells.insert(
-            (
-                realm_id.clone(),
-                format!(
-                    "ak:cell:{}:null",
-                    arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
-                ),
-            ),
-            ResolvedCellState::Value(Value::String(target.to_owned())),
-        );
-        ProjectionEffect::RealmLifecycle {
-            realm_id,
-            action: arkret_wire::EventKind::RealmUpgrade.as_str().to_owned(),
-        }
-    }
-
-    /// Current value of this Realm's registered authority-root cell.
+    /// Current value of this Realm's authority-root facet.
     ///
     /// The controller named here holds effective `ak.realm.owner`
     /// (`authz/capabilities.md` §3.2). `realm_states[..].owner` is a
     /// discardable presentation mirror and MUST NOT be consulted for
     /// authorization.
-    pub fn realm_authority_root(
-        &self,
-        realm_id: &str,
-    ) -> Option<arkret_policy::realm_bootstrap::RealmAuthorityRootValue> {
-        serde_json::from_value(
-            self.realm_null_subject_cell_value(realm_id, REALM_AUTHORITY_ROOT_FAMILY)?
-                .clone(),
-        )
-        .ok()
+    pub fn realm_authority_root(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_facet_value(realm_id, facet::REALM_AUTHORITY_ROOT)
     }
 
-    /// Apply one of the two root-cell CAS transitions. The registry-derived
-    /// CBS write remains the canonical state transition; this method enforces
-    /// the semantic guards and keeps the structured projection mirror in sync.
+    /// Apply one of the two authority-root CAS transitions: an owner transfer
+    /// rotates the controller binding, a governance-Station change rotates the
+    /// Station and bumps the authority generation. Both compare-and-swap
+    /// against the currently projected root.
     pub(crate) fn apply_realm_authority_transition(
         &mut self,
         operation: &Operation,
         kind: arkret_wire::EventKind,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let Some(mut root) = self.realm_authority_root(&realm_id) else {
+        let Some(root) = self.realm_authority_root(&realm_id).cloned() else {
             return ProjectionEffect::Rejected {
                 reason: "realm_authority_root_missing".to_owned(),
             };
         };
-        if operation.context.sender != root.controller_actor_id {
+        let controller_actor_id = root
+            .get("controller_actor_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
+        if controller_actor_id.as_ref() != Some(&operation.context.sender) {
             return ProjectionEffect::Rejected {
                 reason: "realm_authority_controller_mismatch".to_owned(),
             };
         }
-        if operation.payload.get("realm_id").and_then(Value::as_str) != Some(realm_id.as_str()) {
+        let controller_epoch = root
+            .get("controller_epoch")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let authority_generation = root
+            .get("authority_generation")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let mut root = match root {
+            Value::Object(root) => root,
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: "realm_authority_root_conflict".to_owned(),
+                };
+            }
+        };
+        if kind == arkret_wire::EventKind::RealmOwnerTransfer
+            && operation.payload.get("realm_id").and_then(Value::as_str) != Some(realm_id.as_str())
+        {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
@@ -233,11 +187,12 @@ impl ProjectionState {
                 };
             }
         };
-        if operation
-            .payload
-            .get("expected_state_digest")
-            .and_then(Value::as_str)
-            != Some(expected_digest.as_str())
+        if kind == arkret_wire::EventKind::RealmOwnerTransfer
+            && operation
+                .payload
+                .get("expected_state_digest")
+                .and_then(Value::as_str)
+                != Some(expected_digest.as_str())
         {
             return ProjectionEffect::Rejected {
                 reason: "realm_authority_root_conflict".to_owned(),
@@ -255,7 +210,7 @@ impl ProjectionState {
                 };
                 let Ok(successor_epoch) =
                     arkret_models_collaboration::events_payloads::realm::RealmOwnerTransferPayload::successor_controller_epoch(
-                        root.controller_epoch,
+                        controller_epoch,
                     )
                 else {
                     return ProjectionEffect::Rejected {
@@ -277,32 +232,52 @@ impl ProjectionState {
                         reason: "realm_authority_controller_mismatch".to_owned(),
                     };
                 }
-                root.controller_actor_id = payload.patch.controller_actor_id;
-                root.controller_epoch = successor_epoch;
-            }
-            arkret_wire::EventKind::RealmAuthorityReset => {
-                let typed =
-                    operation.typed_payload::<arkret_wire::event_spec::RealmAuthorityReset>();
-                let Ok(payload) = typed else {
+                let Ok(controller) = serde_json::to_value(&payload.patch.controller_actor_id)
+                else {
                     return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                        reason: "realm_authority_root_conflict".to_owned(),
                     };
                 };
-                if payload.destructive_confirmation != kind.as_str() {
+                root.insert("controller_actor_id".to_owned(), controller);
+                root.insert("controller_epoch".to_owned(), successor_epoch.into());
+            }
+            arkret_wire::EventKind::RealmGovernanceStationChange => {
+                let payload = match serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::RealmGovernanceStationChangePayload,
+                >(operation.payload.clone())
+                {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return ProjectionEffect::Rejected {
+                            reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                        };
+                    }
+                };
+                // The expected generation and Realm-stream head keep a stale
+                // administrator decision from re-routing the authority.
+                if payload.expected_authority_generation != authority_generation {
                     return ProjectionEffect::Rejected {
                         reason: "realm_authority_root_conflict".to_owned(),
                     };
                 }
-                let Ok(successor_generation) =
-                    arkret_models_collaboration::events_payloads::realm::RealmAuthorityResetPayload::successor_authority_generation(
-                        root.authority_generation,
-                    )
-                else {
+                // `expected_realm_stream_commit_id` names the Realm-stream
+                // head this decision was taken against. The head belongs to
+                // `CommitStreamProjection`, which the governance Station checks
+                // at admission; the reducer holds the authority generation and
+                // enforces that half of the compare-and-swap.
+                let Some(successor_generation) = authority_generation.checked_add(1) else {
                     return ProjectionEffect::Rejected {
                         reason: "reducer_projection_failed".to_owned(),
                     };
                 };
-                root.authority_generation = successor_generation;
+                root.insert(
+                    "governance_station_id".to_owned(),
+                    Value::String(payload.new_governance_station_id.to_string()),
+                );
+                root.insert(
+                    "authority_generation".to_owned(),
+                    successor_generation.into(),
+                );
             }
             _ => {
                 return ProjectionEffect::Rejected {
@@ -311,18 +286,7 @@ impl ProjectionState {
             }
         }
 
-        let Ok(value) = serde_json::to_value(root) else {
-            return ProjectionEffect::Rejected {
-                reason: "realm_authority_root_conflict".to_owned(),
-            };
-        };
-        self.realm_null_subject_cells.insert(
-            (
-                realm_id.clone(),
-                arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-            ),
-            ResolvedCellState::Value(value),
-        );
+        self.set_realm_facet(&realm_id, facet::REALM_AUTHORITY_ROOT, Value::Object(root));
         ProjectionEffect::RealmLifecycle {
             realm_id,
             action: kind
@@ -406,7 +370,6 @@ impl ProjectionState {
     pub fn apply_validated_realm_bootstrap_membership(
         &mut self,
         operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
     ) -> ProjectionEffect {
         if operation.event_kind != arkret_wire::EventKind::MemberState {
             return ProjectionEffect::Rejected {
@@ -421,15 +384,6 @@ impl ProjectionState {
             };
         };
         let member = payload.member_id.to_string();
-        let Ok(member_subject) = payload
-            .member_id
-            .canonical_key()
-            .and_then(|key| arkret_wire::composite_subject(&[key]))
-        else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
         if operation.context.sender != payload.member_id
             || payload.membership
                 != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
@@ -437,28 +391,6 @@ impl ProjectionState {
         {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),
-            };
-        }
-        let [write] = cell_writes else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
-            || cell_id.subject() != member_subject
-            || !matches!(
-                &write.op,
-                arkret_wire::cbs::ProjectedOp::TransitionTo { to }
-                    if to == &Value::String("join".to_owned())
-            )
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         }
 
@@ -477,7 +409,6 @@ impl ProjectionState {
     pub fn apply_validated_direct_conversation_bootstrap_membership(
         &mut self,
         operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
     ) -> ProjectionEffect {
         if operation.event_kind != arkret_wire::EventKind::MemberState
             || !self.realm_is_direct_conversation(operation.realm_id.as_str())
@@ -494,15 +425,6 @@ impl ProjectionState {
             };
         };
         let member = payload.member_id.to_string();
-        let Ok(member_subject) = payload
-            .member_id
-            .canonical_key()
-            .and_then(|key| arkret_wire::composite_subject(&[key]))
-        else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
         if payload.membership
                 != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
             || payload.reason.as_deref() != Some("direct_conversation_bootstrap")
@@ -510,28 +432,6 @@ impl ProjectionState {
         {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),
-            };
-        }
-        let [write] = cell_writes else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
-            || cell_id.subject() != member_subject
-            || !matches!(
-                &write.op,
-                arkret_wire::cbs::ProjectedOp::TransitionTo { to }
-                    if to == &Value::String("join".to_owned())
-            )
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         }
 
@@ -665,20 +565,16 @@ impl ProjectionState {
             );
         }
 
-        // Mirror the registry's composite ActorId subject. Realm scoping is
-        // implicit in the CellStore key, while the subject preserves the
-        // complete tagged actor (including its Station binding).
+        // The facet subject is the complete tagged actor key (including its
+        // Station binding); the Realm is the facet map's other key half.
         if let Ok(actor) = serde_json::from_value::<arkret_wire::ActorId>(
             payload.get("member_id").cloned().unwrap_or(Value::Null),
         ) && let Ok(actor_key) = actor.canonical_key()
-            && let Ok(subject) = arkret_wire::composite_subject(&[actor_key])
-            && let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                "ak:cell:ak.component.member.state.v1:{subject}"
-            ))
         {
-            self.cells.insert(
-                cell_id,
-                ResolvedCellState::Value(Value::String(new_state.to_owned())),
+            self.set_facet(
+                &realm_id,
+                FacetRef::new(facet::MEMBER_STATE, actor_key),
+                Value::String(new_state.to_owned()),
             );
         }
 
@@ -901,27 +797,6 @@ impl ProjectionState {
     /// Realm profile writes. The accepted SDK CellStore projection is the
     /// source of truth for conflict state; this service-local mirror must not
     /// infer concurrency from incomparable operation and Seal identifiers.
-    #[cfg(test)]
-    pub(crate) fn realm_profile_cell_id() -> Option<CellRef> {
-        CellRef::new(arkret_wire::REALM_PROFILE_CELL.to_owned()).ok()
-    }
-
-    pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
-        match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(arkret_wire::EventKind::RealmProfile) => {
-                let realm_id = operation.realm_id.to_string();
-                if matches!(
-                    self.realm_profile_cells.get(&realm_id),
-                    Some(ResolvedCellState::Bottom(_))
-                ) {
-                    return Err("cell_bottom_state");
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
     /// Apply a `ak.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former Realm lifecycle reducer: the function is now
     /// restricted to the canonical Realm lifecycle kinds
@@ -997,84 +872,24 @@ impl ProjectionState {
                     };
                 }
             };
-            let actor_subject = match arkret_wire::composite_subject(&[actor_key.as_str()]) {
-                Ok(subject) => subject,
-                Err(_) => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
-            };
-            let cell = match arkret_identifiers::CellRef::new(format!(
-                "ak:cell:{}:{actor_subject}",
-                arkret_wire::CellFamilyId::AGENT_STATUS_V1
-            )) {
-                Ok(cell) => cell,
-                Err(_) => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
-            };
-            let projected_transition = self
-                .projected_cell_writes()
-                .iter()
-                .find(|write| write.cell_id == cell)
-                .and_then(ProjectedCellWrite::as_direct)
-                .map(|effect| effect.op);
-            let Some(projected_transition) = projected_transition else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            };
-            if projected_transition.op_type != arkret_wire::cbs::LatticeOpType::Transition
-                || projected_transition.from.as_ref().and_then(Value::as_str)
-                    != Some("uninitialized")
-                || projected_transition.to.as_ref().and_then(Value::as_str) != Some("active")
+            let status = FacetRef::new(facet::AGENT_STATUS, actor_key.as_str());
+            if self
+                .facet_value(operation.realm_id.as_str(), &status)
+                .is_some()
+                || self.agent_lifecycles.contains_key(&actor_key)
             {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            }
-            if self.cells.contains_key(&cell) || self.agent_lifecycles.contains_key(&actor_key) {
                 return ProjectionEffect::Rejected {
                     reason: "invalid_agent_lifecycle_transition".to_owned(),
                 };
             }
-            Some((actor_key, cell))
+            Some((actor_key, status))
         } else {
             None
         };
-        let create_reducer_profile = if kind == arkret_wire::EventKind::RealmCreate {
-            let Some(profile) = payload_object
-                .and_then(|object| object.get("reducer_profile"))
-                .and_then(Value::as_str)
-            else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            };
-            if profile != arkret_wire::CORE_REDUCER_PROFILE
-                || !arkret_wire::is_reducer_profile_id(profile)
-            {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::UNSUPPORTED_PROFILE.to_owned(),
-                };
-            }
-            Some(profile.to_owned())
-        } else {
-            None
-        };
-        let creator = if kind == arkret_wire::EventKind::RealmCreate {
-            registered_authority_root_write(self.projected_cell_writes()).and_then(|value| {
-                value
-                    .get("controller_actor_id")
-                    .cloned()
-                    .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
-            })
-        } else {
-            None
-        };
+        // The Realm genesis author is the initial authority-root controller;
+        // `realm_create_payload` carries no separate owner field.
+        let creator =
+            (kind == arkret_wire::EventKind::RealmCreate).then(|| operation.context.sender.clone());
         // `realm_create_payload` is `{object}` with `additionalProperties:false`,
         // so `ak.realm.create` cannot carry a top-level `owner`: the owning
         // principal is the genesis authority-root controller.
@@ -1205,51 +1020,20 @@ impl ProjectionState {
         // cache mutation so a create that cannot establish an authority root
         // rejects the whole atomic bootstrap unit instead of materializing a
         // Realm nobody can govern.
-        let authority_root = if kind == arkret_wire::EventKind::RealmCreate {
-            let projected = registered_authority_root_write(self.projected_cell_writes());
-            let derived = match creator.as_ref() {
-                Some(creator) => match genesis_authority_root_value(payload_object, creator) {
-                    Ok(value) => value,
-                    Err(reason) => {
-                        return ProjectionEffect::Rejected {
-                            reason: reason.to_owned(),
-                        };
-                    }
-                },
-                None => match projected.clone() {
-                    Some(value) => value,
-                    None => {
-                        return ProjectionEffect::Rejected {
-                            reason: "realm_authority_root_conflict".to_owned(),
-                        };
-                    }
-                },
-            };
-            // When the caller supplied the registry projection of the signed
-            // Event, the two derivations must agree byte-for-byte: the value is
-            // a `state_root` leaf preimage, so a divergence is a forked genesis.
-            if let Some(projected) = projected
-                && projected != derived
-            {
-                return ProjectionEffect::Rejected {
-                    reason: "realm_authority_root_conflict".to_owned(),
-                };
-            }
-            Some(derived)
-        } else {
-            None
+        let authority_root = match creator.as_ref() {
+            Some(creator) => match genesis_authority_root_value(payload_object, creator) {
+                Ok(value) => Some(value),
+                Err(reason) => {
+                    return ProjectionEffect::Rejected {
+                        reason: reason.to_owned(),
+                    };
+                }
+            },
+            None => None,
         };
         let principal_genesis_resolution = if kind == arkret_wire::EventKind::RealmCreate {
             match principal_genesis_resolution_value(operation, payload_object) {
-                Ok(value) => {
-                    if value != registered_principal_resolution_write(self.projected_cell_writes())
-                    {
-                        return ProjectionEffect::Rejected {
-                            reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                        };
-                    }
-                    value
-                }
+                Ok(value) => value,
                 Err(reason) => {
                     return ProjectionEffect::Rejected {
                         reason: reason.to_owned(),
@@ -1308,18 +1092,19 @@ impl ProjectionState {
         }
         realm.updated_at = now;
 
-        // Cells map: synth a ResolvedCellState::Value per the spec cell family
-        // for this canonical kind.
+        // Facet writes for this canonical kind.
         match &kind {
             arkret_wire::EventKind::RealmCreate => {
-                self.realm_create_cells.insert(
-                    realm_id.clone(),
-                    ResolvedCellState::Value(Value::Array(vec![Value::String(realm_id.clone())])),
+                self.set_realm_facet(
+                    &realm_id,
+                    facet::REALM_CREATE,
+                    Value::Array(vec![Value::String(realm_id.clone())]),
                 );
                 if let Some(genesis) = payload_object {
-                    self.realm_null_subject_cells.insert(
-                        (realm_id.clone(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-                        ResolvedCellState::Value(Value::Object(genesis.clone())),
+                    self.set_realm_facet(
+                        &realm_id,
+                        facet::REALM_GENESIS,
+                        Value::Object(genesis.clone()),
                     );
                 }
                 if let Some(history_access) = payload_object.and_then(|object| {
@@ -1339,90 +1124,49 @@ impl ProjectionState {
                             .then_some("since_join")
                         })
                 }) {
-                    self.realm_null_subject_cells.insert(
-                        (
-                            realm_id.clone(),
-                            "ak:cell:ak.component.realm.history_access.v1:null".to_owned(),
-                        ),
-                        ResolvedCellState::Value(Value::String(history_access.to_owned())),
+                    self.set_realm_facet(
+                        &realm_id,
+                        facet::REALM_HISTORY_ACCESS,
+                        Value::String(history_access.to_owned()),
                     );
-                }
-                if let Some(notary) = payload_object.and_then(|object| object.get("notary")) {
-                    self.realm_notary_cells
-                        .insert(realm_id.clone(), ResolvedCellState::Value(notary.clone()));
                 }
                 if let Some(authority_root) = authority_root {
-                    self.realm_null_subject_cells.insert(
-                        (
-                            realm_id.clone(),
-                            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-                        ),
-                        ResolvedCellState::Value(authority_root),
-                    );
-                }
-                if let Some(reducer_profile) = create_reducer_profile {
-                    self.realm_null_subject_cells.insert(
-                        (
-                            realm_id.clone(),
-                            format!(
-                                "ak:cell:{}:null",
-                                arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
-                            ),
-                        ),
-                        ResolvedCellState::Value(Value::String(reducer_profile)),
-                    );
+                    self.set_realm_facet(&realm_id, facet::REALM_AUTHORITY_ROOT, authority_root);
                 }
                 if let Some(resolution) = principal_genesis_resolution {
-                    self.realm_null_subject_cells.insert(
-                        (realm_id.clone(), PRINCIPAL_RESOLUTION_CELL.to_owned()),
-                        ResolvedCellState::Value(resolution),
-                    );
+                    self.set_realm_facet(&realm_id, facet::IDENTITY_RESOLUTION, resolution);
                 }
                 // The Agent PCR genesis is the sole transition from
                 // the internal transition state `uninitialized` to the first public
                 // state `active`. Provision admission only reserves/declares
                 // the future PCR and must never activate this cell early.
-                if let Some((agent_actor_id, cell)) = agent_status {
-                    self.cells.insert(
-                        cell,
-                        ResolvedCellState::Value(Value::String("active".to_owned())),
-                    );
+                if let Some((agent_actor_id, status)) = agent_status {
+                    self.set_facet(&realm_id, status, Value::String("active".to_owned()));
                     self.agent_lifecycles
                         .insert(agent_actor_id, AgentLifecycleState::Active);
                 }
             }
             arkret_wire::EventKind::RealmProfile => {
-                self.realm_profile_cells.insert(
-                    realm_id.clone(),
-                    ResolvedCellState::Value(operation.payload.clone()),
-                );
+                self.set_realm_facet(&realm_id, facet::REALM_PROFILE, operation.payload.clone());
             }
             arkret_wire::EventKind::RealmArchive | arkret_wire::EventKind::RealmRestore => {
-                self.realm_null_subject_cells.insert(
-                    (
-                        realm_id.clone(),
-                        "ak:cell:ak.component.realm.archive.v1:null".to_owned(),
-                    ),
-                    ResolvedCellState::Value(Value::Bool(
-                        kind == arkret_wire::EventKind::RealmArchive,
-                    )),
+                self.set_realm_facet(
+                    &realm_id,
+                    facet::REALM_ARCHIVE,
+                    Value::Bool(kind == arkret_wire::EventKind::RealmArchive),
                 );
             }
             arkret_wire::EventKind::RealmFreeze | arkret_wire::EventKind::RealmUnfreeze => {
-                self.realm_null_subject_cells.insert(
-                    (
-                        realm_id.clone(),
-                        "ak:cell:ak.component.realm.freeze.v1:null".to_owned(),
-                    ),
-                    ResolvedCellState::Value(Value::Bool(
-                        kind == arkret_wire::EventKind::RealmFreeze,
-                    )),
+                self.set_realm_facet(
+                    &realm_id,
+                    facet::REALM_FREEZE,
+                    Value::Bool(kind == arkret_wire::EventKind::RealmFreeze),
                 );
             }
             arkret_wire::EventKind::RealmTombstone => {
-                // Stream-F (Wave 1B): tombstone writes its own terminal
-                // cell with `successor_realm_id` so peers hydrating from
-                // cells alone can distinguish migration from destroy.
+                // The tombstone facet carries `successor_realm_id` so a
+                // Station hydrating from facets alone can distinguish
+                // migration from destroy.
                 let value = serde_json::json!({
                     "terminal_kind": "tombstoned",
                     "tombstoned": true,
@@ -1430,35 +1174,22 @@ impl ProjectionState {
                     "at": arkret_canonical::format_timestamp_canonical(now),
                     "operation_id": operation.operation_id.as_str(),
                 });
-                self.realm_null_subject_cells.insert(
-                    (
-                        realm_id.clone(),
-                        "ak:cell:ak.component.realm.tombstone.v1:null".to_owned(),
-                    ),
-                    ResolvedCellState::Value(value),
-                );
+                self.set_realm_facet(&realm_id, facet::REALM_TOMBSTONE, value);
                 // Tombstone keeps child Space/Strand placement live:
                 // succession transfers the navigation surface to the
                 // successor Realm. Spec §2.5 row "tombstone" — no
                 // realm_destroyed_orphan cascade fires here.
             }
             arkret_wire::EventKind::RealmDestroy => {
-                // registered state model: terminal {destroyed: true, at: ts}.
+                // Terminal facet: {destroyed: true, at: ts}.
                 let value = serde_json::json!({
                     "terminal_kind": "destroyed",
                     "destroyed": true,
                     "at": arkret_canonical::format_timestamp_canonical(now),
                     "operation_id": operation.operation_id.as_str(),
                 });
-                self.realm_null_subject_cells.insert(
-                    (
-                        realm_id.clone(),
-                        "ak:cell:ak.component.realm.destroy.v1:null".to_owned(),
-                    ),
-                    ResolvedCellState::Value(value),
-                );
-                // Stream-F (Wave 1B): destroy cascade per spec
-                // §2.5.1 ¶6 + ¶7.
+                self.set_realm_facet(&realm_id, facet::REALM_DESTROY, value);
+                // Destroy cascade per spec §2.5.1 ¶6 + ¶7.
                 self.cascade_realm_destroy(&realm_id);
             }
             _ => {}

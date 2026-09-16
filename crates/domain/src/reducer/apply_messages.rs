@@ -5,47 +5,6 @@ use arkret_models_collaboration::events_payloads::{
 use super::*;
 
 impl ProjectionState {
-    pub(crate) fn observe_poll_dependency(&mut self, operation: &Operation) {
-        let content = operation.payload.get("content");
-        let known_non_response = operation.event_kind != arkret_wire::EventKind::MessageCreate
-            || content.and_then(content_kind).is_some_and(|kind| {
-                kind != "ak.content.poll.response" && kind != "ak.content.encrypted"
-            });
-        let changes_dependency = self
-            .poll_responses
-            .awaits_classification(&operation.context.canonical_event_digest);
-        if known_non_response
-            && self
-                .poll_responses
-                .observe_non_response(operation.context.canonical_event_digest.clone())
-                .is_ok()
-            && changes_dependency
-        {
-            self.rebuild_poll_votes(operation.created_at);
-        }
-    }
-
-    fn rebuild_poll_votes(&mut self, now: chrono::DateTime<chrono::Utc>) {
-        for poll in self.polls.values_mut() {
-            poll.votes.clear();
-        }
-        for (partition, outcome) in self.poll_responses.project() {
-            let Some(_) = outcome.winner else {
-                continue;
-            };
-            let Some(poll) = self.polls.get_mut(&partition.poll_ref) else {
-                continue;
-            };
-            if poll.realm_id != partition.realm_id
-                || poll.scope_circle_id != partition.scope_circle_id
-            {
-                continue;
-            }
-            poll.votes.insert(partition.actor_id, outcome);
-            poll.updated_at = poll.updated_at.max(now);
-        }
-    }
-
     pub(crate) fn apply_message(
         &mut self,
         operation: &Operation,
@@ -124,7 +83,6 @@ impl ProjectionState {
             encrypted,
             operation_id: operation.operation_id.to_string(),
             created_at: now,
-            history_basis_seals: operation_history_basis_seals(operation),
             revision_of: None,
             redacted_at: None,
         };
@@ -158,7 +116,6 @@ impl ProjectionState {
                 updated_at: now,
             },
         );
-        self.rebuild_poll_votes(now);
     }
 
     pub(crate) fn apply_poll_response(
@@ -196,52 +153,31 @@ impl ProjectionState {
             .answers
             .iter()
             .map(|option| option.id.clone())
-            .collect();
-        let selected = match arkret_models_collaboration::poll::validate_poll_selections(
+            .collect::<BTreeSet<_>>();
+        let selected = match validate_poll_selections(
             &response.selections,
             &valid,
             usize::try_from(poll.definition.poll.max_selections).unwrap_or(usize::MAX),
         ) {
             Ok(selected) => selected,
-            Err(error) => {
+            Err(reason) => {
                 return ProjectionEffect::Rejected {
-                    reason: error.to_string(),
+                    reason: reason.to_owned(),
                 };
             }
         };
-        let scope_circle_id = match &operation.context.accepted_scope_ref {
-            arkret_wire::ScopeRef::Realm { .. } => None,
-            arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.clone()),
-            _ => {
-                return ProjectionEffect::Rejected {
-                    reason: "poll_ref_cross_scope".to_owned(),
-                };
-            }
-        };
-        let fact = arkret_models_collaboration::poll::PollResponseFact {
-            partition: arkret_models_collaboration::poll::PollPartition {
-                realm_id: operation.realm_id.clone(),
-                scope_circle_id,
-                poll_ref: response.poll_ref.clone(),
-                actor_id: operation.context.sender.clone(),
-            },
-            selections: selected,
-            causal_refs: operation
-                .context
-                .envelope_causal_refs
-                .iter()
-                .cloned()
-                .collect(),
-        };
-        if let Err(error) = self
-            .poll_responses
-            .insert(operation.context.canonical_event_digest.clone(), fact)
-        {
+        let poll_ref = response.poll_ref.clone();
+        let actor_id = operation.context.sender.clone();
+        let Some(poll) = self.polls.get_mut(&poll_ref) else {
             return ProjectionEffect::Rejected {
-                reason: error.to_string(),
+                reason: "poll_ref_unknown".to_owned(),
             };
-        }
-        self.rebuild_poll_votes(now);
+        };
+        // The response rides the same commit stream as every other response to
+        // this poll, so the newest accepted one replaces the actor's previous
+        // selections outright.
+        poll.votes.insert(actor_id, selected);
+        poll.updated_at = poll.updated_at.max(now);
         ProjectionEffect::Ignored
     }
 
@@ -1052,4 +988,34 @@ fn rsvp_causal_refs(operation: &Operation) -> Vec<String> {
 struct PinEffectiveScope {
     realm_id: String,
     scope_circle_id: Option<String>,
+}
+
+/// Reduce one poll response against its poll definition.
+///
+/// JSON Schema cannot compare a response to the poll it references, so
+/// `max_selections` and answer-id membership are checked here
+/// (`content-block-poll.schema.json#/$defs/poll_body`).
+fn validate_poll_selections(
+    selections: &[String],
+    valid: &BTreeSet<String>,
+    max_selections: usize,
+) -> std::result::Result<Vec<String>, &'static str> {
+    if selections.is_empty() {
+        return Err("poll_selection_empty");
+    }
+    if selections.len() > max_selections {
+        return Err("poll_selection_over_max");
+    }
+    let mut selected = Vec::with_capacity(selections.len());
+    let mut seen = BTreeSet::new();
+    for selection in selections {
+        if !valid.contains(selection) {
+            return Err("poll_selection_unknown_answer");
+        }
+        if !seen.insert(selection.clone()) {
+            return Err("poll_selection_duplicate");
+        }
+        selected.push(selection.clone());
+    }
+    Ok(selected)
 }

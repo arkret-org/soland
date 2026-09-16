@@ -133,7 +133,7 @@ impl ProjectionState {
         let subject_proof = serde_json::to_value(&typed.subject_proof)
             .expect("validated subject proof remains serializable");
         let realm_policy_bundle = self
-            .realm_policy_bundle_cell_value(operation.realm_id.as_str())
+            .realm_policy_bundle_value(operation.realm_id.as_str())
             .cloned();
 
         let Some(invite) = self.invites.get_mut(&invite_id) else {

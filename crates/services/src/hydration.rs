@@ -952,7 +952,6 @@ pub async fn hydrate_projections_from_persistence(
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
-                    history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
                     // Stream-F (Wave 1B): orphaned flag is reducer-only
@@ -995,7 +994,6 @@ pub async fn hydrate_projections_from_persistence(
                     stage_changed_at: record.stage_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
-                    history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
                     schema_refs: record.schema_refs,
@@ -1141,7 +1139,6 @@ pub async fn hydrate_projections_from_persistence(
                     stage_changed_at: record.stage_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
-                    history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
                 },

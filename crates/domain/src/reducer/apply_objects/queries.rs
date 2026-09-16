@@ -7,51 +7,6 @@ use arkret_models_collaboration::governance::membership_invite::JoinGateProof;
 
 use super::*;
 
-fn is_policy_frontier_component(component: &str) -> bool {
-    (component.starts_with("ak.component.realm.")
-        && (component.contains("policy")
-            || matches!(
-                component,
-                arkret_wire::CellFamilyId::REALM_JOIN_RULE_V1
-                    | arkret_wire::CellFamilyId::REALM_HISTORY_ACCESS_V1
-                    | arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1
-                    | arkret_wire::CellFamilyId::REALM_POLICY_BUNDLE_V1
-                    | arkret_wire::CellFamilyId::REALM_PLAINTEXT_VISIBLE_SERVICES_V1
-            )))
-        || (component.starts_with("ak.component.circle.")
-            && ["policy", "history", "encryption", "lifecycle"]
-                .iter()
-                .any(|marker| component.contains(marker)))
-}
-
-fn is_membership_frontier_component(component: &str) -> bool {
-    matches!(
-        component,
-        arkret_wire::CellFamilyId::MEMBER_STATE_V1
-            | arkret_wire::CellFamilyId::MEMBER_IDENTITY_V1
-            | arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1
-            | arkret_wire::CellFamilyId::DEVICE_AUTHORIZATION_V1
-            | arkret_wire::CellFamilyId::DEVICE_LIST_UPDATE_V1
-            | arkret_wire::CellFamilyId::DEVICE_REANCHOR_V1
-    ) || component.contains("role")
-        || component.contains("account.lifecycle")
-}
-
-fn value_mentions_actor(value: &Value, actor: &Value) -> bool {
-    if value == actor {
-        return true;
-    }
-    match value {
-        Value::Array(values) => values
-            .iter()
-            .any(|value| value_mentions_actor(value, actor)),
-        Value::Object(values) => values
-            .values()
-            .any(|value| value_mentions_actor(value, actor)),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
-    }
-}
-
 impl ProjectionState {
     pub(crate) fn message_by_target_ref(&self, target_ref: &str) -> Option<&MessageState> {
         // Classify by canonical typed id, not by kind prefix: `ak:event:x` is
@@ -306,79 +261,47 @@ impl ProjectionState {
             && controller.member == controller_actor_key
     }
 
-    /// Read the transition state of a member directly from the cells map.
-    /// Returns `None` if the cell hasn't been written or is in `Bottom`
-    /// state. The cell_subject is the actor_id per spec
-    /// `ak.component.member.state.v1` cell_family declaration.
-    pub fn member_transition_state(&self, actor_id: &str) -> Option<String> {
+    /// Current membership transition state of one actor in one Realm.
+    pub fn member_transition_state(&self, realm_id: &str, actor_id: &str) -> Option<String> {
         let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
         let actor_key = actor.canonical_key().ok()?;
-        let subject = arkret_wire::composite_subject(&[actor_key]).ok()?;
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{subject}"
-        ))
-        .ok()?;
-        self.cell_value(&cell_id)
+        self.facet_value(realm_id, &FacetRef::new(facet::MEMBER_STATE, actor_key))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
     }
 
     // ── Cell-keyed query helpers ──
 
-    pub fn realm_null_subject_cell_value(
-        &self,
-        realm_id: &str,
-        cell_family: &str,
-    ) -> Option<&Value> {
-        let cell_id = format!("ak:cell:{cell_family}:null");
-        self.realm_null_subject_cells
-            .get(&(realm_id.to_owned(), cell_id))?
-            .settled_value()
+    /// Settled value of a Realm-singleton facet.
+    pub fn realm_facet_value(&self, realm_id: &str, facet: &str) -> Option<&Value> {
+        self.facet_value(realm_id, &FacetRef::singleton(facet))
     }
 
-    /// Read the effective `ak.realm.read_receipt_policy` value out of the
-    /// Realm-scoped null-subject cell cache. Returns `None` when:
-    ///   - the cell has never been written, OR
-    ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
-    pub fn read_receipt_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::REALM_READ_RECEIPT_POLICY_V1,
-        )
-    }
-
-    /// Effective Realm reducer profile. This singleton is the only profile
-    /// authority used by reducers and federation admission.
-    pub fn realm_reducer_profile(&self, realm_id: &str) -> Option<&str> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1,
-        )
-        .and_then(Value::as_str)
+    /// Effective `ak.realm.read_receipt_policy` value. `None` means no
+    /// accepted Event has set it.
+    pub fn read_receipt_policy_value(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_facet_value(realm_id, facet::REALM_READ_RECEIPT_POLICY)
     }
 
     // ── Realm lifecycle cell helpers ──
 
-    /// Read the effective display profile singleton. Returns `None` for an
-    /// absent or conflicting profile cell.
-    pub fn realm_profile_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_profile_cells.get(realm_id)?.settled_value()
+    /// Effective display profile of the Realm.
+    pub fn realm_profile_value(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_facet_value(realm_id, facet::REALM_PROFILE)
     }
 
-    /// Read the `ak.component.realm.create.v1` ordered-log entries for the
-    /// realm's genesis history. Returns `None` for realms with no create
-    /// events (e.g. before first projection) or `Bottom` state.
+    /// Accepted `ak.realm.create` entries, oldest first.
     pub fn realm_create_log(&self, realm_id: &str) -> Option<&[Value]> {
-        match self.realm_create_cells.get(realm_id)? {
-            ResolvedCellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
+        match self.realm_facet_value(realm_id, facet::REALM_CREATE)? {
+            Value::Array(entries) => Some(entries.as_slice()),
             _ => None,
         }
     }
 
     /// Immutable identity/security genesis value projected by
-    /// `ak.realm.create` into its dedicated singleton cell.
-    pub fn realm_genesis_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_GENESIS_V1)
+    /// `ak.realm.create`.
+    pub fn realm_genesis_value(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_facet_value(realm_id, facet::REALM_GENESIS)
     }
 
     /// Identifies the registered Direct Conversation Realm role from the
@@ -386,21 +309,21 @@ impl ProjectionState {
     /// Unknown, incomplete, or malformed role declarations fail closed and
     /// never fall back to member-count, title, category, or tag heuristics.
     pub fn realm_is_direct_conversation(&self, realm_id: &str) -> bool {
-        self.realm_genesis_cell_value(realm_id)
+        self.realm_genesis_value(realm_id)
             .and_then(|object| object.get("purpose"))
             .and_then(Value::as_str)
             == Some("direct_conversation")
     }
 
-    /// True when the `ak.component.realm.destroy.v1` cell has a Value.
+    /// True once an accepted `ak.realm.destroy` has written the facet.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
-        self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_DESTROY_V1)
+        self.realm_facet_value(realm_id, facet::REALM_DESTROY)
             .is_some()
     }
 
-    /// True when the `ak.component.realm.tombstone.v1` cell has a Value.
+    /// True once an accepted `ak.realm.tombstone` has written the facet.
     pub fn realm_is_tombstoned(&self, realm_id: &str) -> bool {
-        self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_TOMBSTONE_V1)
+        self.realm_facet_value(realm_id, facet::REALM_TOMBSTONE)
             .is_some()
     }
 
@@ -415,51 +338,42 @@ impl ProjectionState {
         {
             return true;
         }
-        // Fall back to cell-presence checks so peers that hydrate from
-        // cells without rebuilding `realm_states` still see terminal state.
+        // Fall back to facet presence so a Station that hydrated the
+        // projection without rebuilding `realm_states` still sees terminal
+        // state.
         self.realm_is_tombstoned(realm_id) || self.realm_is_destroyed(realm_id)
     }
 
-    /// Read the explicit facet from the canonical accepted cells. Missing
-    /// cells have the registry's initial false value; Bottom fails closed.
-    fn realm_facet_blocks(&self, realm_id: &str, family: &str) -> bool {
-        let key = (realm_id.to_owned(), format!("ak:cell:{family}:null"));
+    /// A gate facet blocks unless it is absent or explicitly `false`. Any
+    /// other shape fails closed.
+    fn realm_facet_blocks(&self, realm_id: &str, facet: &str) -> bool {
         !matches!(
-            self.realm_null_subject_cells.get(&key),
-            None | Some(ResolvedCellState::Value(Value::Bool(false)))
+            self.realm_facet_value(realm_id, facet),
+            None | Some(Value::Bool(false))
         )
     }
 
     pub fn realm_is_frozen(&self, realm_id: &str) -> bool {
-        self.realm_facet_blocks(realm_id, arkret_wire::CellFamilyId::REALM_FREEZE_V1)
+        self.realm_facet_blocks(realm_id, facet::REALM_FREEZE)
     }
 
     pub fn realm_is_archived(&self, realm_id: &str) -> bool {
-        self.realm_facet_blocks(realm_id, arkret_wire::CellFamilyId::REALM_ARCHIVE_V1)
+        self.realm_facet_blocks(realm_id, facet::REALM_ARCHIVE)
     }
 
     /// Unknown Realms and conflicting/malformed gates fail closed.
     pub fn realm_ordinary_writes_blocked(&self, realm_id: &str) -> bool {
-        (!self.realm_states.contains_key(realm_id)
-            && self.realm_genesis_cell_value(realm_id).is_none())
+        (!self.realm_states.contains_key(realm_id) && self.realm_genesis_value(realm_id).is_none())
             || self.realm_is_archived(realm_id)
             || self.realm_is_frozen(realm_id)
     }
 
-    pub fn realm_policy_bundle_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        // The registry projects `field=payload`, so authoritative Seal replay
-        // stores the generic state payload `{"value": ...}`. Live dispatch
-        // already normalizes that envelope before caching.
-        let value = self
-            .realm_policy_bundle_cells
-            .get(realm_id)?
-            .settled_value()?;
-        Some(value.get("value").unwrap_or(value))
+    pub fn realm_policy_bundle_value(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_facet_value(realm_id, facet::REALM_POLICY_BUNDLE)
     }
 
-    pub fn realm_join_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_policy_bundle_cell_value(realm_id)?
-            .get("join_policy")
+    pub fn realm_join_policy_value(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_policy_bundle_value(realm_id)?.get("join_policy")
     }
 
     /// Submit-time and reducer-time hard gate for Join Policy.
@@ -534,12 +448,6 @@ impl ProjectionState {
         raw_proofs: &[Value],
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), &'static str> {
-        if matches!(
-            self.realm_policy_bundle_cells.get(realm_id),
-            Some(ResolvedCellState::Bottom(_))
-        ) {
-            return Err("gate_check_failed");
-        }
         let join_rule = (!hard_gates_only).then(|| self.realm_default_join_rule(realm_id));
         if join_rule.is_some_and(|rule| matches!(rule, "invite" | "closed")) && is_self_authored {
             return Err("gate_check_failed");
@@ -550,7 +458,7 @@ impl ProjectionState {
         // admits, which is the silent degradation this fails closed on.
         let automatic_gate_required =
             join_rule.is_some_and(|rule| matches!(rule, "restricted" | "knock_restricted"));
-        let Some(join_policy) = self.realm_join_policy_cell_value(realm_id) else {
+        let Some(join_policy) = self.realm_join_policy_value(realm_id) else {
             return if automatic_gate_required {
                 Err("gate_check_failed")
             } else {
@@ -803,11 +711,8 @@ impl ProjectionState {
             })
     }
 
-    pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::REALM_SEARCH_POLICY_V1,
-        )
+    pub fn realm_search_policy_value(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_facet_value(realm_id, facet::REALM_SEARCH_POLICY)
     }
 
     /// R3.1 — query realm links by direction and optional link_kind
@@ -884,7 +789,7 @@ impl ProjectionState {
 
     /// Read the create-locked Realm encryption profile from genesis.
     pub fn realm_encryption_profile(&self, realm_id: &str) -> Option<String> {
-        self.realm_genesis_cell_value(realm_id)
+        self.realm_genesis_value(realm_id)
             .and_then(|genesis| genesis.get("encryption_profile"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
@@ -898,7 +803,7 @@ impl ProjectionState {
     /// description — and the policy bundle deliberately does not carry the
     /// profile either, so this create-log read is the only source.
     pub fn realm_schema_refs(&self, realm_id: &str) -> Vec<String> {
-        self.realm_genesis_cell_value(realm_id)
+        self.realm_genesis_value(realm_id)
             .and_then(|genesis| genesis.get("schema_refs"))
             .and_then(Value::as_array)
             .map(|refs| {
@@ -910,218 +815,13 @@ impl ProjectionState {
             .unwrap_or_default()
     }
 
-    /// Whether this Realm has at least one active Audit Applet Binding.
-    pub fn realm_has_active_audit_binding(&self, realm_id: &str) -> bool {
-        self.cells.iter().any(|(cell, state)| {
-            let Some(binding_id) = cell
-                .as_str()
-                .strip_prefix("ak:cell:ak.component.audit.binding.v1:")
-            else {
-                return false;
-            };
-            let ResolvedCellState::Value(config) = state else {
-                return false;
-            };
-            if config.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
-                return false;
-            }
-            let Ok(state_cell) = arkret_identifiers::CellRef::new(format!(
-                "ak:cell:ak.component.audit.binding_state.v1:{binding_id}"
-            )) else {
-                return false;
-            };
-            matches!(
-                self.cells.get(&state_cell),
-                Some(ResolvedCellState::Value(Value::String(value))) if value == "active"
-            )
-        })
-    }
-
-    /// The Realm's non-`⊥` policy control cells.
-    ///
-    /// `policy_frontier_digest` is a *filtered state root* over exactly these
-    /// cells, reusing the governance
-    /// `state_root` Merkle rules of `event-auth-state-resolution.md` §6.2.1 —
-    /// JCS leaves, cell-id order, `leaf=H(0x00||bytes)`, `node=H(0x01||l||r)`.
-    /// It is explicitly not an issuer-local opaque value, which is why this
-    /// enumerates cells rather than hashing a hand-built object: a cross-issuer
-    /// verifier has to be able to recompute the same number from the same Seal
-    /// view.
-    ///
-    /// Bottom cells are excluded: §5 covers every non-bottom policy control cell.
-    pub fn realm_policy_control_cells(
-        &self,
-        realm_id: &str,
-    ) -> BTreeMap<CellRef, arkret_state::state_model::ResolvedCellState> {
-        let mut cells = BTreeMap::new();
-        let mut insert = |wire: String, state: &arkret_state::state_model::ResolvedCellState| {
-            if matches!(
-                state,
-                arkret_state::state_model::ResolvedCellState::Bottom(_)
-            ) {
-                return;
-            }
-            if let Ok(cell_ref) = CellRef::new(wire) {
-                cells.insert(cell_ref, state.clone());
-            }
-        };
-        if let Some(bundle) = self.realm_policy_bundle_cells.get(realm_id) {
-            insert(
-                "ak:cell:ak.component.realm.policy_bundle.v1:null".to_owned(),
-                bundle,
-            );
-        }
-        for ((cell_realm_id, wire), state) in &self.realm_null_subject_cells {
-            if cell_realm_id == realm_id {
-                insert(wire.clone(), state);
-            }
-        }
-        // Realm-subject cells (families keyed by the Realm id rather than the
-        // null subject) live in the generic cell store.
-        for (cell_ref, state) in &self.cells {
-            if cell_ref.as_str().ends_with(&format!(":{realm_id}")) {
-                insert(cell_ref.as_str().to_owned(), state);
-            }
-        }
-        cells
-    }
-
-    /// `policy_frontier_digest` for this Realm.
-    ///
-    /// Delegates the leaf/sort/combine rules to the SDK so an issuer and a
-    /// verifier cannot drift; a hash assembled from policy field names would be
-    /// issuer-local and would fail the cross-issuer structured comparison the
-    /// section requires.
-    ///
-    /// This is a value frontier digest, **not** the section 6.2.1 governance
-    /// `state_root`: the two issuers comparing it hold each other's cell values,
-    /// not each other's `causal_register` write identities, and `realm-and-space.md`
-    /// section 3.6 defines this digest's own coverage.
-    pub fn realm_policy_frontier_digest(&self, realm_id: &str) -> Option<arkret_wire::Hash> {
-        let cells = self
-            .realm_policy_control_cells(realm_id)
-            .into_iter()
-            .filter(|(cell, _)| {
-                arkret_wire::cell::CellId::from_ref(cell)
-                    .map(|cell| is_policy_frontier_component(cell.component()))
-                    .unwrap_or(false)
-            })
-            .collect::<BTreeMap<_, _>>();
-        self.realm_digest_algorithm(realm_id)
-            .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
-            .and_then(|suite| arkret_state::value_frontier_digest(&cells, suite).ok())
-    }
-
-    /// Actor-scoped membership/role filtered state root used by peer authority
-    /// frontiers. Only non-bottom canonical cells that name the actor are
-    /// included; this prevents a Realm-wide member-list hash from standing in
-    /// for the actor-specific accepted membership frontier.
-    pub fn realm_membership_frontier_digest(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> Option<arkret_wire::Hash> {
-        let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
-        let actor_subject = arkret_wire::composite_subject(&[actor.canonical_key().ok()?]).ok()?;
-        let actor_value = serde_json::to_value(&actor).ok()?;
-        if !self
-            .members
-            .contains_key(&(realm_id.to_owned(), actor_id.to_owned()))
-        {
-            return None;
-        }
-        let cells = self
-            .cells
-            .iter()
-            .filter_map(|(cell_ref, state)| {
-                let cell_id = arkret_wire::cell::CellId::from_ref(cell_ref).ok()?;
-                if !is_membership_frontier_component(cell_id.component())
-                    || matches!(
-                        state,
-                        arkret_state::state_model::ResolvedCellState::Bottom(_)
-                    )
-                {
-                    return None;
-                }
-                let names_actor = cell_id.subject() == actor_subject;
-                let mentions_actor = state
-                    .settled_value()
-                    .is_some_and(|value| value_mentions_actor(value, &actor_value));
-                (names_actor || mentions_actor).then(|| (cell_ref.clone(), state.clone()))
-            })
-            .collect::<BTreeMap<_, _>>();
-        self.filtered_state_root(realm_id, &cells)
-    }
-
-    /// Issuer-local authorization commitment over the accepted policy,
-    /// actor membership/role, and actor-scoped capability cells.
-    pub fn realm_authorization_state_digest(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> Option<arkret_wire::Hash> {
-        let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
-        let actor_subject = arkret_wire::composite_subject(&[actor.canonical_key().ok()?]).ok()?;
-        let actor_value = serde_json::to_value(&actor).ok()?;
-        let mut cells = self
-            .realm_policy_control_cells(realm_id)
-            .into_iter()
-            .filter(|(cell, _)| {
-                arkret_wire::cell::CellId::from_ref(cell)
-                    .map(|cell| is_policy_frontier_component(cell.component()))
-                    .unwrap_or(false)
-            })
-            .collect::<BTreeMap<_, _>>();
-        for (cell_ref, state) in &self.cells {
-            if matches!(
-                state,
-                arkret_state::state_model::ResolvedCellState::Bottom(_)
-            ) {
-                continue;
-            }
-            let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell_ref) else {
-                continue;
-            };
-            let names_actor = cell_id.subject() == actor_subject;
-            let mentions_actor = state.settled_value().is_some_and(|value| {
-                value_mentions_actor(value, &actor_value)
-                    && (cell_id.component() != arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
-                        || grant_snapshot_from_value(value).realm_id.as_deref() == Some(realm_id))
-            });
-            if (is_membership_frontier_component(cell_id.component())
-                || cell_id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1)
-                && (names_actor || mentions_actor)
-            {
-                cells.insert(cell_ref.clone(), state.clone());
-            }
-        }
-        self.filtered_state_root(realm_id, &cells)
-    }
-
-    fn filtered_state_root(
-        &self,
-        realm_id: &str,
-        cells: &BTreeMap<CellRef, arkret_state::state_model::ResolvedCellState>,
-    ) -> Option<arkret_wire::Hash> {
-        self.realm_digest_algorithm(realm_id)
-            .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
-            .and_then(|suite| arkret_state::value_frontier_digest(cells, suite).ok())
-    }
-
+    /// Create-locked digest suite of the Realm. There is no transition Event
+    /// for it, so genesis is the only source.
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::REALM_DIGEST_SUITE_V1,
-        )
-        .and_then(|value| value.get("to_digest_algorithm"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            self.realm_genesis_cell_value(realm_id)
-                .and_then(|genesis| genesis.get("digest_algorithm"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+        self.realm_genesis_value(realm_id)
+            .and_then(|genesis| genesis.get("digest_algorithm"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
     }
 
     pub fn realm_requires_content_encryption(&self, realm_id: &str) -> bool {
@@ -1135,7 +835,7 @@ impl ProjectionState {
     /// default `allow_plaintext`. Independent of `encryption_profile`, which
     /// only declares the encryption mechanism (realm-and-space.md §2.3).
     pub fn realm_content_encryption_floor(&self, realm_id: &str) -> Option<String> {
-        let components = self.realm_policy_bundle_cell_value(realm_id)?;
+        let components = self.realm_policy_bundle_value(realm_id)?;
         policy_floor_field(components, "content_encryption_floor").map(ToOwned::to_owned)
     }
 
@@ -1144,7 +844,7 @@ impl ProjectionState {
     /// reducer default is inferred elsewhere (`e2ee_required` for MLS /
     /// e2ee_required Realms, else `allow_plaintext`).
     pub fn realm_metadata_encryption_floor(&self, realm_id: &str) -> Option<String> {
-        let components = self.realm_policy_bundle_cell_value(realm_id)?;
+        let components = self.realm_policy_bundle_value(realm_id)?;
         policy_floor_field(components, "metadata_encryption_floor").map(ToOwned::to_owned)
     }
 
@@ -1179,37 +879,20 @@ impl ProjectionState {
 
     /// Effective Realm `history_access` projected from its dedicated cell.
     pub fn realm_history_access(&self, realm_id: &str) -> Option<String> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::REALM_HISTORY_ACCESS_V1,
-        )
-        .and_then(|value| {
-            value
-                .get("value")
-                .and_then(Value::as_str)
-                .or_else(|| value.as_str())
-        })
-        .map(ToOwned::to_owned)
-    }
-
-    /// Effective Realm `durability_policy` (Realm Recovery Key, realm-and-space.md
-    /// §2.3.1), read from the same accepted MLS group Genesis binding as the
-    /// content scheme. `None` means no accepted group has frozen one — callers
-    /// treat that as the spec default `none` (no organizational recovery path).
-    /// Parsed into the authoritative SDK closed union [`arkret_wire::DurabilityPolicy`]
-    /// (soland does not redefine the spec shape).
-    pub fn realm_durability_policy(&self, realm_id: &str) -> Option<arkret_wire::DurabilityPolicy> {
-        self.realm_group_genesis_binding(realm_id)?
-            .get("durability_policy")
-            .and_then(Value::as_str)?
-            .parse()
-            .ok()
+        self.realm_facet_value(realm_id, facet::REALM_HISTORY_ACCESS)
+            .and_then(|value| {
+                value
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.as_str())
+            })
+            .map(ToOwned::to_owned)
     }
 
     /// Read the create-locked Realm `security_class` from genesis.
     pub fn realm_security_class(&self, realm_id: &str) -> Option<String> {
         // Security class is create-locked and has no mutable fallback.
-        if let Some(genesis) = self.realm_genesis_cell_value(realm_id)
+        if let Some(genesis) = self.realm_genesis_value(realm_id)
             && let Some(s) = genesis.get("security_class").and_then(Value::as_str)
         {
             return Some(s.to_owned());
@@ -1219,7 +902,7 @@ impl ProjectionState {
 
     /// Read the effective Realm federation policy from the policy bundle.
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
-        self.realm_policy_bundle_cell_value(realm_id)
+        self.realm_policy_bundle_value(realm_id)
             .and_then(|value| value.get("federation_policy"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)

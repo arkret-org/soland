@@ -29,9 +29,6 @@ pub struct PendingReplayEntry {
     pub reason: String,
     pub operation_id: String,
     pub operation: Operation,
-    /// Registry-derived cell writes of the queued Event, captured at queue time
-    /// so the deferred replay reduces the exact same projection.
-    pub cell_writes: Vec<arkret_wire::cbs::ProjectedCellWrite>,
     pub queued_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -102,8 +99,7 @@ pub struct SolandKeyBackupActiveSeries {
     pub series_pointer_version: u64,
     pub previous_series_ids: Vec<String>,
     pub record_digest: String,
-    pub frontier_ref:
-        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesFrontierRef,
+    pub source_ref: arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesSourceRef,
     pub issued_at: chrono::DateTime<chrono::Utc>,
     pub auth_data: arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesAuthData,
     pub extra: BTreeMap<String, Value>,
@@ -171,7 +167,7 @@ pub struct RealmOrganizationStatementState {
     pub supersedes_statement_id: Option<String>,
     pub revokes_statement_id: Option<String>,
     /// Digest of the Realm control frontier the organization evaluated.
-    pub realm_frontier_digest: Option<String>,
+    pub realm_commit_ref: Option<String>,
     /// Audit summary of the proof material (never the raw signature bytes).
     pub proof_digest: Option<String>,
     /// `authorization.delegation_ref` when present (delegated issuer roles).
@@ -454,7 +450,6 @@ pub struct SpaceContainerProjection {
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stream-F (Wave 1B) — `realm_destroyed_orphan` flag set by the
@@ -471,21 +466,6 @@ pub(crate) fn space_container_id_from_payload(payload: &Value) -> Option<String>
         .get("space_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-}
-
-pub(crate) fn operation_history_basis_seals(operation: &Operation) -> Vec<String> {
-    let mut seals = Vec::new();
-    if let Some(auth_context) = &operation.context.auth_context {
-        seals.extend(auth_context.authority_refs.iter().map(ToString::to_string));
-    }
-    if let Some(seal_basis) = &operation.context.seal_basis {
-        for leaf in &seal_basis.leaves {
-            seals.push(leaf.to_string());
-        }
-    }
-    seals.sort();
-    seals.dedup();
-    seals
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -558,7 +538,6 @@ pub struct StrandProjection {
     pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// AKP-0007 — the Circle this Strand is scoped to, if any (`ak:circle:…`).
@@ -628,31 +607,6 @@ pub struct CircleProjection {
     pub members: BTreeSet<String>,
 }
 
-/// One sealed audit release session (`audited-e2ee.md` sections 3-4).
-///
-/// The registered `ak.component.audit.session.v1` cell carries only the transition
-/// stage, but every later stage and the release manifest are checked against
-/// the binding and scope the session opened under, so those travel here.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AuditSessionProjection {
-    pub session_id: String,
-    pub realm_id: String,
-    pub binding_id: String,
-    /// Accepted scope, retained in the SDK type after binding validation.
-    pub effective_scope: arkret_wire::ScopeRef,
-    pub stage: arkret_models_collaboration::events_payloads::audit::AuditSessionStage,
-    pub approved_release_mode:
-        Option<arkret_models_collaboration::events_payloads::audit::AuditReleaseMode>,
-    /// Audit actor the accepted `authorize` approved as the release recipient.
-    /// Release attestation evidence has to attest this exact actor's output
-    /// path, so a release cannot present evidence for a different auditor
-    /// (`audited-e2ee.md` §6).
-    pub approved_recipient_audit_actor_id: Option<String>,
-    /// Accepted `ak.audit.session.notice` Event id. A release names it, and a
-    /// session that has none has not noticed anybody.
-    pub notice_ref: Option<String>,
-}
-
 /// First-class Agent Sidecar aggregate. Sidecars are not Circles and
 /// never acquire Circle membership or a hidden Circle/Strand backing object.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -660,9 +614,7 @@ pub struct SidecarProjection {
     pub sidecar_id: String,
     pub realm_id: String,
     pub controller_account_id: arkret_wire::AccountId,
-    pub encryption_profile:
-        arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile,
-    pub state: arkret_models_collaboration::agent_operations::AgentSidecarState,
+    pub state: arkret_models_collaboration::agent_sidecar::AgentSidecarState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -750,7 +702,6 @@ pub struct MorphProjection {
     pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -902,7 +853,6 @@ pub struct MessageState {
     pub encrypted: bool,
     pub operation_id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     /// If this is a revision, points to the original event_id.
     pub revision_of: Option<String>,
     /// If redacted, the tombstone timestamp.
@@ -969,7 +919,10 @@ pub struct PollState {
     pub realm_id: arkret_wire::RealmId,
     pub scope_circle_id: Option<arkret_wire::CircleId>,
     pub definition: arkret_models_collaboration::events_payloads::PollBlock,
-    pub votes: BTreeMap<arkret_wire::ActorId, arkret_models_collaboration::poll::PollOutcome>,
+    /// Current selection set of each responder. A poll response is an ordinary
+    /// Event on the same commit stream as the poll, so the latest accepted
+    /// response of an actor replaces the previous one outright.
+    pub votes: BTreeMap<arkret_wire::ActorId, Vec<String>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -987,7 +940,6 @@ pub struct SolandRelationState {
     pub source_event_id: Option<String>,
     pub source_event_digest: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 

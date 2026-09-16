@@ -9,6 +9,8 @@
 
 use std::fmt;
 
+use serde_json::Value;
+
 /// Facet names. Each one is a product surface the reducer maintains, named by
 /// the domain object and field it projects.
 pub mod facet {
@@ -40,11 +42,12 @@ pub mod facet {
     pub const MEMBER_STATE: &str = "member.state";
     pub const MLS_EPOCH: &str = "mls.epoch";
     pub const MODERATION_STATE: &str = "moderation.state";
+    pub const REALM_ALIAS: &str = "realm.alias";
     pub const REALM_ARCHIVE: &str = "realm.archive";
     pub const REALM_AUTHORITY_ROOT: &str = "realm.authority_root";
     pub const REALM_CREATE: &str = "realm.create";
     pub const REALM_DESTROY: &str = "realm.destroy";
-    pub const REALM_DIGEST_SUITE: &str = "realm.digest_suite";
+    pub const REALM_DISCOVERY: &str = "realm.discovery";
     pub const REALM_FREEZE: &str = "realm.freeze";
     pub const REALM_GENESIS: &str = "realm.genesis";
     pub const REALM_HISTORY_ACCESS: &str = "realm.history_access";
@@ -52,7 +55,6 @@ pub mod facet {
     pub const REALM_JOIN_RULE: &str = "realm.join_rule";
     pub const REALM_LINK: &str = "realm.link";
     pub const REALM_MEDIA_SERVICE: &str = "realm.media_service";
-    pub const REALM_NOTARY: &str = "realm.notary";
     pub const REALM_ORGANIZATION: &str = "realm.organization";
     pub const REALM_PLAINTEXT_VISIBLE_SERVICES: &str = "realm.plaintext_visible_services";
     pub const REALM_POLICY: &str = "realm.policy";
@@ -90,6 +92,15 @@ impl FacetRef {
         Self::new(facet, String::new())
     }
 
+    /// A facet whose subject is an ordered tuple of domain identifiers.
+    ///
+    /// The parts are joined with `/`, which no Arkret identifier contains, so
+    /// the encoding stays injective without a length prefix.
+    #[must_use]
+    pub fn composite(facet: &str, parts: &[&str]) -> Self {
+        Self::new(facet, parts.join("/"))
+    }
+
     #[must_use]
     pub fn facet(&self) -> &str {
         &self.facet
@@ -114,4 +125,17 @@ impl fmt::Display for FacetRef {
             write!(f, "{}/{}", self.facet, self.subject)
         }
     }
+}
+
+/// The settled value of one facet plus the revision the Station has reached
+/// for it.
+///
+/// `revision` counts accepted writes to this facet, starting at 1. A producer
+/// that carries an `expected_revision` precondition (for example
+/// `ak.moderation.decision.lift`) names exactly this number, so a stale
+/// decision is rejected instead of silently overwriting a newer one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettledFacet {
+    pub revision: u64,
+    pub value: Value,
 }

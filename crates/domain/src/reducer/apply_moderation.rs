@@ -35,53 +35,6 @@ fn moderation_request_canonical_digest(operation: &Operation) -> Option<String> 
     payload_str(operation, "request_canonical_digest")
 }
 
-/// The 0-based index of `ak.component.moderation_state.v1` in the
-/// `ak.moderation.decision` registry `cell_writes[]`. The contract declares
-/// exactly one write.
-const MODERATION_DECISION_WRITE_INDEX: usize = 0;
-
-/// or_set add dot for `ak.moderation.decision`.
-///
-/// The registry row projects `{"kind":"or_set_add","tag":{"dot":true}}`, so the
-/// tag is the registered dot of `event-and-patch.md` §2.4.2 —
-/// `ak:event:<event_id>:<write_index>`. This used to be
-/// `<decision_kind>:<issuer>:<request_digest>`, which no peer folding the same
-/// Event would reproduce, and which `ak.moderation.decision.lift` cannot name:
-/// `content-moderation.md` §5.5.1 makes lift remove producer-enumerated
-/// `observed_dot_ids[]`, and those dots are this value.
-fn moderation_add_tag(operation: &Operation) -> Option<String> {
-    let event_id = operation.context.event_id.as_str();
-    Some(arkret_schema::or_set_dot(
-        event_id,
-        MODERATION_DECISION_WRITE_INDEX,
-    ))
-}
-
-/// The removal set of `ak.moderation.decision.lift`.
-///
-/// `content-moderation.md` §2.6: the payload MUST carry `observed_dot_ids[]`, the
-/// removal set is byte-equal to it, and every dot's `event_id` segment MUST
-/// equal the full `decision_ref` Event token. A dot appends `:<write_index>`
-/// to that token; §2.4.2 provides no `event_ref -> dot`
-/// derivation, so the two are checked against each other rather than one being
-/// computed from the other. Returns `None` — fail closed — when the field is
-/// absent, empty, malformed, or names a dot belonging to another decision.
-fn moderation_lift_observed_dots(operation: &Operation, decision_ref: &str) -> Option<Vec<String>> {
-    let dots = operation.payload.get("observed_dot_ids")?.as_array()?;
-    if dots.is_empty() {
-        return None;
-    }
-    let expected_prefix = format!("{decision_ref}:");
-    dots.iter()
-        .map(|dot| {
-            let dot = dot.as_str()?;
-            let write_index = dot.strip_prefix(&expected_prefix)?;
-            (!write_index.is_empty() && write_index.bytes().all(|byte| byte.is_ascii_digit()))
-                .then(|| dot.to_owned())
-        })
-        .collect()
-}
-
 fn moderation_value_targets_ref(value: &Value, target_ref: &str) -> bool {
     let Some(value_target_ref) = value.get("target_ref").and_then(Value::as_str) else {
         return false;
@@ -91,49 +44,36 @@ fn moderation_value_targets_ref(value: &Value, target_ref: &str) -> bool {
 }
 
 impl ProjectionState {
-    fn moderation_state_cell_ref(target_ref: &str) -> Option<CellRef> {
-        CellRef::new(format!(
-            "ak:cell:ak.component.moderation_state.v1:{target_ref}"
-        ))
-        .ok()
-    }
-
-    /// Read the current or_set item array for a moderation_state cell (empty
-    /// when the cell is absent / Bottom / not an array).
-    fn moderation_cell_items(&self, cell_ref: &CellRef) -> Vec<Value> {
-        match self.cells.get(cell_ref) {
-            Some(ResolvedCellState::Value(Value::Array(items))) => items.clone(),
-            _ => Vec::new(),
-        }
+    /// Every accepted entry on one target's moderation-state facet.
+    ///
+    /// The facet is a keyed set: each entry carries the `(issuer_id,
+    /// request_canonical_digest)` add tag named by
+    /// `content-moderation.md` §2.6, so a lift removes exactly the entry its
+    /// `decision_ref` produced and never another issuer's decision.
+    fn moderation_entries(&self, realm_id: &str, target_ref: &str) -> Vec<Value> {
+        self.facet_value(
+            realm_id,
+            &FacetRef::new(facet::MODERATION_STATE, target_ref),
+        )
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
     }
 
     /// Fold every live decision for one target using the normative tightening
     /// order `hard_deny > quarantine > require_review > none`.
-    ///
-    /// Arrival order and issuer count are deliberately irrelevant: the cell
-    /// is an OR-Set and concurrent decisions are ordinary joinable state.
     pub fn effective_moderation_verdict(&self, target_ref: &str) -> &'static str {
         let mut rank = 0_u8;
-        for (cell_ref, state) in &self.cells {
-            if !cell_ref
-                .as_str()
-                .starts_with("ak:cell:ak.component.moderation_state.v1:")
-            {
+        for (key, settled) in &self.facets {
+            if key.1.facet() != facet::MODERATION_STATE {
                 continue;
             }
-            let ResolvedCellState::Value(Value::Array(items)) = state else {
+            let Some(items) = settled.value.as_array() else {
                 continue;
             };
             for item in items {
                 let value = item.get("value").unwrap_or(item);
                 if !moderation_value_targets_ref(value, target_ref) {
-                    continue;
-                }
-                if value
-                    .get("lifted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
                     continue;
                 }
                 rank = rank.max(match value.get("decision").and_then(Value::as_str) {
@@ -158,17 +98,10 @@ impl ProjectionState {
 
     #[cfg(test)]
     fn moderation_items_for_decision(&self, decision_id: &str) -> Vec<Value> {
-        self.cells
+        self.facets
             .iter()
-            .filter(|(cell_ref, _)| {
-                cell_ref
-                    .as_str()
-                    .starts_with("ak:cell:ak.component.moderation_state.v1:")
-            })
-            .flat_map(|(_, state)| match state {
-                ResolvedCellState::Value(Value::Array(items)) => items.clone(),
-                _ => Vec::new(),
-            })
+            .filter(|(key, _)| key.1.facet() == facet::MODERATION_STATE)
+            .flat_map(|(_, settled)| settled.value.as_array().cloned().unwrap_or_default())
             .filter(|item| {
                 let value = item.get("value").unwrap_or(item);
                 value
@@ -179,39 +112,24 @@ impl ProjectionState {
             .collect()
     }
 
-    /// True when any surviving or_set item on this moderation_state cell is
-    /// observed-removed (lifted). Drives the §2.6 terminal rule: once a
-    /// decision_id is lifted, re-adds stay lifted.
-    #[cfg(test)]
-    fn moderation_cell_has_lifted_item(items: &[Value]) -> bool {
-        items.iter().any(|item| {
-            let value = item.get("value").unwrap_or(item);
-            value
-                .get("lifted")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
-    }
-
-    /// True when the moderation_state cell for `decision_id` exists and is
-    /// NOT lifted — i.e. there is a live decision under this id. Used by the
-    /// `modify` atomicity check (the new decision MUST already be present).
+    /// True when a live entry for `decision_id` is present on its target's
+    /// moderation-state facet. Used by the `modify` atomicity check (the new
+    /// decision MUST already be present).
     #[cfg(test)]
     pub(crate) fn moderation_decision_is_live(&self, decision_id: &str) -> bool {
-        let items = self.moderation_items_for_decision(decision_id);
-        !items.is_empty() && !Self::moderation_cell_has_lifted_item(&items)
+        !self.moderation_items_for_decision(decision_id).is_empty()
     }
 
-    /// True when the moderation_state cell for `decision_id` exists and is
-    /// lifted. Used by the `overturn` atomicity check.
+    /// True when a decision this Station projected has since been lifted: the
+    /// decision is known but its keyed-set entry is gone.
     #[cfg(test)]
     pub(crate) fn moderation_decision_is_lifted(&self, decision_id: &str) -> bool {
-        let items = self.moderation_items_for_decision(decision_id);
-        !items.is_empty() && Self::moderation_cell_has_lifted_item(&items)
+        self.moderation_decisions.contains_key(decision_id)
+            && self.moderation_items_for_decision(decision_id).is_empty()
     }
 
     /// Reverse-resolve the issuer of the decision named by `decision_id` from
-    /// the moderation_state cell. Returns `None` when the decision was never
+    /// the moderation-state facet. Returns `None` when the decision was never
     /// projected here (causal / backfill tolerance — separation-of-duties is
     /// only enforced when we can observe the original decision's issuer).
     #[cfg(test)]
@@ -284,18 +202,11 @@ impl ProjectionState {
                 realm_id,
             };
         }
-        let Some(cell_ref) = Self::moderation_state_cell_ref(&target_ref) else {
-            return ProjectionEffect::Rejected {
-                reason: "moderation_decision_cell_ref_invalid".to_owned(),
-            };
-        };
-
-        let mut items = self.moderation_cell_items(&cell_ref);
-        let Some(tag) = moderation_add_tag(operation) else {
-            return ProjectionEffect::Rejected {
-                reason: "moderation_decision_add_dot_unresolved".to_owned(),
-            };
-        };
+        let target_ref_key = target_ref.clone();
+        let mut items = self.moderation_entries(&realm_id, &target_ref);
+        // `content-moderation.md` §2.6 — the keyed-set add tag is
+        // `(issuer_id, request_canonical_digest)`.
+        let tag = format!("{issuer}/{request_digest}");
         let Ok(decision) = operation.typed_payload::<arkret_wire::event_spec::ModerationDecision>()
         else {
             return ProjectionEffect::Rejected {
@@ -307,7 +218,7 @@ impl ProjectionState {
         let mut value = operation.payload.clone();
         if let Value::Object(map) = &mut value {
             map.insert("decision_id".to_owned(), Value::String(decision_id.clone()));
-            map.insert("target_ref".to_owned(), Value::String(target_ref));
+            map.insert("target_ref".to_owned(), Value::String(target_ref.clone()));
             map.insert("decision".to_owned(), Value::String(decision_kind));
             map.insert("issuer_id".to_owned(), Value::String(issuer));
             map.insert(
@@ -317,12 +228,16 @@ impl ProjectionState {
             map.entry("realm_id".to_owned())
                 .or_insert_with(|| Value::String(realm_id.clone()));
         }
+        items.retain(|item| item.get("tag").and_then(Value::as_str) != Some(tag.as_str()));
         items.push(serde_json::json!({
             "tag": tag,
             "value": value,
         }));
-        self.cells
-            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
+        self.set_facet(
+            &realm_id,
+            FacetRef::new(facet::MODERATION_STATE, &target_ref_key),
+            Value::Array(items),
+        );
 
         ProjectionEffect::ModerationDecisionProjected {
             decision_id,
@@ -330,17 +245,15 @@ impl ProjectionState {
         }
     }
 
-    /// P2 — project `ak.moderation.decision.lift` as the registered
-    /// `or_set_remove_dots` on the moderation_state cell keyed by
-    /// `payload.target_ref`.
+    /// Project `ak.moderation.decision.lift` as the keyed-set removal of the
+    /// entry the named `decision_ref` produced.
     ///
-    /// `content-moderation.md` §2.6 makes the removal set **byte-equal** to
-    /// `payload.observed_dot_ids[]`, and requires each dot's `event_id` segment to
-    /// equal the `decision_ref` uuid — that pair is the machine-readable form of
-    /// "lifting one review must not implicitly lift another issuer's decision". This used to
-    /// select by `decision_id` and mark every matching add lifted, which is the
-    /// `or_set_remove_observed` shape §2.6 forbids by name for exactly that
-    /// reason. Idempotent: re-lifting an already-removed dot converges.
+    /// `content-moderation.md` §2.6 — the lift removes exactly the entry whose
+    /// tag the referenced decision wrote, so lifting one review never
+    /// implicitly lifts another issuer's decision. `expected_revision` is the
+    /// exact moderation-target revision the producer observed; a different
+    /// current revision rejects the Event as stale, while an exact retry stays
+    /// idempotent.
     pub(crate) fn apply_moderation_decision_lift(
         &mut self,
         operation: &Operation,
@@ -356,54 +269,41 @@ impl ProjectionState {
                 reason: "moderation_lift_target_ref_missing".to_owned(),
             };
         };
-        let Some(observed_dot_ids) = moderation_lift_observed_dots(operation, &decision_id) else {
+        let Some(expected_revision) = operation
+            .payload
+            .get("expected_revision")
+            .and_then(Value::as_u64)
+        else {
             return ProjectionEffect::Rejected {
-                reason: "moderation_lift_observed_dots_invalid".to_owned(),
+                reason: "moderation_lift_expected_revision_missing".to_owned(),
             };
         };
         let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::moderation_state_cell_ref(&target_ref) else {
+        let target = FacetRef::new(facet::MODERATION_STATE, &target_ref);
+        if self.facet_revision(&realm_id, &target) != expected_revision {
             return ProjectionEffect::Rejected {
-                reason: "moderation_lift_cell_ref_invalid".to_owned(),
+                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
-        };
-
-        let mut items = self.moderation_cell_items(&cell_ref);
-        let lifted_at = arkret_canonical::format_timestamp_canonical(now);
-        for dot in &observed_dot_ids {
-            let existing = items
-                .iter_mut()
-                .find(|item| item.get("tag").and_then(Value::as_str) == Some(dot.as_str()));
-            match existing {
-                Some(item) => {
-                    let target = if item.get("value").is_some() {
-                        item.get_mut("value").expect("value present")
-                    } else {
-                        item
-                    };
-                    if let Value::Object(map) = target {
-                        map.insert("lifted".to_owned(), Value::Bool(true));
-                        map.entry("lifted_at".to_owned())
-                            .or_insert_with(|| Value::String(lifted_at.clone()));
-                    }
-                }
-                // Lift-before-decision, or a decision this server never
-                // projected. An OR-Set remove has to record the dot, or a later
-                // add carrying it would revive what was already removed.
-                None => items.push(serde_json::json!({
-                    "tag": dot,
-                    "value": {
-                        "decision_id": decision_id.clone(),
-                        "target_ref": target_ref.clone(),
-                        "realm_id": realm_id.clone(),
-                        "lifted": true,
-                        "lifted_at": lifted_at,
-                    },
-                })),
-            }
         }
-        self.cells
-            .insert(cell_ref, ResolvedCellState::Value(Value::Array(items)));
+        let _ = now;
+        let mut items = self.moderation_entries(&realm_id, &target_ref);
+        let before = items.len();
+        items.retain(|item| {
+            item.get("value")
+                .unwrap_or(item)
+                .get("decision_id")
+                .and_then(Value::as_str)
+                != Some(decision_id.as_str())
+        });
+        if items.len() == before {
+            // A lift that observes no entry of its own decision is either a
+            // lift-before-decision or a lift of somebody else's tag; under a
+            // linear commit stream neither is an ordering artefact.
+            return ProjectionEffect::Rejected {
+                reason: "moderation_lift_decision_not_projected".to_owned(),
+            };
+        }
+        self.set_facet(&realm_id, target, Value::Array(items));
 
         ProjectionEffect::ModerationDecisionLifted {
             decision_id,

@@ -216,13 +216,6 @@ fn apply_realm_profile_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmProfile)
 }
-fn apply_realm_upgrade_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_upgrade(op)
-}
 fn apply_realm_archive_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -272,12 +265,12 @@ fn apply_realm_owner_transfer_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmOwnerTransfer)
 }
-fn apply_realm_authority_reset_dispatch(
+fn apply_realm_governance_station_change_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmAuthorityReset)
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmGovernanceStationChange)
 }
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
@@ -285,20 +278,6 @@ fn apply_realm_set_default_strand_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_set_default_strand(op, op.created_at)
-}
-fn apply_realm_notary_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_notary(op)
-}
-fn apply_realm_digest_suite_transition_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_digest_suite_transition(op)
 }
 fn apply_space_container_create_dispatch(
     s: &mut ProjectionState,
@@ -674,38 +653,6 @@ fn apply_call_create_dispatch(
     s.apply_call_create(op)
 }
 
-fn apply_audit_binding_create_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_audit_binding_create(op)
-}
-
-fn apply_audit_binding_state_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_audit_binding_state(op)
-}
-
-fn apply_audit_session_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_audit_session(op)
-}
-
-fn apply_audit_release_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_audit_release(op)
-}
-
 /// Dispatch for `ak.call.state`; cell family is
 /// `ak.component.call.state.v1` (`cell_subject = payload.call_id`).
 fn apply_call_state_dispatch(
@@ -992,10 +939,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_realm_profile_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::RealmUpgrade,
-        apply_realm_upgrade_dispatch,
-    );
-    m.insert(
         arkret_wire::EventKind::RealmArchive,
         apply_realm_archive_dispatch,
     );
@@ -1024,21 +967,13 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_realm_owner_transfer_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::RealmAuthorityReset,
-        apply_realm_authority_reset_dispatch,
+        arkret_wire::EventKind::RealmGovernanceStationChange,
+        apply_realm_governance_station_change_dispatch,
     );
     // COT-06-004 — Realm default-Strand pointer.
     m.insert(
         arkret_wire::EventKind::RealmSetDefaultStrand,
         apply_realm_set_default_strand_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmNotary,
-        apply_realm_notary_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmDigestSuiteTransition,
-        apply_realm_digest_suite_transition_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::SpaceCreate,
@@ -1212,37 +1147,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::CallCreate,
         apply_call_create_dispatch,
     );
-    m.insert(
-        arkret_wire::EventKind::AuditAppletBindingCreate,
-        apply_audit_binding_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AuditAppletBindingState,
-        apply_audit_binding_state_dispatch,
-    );
-    // `audited-e2ee.md` sections 3-4 — the sealed release session and its
-    // release manifests. Without these the four release gates
-    // (binding / scope / notice / non-retroactive) have no evaluation point.
-    m.insert(
-        arkret_wire::EventKind::AuditSessionRequest,
-        apply_audit_session_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AuditSessionAuthorize,
-        apply_audit_session_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AuditSessionNotice,
-        apply_audit_session_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AuditSessionClose,
-        apply_audit_session_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AuditRelease,
-        apply_audit_release_dispatch,
-    );
     // `ak.call.state` — durable call lifecycle + recording/transcribe/
     // moderation projection. Cell family `ak.component.call.state.v1`,
     // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
@@ -1315,25 +1219,9 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     // governance binding projection.
     // Canonical event kinds — the publish/claim distinction lives at the
     // HTTP operation_id layer and is conveyed inside the kind's payload
-    // via `action ∈ {"publish","claim"}`; the event log itself stores
-    // only the canonical `ak.mls.keypackage` kind.
-    // Deferred (TODO(G3.S1-followup)): decryption_pending. See
-    // `reducer/mls.rs`.
-    m.insert(
-        arkret_wire::EventKind::MlsKeypackage,
-        apply_mls_keypackage_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MlsWelcome,
-        apply_mls_welcome_dispatch,
-    );
     m.insert(
         arkret_wire::EventKind::MlsGenesis,
         apply_mls_genesis_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MlsProposal,
-        apply_mls_proposal_dispatch,
     );
     m.insert(arkret_wire::EventKind::MlsCommit, apply_mls_commit_dispatch);
     for kind in EventKind::ALL.iter().filter(|kind| kind.is_reducer_input()) {

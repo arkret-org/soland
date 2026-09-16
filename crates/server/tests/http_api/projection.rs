@@ -548,7 +548,6 @@ async fn projection_morphs_endpoint_filters_circle_scope_body() {
                     stage_changed_at: None,
                     created_by: fixture_account_actor(&state, "did:web:alice.example").to_string(),
                     created_at: now,
-                    history_basis_seals: Vec::new(),
                     updated_by: None,
                     updated_at: None,
                 },
@@ -890,7 +889,6 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
             stage_changed_at: None,
             created_by: fixture_account_actor(&state, "did:web:alice.example").to_string(),
             created_at: now,
-            history_basis_seals: Vec::new(),
             updated_by: None,
             updated_at: None,
             schema_refs: Vec::new(),
@@ -916,7 +914,6 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
             source_event_id: None,
             source_event_digest: Some(format!("sha256:{}", "1".repeat(64))),
             created_at: now,
-            history_basis_seals: Vec::new(),
             updated_at: now,
         }
     };
@@ -951,7 +948,6 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
                 stage_changed_at: None,
                 created_by: fixture_account_actor(&state, "did:web:alice.example").to_string(),
                 created_at: now,
-                history_basis_seals: Vec::new(),
                 updated_by: None,
                 updated_at: None,
             },

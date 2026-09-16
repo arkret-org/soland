@@ -28,7 +28,6 @@ fn seed_strand(state: &mut ProjectionState, strand_id: &str, circle_id: Option<&
             stage_changed_at: None,
             created_by: "ak:did_core:web:alice.example".to_owned(),
             created_at: now,
-            history_basis_seals: Vec::new(),
             updated_by: None,
             updated_at: None,
             scope_circle_id: circle_id.map(ToOwned::to_owned),

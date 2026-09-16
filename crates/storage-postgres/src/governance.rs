@@ -442,7 +442,7 @@ impl RealmOrganizationStatementStore for PgRealmOrganizationStatementStore {
             "INSERT INTO realm_organizations \
              (realm_id, organization_id, relationship, statement_id, status, control_scopes, \
               issued_at, not_before, expires_at, supersedes_statement_id, revokes_statement_id, \
-              realm_frontier_digest, proof_digest, delegation_ref, issuer_role, updated_at) \
+              realm_commit_ref, proof_digest, delegation_ref, issuer_role, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
              ON CONFLICT (realm_id, organization_id, relationship) DO UPDATE SET \
                statement_id = EXCLUDED.statement_id, \
@@ -453,7 +453,7 @@ impl RealmOrganizationStatementStore for PgRealmOrganizationStatementStore {
                expires_at = EXCLUDED.expires_at, \
                supersedes_statement_id = EXCLUDED.supersedes_statement_id, \
                revokes_statement_id = EXCLUDED.revokes_statement_id, \
-               realm_frontier_digest = EXCLUDED.realm_frontier_digest, \
+               realm_commit_ref = EXCLUDED.realm_commit_ref, \
                proof_digest = EXCLUDED.proof_digest, \
                delegation_ref = EXCLUDED.delegation_ref, \
                issuer_role = EXCLUDED.issuer_role, \
@@ -470,7 +470,7 @@ impl RealmOrganizationStatementStore for PgRealmOrganizationStatementStore {
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
         .bind::<Nullable<Text>, _>(&record.supersedes_statement_id)
         .bind::<Nullable<Text>, _>(&record.revokes_statement_id)
-        .bind::<Nullable<Text>, _>(&record.realm_frontier_digest)
+        .bind::<Nullable<Text>, _>(&record.realm_commit_ref)
         .bind::<Nullable<Text>, _>(&record.proof_digest)
         .bind::<Nullable<Text>, _>(&record.delegation_ref)
         .bind::<Text, _>(&record.issuer_role)
@@ -488,7 +488,7 @@ impl RealmOrganizationStatementStore for PgRealmOrganizationStatementStore {
         sql_query(
             "SELECT realm_id, organization_id, relationship, statement_id, status, control_scopes, \
                     issued_at, not_before, expires_at, supersedes_statement_id, \
-                    revokes_statement_id, realm_frontier_digest, proof_digest, delegation_ref, \
+                    revokes_statement_id, realm_commit_ref, proof_digest, delegation_ref, \
                     issuer_role, updated_at \
              FROM realm_organizations \
              ORDER BY realm_id, organization_id, relationship",
@@ -528,7 +528,7 @@ struct RealmOrganizationStatementRow {
     #[diesel(sql_type = Nullable<Text>)]
     revokes_statement_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
-    realm_frontier_digest: Option<String>,
+    realm_commit_ref: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     proof_digest: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -552,7 +552,7 @@ impl From<RealmOrganizationStatementRow> for RealmOrganizationStatementRecord {
             expires_at: row.expires_at,
             supersedes_statement_id: row.supersedes_statement_id,
             revokes_statement_id: row.revokes_statement_id,
-            realm_frontier_digest: row.realm_frontier_digest,
+            realm_commit_ref: row.realm_commit_ref,
             proof_digest: row.proof_digest,
             delegation_ref: row.delegation_ref,
             issuer_role: row.issuer_role,

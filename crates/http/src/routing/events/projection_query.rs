@@ -142,7 +142,6 @@ fn projection_row_visible_to_session(
     session: &SessionRecord,
     sender: &str,
     created_at: DateTime<Utc>,
-    _history_basis_seals: &[String],
     scope_circle_id: Option<&str>,
     history_access: &str,
 ) -> bool {
@@ -405,7 +404,6 @@ struct DocumentRelationSnapshot {
 struct TargetRowVisibilitySnapshot {
     sender: String,
     created_at: DateTime<Utc>,
-    history_basis_seals: Vec<String>,
     scope_circle_id: Option<String>,
 }
 
@@ -460,7 +458,6 @@ fn target_info_for_relation_ref(
             Some(TargetRowVisibilitySnapshot {
                 sender: space.created_by.clone(),
                 created_at: space.created_at,
-                history_basis_seals: space.history_basis_seals.clone(),
                 scope_circle_id: space.scope_circle_id.clone(),
             }),
         );
@@ -480,7 +477,6 @@ fn target_info_for_relation_ref(
             Some(TargetRowVisibilitySnapshot {
                 sender: strand.created_by.clone(),
                 created_at: strand.created_at,
-                history_basis_seals: strand.history_basis_seals.clone(),
                 scope_circle_id: strand.scope_circle_id.clone(),
             }),
         );
@@ -500,7 +496,6 @@ fn target_info_for_relation_ref(
             Some(TargetRowVisibilitySnapshot {
                 sender: morph.created_by.clone(),
                 created_at: morph.created_at,
-                history_basis_seals: morph.history_basis_seals.clone(),
                 scope_circle_id: morph.scope_circle_id.clone(),
             }),
         );
@@ -536,7 +531,6 @@ fn target_info_for_relation_ref(
                 Some(TargetRowVisibilitySnapshot {
                     sender: message.sender.clone(),
                     created_at: message.created_at,
-                    history_basis_seals: message.history_basis_seals.clone(),
                     scope_circle_id: message_scope_circle_id(message).map(ToOwned::to_owned),
                 }),
             );
@@ -638,7 +632,6 @@ async fn document_relation_target_row_visible(
         session,
         &row.sender,
         row.created_at,
-        &row.history_basis_seals,
         row.scope_circle_id.as_deref(),
         &history_access,
     )
@@ -865,7 +858,6 @@ fn document_projection_comments(
                 session,
                 &message.sender,
                 message.created_at,
-                &message.history_basis_seals,
                 message_scope_circle_id(message),
                 history_access,
             )
@@ -1210,7 +1202,6 @@ async fn get_strand_projection(
         &session,
         &strand.created_by,
         strand.created_at,
-        &strand.history_basis_seals,
         strand.scope_circle_id.as_deref(),
         &history_access,
     ) {
@@ -1317,7 +1308,6 @@ mod relation_actor_endpoint_tests {
             stage_changed_at: None,
             created_by: creator.to_string(),
             created_at: Utc::now(),
-            history_basis_seals: Vec::new(),
             updated_by: Some(editor.to_string()),
             updated_at: None,
         };
@@ -1503,7 +1493,6 @@ mod relation_actor_endpoint_tests {
                     source_event_id: Some(event.to_string()),
                     source_event_digest: None,
                     created_at: Utc::now(),
-                    history_basis_seals: vec![],
                     updated_at: Utc::now(),
                 },
             );
@@ -1690,7 +1679,6 @@ async fn get_document_projection(
             &session,
             &morph.created_by,
             morph.created_at,
-            &morph.history_basis_seals,
             morph.scope_circle_id.as_deref(),
             &history_access,
         ) {
@@ -1752,7 +1740,6 @@ async fn list_morph_projections(
                 &session,
                 &m.created_by,
                 m.created_at,
-                &m.history_basis_seals,
                 m.scope_circle_id.as_deref(),
                 &history_access,
             )

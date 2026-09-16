@@ -929,7 +929,6 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
                 stage_changed_at: None,
                 created_by: "ak:did_core:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),
-                history_basis_seals: Vec::new(),
                 updated_by: None,
                 updated_at: None,
                 schema_refs: Vec::new(),
@@ -2615,7 +2614,6 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                         .to_owned(),
                 ),
                 created_at: now,
-                history_basis_seals: Vec::new(),
                 updated_at: now,
             },
         );

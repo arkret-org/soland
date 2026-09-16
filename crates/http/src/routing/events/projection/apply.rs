@@ -730,7 +730,7 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         expires_at: row.expires_at,
         supersedes_statement_id: row.supersedes_statement_id,
         revokes_statement_id: row.revokes_statement_id,
-        realm_frontier_digest: row.realm_frontier_digest,
+        realm_commit_ref: row.realm_commit_ref,
         proof_digest: row.proof_digest,
         delegation_ref: row.delegation_ref,
         issuer_role: row.issuer_role,

@@ -10,13 +10,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::RealmId;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
 use arkret_wire::{AppletId, ProfileId};
 use serde_json::Value;
 
+use super::facets::{FacetRef, SettledFacet, facet};
 use super::*;
-use super::facets::{FacetRef, facet};
 use crate::hlc::ServerHlc;
 
 /// In-memory projection state produced by the reducer.
@@ -50,7 +50,6 @@ pub struct ProjectionState {
     /// Poll projections keyed by poll_id. Poll create is a message content
     /// block; current votes are derived from the complete response causal set.
     pub polls: BTreeMap<arkret_wire::MessageId, PollState>,
-    pub poll_responses: arkret_models_collaboration::poll::PollResponseSet,
     /// Structured side-band cache keyed by
     /// `(realm_id, actor_id)`. Holds the transition state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
@@ -106,7 +105,7 @@ pub struct ProjectionState {
     /// Event kinds that carry no facet -- `ak.message.*`, `ak.reaction.*`,
     /// `ak.read_cursor.advance`, `ak.relation.*`, `ak.redaction` -- keep their
     /// own structured fields above.
-    pub facets: BTreeMap<(String, FacetRef), Value>,
+    pub facets: BTreeMap<(String, FacetRef), SettledFacet>,
     /// Effective `default_join_rule`, keyed by Realm. This mirrors the
     /// bootstrap/create value and later sealed join-rule facet so admission
     /// can select the protocol's C-axis gates without inventing a Realm id
@@ -136,8 +135,6 @@ pub struct ProjectionState {
     pub circles: BTreeMap<String, CircleProjection>,
     /// First-class Sidecars keyed by `sidecar_id`.
     pub sidecars: BTreeMap<String, SidecarProjection>,
-    /// Sealed audit release sessions keyed by `audit_session_id`.
-    pub audit_sessions: BTreeMap<String, AuditSessionProjection>,
     /// Native source-context mappings keyed by `(sidecar_id, kind:id)`.
     pub sidecar_contexts: BTreeMap<(String, String), SidecarContextProjection>,
     /// Accepted control ref that created each Sidecar.
@@ -294,7 +291,6 @@ impl ProjectionState {
                 reason: reason.clone(),
                 operation_id: operation_id.clone(),
                 operation: operation.clone(),
-                cell_writes: self.projected_cell_writes.clone(),
                 queued_at: operation.created_at,
             });
         }
@@ -403,10 +399,7 @@ impl ProjectionState {
                     continue;
                 };
                 for entry in entries {
-                    let restored =
-                        std::mem::replace(&mut self.projected_cell_writes, entry.cell_writes);
                     let _ = self.apply_once(&entry.operation, hlc);
-                    self.projected_cell_writes = restored;
                     replayed += 1;
                 }
             }
@@ -435,13 +428,6 @@ impl ProjectionState {
                 reason: "recipient_id_mismatch".to_owned(),
             };
         }
-        let account_id = scope
-            .account_id
-            .canonical_key()
-            .expect("validated AccountId has canonical JCS bytes");
-        let actor_id =
-            serde_json::to_value(arkret_wire::ActorId::account(scope.account_id.clone()))
-                .expect("validated AccountId serializes as ActorId");
         let device_id = scope.device_id.as_str();
         let push_route = scope.push_route.as_str();
 
@@ -450,41 +436,6 @@ impl ProjectionState {
             device_id: device_id.to_owned(),
             push_route: push_route.to_owned(),
         };
-        let private_registry = match arkret_lattice_registry::build_actor_private_registry() {
-            Ok(registry) => registry,
-            Err(error) => {
-                return ProjectionEffect::Rejected {
-                    reason: format!("push_route_private_registry_unavailable:{error}"),
-                };
-            }
-        };
-        let derived_subject = match private_registry.derive_subject(
-            arkret_wire::EventKind::DevicePushRoute.as_str(),
-            &actor_id,
-            &operation.payload,
-        ) {
-            Ok(subject) => subject,
-            Err(error) => {
-                return ProjectionEffect::Rejected {
-                    reason: format!("push_route_private_subject_invalid:{error}"),
-                };
-            }
-        };
-        let expected_subject =
-            match arkret_wire::composite_subject(&[&account_id, device_id, push_route]) {
-                Ok(subject) => subject,
-                Err(error) => {
-                    return ProjectionEffect::Rejected {
-                        reason: format!("push_route_private_subject_invalid:{error}"),
-                    };
-                }
-            };
-        if derived_subject != expected_subject {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_private_subject_mismatch".to_owned(),
-            };
-        }
-
         let expected_revision = payload.expected_revision();
         let incoming_revision = match expected_revision.checked_add(1) {
             Some(revision) => revision,
@@ -494,54 +445,11 @@ impl ProjectionState {
                 };
             }
         };
-        let incoming_value = serde_json::to_value(&payload)
-            .expect("validated push-route payload remains serializable");
-        let current = self.push_routes.get(&subject).map(|value| {
-            arkret_lattice_registry::ActorPrivateCandidate {
-                value: serde_json::json!({
-                    "account_id": &subject.account_id,
-                    "device_id": &subject.device_id,
-                    "push_route": &subject.push_route,
-                    "push_target_id": &value.push_target_id,
-                    "push_gateway_id": &value.push_gateway_id,
-                    "encryption_key": &value.encryption_key,
-                    "capabilities": &value.capabilities,
-                    "revoked": value.revoked,
-                }),
-                revision: Some(value.revision),
-                expected_revision: None,
-                causal_order: None,
-                hlc: None,
-                device_id: None,
-            }
-        });
-        let incoming = arkret_lattice_registry::ActorPrivateCandidate {
-            value: incoming_value,
-            revision: Some(incoming_revision),
-            expected_revision: Some(expected_revision),
-            causal_order: None,
-            hlc: None,
-            device_id: None,
-        };
-        match private_registry.apply(
-            "ak.private.device.push_route.v1",
-            current.as_ref(),
-            incoming,
-        ) {
-            Ok(
-                arkret_lattice_registry::ActorPrivateMergeOutcome::Accepted(_)
-                | arkret_lattice_registry::ActorPrivateMergeOutcome::Unchanged(_),
-            ) => {}
-            Ok(arkret_lattice_registry::ActorPrivateMergeOutcome::Conflict) => {
-                return ProjectionEffect::Rejected {
-                    reason: "push_route_cas_conflict".to_owned(),
-                };
-            }
-            Err(error) => {
-                return ProjectionEffect::Rejected {
-                    reason: format!("push_route_private_merge_failed:{error}"),
-                };
-            }
+        let current_revision = self.push_routes.get(&subject).map(|value| value.revision);
+        if current_revision.unwrap_or(0) != expected_revision {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_cas_conflict".to_owned(),
+            };
         }
 
         match payload {
@@ -593,9 +501,8 @@ impl ProjectionState {
     }
 
     fn store_push_route_cell(&mut self, subject: PushRouteSubject, value: PushRouteCellValue) {
-        // Actor-private routes are deliberately absent from `cells`: that map
-        // feeds Realm CBS/Seal/state-root resolution. The recipient Station keeps this revision-CAS
-        // value only in its private projection.
+        // Actor-private routes never enter the shared Realm projection: the
+        // recipient Station keeps this revision-CAS value privately.
         self.push_routes.insert(subject, value);
     }
 
@@ -604,13 +511,26 @@ impl ProjectionState {
     /// `None` means no accepted Event has written that facet yet. A total
     /// commit order leaves no conflict state to report.
     pub fn facet_value(&self, realm_id: &str, facet: &FacetRef) -> Option<&Value> {
-        self.facets.get(&(realm_id.to_owned(), facet.clone()))
+        self.facets
+            .get(&(realm_id.to_owned(), facet.clone()))
+            .map(|settled| &settled.value)
+    }
+
+    /// Number of accepted writes to a facet. `0` means it has never been
+    /// written, which is what an `expected_revision` precondition on a
+    /// first write names.
+    pub fn facet_revision(&self, realm_id: &str, facet: &FacetRef) -> u64 {
+        self.facets
+            .get(&(realm_id.to_owned(), facet.clone()))
+            .map_or(0, |settled| settled.revision)
     }
 
     /// Write a facet of one Realm. The caller has already established that the
     /// Event was accepted and committed, so the write is unconditional.
     pub fn set_facet(&mut self, realm_id: &str, facet: FacetRef, value: Value) {
-        self.facets.insert((realm_id.to_owned(), facet), value);
+        let key = (realm_id.to_owned(), facet);
+        let revision = self.facets.get(&key).map_or(0, |settled| settled.revision) + 1;
+        self.facets.insert(key, SettledFacet { revision, value });
     }
 
     /// Write a Realm-singleton facet.
@@ -620,7 +540,9 @@ impl ProjectionState {
 
     /// Remove a facet of one Realm.
     pub fn clear_facet(&mut self, realm_id: &str, facet: &FacetRef) -> Option<Value> {
-        self.facets.remove(&(realm_id.to_owned(), facet.clone()))
+        self.facets
+            .remove(&(realm_id.to_owned(), facet.clone()))
+            .map(|settled| settled.value)
     }
 
     /// Every settled facet of one Realm, in facet order.
@@ -628,9 +550,10 @@ impl ProjectionState {
         self.facets
             .iter()
             .filter(move |((realm, _), _)| realm == realm_id)
-            .map(|((_, facet), value)| (facet, value))
+            .map(|((_, facet), settled)| (facet, &settled.value))
     }
-    pub fn child_order_cell_value(&self, parent_space_id: &str) -> Value {
+    /// Settled `container.order` facet value of one parent Space.
+    pub fn child_order_facet_value(&self, parent_space_id: &str) -> Value {
         let mut children = self
             .space_containers
             .values()
@@ -663,7 +586,7 @@ impl ProjectionState {
             })
             .collect::<Vec<_>>();
         serde_json::json!({
-            "schema": CHILD_ORDER_CELL_FAMILY,
+            "facet": facet::CONTAINER_ORDER,
             "parent_space_id": parent_space_id,
             "order": order,
             "children": entries,
@@ -698,7 +621,6 @@ impl ProjectionState {
                 source_event_id: None,
                 source_event_digest: None,
                 created_at: now,
-                history_basis_seals: Vec::new(),
                 updated_at: now,
             });
         relation.realm_id = realm_id.to_owned();
@@ -758,9 +680,6 @@ impl ProjectionState {
                 reason: "unregistered_reducer_event_kind".to_owned(),
             },
         };
-        if !matches!(effect, ProjectionEffect::Rejected { .. }) {
-            self.observe_poll_dependency(operation);
-        }
         effect
     }
 
@@ -806,11 +725,7 @@ impl ProjectionState {
             };
         };
         if !kind.is_reducer_input() {
-            let effect = self.apply_non_reducer_event(kind, operation);
-            if !matches!(effect, ProjectionEffect::Rejected { .. }) {
-                self.observe_poll_dependency(operation);
-            }
-            return effect;
+            return self.apply_non_reducer_event(kind, operation);
         }
         self.apply_projected(operation, hlc)
     }

@@ -1,17 +1,12 @@
 use super::*;
 
-const RESOLUTION_CELL: &str = super::apply_realm_lifecycle::PRINCIPAL_RESOLUTION_CELL;
-
 impl ProjectionState {
     /// Read the resolution singleton of one explicitly selected PCR.
     ///
     /// Multiple PCRs may share a principal core, so this API deliberately
     /// cannot discover a supposedly global current PCR from `principal_id`.
     pub fn principal_resolution_for_realm(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::IDENTITY_RESOLUTION_V1,
-        )
+        self.facet_value(realm_id, &FacetRef::singleton(facet::IDENTITY_RESOLUTION))
     }
 
     pub(crate) fn apply_identity_resolution_update(
@@ -31,16 +26,13 @@ impl ProjectionState {
                 reason: "identity_resolution_wrong_realm".to_owned(),
             };
         }
-        let Some(current) = self
-            .realm_null_subject_cells
-            .get(&(operation.realm_id.to_string(), RESOLUTION_CELL.to_owned()))
-            .and_then(ResolvedCellState::settled_value)
-            .cloned()
-        else {
+        let realm_id = operation.realm_id.to_string();
+        let resolution = FacetRef::singleton(facet::IDENTITY_RESOLUTION);
+        if self.facet_value(&realm_id, &resolution).is_none() {
             return ProjectionEffect::Rejected {
                 reason: "identity_resolution_missing".to_owned(),
             };
-        };
+        }
         let Some(next) = operation.payload.get("next").and_then(Value::as_object) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
@@ -65,17 +57,6 @@ impl ProjectionState {
                 reason: "identity_resolution_predecessor_mismatch".to_owned(),
             };
         }
-        let preconditions = &operation.context.preconditions;
-        if preconditions.len() != 1
-            || preconditions[0].cell_id.as_str() != RESOLUTION_CELL
-            || preconditions[0].predicate.op != arkret_wire::cbs::PredicateOp::HeadEq
-            || preconditions[0].predicate.value.as_ref() != Some(&current)
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::FAILED_PRECONDITION.to_owned(),
-            };
-        }
-
         let mut expected = next.clone();
         expected.insert(
             "resolution_event_ref".to_owned(),
@@ -85,27 +66,9 @@ impl ProjectionState {
             "updated_at".to_owned(),
             Value::String(utc_timestamp_z(operation.created_at)),
         );
-        let expected = Value::Object(expected);
-        let projected = self
-            .projected_cell_writes()
-            .iter()
-            .filter(|write| write.cell_id.as_str() == RESOLUTION_CELL)
-            .filter_map(ProjectedCellWrite::as_direct)
-            .collect::<Vec<_>>();
-        if projected.len() != 1
-            || projected[0].op.op_type != arkret_wire::cbs::LatticeOpType::Set
-            || projected[0].op.value.as_ref() != Some(&expected)
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        }
-        self.realm_null_subject_cells.insert(
-            (operation.realm_id.to_string(), RESOLUTION_CELL.to_owned()),
-            ResolvedCellState::Value(expected),
-        );
+        self.set_facet(&realm_id, resolution, Value::Object(expected));
         ProjectionEffect::RealmLifecycle {
-            realm_id: operation.realm_id.to_string(),
+            realm_id,
             action: operation.event_kind.as_str().to_owned(),
         }
     }

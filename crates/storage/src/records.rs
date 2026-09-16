@@ -1135,7 +1135,7 @@ pub struct RealmOrganizationStatementRecord {
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub supersedes_statement_id: Option<String>,
     pub revokes_statement_id: Option<String>,
-    pub realm_frontier_digest: Option<String>,
+    pub realm_commit_ref: Option<String>,
     pub proof_digest: Option<String>,
     pub delegation_ref: Option<String>,
     pub issuer_role: String,

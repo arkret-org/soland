@@ -528,7 +528,6 @@ fn install_projected_strand_scope(
             stage_changed_at: None,
             created_by: local_actor_id(state, created_by).to_string(),
             created_at: now,
-            history_basis_seals: Vec::new(),
             updated_by: None,
             updated_at: None,
             schema_refs: Vec::new(),

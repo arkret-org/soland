@@ -37,20 +37,14 @@ use serde_json::json;
 
 use super::{ProjectionState, RealmInheritancePolicyState};
 
-/// Projection-local cell id for a Realm Link composite subject.
+/// Projection-local facet coordinate of one directed Realm Link.
 ///
-/// The protocol subject is `(target_realm_id, link_kind)` inside an enclosing
-/// Realm. `ProjectionState::cells` is a flat process-wide map, so its local key
-/// prepends that enclosing Realm before applying the SDK's canonical composite
-/// subject hash. This key is internal and is never emitted as the wire subject.
-pub fn realm_link_projection_cell_ref(
-    source_realm_id: &str,
-    target_realm_id: &str,
-    link_kind: &str,
-) -> Option<arkret_identifiers::CellRef> {
-    let subject =
-        arkret_wire::composite_subject(&[source_realm_id, target_realm_id, link_kind]).ok()?;
-    arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.realm.link.v1:{subject}")).ok()
+/// The subject is `(target_realm_id, link_kind)`; the enclosing Realm is the
+/// other half of the facet map key. This coordinate is internal to the
+/// Station's projection and never appears on the wire.
+#[must_use]
+pub fn realm_link_facet(target_realm_id: &str, link_kind: &str) -> super::FacetRef {
+    super::FacetRef::composite(super::facet::REALM_LINK, &[target_realm_id, link_kind])
 }
 
 /// Inheritance mode emitted on the effective-policy response.

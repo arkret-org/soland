@@ -126,7 +126,6 @@ impl ProjectionState {
             stage_changed_at: None,
             created_by,
             created_at: now,
-            history_basis_seals: operation_history_basis_seals(operation),
             updated_by: None,
             updated_at: None,
             scope_circle_id: object

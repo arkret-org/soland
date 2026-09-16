@@ -684,7 +684,6 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
             stage_changed_at: record.stage_changed_at,
             created_by: record.created_by.clone(),
             created_at: record.created_at,
-            history_basis_seals: record.history_basis_seals.clone(),
             updated_by: record.updated_by.clone(),
             updated_at: record.updated_at,
         };

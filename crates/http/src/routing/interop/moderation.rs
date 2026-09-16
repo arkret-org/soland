@@ -1312,7 +1312,6 @@ mod report_safety_tests {
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0000-7000-8000-000000000777".to_owned(),
                 created_at: chrono::Utc::now(),
-                history_basis_seals: Vec::new(),
                 revision_of: None,
                 redacted_at: None,
             },

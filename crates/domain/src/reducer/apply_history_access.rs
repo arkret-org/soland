@@ -1,8 +1,5 @@
 use super::*;
 
-const REALM_HISTORY_ACCESS_CELL: &str = "ak:cell:ak.component.realm.history_access.v1:null";
-const CIRCLE_HISTORY_ACCESS_FAMILY: &str = arkret_wire::CellFamilyId::CIRCLE_HISTORY_ACCESS_V1;
-
 fn valid_history_access(value: &str) -> bool {
     matches!(value, "since_join" | "all_history_for_current_members")
 }
@@ -29,14 +26,8 @@ impl ProjectionState {
         }
 
         let realm_id = operation.realm_id.to_string();
-        let key = (realm_id.clone(), REALM_HISTORY_ACCESS_CELL.to_owned());
-        let current = self
-            .realm_null_subject_cells
-            .get(&key)
-            .and_then(|state| match state {
-                ResolvedCellState::Value(Value::String(value)) => Some(value.as_str()),
-                _ => None,
-            });
+        let key = FacetRef::singleton(facet::REALM_HISTORY_ACCESS);
+        let current = self.facet_value(&realm_id, &key).and_then(Value::as_str);
         match current {
             None if from.is_none() => {}
             None => {
@@ -66,8 +57,7 @@ impl ProjectionState {
             };
         }
 
-        self.realm_null_subject_cells
-            .insert(key, ResolvedCellState::Value(Value::String(to.to_owned())));
+        self.set_facet(&realm_id, key, Value::String(to.to_owned()));
         ProjectionEffect::RealmBootstrapFacetProjected {
             realm_id,
             kind: arkret_wire::EventKind::RealmHistoryAccess
@@ -123,15 +113,12 @@ impl ProjectionState {
         }
 
         circle.history_access = to.to_owned();
-        let Ok(cell) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:{CIRCLE_HISTORY_ACCESS_FAMILY}:{circle_id}"
-        )) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        self.cells
-            .insert(cell, ResolvedCellState::Value(Value::String(to.to_owned())));
+        let realm_id = operation.realm_id.to_string();
+        self.set_facet(
+            &realm_id,
+            FacetRef::new(facet::CIRCLE_HISTORY_ACCESS, &circle_id),
+            Value::String(to.to_owned()),
+        );
         ProjectionEffect::CircleLifecycle {
             circle_id,
             new_state: CircleLifecycleState::Active,

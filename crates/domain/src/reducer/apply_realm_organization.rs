@@ -38,6 +38,7 @@ use arkret_models_collaboration::{
 };
 use arkret_policy::{NoDelegationResolver, verify_realm_organization_statement};
 
+use super::facets::{FacetRef, facet};
 use super::{ProjectionEffect, ProjectionState, RealmOrganizationStatementState};
 
 impl ProjectionState {
@@ -120,7 +121,7 @@ impl ProjectionState {
         // `{organization_id}::{relationship}` subject. This mirrors the SDK
         // `RealmOrganization::subject_for_effect` form exactly so the inline
         // cache and the Move/Seal cell store agree.
-        if let Some(cell_id) = Self::realm_organization_cell_id(&organization_id, &relationship) {
+        {
             let value = serde_json::json!({
                 "statement_id": payload.statement_id,
                 "realm_id": realm_id,
@@ -132,9 +133,10 @@ impl ProjectionState {
                 "updated_at": arkret_canonical::format_timestamp_canonical(now),
                 "operation_id": operation.operation_id.as_str(),
             });
-            self.cells.insert(
-                cell_id,
-                arkret_state::state_model::ResolvedCellState::Value(value),
+            self.set_facet(
+                &realm_id,
+                Self::realm_organization_facet(&organization_id, &relationship),
+                value,
             );
         }
 
@@ -150,10 +152,7 @@ impl ProjectionState {
             expires_at: payload.expires_at,
             supersedes_statement_id: payload.supersedes_statement_id.clone(),
             revokes_statement_id: payload.revokes_statement_id.clone(),
-            realm_frontier_digest: payload
-                .realm_frontier_digest
-                .as_ref()
-                .map(|hash| hash.as_str().to_owned()),
+            realm_commit_ref: payload.realm_commit_ref.as_ref().map(ToString::to_string),
             proof_digest: proof_digest(&payload.authorization.proof),
             delegation_ref: payload.authorization.delegation_ref.clone(),
             issuer_role: issuer_role_str(&payload).to_owned(),
@@ -176,19 +175,15 @@ impl ProjectionState {
         }
     }
 
-    /// SOL-ORG-02 — the canonical `ak.component.realm.organization.v1` cell id
-    /// for a `(organization_id, relationship)` pair. The subject form mirrors
-    /// the SDK `RealmOrganization::subject_for_effect` (`{org}::{rel}`).
-    pub(crate) fn realm_organization_cell_id(
+    /// Facet coordinate of one `(organization_id, relationship)` statement.
+    pub(crate) fn realm_organization_facet(
         organization_id: &arkret_wire::DidCoreId,
         relationship: &str,
-    ) -> Option<arkret_identifiers::CellRef> {
-        let subject =
-            arkret_wire::composite_subject(&[organization_id.as_str(), relationship]).ok()?;
-        arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.organization.v1:{subject}"
-        ))
-        .ok()
+    ) -> FacetRef {
+        FacetRef::composite(
+            facet::REALM_ORGANIZATION,
+            &[organization_id.as_str(), relationship],
+        )
     }
 
     // ── SOL-ORG-05 — verified-relationship + effective-policy reads ──
@@ -300,7 +295,6 @@ pub(crate) fn control_scope_str(scope: RealmOrganizationControlScope) -> &'stati
         S::OfficialBadge => "official_badge",
         S::RealmAdmin => "realm_admin",
         S::NotaryControl => "notary_control",
-        S::DurabilityPolicy => "durability_policy",
         S::ModerationPolicy => "moderation_policy",
         S::RetentionPolicy => "retention_policy",
         S::DirectoryListing => "directory_listing",

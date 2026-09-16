@@ -83,13 +83,17 @@ db-shell:
 db-url:
     @echo "{{ local_database_url }}"
 
-# Format Rust sources.
+# Scoped to this repository's own packages on purpose. The Arkret SDK is a
+# sibling path dependency in this workspace, and `cargo fmt --all` reaches into
+# that repository and rewrites its sources.
 fmt:
-    cargo +nightly fmt --all
+    cargo +nightly fmt -p soland -p soland-contracts -p soland-domain -p soland-http -p soland-keystore-keygen -p soland-services -p soland-storage -p soland-storage-postgres -p soland-test-support -p xtask
 
-# Check Rust formatting.
+# Scoped to this repository's own packages on purpose. The Arkret SDK is a
+# sibling path dependency in this workspace, and `cargo fmt --all` reaches into
+# that repository and rewrites its sources.
 fmt-check:
-    cargo +nightly fmt --all -- --check
+    cargo +nightly fmt -p soland -p soland-contracts -p soland-domain -p soland-http -p soland-keystore-keygen -p soland-services -p soland-storage -p soland-storage-postgres -p soland-test-support -p xtask -- --check
 
 # Check the default Cargo targets.
 check:

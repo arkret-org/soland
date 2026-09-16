@@ -69,7 +69,6 @@ pub struct MorphProjectionRecord {
     pub stage_changed_at: Option<DateTime<Utc>>,
     pub created_by: String,
     pub created_at: DateTime<Utc>,
-    pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
 }

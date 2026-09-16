@@ -118,10 +118,10 @@ async fn list_realm_organizations_impl(
                 .iter()
                 .map(|s| de_str("control_scope", s))
                 .collect::<Result<Vec<_>, _>>()?;
-            let realm_frontier_digest = row
-                .realm_frontier_digest
+            let realm_commit_ref = row
+                .realm_commit_ref
                 .as_deref()
-                .map(|s| de_str::<Hash>("realm_frontier_digest", s))
+                .map(|s| de_str::<Hash>("realm_commit_ref", s))
                 .transpose()?;
             relationships.push(RealmOrganizationRelationshipRow {
                 statement_id: row.statement_id.clone(),
@@ -134,7 +134,7 @@ async fn list_realm_organizations_impl(
                 expires_at: row.expires_at,
                 supersedes_statement_id: row.supersedes_statement_id.clone(),
                 revokes_statement_id: row.revokes_statement_id.clone(),
-                realm_frontier_digest,
+                realm_commit_ref,
                 issuer_role: de_str("issuer_role", &row.issuer_role)?,
                 delegation_ref: row.delegation_ref.clone(),
                 lifecycle_phase,

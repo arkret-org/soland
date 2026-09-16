@@ -1,6 +1,4 @@
 use super::*;
-const KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY: &str =
-    arkret_wire::CellFamilyId::KEY_BACKUP_ACTIVE_SERIES_V1;
 
 impl ProjectionState {
     pub(crate) fn apply_key_backup_active_series(
@@ -57,19 +55,17 @@ impl ProjectionState {
             series_pointer_version: head.series_pointer_version,
             previous_series_ids,
             record_digest: head.record_digest,
-            frontier_ref: record.frontier_ref.clone(),
+            source_ref: record.source_ref.clone(),
             issued_at: record.issued_at,
             auth_data: record.auth_data.clone(),
             extra: record.extra.clone(),
             event_id: operation.context.event_id.to_string(),
         };
-        let subject = active_series_subject(&actor_id, &backup_kind);
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
-        )) {
-            self.cells
-                .insert(cell_id, ResolvedCellState::Value(operation.payload.clone()));
-        }
+        self.set_facet(
+            operation.realm_id.as_str(),
+            FacetRef::composite(facet::KEY_BACKUP_ACTIVE_SERIES, &[&actor_id, &backup_kind]),
+            operation.payload.clone(),
+        );
         self.key_backup_active_series
             .insert(pointer_key, projection);
 
@@ -130,13 +126,5 @@ fn rejected(reason: &str) -> ProjectionEffect {
 }
 
 fn backup_class_wire(backup_kind: arkret_models_crypto::BackupKind) -> &'static str {
-    match backup_kind {
-        arkret_models_crypto::BackupKind::SecretStorage => "secret_storage",
-        arkret_models_crypto::BackupKind::MlsHistory => "mls_history",
-    }
-}
-
-fn active_series_subject(actor_id: &str, backup_kind: &str) -> String {
-    arkret_wire::composite_subject(&[actor_id, backup_kind])
-        .expect("string cell-subject parts always have canonical JSON encoding")
+    backup_kind.as_str()
 }

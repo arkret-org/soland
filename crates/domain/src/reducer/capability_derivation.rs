@@ -7,7 +7,6 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::CellRef;
 use serde_json::Value;
 
 use super::{ProjectionState, RealmInheritancePolicyState};
@@ -216,18 +215,7 @@ pub(crate) fn find_capability_grant(
     state: &ProjectionState,
     requested_ref: &str,
 ) -> Option<CapabilityGrantSnapshot> {
-    let cell_ref = CellRef::new(format!(
-        "ak:cell:{}:{requested_ref}",
-        arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
-    ))
-    .ok()?;
-    let arkret_state::ResolvedCellState::Sequenced(current) = state.cells.get(&cell_ref)? else {
-        return None;
-    };
-    let [entry] = current.value.as_array()?.as_slice() else {
-        return None;
-    };
-    let mut snapshot = grant_snapshot_from_value(entry.get("value")?);
+    let mut snapshot = grant_snapshot_from_value(state.capability_grant_value(requested_ref)?);
     if snapshot.realm_id.is_none() {
         snapshot.realm_id = state
             .capability_grant_metadata

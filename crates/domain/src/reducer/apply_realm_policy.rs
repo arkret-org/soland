@@ -1,358 +1,77 @@
+use arkret_models_collaboration::events_payloads::call::{
+    CallCreatePayload, CallLifecycleState, CallModerationDelta, CallRecordingStartPayload,
+    CallRecordingState, CallRosterDelta, CallStatePayload, CallSummaryPayload, CallTranscriptState,
+    RecordingCaptureKind,
+};
+
 use super::*;
 
 impl ProjectionState {
-    pub(crate) fn apply_audit_binding_create(&mut self, operation: &Operation) -> ProjectionEffect {
-        if operation.payload.get("binding_id").is_some() {
-            return ProjectionEffect::Rejected {
-                reason: "audit_binding_id_must_be_event_derived".to_owned(),
-            };
-        }
-        let event_id = operation.context.event_id.clone();
-        let binding_id = arkret_identifiers::AuditBindingId::from_event_id(&event_id).to_string();
-        let config_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.audit.binding.v1:{binding_id}"
-        ))
-        .ok();
-        let state_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.audit.binding_state.v1:{binding_id}"
-        ))
-        .ok();
-        let (Some(config_cell), Some(state_cell)) = (config_cell, state_cell) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-
-        let projected = self.projected_cell_writes();
-        let config_value = projected
-            .iter()
-            .find(|write| write.cell_id == config_cell)
-            .and_then(ProjectedCellWrite::as_direct)
-            .filter(|direct| direct.op.op_type == arkret_wire::cbs::LatticeOpType::Set)
-            .and_then(|direct| direct.op.value.clone());
-        let state_transition = projected
-            .iter()
-            .find(|write| write.cell_id == state_cell)
-            .and_then(ProjectedCellWrite::as_direct)
-            .map(|direct| direct.op);
-        let (Some(config_value), Some(state_transition)) = (config_value, state_transition) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        if state_transition.op_type != arkret_wire::cbs::LatticeOpType::Transition
-            || state_transition.from.as_ref() != Some(&Value::Null)
-            || state_transition.to.as_ref().and_then(Value::as_str) != Some("active")
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        }
-        if let Some(existing) = self.cells.get(&config_cell) {
-            if existing != &ResolvedCellState::Value(config_value.clone())
-                || self.cells.get(&state_cell)
-                    != Some(&ResolvedCellState::Value(Value::String(
-                        "active".to_owned(),
-                    )))
-            {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
-                };
-            }
-        } else {
-            if self.cells.contains_key(&state_cell) {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
-                };
-            }
-            self.cells
-                .insert(config_cell, ResolvedCellState::Value(config_value));
-            self.cells.insert(
-                state_cell,
-                ResolvedCellState::Value(Value::String("active".to_owned())),
-            );
-        }
-        ProjectionEffect::AuditBindingProjected {
-            binding_id,
-            state: "active".to_owned(),
-        }
-    }
-
-    pub(crate) fn apply_audit_binding_state(&mut self, operation: &Operation) -> ProjectionEffect {
-        let Some(binding_id) = operation
-            .payload
-            .get("binding_id")
-            .and_then(Value::as_str)
-            .filter(|value| arkret_identifiers::AuditBindingId::new((*value).to_owned()).is_ok())
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "audit_binding_id_required".to_owned(),
-            };
-        };
-        let Ok(config_cell) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.audit.binding.v1:{binding_id}"
-        )) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let Ok(state_cell) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.audit.binding_state.v1:{binding_id}"
-        )) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        if !matches!(
-            self.cells.get(&config_cell),
-            Some(ResolvedCellState::Value(_))
-        ) {
-            return ProjectionEffect::Rejected {
-                reason: "audit_binding_unresolved".to_owned(),
-            };
-        }
-        let Some(op) = self
-            .projected_cell_writes()
-            .iter()
-            .find(|write| write.cell_id == state_cell)
-            .and_then(ProjectedCellWrite::as_direct)
-            .map(|direct| direct.op)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let from = op.from.as_ref().and_then(Value::as_str);
-        let to = op.to.as_ref().and_then(Value::as_str);
-        let legal = matches!(
-            (from, to),
-            (Some("active"), Some("suspended" | "revoked"))
-                | (Some("suspended"), Some("active" | "revoked"))
-        );
-        let current = self.cells.get(&state_cell).and_then(|cell| match cell {
-            ResolvedCellState::Value(Value::String(value)) => Some(value.as_str()),
-            _ => None,
-        });
-        if op.op_type != arkret_wire::cbs::LatticeOpType::Transition || !legal {
-            return ProjectionEffect::Rejected {
-                reason: "audit_binding_state_transition_invalid".to_owned(),
-            };
-        }
-        if current != from {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
-            };
-        }
-        let state = to.expect("legal audit transition has a target").to_owned();
-        self.cells.insert(
-            state_cell,
-            ResolvedCellState::Value(Value::String(state.clone())),
-        );
-        ProjectionEffect::AuditBindingProjected { binding_id, state }
-    }
-
-    fn set_realm_null_subject_cell(&mut self, realm_id: &str, family: &str, value: Value) {
-        self.realm_null_subject_cells.insert(
-            (realm_id.to_owned(), format!("ak:cell:{family}:null")),
-            ResolvedCellState::Value(value),
-        );
-    }
-
-    /// Apply one closed Realm-bootstrap registered state model facet.
+    /// Apply one closed Realm-bootstrap facet.
     ///
-    /// The write itself is not read off the wire — the v1 Event carries no
-    /// producer `effects[]`. It comes from the registry contract evaluated by
-    /// `arkret_schema::project_registered_cell_writes`, so Soland keeps no
-    /// second event-kind -> cell-family table. Every one of these facets
-    /// registers exactly one `causal_register` write on a `null`-subject cell
-    /// whose value is the whole payload object; this process-wide projection
-    /// cache scopes those Realm-singleton cells by Realm so two Realms cannot
-    /// overwrite one another.
-    pub fn apply_validated_realm_bootstrap_facet(
-        &mut self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-    ) -> ProjectionEffect {
+    /// Each of these kinds writes exactly one Realm-singleton facet whose
+    /// value is the whole accepted payload, and each is write-once: the
+    /// bootstrap sequence declares the Realm's opening policy and a second
+    /// accepted Event of the same kind would be a silent redefinition.
+    pub fn apply_realm_bootstrap_facet(&mut self, operation: &Operation) -> ProjectionEffect {
         let kind = operation.event_kind.clone();
-        if kind != arkret_wire::EventKind::RealmPolicyBundle
-            && !matches!(
-                &kind,
-                arkret_wire::EventKind::RealmAlias
-                    | arkret_wire::EventKind::RealmJoinRule
-                    | arkret_wire::EventKind::RealmDiscovery
-                    | arkret_wire::EventKind::RealmPlaintextVisibleServices
-            )
-        {
-            return ProjectionEffect::Rejected {
-                reason: "out_of_order_bootstrap".to_owned(),
-            };
-        }
-        let [write] = cell_writes else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let Some(direct) = write.as_direct() else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let Some(value) = direct.op.value.clone() else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
         if kind == arkret_wire::EventKind::RealmPolicyBundle {
-            // Projection Operations carry receiver-only metadata such as
-            // event_id/sender/hlc beside their Event payload. The registered
-            // cell write is the authoritative closed policy-bundle value, so
-            // feed that value to the deny-unknown-fields typed reducer rather
-            // than accidentally treating projection metadata as wire fields.
-            let mut canonical = operation.clone();
-            canonical.payload = value;
-            return self.apply_realm_policy_bundle(&canonical);
+            return self.apply_realm_policy_bundle(operation);
         }
-        let wire_cell = direct.cell_id.clone();
-        let Ok(cell_id) = arkret_wire::CellId::from_ref(&wire_cell) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
+        let name = match &kind {
+            arkret_wire::EventKind::RealmAlias => facet::REALM_ALIAS,
+            arkret_wire::EventKind::RealmJoinRule => facet::REALM_JOIN_RULE,
+            arkret_wire::EventKind::RealmDiscovery => facet::REALM_DISCOVERY,
+            arkret_wire::EventKind::RealmPlaintextVisibleServices => {
+                facet::REALM_PLAINTEXT_VISIBLE_SERVICES
+            }
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: "out_of_order_bootstrap".to_owned(),
+                };
+            }
         };
-        if cell_id.subject() != arkret_wire::NULL_SUBJECT {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        }
-        let realm_cell_key = (
-            operation.realm_id.to_string(),
-            wire_cell.as_str().to_owned(),
-        );
-        if self.realm_null_subject_cells.contains_key(&realm_cell_key) {
+        let realm_id = operation.realm_id.to_string();
+        let target = FacetRef::singleton(name);
+        if self.facet_value(&realm_id, &target).is_some() {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
+        let value = operation.payload.clone();
         if kind == arkret_wire::EventKind::RealmJoinRule {
-            // `realm_join_rule_payload` is `{"value": <enum>}` and the
-            // registered projection sets the cell to that whole object, so the
-            // scalar rule lives one level down.
+            // `realm_join_rule_payload` is `{"value": <enum>}`, so the scalar
+            // rule lives one level down.
             let Some(join_rule) = value.get("value").and_then(Value::as_str) else {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             };
             // An accepted policy bundle is the other half of the pair; a Realm
             // that has not written one yet is checked when it does.
             if join_rule_requires_an_automatic_gate(join_rule)
-                && self
-                    .realm_policy_bundle_cell_value(operation.realm_id.as_str())
-                    .is_some()
-                && !join_policy_declares_an_automatic_gate(
-                    self.realm_join_policy_cell_value(operation.realm_id.as_str()),
-                )
+                && self.realm_policy_bundle_value(&realm_id).is_some()
+                && !join_policy_declares_an_automatic_gate(self.realm_join_policy_value(&realm_id))
             {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH.to_owned(),
                 };
             }
             self.realm_join_rules
-                .insert(operation.realm_id.to_string(), join_rule.to_owned());
+                .insert(realm_id.clone(), join_rule.to_owned());
         }
-        self.realm_null_subject_cells
-            .insert(realm_cell_key, ResolvedCellState::Value(value));
+        self.set_facet(&realm_id, target, value);
         ProjectionEffect::RealmBootstrapFacetProjected {
-            realm_id: operation.realm_id.to_string(),
+            realm_id,
             kind: kind.as_str().to_owned(),
         }
     }
 
-    pub(crate) fn apply_realm_notary(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload = match operation.typed_payload::<arkret_wire::event_spec::RealmNotary>() {
-            Ok(payload)
-                if payload.validate().is_ok()
-                    && payload.realm_id.as_str() == operation.realm_id.as_str() =>
-            {
-                payload
-            }
-            _ => {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            }
-        };
-        let realm_id = payload.realm_id.to_string();
-        if matches!(
-            self.realm_notary_cells.get(&realm_id),
-            Some(ResolvedCellState::Bottom(_))
-        ) {
-            return ProjectionEffect::Rejected {
-                reason: "cell_in_bottom_state".to_owned(),
-            };
-        }
-        let Ok(value) = serde_json::to_value(payload.notary) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        };
-        self.realm_notary_cells
-            .insert(realm_id.clone(), ResolvedCellState::Value(value));
-        ProjectionEffect::RealmNotaryProjected { realm_id }
-    }
-
-    pub(crate) fn apply_realm_digest_suite_transition(
-        &mut self,
-        operation: &Operation,
-    ) -> ProjectionEffect {
-        let payload = match operation
-            .typed_payload::<arkret_wire::event_spec::RealmDigestSuiteTransition>()
-        {
-            Ok(payload) if payload.validate().is_ok() => payload,
-            _ => {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            }
-        };
-        let realm_id = operation.realm_id.to_string();
-        if self.realm_digest_algorithm(&realm_id).as_deref()
-            != Some(payload.from_digest_algorithm.as_str())
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
-            };
-        }
-        let cell_key = (
-            realm_id.clone(),
-            "ak:cell:ak.component.realm.digest_suite.v1:null".to_owned(),
-        );
-        if matches!(
-            self.realm_null_subject_cells.get(&cell_key),
-            Some(ResolvedCellState::Bottom(_))
-        ) {
-            return ProjectionEffect::Rejected {
-                reason: "cell_in_bottom_state".to_owned(),
-            };
-        }
-        let digest_algorithm = payload.to_digest_algorithm.as_str().to_owned();
-        let Ok(value) = serde_json::to_value(payload) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        };
-        self.realm_null_subject_cells
-            .insert(cell_key, ResolvedCellState::Value(value));
-        ProjectionEffect::RealmDigestSuiteTransitionProjected {
-            realm_id,
-            digest_algorithm,
-        }
-    }
-
-    /// Project `ak.realm.policy_bundle` into the canonical Realm policy
-    /// components cell. The Event Envelope wire shape is the flat closed
-    /// `realm_policy_bundle_payload` object, NOT a `{"value": ...}` state
-    /// payload wrapper — `additionalProperties:false` on that def makes the
-    /// wrapper unrepresentable on the wire.
+    /// Project `ak.realm.policy_bundle` into the Realm policy facet. The
+    /// Event Envelope wire shape is the flat closed `realm_policy_bundle_payload`
+    /// object, NOT a `{"value": ...}` state payload wrapper —
+    /// `additionalProperties:false` on that def makes the wrapper
+    /// unrepresentable on the wire.
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
@@ -373,7 +92,7 @@ impl ProjectionState {
             };
         };
         let previous_revision = self
-            .realm_policy_bundle_cell_value(&realm_id)
+            .realm_policy_bundle_value(&realm_id)
             .and_then(|current| current.get("policy_revision"))
             .and_then(Value::as_u64)
             .unwrap_or(0);
@@ -412,9 +131,9 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH.to_owned(),
             };
         }
-        // `encryption-and-audit.md` §2.4.1 — the 300000 ms ceiling is a reducer
-        // rule, not a schema bound, so an over-ceiling window arrives here and
-        // leaves as `relaxed_window_exceeds_ceiling`. It is never clamped.
+        // `encryption-and-audit.md` §2.4.1 — the ceiling is a reducer rule, not
+        // a schema bound, so an over-ceiling window arrives here and leaves as
+        // a rejection. It is never clamped.
         if let Err(reason) = validate_relaxed_window(&value) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
@@ -428,30 +147,28 @@ impl ProjectionState {
         // One-way encryption-floor ratchet (realm-and-space.md §2.5): the
         // effective content / metadata encryption floor MUST be monotonically
         // non-decreasing. Compare the incoming snapshot against the currently
-        // projected floor before the cell is overwritten; tightening is always
+        // projected floor before the facet is overwritten; tightening is always
         // allowed, lowering (including dropping a previously-set floor by
         // omission) is rejected.
         if content_floor_rank(policy_floor_field(&value, "content_encryption_floor"))
             < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                reason: "content_encryption_floor_downgrade".to_owned(),
             };
         }
         if metadata_floor_rank(policy_floor_field(&value, "metadata_encryption_floor"))
             < metadata_floor_rank(self.realm_metadata_encryption_floor(&realm_id).as_deref())
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                reason: "metadata_encryption_floor_downgrade".to_owned(),
             };
         }
-        // `content_scheme` and `durability_policy` are frozen by the accepted
-        // MLS group Genesis and are not bundle components
-        // (realm-and-space.md sections 2.3 and 2.3.1). The closed bundle schema
-        // does not declare them, so there is nothing to select, ratchet or
-        // preserve here: both are read from the winning MLS epoch tuple.
-        self.realm_policy_bundle_cells
-            .insert(realm_id.clone(), ResolvedCellState::Value(value));
+        // `content_scheme` is frozen by the accepted MLS group Genesis and is
+        // not a bundle component (realm-and-space.md §2.3). The closed bundle
+        // schema does not declare it, so there is nothing to select, ratchet or
+        // preserve here: it is read from the accepted MLS genesis binding.
+        self.set_realm_facet(&realm_id, facet::REALM_POLICY_BUNDLE, value);
         ProjectionEffect::RealmPolicyBundleProjected { realm_id }
     }
 
@@ -463,45 +180,38 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        self.set_realm_null_subject_cell(
-            &realm_id,
-            arkret_wire::CellFamilyId::REALM_SEARCH_POLICY_V1,
-            value,
-        );
+        self.set_realm_facet(&realm_id, facet::REALM_SEARCH_POLICY, value);
         ProjectionEffect::RealmSearchPolicyProjected { realm_id }
     }
 
-    /// Project `ak.realm.media_service` into the canonical
-    /// `ak.component.realm.media_service.v1` registered state model cell consumed by
-    /// the AKP-0010 media token exchange (`routing::interop::webrtc`). The
-    /// The SDK's exact payload type validates the closed descriptor before its
-    /// `value` is projected into the cell.
+    /// Project `ak.realm.media_service` into the Realm media-service facet
+    /// consumed by the media token exchange (`routing::interop::webrtc`). The
+    /// SDK's exact payload type validates the closed descriptor before its
+    /// `value` is projected.
     pub(crate) fn apply_realm_media_service(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let foci_non_empty = operation
-            .payload
-            .pointer("/value/foci")
-            .and_then(Value::as_array)
-            .is_some_and(|foci| !foci.is_empty());
-        if !foci_non_empty {
+        let payload = match serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::realm::RealmMediaServicePayload,
+        >(operation.payload.clone())
+        {
+            Ok(payload) => payload,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        if payload.value.foci.is_empty() {
             return ProjectionEffect::Rejected {
-                reason: "media_service_foci_required".to_owned(),
+                reason: arkret_wire::ReasonCode::MEDIA_SERVICE_FOCI_REQUIRED.to_owned(),
             };
         }
-        if operation
-            .typed_payload::<arkret_wire::event_spec::RealmMediaService>()
-            .is_err()
-        {
+        let Ok(value) = serde_json::to_value(&payload.value) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
-        }
-        let value = operation.payload["value"].clone();
-        self.set_realm_null_subject_cell(
-            &realm_id,
-            arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
-            value,
-        );
+        };
+        self.set_realm_facet(&realm_id, facet::REALM_MEDIA_SERVICE, value);
         ProjectionEffect::RealmMediaServiceProjected { realm_id }
     }
 
@@ -513,324 +223,410 @@ impl ProjectionState {
                 reason: "call_id_must_be_event_derived".to_owned(),
             };
         }
+        let payload = match serde_json::from_value::<CallCreatePayload>(operation.payload.clone()) {
+            Ok(payload) if payload.validate().is_ok() => payload,
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID.to_owned(),
+                };
+            }
+        };
         let event_id = operation.context.event_id.clone();
         let call_id = arkret_identifiers::CallId::from_event_id(&event_id).to_string();
-        let Some(initial_state) = operation
-            .payload
-            .get("initial_state")
+        let initial_state = call_lifecycle_wire(payload.initial_state);
+        let realm_id = operation.realm_id.to_string();
+        let state_facet = FacetRef::new(facet::CALL_STATE, &call_id);
+        match self
+            .facet_value(&realm_id, &state_facet)
             .and_then(Value::as_str)
-            .filter(|state| matches!(*state, "scheduled" | "ringing" | "connecting"))
-        else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID.to_owned(),
-            };
-        };
-        let state_cell = match arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.call.state.v1:{call_id}"
-        )) {
-            Ok(cell) => cell,
-            Err(_) => {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            }
-        };
-        let projected = self.projected_cell_writes();
-        let Some(state_write) = projected
-            .iter()
-            .find(|write| write.cell_id == state_cell)
-            .and_then(ProjectedCellWrite::as_direct)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let op = &state_write.op;
-        if op.op_type != arkret_wire::cbs::LatticeOpType::Transition
-            || op.from.as_ref() != Some(&Value::Null)
-            || op.to.as_ref().and_then(Value::as_str) != Some(initial_state)
         {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        }
-        if self.cell_value(&state_cell).and_then(Value::as_str) == Some(initial_state) {
-            return ProjectionEffect::CallStateProjected { call_id };
-        }
-        let Some(next) = (match project_call_transition(
-            self,
-            &state_cell,
-            arkret_wire::CellFamilyId::CALL_STATE_V1,
-            op,
-            operation,
-            false,
-        ) {
-            Ok(projected) => projected,
-            Err(reason) => {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
+            None => {}
+            Some(current) if current == initial_state => {
+                return ProjectionEffect::CallStateProjected { call_id };
             }
-        }) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        self.cells.insert(state_cell, next);
-        ProjectionEffect::CallStateProjected { call_id }
-    }
-
-    /// Project a validated `ak.call.state` Event's exact registered effects
-    /// into the nine independent call cells. The shared SDK validator has
-    /// already recomputed every cell and full state model op from the signed
-    /// payload; this projection consumes those effects rather than recreating
-    /// a private composite-call state model.
-    pub(crate) fn apply_call_state(&mut self, operation: &Operation) -> ProjectionEffect {
-        self.apply_call_cell_effects(operation, false)
-    }
-
-    /// Project the capture transition and initial result effects of a validated
-    /// `ak.call.recording.start`. Consent and notice are checked before either
-    /// cell is changed.
-    pub(crate) fn apply_call_recording_start(&mut self, operation: &Operation) -> ProjectionEffect {
-        self.apply_call_cell_effects(operation, true)
-    }
-
-    fn apply_call_cell_effects(
-        &mut self,
-        operation: &Operation,
-        recording_start: bool,
-    ) -> ProjectionEffect {
-        let payload = state_payload_value(&operation.payload);
-        let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
-            return ProjectionEffect::Rejected {
-                reason: "call_state_call_id_required".to_owned(),
-            };
-        };
-        let call_id = call_id.to_owned();
-        if !recording_start {
-            let state_cell = arkret_identifiers::CellRef::new(format!(
-                "ak:cell:ak.component.call.state.v1:{call_id}"
-            ))
-            .ok();
-            if state_cell
-                .as_ref()
-                .is_none_or(|cell| !self.cells.contains_key(cell))
-                && payload.get("state_transition").is_none()
-            {
+            Some(_) => {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID.to_owned(),
                 };
             }
         }
-        if recording_start {
-            let event_id = operation.context.accepted_event_id.as_str();
-            let result = payload.get("result");
-            let expected_ref = match payload.get("capture_kind").and_then(Value::as_str) {
-                Some("recording") => result
-                    .and_then(|value| value.get("recording_start_event_id"))
-                    .and_then(Value::as_str),
-                Some("transcript") => result
-                    .and_then(|value| value.get("transcript_start_event_id"))
-                    .and_then(Value::as_str),
-                _ => None,
-            };
-            let consent = result
-                .and_then(|value| value.get("retention"))
-                .and_then(|value| value.get("consent_confirmed"))
-                .and_then(Value::as_bool);
-            if payload.get("visible_notice").and_then(Value::as_bool) != Some(true)
-                || consent != Some(true)
-                || expected_ref != Some(event_id)
-            {
+        self.set_facet(
+            &realm_id,
+            state_facet,
+            Value::String(initial_state.to_owned()),
+        );
+        ProjectionEffect::CallStateProjected { call_id }
+    }
+
+    /// Project a validated `ak.call.state` Event into the independent call
+    /// facets it names. Every delta the payload carries is applied, or the
+    /// whole Event is rejected; a partially applied call Event would leave the
+    /// roster and the lifecycle disagreeing.
+    pub(crate) fn apply_call_state(&mut self, operation: &Operation) -> ProjectionEffect {
+        let payload = match serde_json::from_value::<CallStatePayload>(
+            state_payload_value(&operation.payload).clone(),
+        ) {
+            Ok(payload) => payload,
+            Err(_) => {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::RECORDING_CONSENT_REQUIRED.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             }
+        };
+        if let Err(reason) = payload.validate() {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        let realm_id = operation.realm_id.to_string();
+        let call_id = payload.call_id.to_string();
+        let state_facet = FacetRef::new(facet::CALL_STATE, &call_id);
+        if payload.state_transition.is_none() && self.facet_value(&realm_id, &state_facet).is_none()
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID.to_owned(),
+            };
         }
 
-        // v1 carries no producer `effects[]`: the writes below are the exact
-        // registry projection of this Event's `kind + payload`
-        // (`ak.call.state` / `ak.call.recording.start` in
-        // `event-kind-registry.json`), evaluated by the shared SDK contract
-        // evaluator before the reducer runs.
-        let projected = self.projected_cell_writes().to_vec();
-        if projected.is_empty() {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
+        let mut writes: Vec<(FacetRef, Value)> = Vec::new();
+
+        if let Some(transition) = &payload.state_transition {
+            let from = call_lifecycle_wire(transition.from);
+            let to = call_lifecycle_wire(transition.to);
+            if let Err(reason) = self.check_call_lifecycle_edge(&realm_id, &state_facet, from, to) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+            writes.push((state_facet, Value::String(to.to_owned())));
         }
-        let mut updates = Vec::with_capacity(projected.len());
-        for write in &projected {
-            let cell_id = write.cell_id.clone();
-            let Some(family) = cell_id
-                .as_str()
-                .strip_prefix("ak:cell:")
-                .and_then(|rest| rest.split_once(':'))
-                .map(|(family, _)| family)
-            else {
+
+        if let Some(focus) = &payload.focus {
+            let focus_facet = FacetRef::new(facet::CALL_FOCUS, &call_id);
+            let Ok(next) = serde_json::to_value(focus) else {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             };
-            if !call_cell_family_allowed(family, recording_start) {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            }
-            if matches!(self.cells.get(&cell_id), Some(ResolvedCellState::Bottom(_))) {
-                return ProjectionEffect::Rejected {
-                    reason: "cell_bottom_state".to_owned(),
-                };
-            }
-            // Every call cell registers a projection that resolves without the
-            // frozen pre-state; `transition_to` / `apply_patch` /
-            // `or_set_remove_observed` are not part of these two contracts.
-            let Some(direct) = write.as_direct() else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            };
-            let op = &direct.op;
-            if !call_observed_remove_matches(family, self.cells.get(&cell_id), op, payload) {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            }
-            let next = match op.op_type {
-                arkret_wire::cbs::LatticeOpType::Transition => {
-                    match project_call_transition(
-                        self,
-                        &cell_id,
-                        family,
-                        op,
-                        operation,
-                        recording_start,
-                    ) {
-                        Ok(projected) => projected,
-                        Err(reason) => {
-                            return ProjectionEffect::Rejected {
-                                reason: reason.to_owned(),
-                            };
-                        }
-                    }
-                }
-                arkret_wire::cbs::LatticeOpType::Set => {
-                    arkret_state::state_model::SequencedState::new(
-                        arkret_wire::EventCellValueShape::Register,
-                    )
-                    .apply(
-                        self.cells.get(&cell_id),
-                        &arkret_state::state_model::StateWrite::new(
-                            operation.context.event_id.clone(),
-                            op.clone(),
-                        ),
-                    )
-                    .ok()
-                }
-                arkret_wire::cbs::LatticeOpType::Add | arkret_wire::cbs::LatticeOpType::Remove => {
-                    arkret_state::state_model::SequencedState::new(
-                        arkret_wire::EventCellValueShape::Set,
-                    )
-                    .apply(
-                        self.cells.get(&cell_id),
-                        &arkret_state::state_model::StateWrite::new(
-                            operation.context.event_id.clone(),
-                            op.clone(),
-                        ),
-                    )
-                    .ok()
-                }
-                _ => None,
-            };
-            let Some(next) = next else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                };
-            };
-            if family == arkret_wire::CellFamilyId::CALL_FOCUS_V1
-                && !focus_write_preserves_committed(
-                    self.cells.get(&cell_id),
-                    next.settled_value()
-                        .expect("call safety projection is sequenced"),
-                )
+            // `call-state.md` §5 — a committed `session_focus` is final for the
+            // life of the call; a later focus write may refine the mode but not
+            // move the session off the focus already committed to.
+            if let Some(committed) = self
+                .facet_value(&realm_id, &focus_facet)
+                .and_then(|value| value.get("session_focus"))
+                .and_then(Value::as_str)
+                && next.get("session_focus").and_then(Value::as_str) != Some(committed)
             {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
                 };
             }
-            updates.push((cell_id, next));
+            writes.push((focus_facet, next));
         }
-        for (cell_id, state) in updates {
-            self.cells.insert(cell_id, state);
+
+        if let Some(transition) = &payload.recording_transition {
+            let subject = [call_id.as_str(), transition.recording_id.as_str()];
+            let capture = FacetRef::composite(facet::CALL_RECORDING, &subject);
+            let from = call_recording_wire(transition.from);
+            let to = call_recording_wire(transition.to);
+            if !matches!(
+                (from, to),
+                ("recording", "stopped" | "ready" | "failed") | ("stopped", "ready")
+            ) || self
+                .facet_value(&realm_id, &capture)
+                .and_then(Value::as_str)
+                != Some(from)
+            {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID.to_owned(),
+                };
+            }
+            writes.push((capture, Value::String(to.to_owned())));
+            if let Some(result) = &transition.result {
+                let Ok(value) = serde_json::to_value(result) else {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                };
+                writes.push((
+                    FacetRef::composite(facet::CALL_RECORDING_RESULT, &subject),
+                    value,
+                ));
+            }
+        }
+
+        if let Some(transition) = &payload.transcript_transition {
+            let subject = [call_id.as_str(), transition.recording_id.as_str()];
+            let capture = FacetRef::composite(facet::CALL_TRANSCRIPT, &subject);
+            let from = call_transcript_wire(transition.from);
+            let to = call_transcript_wire(transition.to);
+            if !matches!(
+                (from, to),
+                ("transcribing", "stopped" | "ready" | "failed") | ("stopped", "ready")
+            ) || self
+                .facet_value(&realm_id, &capture)
+                .and_then(Value::as_str)
+                != Some(from)
+            {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID.to_owned(),
+                };
+            }
+            writes.push((capture, Value::String(to.to_owned())));
+            if let Some(result) = &transition.result {
+                let Ok(value) = serde_json::to_value(result) else {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                };
+                writes.push((
+                    FacetRef::composite(facet::CALL_TRANSCRIPT_RESULT, &subject),
+                    value,
+                ));
+            }
+        }
+
+        if let Some(delta) = &payload.roster_delta {
+            let roster = FacetRef::new(facet::CALL_ROSTER, &call_id);
+            let mut entries = self.facet_entries(&realm_id, &roster);
+            match delta {
+                CallRosterDelta::Join { participant } => {
+                    let Ok(entry) = serde_json::to_value(participant) else {
+                        return ProjectionEffect::Rejected {
+                            reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                        };
+                    };
+                    upsert_call_entry(
+                        &mut entries,
+                        &["actor_id", "device_id"],
+                        entry,
+                        operation.context.event_id.as_str(),
+                    );
+                }
+                CallRosterDelta::Leave {
+                    observed_tag,
+                    actor_id,
+                    device_id,
+                } => {
+                    // `observed_tag` names the exact join entry being removed;
+                    // a leave that does not observe a present join is not an
+                    // ordering artefact under a linear commit stream.
+                    if !remove_call_entry(&mut entries, observed_tag.as_str(), |entry| {
+                        entry.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
+                            && entry.get("device_id").and_then(Value::as_str)
+                                == Some(device_id.as_str())
+                    }) {
+                        return ProjectionEffect::Rejected {
+                            reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                        };
+                    }
+                }
+            }
+            writes.push((roster, Value::Array(entries)));
+        }
+
+        if let Some(delta) = &payload.moderation_delta {
+            let moderation = FacetRef::new(facet::CALL_MODERATION, &call_id);
+            let mut entries = self.facet_entries(&realm_id, &moderation);
+            match delta {
+                CallModerationDelta::RemoveParticipant { removal } => {
+                    let Ok(entry) = serde_json::to_value(removal) else {
+                        return ProjectionEffect::Rejected {
+                            reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                        };
+                    };
+                    upsert_call_entry(
+                        &mut entries,
+                        &["actor_id", "action"],
+                        entry,
+                        operation.context.event_id.as_str(),
+                    );
+                }
+                CallModerationDelta::RestoreParticipant {
+                    observed_tag,
+                    actor_id,
+                    ..
+                } => {
+                    if !remove_call_entry(&mut entries, observed_tag.as_str(), |entry| {
+                        entry.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
+                            && entry.get("action").and_then(Value::as_str) == Some("ban")
+                    }) {
+                        return ProjectionEffect::Rejected {
+                            reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                        };
+                    }
+                }
+            }
+            writes.push((moderation, Value::Array(entries)));
+        }
+
+        if let Some(mute_override) = &payload.mute_override {
+            let Ok(value) = serde_json::to_value(mute_override) else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            };
+            writes.push((
+                FacetRef::composite(
+                    facet::CALL_MUTE_OVERRIDE,
+                    &[
+                        call_id.as_str(),
+                        &mute_override.actor_id.to_string(),
+                        mute_override.device_id.as_str(),
+                    ],
+                ),
+                value,
+            ));
+        }
+
+        for (target, value) in writes {
+            self.set_facet(&realm_id, target, value);
         }
         ProjectionEffect::CallStateProjected { call_id }
     }
 
-    /// Project `ak.call.summary` into the write-once
-    /// `ak.component.call.summary.v1` causal_register cell
-    /// (`cell_subject = payload.call_id`). `call-state.md` §7:
+    /// Project the capture transition and initial result of a validated
+    /// `ak.call.recording.start`. Consent and visible notice are checked before
+    /// either facet changes.
+    pub(crate) fn apply_call_recording_start(&mut self, operation: &Operation) -> ProjectionEffect {
+        let payload = match serde_json::from_value::<CallRecordingStartPayload>(
+            state_payload_value(&operation.payload).clone(),
+        ) {
+            Ok(payload) => payload,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        if payload.result.retention.consent_confirmed != Some(true) {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::RECORDING_CONSENT_REQUIRED.to_owned(),
+            };
+        }
+        let realm_id = operation.realm_id.to_string();
+        let call_id = payload.call_id.to_string();
+        let subject = [call_id.as_str(), payload.recording_id.as_str()];
+        let (capture, result, opening) = match payload.capture_kind {
+            RecordingCaptureKind::Recording => (
+                FacetRef::composite(facet::CALL_RECORDING, &subject),
+                FacetRef::composite(facet::CALL_RECORDING_RESULT, &subject),
+                "recording",
+            ),
+            RecordingCaptureKind::Transcript => (
+                FacetRef::composite(facet::CALL_TRANSCRIPT, &subject),
+                FacetRef::composite(facet::CALL_TRANSCRIPT_RESULT, &subject),
+                "transcribing",
+            ),
+        };
+        if self.facet_value(&realm_id, &capture).is_some() {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID.to_owned(),
+            };
+        }
+        let Ok(outcome) = serde_json::to_value(&payload.result) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        self.set_facet(&realm_id, capture, Value::String(opening.to_owned()));
+        self.set_facet(&realm_id, result, outcome);
+        ProjectionEffect::CallStateProjected { call_id }
+    }
+
+    /// Project `ak.call.summary` into the write-once call summary facet
+    /// (`call-state.md` §7):
     ///
-    /// - `final_state` MUST be a terminal call state (`ended` / `missed` / `failed` / `cancelled`).
-    /// - the `call_id` MUST already have a terminal `ak.call.state` head (the projected call-state
-    ///   cell is in a terminal `state`).
-    /// - the summary cell is write-once: a divergent rewrite MUST `call_summary_invalid`; an
-    ///   identical replay is an idempotent no-op.
-    ///
-    /// Any violation rejects with `call_summary_invalid`.
+    /// - `final_state` MUST be a terminal call state.
+    /// - the `call_id` MUST already have a terminal `ak.call.state` head.
+    /// - the facet is write-once: a divergent rewrite MUST `call_summary_invalid`; an identical
+    ///   replay is an idempotent no-op.
     pub(crate) fn apply_call_summary(&mut self, operation: &Operation) -> ProjectionEffect {
         let value = state_payload_value(&operation.payload).clone();
-        let Some(call_id) = value.get("call_id").and_then(Value::as_str) else {
+        let Ok(summary) = serde_json::from_value::<CallSummaryPayload>(value.clone()) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         };
-        let call_id = call_id.to_owned();
-
-        // §7 — `final_state` MUST be a terminal state.
-        let final_state_terminal = value
-            .get("final_state")
-            .and_then(Value::as_str)
-            .is_some_and(is_terminal_call_state);
-        if !final_state_terminal {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
-            };
-        }
+        let realm_id = operation.realm_id.to_string();
+        let call_id = summary.call_id.to_string();
 
         // §7 — the call MUST already have a terminal `ak.call.state` head.
-        let call_state_terminal = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.call.state.v1:{call_id}"
-        ))
-        .ok()
-        .and_then(|cell_id| self.cell_value(&cell_id).cloned())
-        .and_then(|state| state.as_str().map(ToOwned::to_owned))
-        .is_some_and(|state| is_terminal_call_state(&state));
-        if !call_state_terminal {
+        // `final_state` is a closed terminal-only union in the SDK type, so the
+        // payload half of the rule is settled by deserialization.
+        let terminal = self
+            .facet_value(&realm_id, &FacetRef::new(facet::CALL_STATE, &call_id))
+            .and_then(Value::as_str)
+            .is_some_and(is_terminal_call_state);
+        if !terminal {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         }
 
-        // §7 — write-once causal_register. A divergent rewrite is rejected; an
-        // identical replay is a no-op.
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.call.summary.v1:{call_id}"
-        )) {
-            if let Some(existing) = self.cell_value(&cell_id) {
-                if existing != &value {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
-                    };
-                }
-                return ProjectionEffect::CallSummaryProjected { call_id };
+        let target = FacetRef::new(facet::CALL_SUMMARY, &call_id);
+        if let Some(existing) = self.facet_value(&realm_id, &target) {
+            if existing != &value {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
+                };
             }
-            self.cells.insert(cell_id, ResolvedCellState::Value(value));
+            return ProjectionEffect::CallSummaryProjected { call_id };
         }
+        self.set_facet(&realm_id, target, value);
         ProjectionEffect::CallSummaryProjected { call_id }
     }
 
-    /// Project a canonical `ak.realm.link` event into its transition cell and query caches.
+    /// `call-state.md` §4.2 — the legal-successor table plus the terminal
+    /// guard, checked against the currently projected head.
+    fn check_call_lifecycle_edge(
+        &self,
+        realm_id: &str,
+        state_facet: &FacetRef,
+        from: &str,
+        to: &str,
+    ) -> std::result::Result<(), &'static str> {
+        let current = self
+            .facet_value(realm_id, state_facet)
+            .and_then(Value::as_str);
+        match current {
+            Some(current) if current == from => {}
+            Some(current) if is_terminal_call_state(current) => {
+                return Err(arkret_wire::ReasonCode::CALL_STATE_TERMINAL);
+            }
+            _ => return Err(arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID),
+        }
+        let legal = match from {
+            "scheduled" => matches!(
+                to,
+                "ringing" | "connecting" | "cancelled" | "missed" | "failed"
+            ),
+            "ringing" => matches!(
+                to,
+                "connecting" | "active" | "missed" | "cancelled" | "failed"
+            ),
+            "connecting" => matches!(to, "active" | "failed" | "ended"),
+            "active" => matches!(to, "ended" | "failed"),
+            _ => false,
+        };
+        if legal {
+            Ok(())
+        } else if is_terminal_call_state(from) {
+            Err(arkret_wire::ReasonCode::CALL_STATE_TERMINAL)
+        } else {
+            Err(arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID)
+        }
+    }
+
+    /// Current entries of a list-valued facet, or an empty list.
+    fn facet_entries(&self, realm_id: &str, target: &FacetRef) -> Vec<Value> {
+        self.facet_value(realm_id, target)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Project a canonical `ak.realm.link` event into its facet and query caches.
     ///
     /// The HTTP operation materializes its default `status=active` before this
     /// point. Durable Event admission requires `status` explicitly.
@@ -911,11 +707,10 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
 
-        // Cell write — transition keyed by the canonical composite subject.
-        if let Some(cell_id) =
-            realm_links::realm_link_projection_cell_ref(&realm_id, target_realm_id, link_kind)
-        {
-            let value = serde_json::json!({
+        self.set_facet(
+            &realm_id,
+            FacetRef::composite(facet::REALM_LINK, &[target_realm_id, link_kind]),
+            serde_json::json!({
                 "realm_id": realm_id,
                 "target_realm_id": target_realm_id,
                 "link_kind": link_kind,
@@ -923,9 +718,8 @@ impl ProjectionState {
                 "label": label,
                 "commitment": commitment,
                 "updated_at": arkret_canonical::format_timestamp_canonical(now),
-            });
-            self.cells.insert(cell_id, ResolvedCellState::Value(value));
-        }
+            }),
+        );
 
         // Structured side-band cache mirror. Outbound: keyed by source
         // realm. Inbound: keyed by target realm.
@@ -957,8 +751,7 @@ impl ProjectionState {
 
     /// R3.2 — project a `ak.realm.inheritance_policy` event.
     ///
-    /// Cell family: `ak.component.realm.inheritance_policy.v1` (registered state model).
-    /// Rejects payloads with `max_depth > 1` (current wire cap), rejects
+    /// Rejects payloads with `max_depth` over the wire cap, rejects
     /// inheritance through an already-active non-capability-bearing Realm
     /// link, and verifies requested policies / bundles against projected
     /// parent grants when those grants are present in the reducer state.
@@ -1018,19 +811,18 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}"
-        )) {
-            let value = serde_json::json!({
+        self.set_facet(
+            &realm_id,
+            FacetRef::new(facet::REALM_INHERITANCE_POLICY, source_realm_id),
+            serde_json::json!({
                 "operation_id": operation.operation_id.as_str(),
                 "source_realm_id": source_realm_id,
                 "allowed_policies": allowed_policies,
                 "allowed_capability_bundles": allowed_capability_bundles,
                 "max_depth": max_depth,
                 "updated_at": arkret_canonical::format_timestamp_canonical(now),
-            });
-            self.cells.insert(cell_id, ResolvedCellState::Value(value));
-        }
+            }),
+        );
 
         let state_row = RealmInheritancePolicyState {
             realm_id: realm_id.clone(),
@@ -1099,9 +891,7 @@ impl ProjectionState {
                 arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant {
                     grant_id,
                 } => Some(grant_id.to_string()),
-                arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::RealmRoot {
-                    ..
-                } => None,
+                _ => None,
             })
             .collect::<Vec<_>>();
         let [source_grant_id] = source_grant_ids.as_slice() else {
@@ -1154,36 +944,11 @@ impl ProjectionState {
                 }
             };
 
-        let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.capability.derived.v1:{grant_id}"
-        )) else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_derived_cell_ref_invalid".to_owned(),
-            };
-        };
-        let projected = self.projected_cell_writes();
-        let Some(write) = projected
-            .iter()
-            .find(|write| write.cell_id == cell_id)
-            .and_then(ProjectedCellWrite::as_direct)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        let model =
-            arkret_state::state_model::SequencedState::new(arkret_wire::EventCellValueShape::Set);
-        let state_write = arkret_state::state_model::StateWrite::new(
-            operation.context.event_id.clone(),
-            write.op.clone(),
+        self.set_facet(
+            &realm_id,
+            FacetRef::new(facet::CAPABILITY_DERIVED, &grant_id),
+            grant.clone(),
         );
-        let Ok(next) = model.apply(self.cells.get(&cell_id), &state_write) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-            };
-        };
-        self.cells.insert(cell_id, next);
-
         self.capability_derived.insert(
             grant_id.clone(),
             CapabilityDerivedState {
@@ -1206,223 +971,76 @@ fn is_terminal_call_state(state: &str) -> bool {
     matches!(state, "ended" | "missed" | "failed" | "cancelled")
 }
 
-fn call_cell_family_allowed(family: &str, recording_start: bool) -> bool {
-    if recording_start {
-        return matches!(
-            family,
-            arkret_wire::CellFamilyId::CALL_RECORDING_V1
-                | arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1
-                | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1
-                | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_RESULT_V1
-        );
-    }
-    matches!(
-        family,
-        arkret_wire::CellFamilyId::CALL_STATE_V1
-            | arkret_wire::CellFamilyId::CALL_FOCUS_V1
-            | arkret_wire::CellFamilyId::CALL_RECORDING_V1
-            | arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1
-            | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1
-            | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_RESULT_V1
-            | arkret_wire::CellFamilyId::CALL_MODERATION_V1
-            | arkret_wire::CellFamilyId::CALL_ROSTER_V1
-            | arkret_wire::CellFamilyId::CALL_MUTE_OVERRIDE_V1
-    )
-}
-
-fn project_call_transition(
-    state: &ProjectionState,
-    cell_id: &arkret_identifiers::CellRef,
-    family: &str,
-    op: &arkret_wire::cbs::LatticeOp,
-    operation: &Operation,
-    recording_start: bool,
-) -> Result<Option<ResolvedCellState>, &'static str> {
-    let from = match op.from.as_ref() {
-        Some(Value::Null) => None,
-        Some(Value::String(value)) if !value.is_empty() => Some(value.as_str()),
-        _ => return Err(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED),
-    };
-    let Some(to) = op
-        .to
-        .as_ref()
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    else {
-        return Err(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED);
-    };
-    validate_call_transition_edge(family, from, to, recording_start)?;
-
-    let current = state
-        .cells
-        .get(cell_id)
-        .and_then(ResolvedCellState::settled_value)
-        .and_then(Value::as_str);
-    match (current, from) {
-        (None, None) => {}
-        (Some(current), Some(from)) if current == from => {}
-        (Some(current), _)
-            if family == arkret_wire::CellFamilyId::CALL_STATE_V1
-                && is_terminal_call_state(current) =>
-        {
-            return Err(arkret_wire::ReasonCode::CALL_STATE_TERMINAL);
-        }
-        _ => {
-            return Err(if family == arkret_wire::CellFamilyId::CALL_STATE_V1 {
-                arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
-            } else {
-                arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID
-            });
-        }
-    }
-
-    Ok(Some(ResolvedCellState::Sequenced(
-        arkret_state::state_model::SequencedStateValue {
-            revision_event_id: operation.context.event_id.clone(),
-            value: Value::String(to.to_owned()),
-        },
-    )))
-}
-
-fn validate_call_transition_edge(
-    family: &str,
-    from: Option<&str>,
-    to: &str,
-    recording_start: bool,
-) -> Result<(), &'static str> {
-    match family {
-        arkret_wire::CellFamilyId::CALL_STATE_V1 => {
-            let legal = match from {
-                None => matches!(to, "scheduled" | "ringing" | "connecting"),
-                Some("scheduled") => {
-                    matches!(
-                        to,
-                        "ringing" | "connecting" | "cancelled" | "missed" | "failed"
-                    )
-                }
-                Some("ringing") => {
-                    matches!(
-                        to,
-                        "connecting" | "active" | "missed" | "cancelled" | "failed"
-                    )
-                }
-                Some("connecting") => matches!(to, "active" | "failed" | "ended"),
-                Some("active") => matches!(to, "ended" | "failed"),
-                Some(_) => false,
-            };
-            if legal {
-                Ok(())
-            } else if from.is_some_and(is_terminal_call_state) {
-                Err(arkret_wire::ReasonCode::CALL_STATE_TERMINAL)
-            } else {
-                Err(arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID)
-            }
-        }
-        arkret_wire::CellFamilyId::CALL_RECORDING_V1 => {
-            let legal = if recording_start {
-                from.is_none() && to == "recording"
-            } else {
-                matches!(
-                    (from, to),
-                    (Some("recording"), "stopped" | "ready" | "failed")
-                        | (Some("stopped"), "ready")
-                )
-            };
-            legal
-                .then_some(())
-                .ok_or(arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID)
-        }
-        arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1 => {
-            let legal = if recording_start {
-                from.is_none() && to == "transcribing"
-            } else {
-                matches!(
-                    (from, to),
-                    (Some("transcribing"), "stopped" | "ready" | "failed")
-                        | (Some("stopped"), "ready")
-                )
-            };
-            legal
-                .then_some(())
-                .ok_or(arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID)
-        }
-        _ => Err(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED),
+fn call_lifecycle_wire(state: CallLifecycleState) -> &'static str {
+    match state {
+        CallLifecycleState::Scheduled => "scheduled",
+        CallLifecycleState::Ringing => "ringing",
+        CallLifecycleState::Connecting => "connecting",
+        CallLifecycleState::Active => "active",
+        CallLifecycleState::Ended => "ended",
+        CallLifecycleState::Missed => "missed",
+        CallLifecycleState::Failed => "failed",
+        CallLifecycleState::Cancelled => "cancelled",
     }
 }
 
-fn call_observed_remove_matches(
-    family: &str,
-    existing: Option<&ResolvedCellState>,
-    op: &arkret_wire::cbs::LatticeOp,
-    payload: &Value,
-) -> bool {
-    if op.op_type != arkret_wire::cbs::LatticeOpType::Remove {
-        return true;
+fn call_recording_wire(state: CallRecordingState) -> &'static str {
+    match state {
+        CallRecordingState::Recording => "recording",
+        CallRecordingState::Stopped => "stopped",
+        CallRecordingState::Ready => "ready",
+        CallRecordingState::Failed => "failed",
     }
-    let Some(tag) = op.tag.as_deref() else {
-        return false;
-    };
-    let Some(value) = existing.and_then(|state| {
-        let ResolvedCellState::Sequenced(state) = state else {
-            return None;
-        };
-        state.value.as_array()?.iter().find_map(|entry| {
-            (entry.get("tag_id").and_then(Value::as_str) == Some(tag))
-                .then(|| entry.get("value"))
-                .flatten()
+}
+
+fn call_transcript_wire(state: CallTranscriptState) -> &'static str {
+    match state {
+        CallTranscriptState::Transcribing => "transcribing",
+        CallTranscriptState::Stopped => "stopped",
+        CallTranscriptState::Ready => "ready",
+        CallTranscriptState::Failed => "failed",
+    }
+}
+
+/// Insert or replace one entry of a list-valued call facet.
+///
+/// Each entry carries the accepted Event id that produced it under `tag_id`,
+/// which is exactly the coordinate a later `observed_tag` names.
+fn upsert_call_entry(entries: &mut Vec<Value>, keys: &[&str], value: Value, tag_id: &str) {
+    let matches_key = |entry: &Value| {
+        keys.iter().all(|key| {
+            entry
+                .get("value")
+                .and_then(|current| current.get(key))
+                .and_then(Value::as_str)
+                == value.get(key).and_then(Value::as_str)
         })
+    };
+    entries.retain(|entry| !matches_key(entry));
+    entries.push(serde_json::json!({ "tag_id": tag_id, "value": value }));
+}
+
+/// Remove the entry a later delta observed. Returns false when the observed tag
+/// is absent or does not name the entry the delta describes.
+fn remove_call_entry(
+    entries: &mut Vec<Value>,
+    observed_tag: &str,
+    describes: impl Fn(&Value) -> bool,
+) -> bool {
+    let Some(index) = entries.iter().position(|entry| {
+        entry.get("tag_id").and_then(Value::as_str) == Some(observed_tag)
+            && entry.get("value").is_some_and(&describes)
     }) else {
         return false;
     };
-    let Ok(payload) = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::call::CallStatePayload,
-    >(payload.clone()) else {
-        return false;
-    };
-    match family {
-        arkret_wire::CellFamilyId::CALL_ROSTER_V1 => {
-            let Some(arkret_models_collaboration::events_payloads::call::CallRosterDelta::Leave {
-                actor_id,
-                device_id,
-                ..
-            }) = payload.roster_delta
-            else {
-                return false;
-            };
-            value.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
-                && value.get("device_id").and_then(Value::as_str) == Some(device_id.as_str())
-        }
-        arkret_wire::CellFamilyId::CALL_MODERATION_V1 => {
-            let Some(
-                arkret_models_collaboration::events_payloads::call::CallModerationDelta::RestoreParticipant {
-                    actor_id,
-                    ..
-                },
-            ) = payload.moderation_delta
-            else {
-                return false;
-            };
-            value.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
-                && value.get("action").and_then(Value::as_str) == Some("ban")
-        }
-        _ => false,
-    }
-}
-
-fn focus_write_preserves_committed(existing: Option<&ResolvedCellState>, next: &Value) -> bool {
-    let Some(existing) = existing.and_then(ResolvedCellState::settled_value) else {
-        return true;
-    };
-    match existing.get("session_focus").and_then(Value::as_str) {
-        Some(committed) => next.get("session_focus").and_then(Value::as_str) == Some(committed),
-        None => true,
-    }
+    entries.remove(index);
+    true
 }
 
 /// join-policy.md 2: `restricted` and `knock_restricted` promise an entry gate.
 /// A policy carrying only `principal_admission` / `cooldown` hard gates admits
 /// exactly the set `public` admits, so the pair is a contradictory declaration
-/// and neither cell may be written under it.
+/// and neither facet may be written under it.
 fn join_policy_declares_an_automatic_gate(join_policy: Option<&Value>) -> bool {
     join_policy
         .and_then(|policy| policy.get("gates"))
