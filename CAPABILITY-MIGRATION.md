@@ -13,57 +13,71 @@ counts as absent.
 ## Orphaned modules
 
 Measured by enumerating `src/**/*.rs` per crate and subtracting the set reachable
-from the crate root along `mod` declarations, including `#[path]` targets. 93
-files, 54,170 lines, are present in the repository and reach no crate root, so
-they do not compile and the capability in them counts as absent.
+from the crate root along `mod` declarations, including `#[path]` targets
+(`cargo bin` targets excluded, since Cargo reaches those without a `mod`).
+Re-measured 2026-09-16 after the reducer rewiring landed: **15 files, 5,029
+lines**, reach no crate root, so they do not compile and the capability in them
+counts as absent.
 
 | crate | orphan files | lines |
 |---|---|---|
-| `soland-domain` | 54 | 37,206 |
-| `soland-storage-postgres` | 35 | 16,109 |
-| `soland-http` | 4 | 855 |
+| `soland-storage-postgres` | 14 | 4,706 |
+| `soland-http` | 1 | 323 |
 | all others | 0 | 0 |
 
-Judgement per group. "Rewire" means the capability is in the specification and
+`soland-domain` is fully wired: every file under `crates/domain/src/reducer/` is
+now reachable and the crate's **library** compiles. Its 424 remaining errors are
+all in `#[cfg(test)]` code.
+
+Judgement per file. "Rewire" means the capability is in the specification and
 the module must be migrated onto accepted `StreamItem` / `CommittedEventRef`
 inputs; "Delete" means every responsibility in it belongs to a removed
 mechanism.
 
-- Rewire — the whole of `crates/domain/src/reducer/` except the two entries
-  below: messages, reactions, polls, RSVPs, pins, read cursors, relations,
-  moderation, invites, key backup, capability grants, Realm lifecycle/policy/
-  organization/links, Circles, Strands, Morphs, Sidecars, Applets and Agents,
-  and the MLS genesis/commit lifecycle. Each of these event kinds is in
-  `spec/v1/artifacts/registry/event-kind-registry.json`.
-- Delete — `reducer/apply_audit_session.rs` and `reducer/tests/audit_release.rs`.
-  `ak.audit.session.*` and `ak.audit.release` are absent from the event-kind
-  registry, and `events_payloads::audit` in the SDK now exports only
-  `AuditAccessedKind` and `AuditAccessedPayload`. Done.
-- Rewire — `storage-postgres` `current_data.rs`, `current_results.rs`,
-  `timeline_order.rs`, `mls_public_state/`, `principal_resolution/`,
-  `sync_cursor/current_detail.rs`, `devices/confirmed_history.rs`,
-  `device_revocations/{artifact,historical,material_cleanup}.rs`, and
-  `events/{approval_publications,transaction_locks}.rs`. These are product
-  reads and durable-boundary helpers; they must move onto the new typed
-  current-result model (`arkret_wire::{CurrentSelector, TypedCurrentResult,
-  CurrentRevision}`) rather than the removed `sync_frames::current_results`
-  entry/target/coverage types.
-- Delete — `storage-postgres/state_resolution.rs` and its four submodules
-  (5,805 lines). Every entry point is built on `arkret_state::state::{SealStore,
-  ControlEventStore, ControlProposalSnapshot, ControlSealScheduleClaim,
-  compute_state_root, control_event_digest, …}`, all of which the SDK has
-  removed. Its product-facing reads belong in the rewired `current_results`.
-- Rewire — `http/routing/authority_commit.rs`. It is the current-protocol route
-  file and simply needs `mod authority_commit;` plus a `router_build.rs` entry.
-- Delete — `http/routing/admin/seal/gc.rs` (Seal GC) and
-  `http/routing/governance_history/{replay,signing}.rs` (history-key
-  request/response). Their parent modules were already deleted, which is why
-  they became unreachable; 13 call sites in `soland-http` still name
-  `crate::routing::governance_history::*` and must be removed with them.
+| orphan | lines | verdict |
+|---|---|---|
+| `http/routing/authority_commit.rs` | 323 | Rewire — this *is* the current-protocol route file. It needs `mod authority_commit;` plus a `router_build.rs` entry. Until then the authority-commit HTTP surface does not exist at runtime. |
+| `storage-postgres/current_data.rs` | 593 | Rewire — demand-sync current object head index. |
+| `storage-postgres/current_results.rs` | 112 | Rewire — durable typed current-result index. |
+| `storage-postgres/timeline_order.rs` | 658 | Rewire, then drop its inputs. The projection order it persists is `(causal_depth, hlc, actor_id, actor_seq, event_id)`; all five are producer-order values the protocol removed. Message timeline paging survives as a keyset over `realm_commits.stream_position` on one `CommitStreamRef`. The `realm_timeline_order` and `realm_timeline_pending_edges` tables go with the old ordering. |
+| `storage-postgres/mls_public_state.rs` | 287 | Rewire — public MLS genesis/commit tracker. |
+| `storage-postgres/principal_resolution/{current,genesis}.rs` | 238 | Rewire — principal resolution reads. `SyncCursorStore::current_principal` already dropped its `CellStateRegistry` parameter. |
+| `storage-postgres/devices/confirmed_history{,_tests}.rs` | 707 | Rewire — confirmed device history projection. |
+| `storage-postgres/device_revocations/{historical,material_cleanup}.rs` | 172 | Rewire — revocation history and key-material cleanup, both still in the specification. |
+| `storage-postgres/events/approval_publications.rs` | 458 | Rewire — approval publication evidence. |
+| `storage-postgres/events/transaction_locks.rs` | 75 | Rewire — row locks the single commit transaction needs. |
+| `storage-postgres/events/recovery_terminal_tests.rs` | 1,115 | Rewire — recovery terminal-unit tests. The completion criterion must become the pair rule below, not a terminal Seal. |
+| `storage-postgres/sync_cursor/current_detail.rs` | 291 | Rewire — resumable snapshot-and-tail detail page. |
 
-The reducer rewiring is started on the `wip/reducer-authority-commit-rewire`
-branch and is not on `main`: the per-kind reducers still address state through
-the removed cell families, so landing it would leave `soland-domain` red.
+Nothing in this list is a delete: every entry names a product capability that
+the specification kept.
+
+### Recovery completion is two commits, never one
+
+`RecoveryTransaction` completion is **two consecutive `CommittedEventRef`s on
+the same PCR Realm stream**. Because one `RealmCommit` carries exactly one
+`event_ref`, those two references necessarily name **two different commits**:
+same `stream_ref`, which must be `CommitStreamRef::Realm`; `stream_position`
+differing by exactly 1; `commit_id` different; `event_id` different. The
+authoritative implementation is `validate_recovery_commit_pair` in
+`../arkret-rust-sdk/crates/wire/src/recovery_authority.rs`. Any local code that
+reads the two positions out of a *single* commit fails closed forever and is a
+bug, not a shortcut. As of this writing soland contains no such implementation;
+`http/routing/identity/recovery/security_transaction_endpoints.rs` still builds
+the attestation from the retired `terminal_commit_digest`,
+`device_authorization_event_id` and `first_generation_seal_id` fields and has
+to be rewritten onto `reanchor_event_ref` / `device_authorization_event_ref`.
+
+### Relation current value is stream order, never causal depth
+
+A relation's current value is the typed current result produced by the **last
+accepted `ak.relation.resolve` on that relation's stream**, ordered by the
+Station's `stream_position`, with concurrency resolved by an `expected_revision`
+CAS. There is no "greater causal depth wins" rule and no causal-register join.
+Verified 2026-09-16: `crates/domain/src/reducer/` contains no `(depth, EventId)`
+comparison — every remaining `depth` in the reducer is capability delegation
+`max_authority_depth`, an unrelated product concept. The only surviving causal
+ordering is `timeline_order.rs` and the `realm_timeline_order` table above.
 
 ## Protocol invariants
 
@@ -111,27 +125,49 @@ peer-merge graph.
   idempotency reservation in one `conn.transaction`. Batch-level Applet
   installation, Applet authoring preview, Agent membership cascade, and
   moderation franking-nonce effects commit in that same transaction.
-- [ ] Account lifecycle, sessions, account data, and contacts. Storage is wired;
-  `crates/services/src/identity.rs` does not compile.
-- [ ] DID, service identity, device inventory, pairing, and revocation. Storage
-  is wired; the HTTP surface is unverified because `soland-http` does not build.
-- [ ] Realm lifecycle, organization ownership, policy, and directory reads.
-  Reducer code for these lives in `crates/domain/src/reducer/apply_realm_*.rs`,
-  which no `mod` declaration reaches.
-- [ ] Invitations, join policy, history-access policy, and join bootstrap.
-  `crates/domain/src/reducer/apply_invites.rs` and `apply_history_access.rs` are
-  orphaned.
-- [ ] Circles, Sidecars, Spaces, Strands, Morphs, and applet integration.
-  `crates/domain/src/reducer/apply_objects/` is orphaned.
-- [ ] Messages, moderation, notifications, push, Signals, and WebSocket sync.
-  `apply_messages.rs`, `apply_moderation.rs`, and
-  `crates/storage-postgres/src/timeline_order.rs` are orphaned.
+- [~] Account lifecycle, sessions, account data, and contacts. Storage is wired
+  and `crates/services/src/identity.rs` now compiles: consent grants are
+  addressed by `ConsentId`, account status reads come from
+  `arkret_models_collaboration::account_status`, and the §6.1 counterparty
+  comparison survives as exact `ConsentPeer` equality. The HTTP surface is
+  still unverified because `soland-services` (lib) does not build.
+- [~] DID, service identity, device inventory, pairing, and revocation. Storage
+  is wired and the `DeviceRevocationStore` delegation now matches the
+  single-transaction trait (`target_for_event`, `commit_revocation`). Agent
+  runtime activation is gated on the authorize Event's `CommittedEventRef` plus
+  its `AgentLifecycleState` instead of a `SealBasis` and an
+  `AwaitingAcceptedFrontier` state. `crates/http/src/routing/identity/agents/
+  pairing.rs` still carries the retired activation model and is unverified,
+  because `soland-http` is never reached by `cargo check`.
+- [~] Realm lifecycle, organization ownership, policy, and directory reads.
+  `crates/domain/src/reducer/apply_realm_*.rs` are wired and compile; their
+  tests are not ported yet.
+- [~] Invitations, join policy, history-access policy, and join bootstrap.
+  `apply_invites.rs` and `apply_history_access.rs` are wired and compile. Join
+  bootstrap itself is still missing its assembler (see the unchecked invariant
+  above).
+- [~] Circles, Sidecars, Spaces, Strands, Morphs, and applet integration.
+  `crates/domain/src/reducer/apply_objects/` is wired and compiles. The Sidecar
+  projection no longer carries an encryption profile; a Sidecar scope activates
+  RFC 9420 through its own accepted `ak.mls.genesis`.
+- [~] Messages, moderation, notifications, push, Signals, and WebSocket sync.
+  `apply_messages.rs` and `apply_moderation.rs` are wired and compile.
+  `crates/storage-postgres/src/timeline_order.rs` is still orphaned and still
+  orders by producer causal depth; message paging has to move onto
+  `realm_commits.stream_position`.
 - [ ] Blob upload/download and object storage.
-- [ ] MLS key packages, proposals, commits, installed state, and Welcome delivery.
-  The commit/Welcome transaction exists; `crates/domain/src/reducer/mls.rs` and
-  `crates/storage-postgres/src/mls_public_state/` are orphaned.
-- [ ] Key backup, recovery sessions, and security transactions.
-  `apply_key_backup.rs` is orphaned.
+- [ ] MLS key packages, commits, installed state, and Welcome delivery. The
+  commit/Welcome transaction exists and `crates/domain/src/reducer/mls.rs` is
+  wired, but `apply_keypackage_claim` was deleted without a replacement: the
+  KeyPackage compare-and-swap claim is a ledger projection, not an Event
+  reducer, and `MlsEffect::KeyPackageClaimed` plus its tests still reference
+  the removed function. `crates/storage-postgres/src/mls_public_state.rs`
+  remains orphaned. Proposals are inlined into the Commit, so
+  `apply_remove_proposal` is correctly gone; Welcome is a producer-signed
+  `MlsWelcomeDelivery`, so `apply_welcome_enqueue` is correctly gone.
+- [~] Key backup, recovery sessions, and security transactions.
+  `apply_key_backup.rs` is wired and compiles. Recovery completion still has to
+  move onto the two-distinct-commits pair rule stated above.
 - [ ] Federation delivery needed to reach a Realm's current Station.
 - [ ] Administration, health, metrics, configuration, and runtime startup.
 
@@ -260,3 +296,72 @@ still supplies the removed `terminal_commit_digest`,
 `device_authorization_event_id` and `first_generation_seal_id`. It must pass the
 two `CommittedEventRef` values and rely on the SDK's own
 `validate_recovery_commit_pair` rather than re-checking the pair locally.
+
+## Measured status, 2026-09-16
+
+Commands and their real output, so the next session starts from numbers rather
+than from an impression. `cargo check` is run with `--all-targets`, because a
+green library check says nothing about the tests that prove the capability.
+
+```
+cargo check --workspace --all-targets --message-format short
+```
+
+| unit | errors | note |
+|---|---|---|
+| `soland-domain` (lib) | 0 | |
+| `soland-domain` (lib test) | 424 | 160 in `reducer/tests/cells_realm.rs` alone |
+| `soland-storage` (lib) | 0 | |
+| `soland-storage` (lib test) | 35 | `contract_tests.rs` |
+| `soland-storage-postgres` (lib) | 0 | |
+| `soland-storage-postgres` (integration tests) | 160 | `store_contracts` 106, `durable_plane_restart` 43, `account_global_sync` 11 |
+| `soland-services` (lib) | **167** | was 216 at the start of this session |
+| `soland-services` (lib test) | 266 | |
+| `soland-http` | **never checked** | Cargo stops at the failing `soland-services` library, so this crate has not been type-checked once during the migration. |
+| `soland-server` | **never checked** | same reason |
+
+Where the 167 remaining `soland-services` library errors are:
+
+| file | errors | what it needs |
+|---|---|---|
+| `projection.rs` | 94 | the Cell-write projection seam: `arkret_state::state`, `arkret_schema::project_registered_cell_writes*`, `prepare_seal_in_context`, `SealBasis`, `composite_subject`, the `MlsKeypackage`/`MlsWelcome`/`MlsProposal` event kinds |
+| `events.rs` | 32 | `ControlProposalAck`, `GovernanceDependencyWrite`, `MlsSecurityFrontierLeaf`, `RealmBootstrapCommitOutcome`, `RecoveryTerminalCommitWrite` |
+| `sync.rs` | 16 | the frozen timeline window: `TimelineOrderPosition`, `TimelineWindowScan` |
+| `persistence_operations.rs` | 12 | same timeline window, plus the control-proposal ack port |
+| `persistence_events.rs` | 12 | same as `events.rs` |
+| `hydration.rs` | 1 | `validate_realm_bootstrap_unit`; the SDK now validates one genesis Event (`validate_realm_genesis_event`) rather than a multi-Event unit |
+
+The `soland-http` figure is the important one. Nothing in that crate has been
+compiled since the migration began, and a grep finds 328 references to the
+retired encryption-floor / content-scheme / encryption-profile vocabulary across
+40+ files there, plus a 2,177-line
+`routing/identity/recovery/security_transaction_endpoints.rs` still built on
+Seals. Treat "the workspace has N errors" as a lower bound until
+`soland-services` (lib) reaches zero.
+
+### Upstream dependency
+
+`arkret-rust-sdk` has several agents landing the fourth round of restorations
+concurrently, and its working tree went red twice during this session
+(`arkret-mls::exporter_kdf` importing `arkret_wire::CallRecordingId`, then
+`arkret-models-identity::signer_key_operations` against `CommittedEventRef` /
+`StationSigningKey`). Both cleared on their own. Measure soland only when the
+SDK workspace is green, or the numbers mean nothing.
+
+### Schema
+
+`schema.rs` and the initial migration now agree column for column: enumerating
+every `diesel::table!` and every `CREATE TABLE` finds **0** declared columns and
+**0** declared tables the database does not have. The five that were wrong were
+`device_revocation_gate_receipts.{target_device_authorize_event_id,
+target_device_generation_ref}` (also spelled into the primary key) and
+`federation_frontier_confirmed_evidence.{resolution_kind, resolution_digest,
+resolved_at}`, where the table actually has `local_resolution_kind`,
+`local_resolution_digest`, `local_normalized_at`, `peer_alignment_digest` and
+`peer_aligned_at`.
+
+The old-protocol tables are still created: Seal, Cell, control-proposal,
+history-key, RHRK, frontier, and the two timeline-order tables. They cannot be
+dropped while `federation.rs`, `events.rs`, `idempotency.rs`, `recovery.rs`,
+`services/src/persistence_operations.rs` and `test-support/src/fault_injection.rs`
+still name them.
