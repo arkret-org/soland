@@ -31,17 +31,6 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
-    pub async fn recover_confirmed_metadata(
-        &self,
-        projection: &ProjectionService,
-        realm: &RealmId,
-        adapter: &dyn HydrationProjectionAdapter,
-    ) -> Result<BTreeSet<arkret_identifiers::Hash>, String> {
-        projection
-            .recover_confirmed_metadata(realm, self.persistence.as_ref(), adapter)
-            .await
-    }
-
     /// Load immutable pending publication material without granting finality.
     pub async fn publication_event_for_approval(
         &self,

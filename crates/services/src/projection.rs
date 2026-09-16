@@ -43,7 +43,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
 
-mod confirmed_commands;
+mod atomic_batch;
 pub mod tombstone;
 
 /// A confirmed metadata mutation is awaiting reconstruction at its exact head.

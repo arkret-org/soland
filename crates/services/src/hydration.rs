@@ -192,7 +192,6 @@ pub async fn hydrate_sidecar_projections(
                 sidecar_id: record.sidecar_id,
                 realm_id: record.realm_id,
                 controller_account_id: record.controller_account_id,
-                encryption_profile: arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile::MlsRfc9420,
                 state: record.state,
                 state_changed_at: record.state_changed_at,
                 created_at: record.created_at,
@@ -302,18 +301,11 @@ async fn select_hydration_records(
         }
         let event = serde_json::from_value::<Event>(record.envelope.clone())
             .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
-        if event.auth_context.is_some()
-            && arkret_schema::classify_event_execution(&event)
-                .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
-                == Some(arkret_wire::CbsEffectPlane::Data)
-            && projection
-                .control_proposal_snapshot(&event.event_id.event_digest())
-                .await
-                .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
-                .is_none()
-        {
-            result.push(record);
-        }
+        // Every accepted Event reached the reducer through the same authority
+        // commit stream: there is no second effect plane to filter out and no
+        // proposal to wait on, so an unseen published record always replays.
+        let _ = &event;
+        result.push(record);
     }
     Ok(result)
 }
