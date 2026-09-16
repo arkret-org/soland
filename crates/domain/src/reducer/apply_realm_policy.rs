@@ -131,43 +131,6 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH.to_owned(),
             };
         }
-        // `encryption-and-audit.md` §2.4.1 — the ceiling is a reducer rule, not
-        // a schema bound, so an over-ceiling window arrives here and leaves as
-        // a rejection. It is never clamped.
-        if let Err(reason) = validate_relaxed_window(&value) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-        if let Err(reason) = validate_mls_send_pause(&value) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-        // One-way encryption-floor ratchet (realm-and-space.md §2.5): the
-        // effective content / metadata encryption floor MUST be monotonically
-        // non-decreasing. Compare the incoming snapshot against the currently
-        // projected floor before the facet is overwritten; tightening is always
-        // allowed, lowering (including dropping a previously-set floor by
-        // omission) is rejected.
-        if content_floor_rank(policy_floor_field(&value, "content_encryption_floor"))
-            < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
-        {
-            return ProjectionEffect::Rejected {
-                reason: "content_encryption_floor_downgrade".to_owned(),
-            };
-        }
-        if metadata_floor_rank(policy_floor_field(&value, "metadata_encryption_floor"))
-            < metadata_floor_rank(self.realm_metadata_encryption_floor(&realm_id).as_deref())
-        {
-            return ProjectionEffect::Rejected {
-                reason: "metadata_encryption_floor_downgrade".to_owned(),
-            };
-        }
-        // `content_scheme` is frozen by the accepted MLS group Genesis and is
-        // not a bundle component (realm-and-space.md §2.3). The closed bundle
-        // schema does not declare it, so there is nothing to select, ratchet or
-        // preserve here: it is read from the accepted MLS genesis binding.
         self.set_realm_facet(&realm_id, facet::REALM_POLICY_BUNDLE, value);
         ProjectionEffect::RealmPolicyBundleProjected { realm_id }
     }

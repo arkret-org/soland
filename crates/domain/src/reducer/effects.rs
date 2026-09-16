@@ -33,10 +33,8 @@ pub enum ProjectionEffect {
         event_ref: String,
         actor_id: String,
         occurrence: Option<String>,
-        /// The one deterministic current write after joining all accepted evidence.
-        winner_event_id: String,
-        /// Receiver-derived causal depth used before the full Event-id tie-break.
-        winner_depth: u64,
+        /// Accepted Event whose entry is now the settled RSVP.
+        source_event_id: String,
     },
     PinProjected {
         pin_scope_key: String,

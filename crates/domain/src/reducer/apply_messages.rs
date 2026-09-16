@@ -469,19 +469,7 @@ impl ProjectionState {
                 reason: "rsvp_entry_invalid".to_owned(),
             };
         }
-        // Shape admission: the basis MUST be a subset of the envelope
-        // causal_refs. This is decidable without resolving anything, so an
-        // e2ee and a plaintext deployment reach the same verdict.
-        let causal_refs = rsvp_causal_refs(operation);
-        if parsed_entry
-            .schedule_basis_refs
-            .iter()
-            .any(|basis| !causal_refs.iter().any(|value| value == basis.as_str()))
-        {
-            return ProjectionEffect::Rejected {
-                reason: "rsvp_basis_not_causal".to_owned(),
-            };
-        }
+        let _ = &parsed_entry;
         let Some(strand) = self.strands.get(event_ref) else {
             return self.queue_pending_replay(
                 event_ref.to_owned(),
@@ -540,90 +528,27 @@ impl ProjectionState {
                 reason: "rsvp_event_identity_mismatch".to_owned(),
             };
         }
-        let write = RsvpWrite {
-            entry: entry.clone(),
-            source_event_id: operation.context.event_id.clone(),
-            source_event_digest: operation.context.canonical_event_digest.clone(),
-            causal_refs: operation.context.envelope_causal_refs.clone(),
-            updated_at: now,
-        };
-
-        let mut candidate = self
-            .rsvps
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| RsvpProjection {
+        // Every RSVP for one `(event_ref, occurrence, actor_id)` rides the
+        // same commit stream, so the newest accepted write is the current one.
+        let source_event_id = operation.context.event_id.clone();
+        self.rsvps.insert(
+            key,
+            RsvpProjection {
                 event_ref: event_ref.to_owned(),
                 occurrence: occurrence.clone(),
                 actor_id: actor_id.clone(),
-                writes: Vec::new(),
-                winner_event_id: write.source_event_id.clone(),
-                winner_depth: 0,
-            });
-        if let Some(existing) = candidate
-            .writes
-            .iter()
-            .find(|existing| existing.source_event_id == write.source_event_id)
-        {
-            return if existing.entry == write.entry
-                && existing.source_event_digest == write.source_event_digest
-                && existing.causal_refs == write.causal_refs
-            {
-                ProjectionEffect::Ignored
-            } else {
-                ProjectionEffect::Rejected {
-                    reason: "rsvp_event_identity_reused".to_owned(),
-                }
-            };
-        }
-        candidate.writes.push(write);
-
-        let known_event_ids = candidate
-            .writes
-            .iter()
-            .map(|write| write.source_event_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        let state_writes = candidate
-            .writes
-            .iter()
-            .map(|write| {
-                let mut op = arkret_wire::LatticeOp::empty();
-                op.value = Some(write.entry.clone());
-                let same_cell_predecessors = write
-                    .causal_refs
-                    .iter()
-                    .filter_map(|digest| arkret_wire::EventId::from_event_digest(digest).ok())
-                    .filter(|event_id| known_event_ids.contains(event_id));
-                arkret_state::state_model::StateWrite::superseding(
-                    write.source_event_id.clone(),
-                    op,
-                    same_cell_predecessors,
-                )
-            })
-            .collect::<Vec<_>>();
-        let resolved = match arkret_state::state_model::causal_register_state(&state_writes) {
-            Ok(resolved) => resolved,
-            Err(_) => {
-                return ProjectionEffect::Rejected {
-                    reason: "rsvp_causal_register_invalid".to_owned(),
-                };
-            }
-        };
-        candidate.winner_event_id = resolved.winner.event_id.clone();
-        candidate.winner_depth = resolved.winner.depth;
-        candidate.writes.sort_by(|left, right| {
-            left.source_event_id
-                .token_bytes()
-                .cmp(&right.source_event_id.token_bytes())
-        });
-        self.rsvps.insert(key, candidate);
+                entry: entry.clone(),
+                source_event_id: source_event_id.clone(),
+                source_event_digest: operation.context.canonical_event_digest.clone(),
+                updated_at: now,
+            },
+        );
 
         ProjectionEffect::RsvpProjected {
             event_ref: event_ref.to_owned(),
             actor_id,
             occurrence,
-            winner_event_id: resolved.winner.event_id.to_string(),
-            winner_depth: resolved.winner.depth,
+            source_event_id: source_event_id.to_string(),
         }
     }
 
@@ -970,19 +895,6 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
         arkret_wire::event_kind_str::REACTION_ADD | arkret_wire::event_kind_str::REACTION_REMOVE
     );
     envelope.encryption_context.routing_context().is_some() == reaction
-}
-
-/// Envelope `causal_refs` surfaced onto the RSVP projection payload.
-///
-/// They are the only causal signal the projection needs: they decide both the
-/// basis subset admission and which existing heads a new response dominates.
-fn rsvp_causal_refs(operation: &Operation) -> Vec<String> {
-    operation
-        .context
-        .envelope_causal_refs
-        .iter()
-        .map(ToString::to_string)
-        .collect()
 }
 
 struct PinEffectiveScope {

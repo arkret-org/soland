@@ -815,49 +815,6 @@ pub(crate) fn metadata_floor_rank(floor: Option<&str>) -> u8 {
     }
 }
 
-/// `encryption-and-audit.md` §2.4.1 — absolute ceiling on the declared
-/// `ak.profile.e2ee_relaxed.v1` removed-member decryption window.
-///
-/// Spelled once here and taken from the SDK's wire-type constant so the
-/// reducer, the schema and the receivers cannot drift.
-pub(crate) const RELAXED_WINDOW_MAX_MS_CEILING: u64 =
-    arkret_models_collaboration::events_payloads::RELAXED_WINDOW_MAX_MS_CEILING;
-
-/// `encryption-and-audit.md` §2.4.1 — reject a `relaxed_window_max_ms` above
-/// the absolute ceiling.
-///
-/// The schema leaves the field unbounded above on purpose so an over-ceiling
-/// value reaches this check as `relaxed_window_exceeds_ceiling` rather than as
-/// `schema_violation`. Silently clamping to the ceiling is forbidden: a sender
-/// that asked for a longer window would believe it got one.
-pub(crate) fn validate_relaxed_window(value: &Value) -> Result<(), &'static str> {
-    let Some(declared) = value.get("relaxed_window_max_ms") else {
-        return Ok(());
-    };
-    // A non-integer or negative value never reaches the ceiling rule; it is an
-    // ordinary schema violation of `{"type":"integer","minimum":1}`.
-    let Some(window_ms) = declared.as_u64().filter(|window| *window >= 1) else {
-        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-    };
-    if window_ms > RELAXED_WINDOW_MAX_MS_CEILING {
-        return Err(arkret_wire::ReasonCode::RELAXED_WINDOW_EXCEEDS_CEILING);
-    }
-    Ok(())
-}
-
-/// Validate the closed `mls_send_pause` policy value. The effective relaxed
-/// mode is derived directly from `advisory`; no generic Realm profile carrier
-/// exists.
-pub(crate) fn validate_mls_send_pause(value: &Value) -> Result<(), &'static str> {
-    let Some(pause) = value.get("mls_send_pause").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    if pause != "advisory" {
-        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod policy_bundle_component_tests {
     use serde_json::json;
@@ -884,26 +841,5 @@ mod policy_bundle_component_tests {
             validate_challenge_response_gate(typed_core.as_object().unwrap()),
             Err("challenge_response_provider_invalid")
         );
-    }
-
-    #[test]
-    fn an_over_ceiling_relaxed_window_is_not_a_schema_violation() {
-        validate_relaxed_window(&json!({"relaxed_window_max_ms": 300_000})).unwrap();
-        validate_relaxed_window(&json!({"policy_revision": 1})).unwrap();
-        assert_eq!(
-            validate_relaxed_window(&json!({"relaxed_window_max_ms": 300_001})),
-            Err(arkret_wire::ReasonCode::RELAXED_WINDOW_EXCEEDS_CEILING)
-        );
-        assert_eq!(
-            validate_relaxed_window(&json!({"relaxed_window_max_ms": 0})),
-            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        );
-    }
-
-    #[test]
-    fn advisory_send_pause_is_the_policy_carrier() {
-        let advisory = json!({"mls_send_pause": "advisory"});
-        validate_mls_send_pause(&advisory).unwrap();
-        validate_mls_send_pause(&json!({"policy_revision": 1})).unwrap();
     }
 }

@@ -872,34 +872,19 @@ pub struct ReactionState {
 /// The state model value is the whole `payload.entry`. History remains available
 /// so out-of-order delivery can recompute depth after a predecessor arrives.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RsvpWrite {
-    pub entry: Value,
-    pub source_event_id: EventId,
-    pub source_event_digest: Hash,
-    pub causal_refs: Vec<Hash>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Converged RSVP cell for one `(event_ref, occurrence, actor_id)` subject.
+/// Settled RSVP of one `(event_ref, occurrence, actor_id)` subject.
 ///
-/// The projection retains all covered writes but exposes exactly one winner,
-/// selected by causal depth and then the complete Event identity.
-#[derive(Clone, Debug, PartialEq)]
+/// Every response rides the Realm's own commit stream, so the newest accepted
+/// one replaces the previous outright; there is no covered-write set to retain
+/// and no winner to select.
 pub struct RsvpProjection {
     pub event_ref: String,
     pub occurrence: Option<String>,
     pub actor_id: String,
-    pub writes: Vec<RsvpWrite>,
-    pub winner_event_id: EventId,
-    pub winner_depth: u64,
-}
-
-impl RsvpProjection {
-    pub fn winner(&self) -> Option<&RsvpWrite> {
-        self.writes
-            .iter()
-            .find(|write| write.source_event_id == self.winner_event_id)
-    }
+    pub entry: Value,
+    pub source_event_id: EventId,
+    pub source_event_digest: Hash,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
