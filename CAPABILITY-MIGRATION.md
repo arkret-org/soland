@@ -175,8 +175,24 @@ peer-merge graph.
 
 - [x] Cell/Seal state join and Seal construction helpers: replaced by Station
   admission followed by an authority-signed stream commit.
-- [x] CBS/conformance basis fixtures: they existed only to synthesize Seal
-  authority.
+- [ ] ~~CBS/conformance basis fixtures: they existed only to synthesize Seal
+  authority.~~ **The premise is wrong and this box was ticked in error**
+  (corrected 2026-09-18). `arkret_wire::cbs` was never a fixture module. It is
+  the Cell-write projection data model, and it is load-bearing in this
+  repository right now: **19 files, 49 references**, spread across `domain` (3),
+  `http` (12), `server` (2), `services` (1) and `storage-postgres` (1) --
+  `ProjectedCellWrite` (26), `ProjectedOp` (11), `LatticeOpType` (7),
+  `LatticeOp` (4), `ProjectionEffect` (3). The live consumers are the accepted
+  operation projection pipeline (`http/src/routing/events/projection/apply.rs`),
+  the governance proof builder, the submit value path and the postgres
+  `current_data` writer -- all product capability, none of it Seal synthesis.
+  The module is gone from the SDK (`crates/wire/src/lib.rs` has no `pub mod
+  cbs`; `ProjectedCellWrite` / `ProjectedOp` / `LatticeOp` have zero hits
+  anywhere in the SDK). Its successors are `arkret_wire::patch::Patch` plus
+  `arkret_models_collaboration`'s `TypedCurrentResult`, which have a **different
+  shape**, so this is a port, not a deletion. The four compile errors the
+  triage counted are only the ones Cargo reaches before it aborts at
+  `soland-services`; they are not the size of the job.
 - [x] HLC and producer causal predecessor handling: ordering now belongs to the
   selected independent commit stream.
 - [x] Peer frontier exchange/reduction and Move/Seal federation: a Realm has one
@@ -191,6 +207,18 @@ peer-merge graph.
   (`unit_of_work/domain_effects.rs`): it existed only to replay Contact and
   consent intents at a later Seal decision. The Station now admits and commits
   in one transaction, so the effects are applied directly.
+- [x] Control-proposal authority ack lane (landed 2026-09-18, `fa20b0cd9`):
+  `POST /_arkret/self/control-proposal-acks` and the two
+  `control-proposal-decisions` routes, `MaintenancePort`'s two ack methods,
+  `SyncStoreRegistry::control_proposal_authority_acks`, the
+  `PgControlProposalAuthorityAckStore` contract test, the
+  `control_proposal_authority_acks` table and its `diesel::table!` block. Every
+  upstream link was already deleted before this, so the routes were serving a
+  store trait that no longer existed; there was no product capability behind
+  the lane to preserve. Note that `schema.rs`'s
+  `control_proposal_ack -> Nullable<Jsonb>` column is a **different thing** --
+  it is on the ingress side and is entangled with the projection seam, so it
+  stays until `projection.rs` is ported.
 - [x] Audited-E2EE compliance profiles: `ak.profile.attested_audit_e2ee.v1` and
   `ak.profile.disclosed_audit_e2ee.v1` are gone from the specification and the
   SDK, so `AUDIT_COMPLIANCE_PROFILES` is removed from
@@ -429,7 +457,59 @@ still supplies the removed `terminal_commit_digest`,
 two `CommittedEventRef` values and rely on the SDK's own
 `validate_recovery_commit_pair` rather than re-checking the pair locally.
 
-## Measured status, 2026-09-16
+## Measured status, 2026-09-18
+
+```
+cargo check --workspace --all-targets --keep-going --message-format short
+```
+
+`--keep-going` is not optional. Without it Cargo aborts the whole build at the
+first failing unit, which is why every earlier number in this file understated
+the workspace: the units after `soland-services` were never reached at all.
+
+| unit | errors | delta vs 09-16 |
+|---|---|---|
+| `soland-domain` (lib) | 0 | |
+| `soland-domain` (lib test) | 392 | -32 |
+| `soland-storage` (lib) | 0 | |
+| `soland-storage` (lib test) | 35 | 0 |
+| `soland-storage-postgres` (lib) | **0** | was 3 undetected E0609 |
+| `soland-storage-postgres` (lib test) | 84 | not previously measured |
+| `soland-storage-postgres` (integration tests) | 170 | `store_contracts` 111, `durable_plane_restart` 48, `account_global_sync` 11 |
+| `soland-services` (lib) | **160** | -7 |
+| `soland-services` (lib test) | 199 | -67 |
+| `soland-http` | **still never checked** | blocked on `soland-services` (lib) |
+| `soland-server` | **still never checked** | same |
+
+Workspace total with `--keep-going`: **853** errors across 8 failing units.
+
+What `fa20b0cd9` actually closed: `soland-storage-postgres` (lib) 3 -> 0,
+`hydration.rs` 1 -> 0, `persistence_operations.rs` 12 -> 7 (the remainder is
+timeline only), and the two `E0407` in the same file. It did **not** move
+`projection.rs`, and it was not meant to.
+
+### The three remaining `soland-services` (lib) clusters are not residue
+
+- `projection.rs` -- the Cell-write projection seam. Every `control_*` method on
+  it routes through `self.control_event_store()`, and
+  `arkret_state::state::store::ControlEventStore` no longer exists upstream, so
+  `put_pending_control_event`, `put_pending_control_unit`,
+  `control_event_by_digest`, `control_proposal_snapshot` and
+  `pending_control_records` are **all** broken -- not only the ack ones. The
+  capability those methods provide survives in the protocol; the store under
+  them has to be rebuilt in soland. Together with the `cbs` port above this is
+  one design round, not a sweep.
+- `events.rs` / `persistence_events.rs` -- the same seam seen from the event
+  side.
+- `sync.rs` / `persistence_operations.rs` -- `TimelineOrderPosition` /
+  `TimelineWindowScan`. These types did not exist at the merge base
+  `e309e0463` either; they are residue of the **earlier** large deletion, not
+  of this round. The replacement design (keyset on `realm_commits.stream_position`
+  over a single `CommitStreamRef`) cannot be implemented yet: the frame shape it
+  has to feed is undefined in the specification. See
+  `arkret-work/tasks/spec-open/`.
+
+## Superseded: measured status, 2026-09-16
 
 Commands and their real output, so the next session starts from numbers rather
 than from an impression. `cargo check` is run with `--all-targets`, because a
