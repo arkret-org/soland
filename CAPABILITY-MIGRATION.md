@@ -284,6 +284,39 @@ peer-merge graph.
   `control_proposal_ack -> Nullable<Jsonb>` column is a **different thing** --
   it is on the ingress side and is entangled with the projection seam, so it
   stays until `projection.rs` is ported.
+- [~] The `soland-http` ingress ack lane (measured 2026-09-19). The two modules
+  it is built on, `crate::notary` and `crate::control_proposal`, **no longer
+  exist as files**: `find src -path '*notary*' -o -path '*control_proposal*'`
+  returns nothing. "Notary" also has **zero hits in the whole of
+  `arkret-spec/spec/v1/zh`**, and `authz/cbs-profiles.md`, cited by name in
+  `submit/control_ack.rs`, is not in the tree either. So every `crate::notary::`
+  and `crate::control_proposal::` path in this crate resolves to nothing; these
+  are not calls that need porting, they are calls into a deleted mechanism.
+  Fifteen files still contain them:
+
+  | file | refs | status |
+  |---|---|---|
+  | `event_log/governance_proof.rs` | 11 | **held** -- also carries the Seal-frontier question under ruling |
+  | `event_log/submit/control_ack.rs` | 8 | delete whole (211 lines); it is the lane's entry point |
+  | `event_log/endpoints.rs` | 5 | **held** -- same ruling |
+  | `event_log/submit/identity_anchor.rs` | 4 | unwind |
+  | `event_log/submit/ghost_provision.rs` | 4 | unwind |
+  | `identity/agent_pcr.rs` | 3 | unwind |
+  | `identity/recovery/security_transaction_endpoints.rs` | 2 | unwind |
+  | `spaces/directory/realm_resolution.rs`, `interop/moderation.rs`, `interop/mimi/payload.rs`, `identity/account/social/contact_write.rs`, `identity/account.rs`, `event_log/submit/value.rs`, `event_log/submit/realm_bootstrap.rs`, `conformance/handlers.rs` | 1 each | unwind |
+
+  `arkret_wire::ControlProposalAck`, `ControlProposalAckKind`,
+  `ControlProposalDecisionCommitOutcome` and `SealBasis` likewise have **zero
+  hits in the SDK**, so the types threaded through
+  `submit.rs`, `commit_prepare.rs`, `post_commit.rs`, `value.rs`,
+  `identity_anchor.rs`, `agent_membership_cascade.rs`, `state/app_state.rs` and
+  `conformance/realm_fixture.rs` have no definition either. The receiver-minted
+  Ack has no successor object: in the authority-commit protocol an admitted
+  Control Move is evidenced by the accepted Event plus its signed `RealmCommit`,
+  and nothing else is issued.
+  This is marked `[~]` and not `[x]` because two of the fifteen files are held
+  behind the open Seal-frontier ruling, so the lane cannot be closed in one
+  pass.
 - [x] Audited-E2EE compliance profiles: `ak.profile.attested_audit_e2ee.v1` and
   `ak.profile.disclosed_audit_e2ee.v1` are gone from the specification and the
   SDK, so `AUDIT_COMPLIANCE_PROFILES` is removed from
