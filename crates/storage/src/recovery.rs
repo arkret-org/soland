@@ -191,7 +191,7 @@ pub fn validate_security_transaction_update(
     if current == next {
         return Ok(());
     }
-    if current.terminal_result.is_some() {
+    if current.terminal_outcome.is_some() {
         return Err(PersistenceError::Conflict(
             "terminal security transaction cannot change".to_owned(),
         ));

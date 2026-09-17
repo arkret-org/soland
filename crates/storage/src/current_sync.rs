@@ -33,7 +33,7 @@ pub struct CurrentDetailProgress {
 #[derive(Clone, Debug)]
 pub struct CurrentDetailPage {
     pub progress: CurrentDetailProgress,
-    pub entries: Vec<arkret_wire::StreamItem>,
+    pub entries: Vec<arkret_wire::StreamRow>,
     pub snapshot: Option<arkret_wire::RealmStateSnapshot>,
 }
 

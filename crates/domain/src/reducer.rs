@@ -5,10 +5,10 @@
 //! each Circle and each Sidecar carry independent linear streams, and this
 //! module never derives order from a producer Event or from a peer-merge
 //! graph. [`CommitStreamProjection`] owns the per-stream succession check;
-//! [`ProjectionState`] folds the accepted [`arkret_wire::StreamItem`] into the
+//! [`ProjectionState`] folds the accepted [`arkret_wire::StreamRow`] into the
 //! product projection once that check passes.
 
-// Independent per-stream head tracking for accepted `StreamItem`s.
+// Independent per-stream head tracking for accepted `StreamRow`s.
 mod commit_stream;
 // Domain coordinates for the Station's local product projection.
 mod facets;

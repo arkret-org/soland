@@ -30,7 +30,7 @@ now reachable and the crate's **library** compiles. Its 424 remaining errors are
 all in `#[cfg(test)]` code.
 
 Judgement per file. "Rewire" means the capability is in the specification and
-the module must be migrated onto accepted `StreamItem` / `CommittedEventRef`
+the module must be migrated onto accepted `StreamRow` / `CommittedEventRef`
 inputs; "Delete" means every responsibility in it belongs to a removed
 mechanism.
 
@@ -82,7 +82,7 @@ ordering is `timeline_order.rs` and the `realm_timeline_order` table above.
 ## Protocol invariants
 
 - [x] Producer `Event` carries no predecessor or local ordering metadata.
-  `crates/domain/src/reducer.rs` projects `StreamItem` only;
+  `crates/domain/src/reducer.rs` projects `StreamRow` only;
   `crates/storage/src/authority_commit.rs::AuthorityCommitTransaction::validate`
   rejects a commit whose stream disagrees with the Event scope.
 - [x] Realm, Circle, and Sidecar each use an independent `CommitStreamRef`.
@@ -115,7 +115,7 @@ ordering is `timeline_order.rs` and the `realm_timeline_order` table above.
 ## Product capabilities to preserve and migrate
 
 Every item below needs its projection and storage code to consume accepted
-`StreamItem`/`CommittedEventRef` inputs, never producer-Event order or a
+`StreamRow`/`CommittedEventRef` inputs, never producer-Event order or a
 peer-merge graph.
 
 - [x] Accepted-Event durable boundary. `crates/storage-postgres/src/unit_of_work.rs`

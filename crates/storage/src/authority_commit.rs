@@ -157,7 +157,7 @@ pub trait AuthorityCommitStore: Send + Sync {
     async fn resolve_committed(
         &self,
         refs: &[arkret_wire::CommittedEventRef],
-    ) -> PersistenceResult<Vec<arkret_wire::StreamItem>>;
+    ) -> PersistenceResult<Vec<arkret_wire::StreamRow>>;
 
     async fn install_handoff(
         &self,

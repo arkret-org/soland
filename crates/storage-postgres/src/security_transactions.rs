@@ -36,7 +36,7 @@ struct SecurityTransactionRow {
     #[diesel(sql_type = Jsonb)]
     accepted_steps: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
-    terminal_result: Option<Value>,
+    terminal_outcome: Option<Value>,
     #[diesel(sql_type = Binary)]
     canonical_request: Vec<u8>,
 }
@@ -130,9 +130,9 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
             prepared_plan_digest: Hash::new(row.prepared_plan_digest)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             accepted_steps: parse_stored("accepted_steps", row.accepted_steps)?,
-            terminal_result: row
-                .terminal_result
-                .map(|result| parse_stored("terminal_result", result))
+            terminal_outcome: row
+                .terminal_outcome
+                .map(|result| parse_stored("terminal_outcome", result))
                 .transpose()?,
         };
         resource
@@ -155,7 +155,7 @@ fn parse_stored<T: serde::de::DeserializeOwned>(name: &str, value: Value) -> Per
 
 const COLUMNS: &str = "id, kind, principal_id, station_id, expires_at, created_at, \
     request_digest, prepared_plan, prepared_plan_digest, accepted_steps, \
-    terminal_result, canonical_request";
+    terminal_outcome, canonical_request";
 
 async fn load_one(
     conn: &mut AsyncPgConnection,
@@ -216,7 +216,7 @@ async fn insert_one(
         "INSERT INTO security_transactions \
          (id, kind, principal_id, station_id, expires_at, created_at, request_digest, \
            prepared_plan, prepared_plan_digest, accepted_steps, \
-           terminal_result, canonical_request) \
+           terminal_outcome, canonical_request) \
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
@@ -242,7 +242,7 @@ async fn insert_one(
     )
     .bind::<Nullable<Jsonb>, _>(
         resource
-            .terminal_result
+            .terminal_outcome
             .as_ref()
             .map(serde_json::to_value)
             .transpose()
@@ -311,7 +311,7 @@ async fn update_mutable_fields(
 ) -> PersistenceResult<()> {
     sql_query(
         "UPDATE security_transactions SET accepted_steps = $2, \
-         terminal_result = $3 WHERE id = $1",
+         terminal_outcome = $3 WHERE id = $1",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         record.resource.transaction_id.as_str(),
@@ -323,7 +323,7 @@ async fn update_mutable_fields(
     .bind::<Nullable<Jsonb>, _>(
         record
             .resource
-            .terminal_result
+            .terminal_outcome
             .as_ref()
             .map(serde_json::to_value)
             .transpose()
@@ -359,7 +359,7 @@ async fn lock_transaction_recovery_authority(
     conn: &mut AsyncPgConnection,
     record: &SecurityTransactionRecord,
 ) -> Result<(), PgTransactionError> {
-    if record.resource.terminal_result.is_some() {
+    if record.resource.terminal_outcome.is_some() {
         return Ok(());
     }
     if let Some(binding) = record.resource.recovery_plan().map(|plan| &plan.binding) {
@@ -466,7 +466,7 @@ pub(crate) async fn accept_step_in_transaction(
     .map_err(PersistenceError::database)?;
     update_mutable_fields(conn, &record).await?;
     if matches!(
-        record.resource.terminal_result,
+        record.resource.terminal_outcome,
         Some(arkret_models_crypto::SecurityTransactionTerminalOutcome::Completed { .. })
     ) && let Some(binding) = record.resource.recovery_plan().map(|plan| &plan.binding)
     {

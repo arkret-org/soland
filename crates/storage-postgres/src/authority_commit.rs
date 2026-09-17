@@ -85,7 +85,7 @@ struct HandoffRow {
 }
 
 #[derive(QueryableByName)]
-struct StreamItemRow {
+struct CommitStreamRow {
     #[diesel(sql_type = Jsonb)]
     commit_json: Value,
     #[diesel(sql_type = Jsonb)]
@@ -609,7 +609,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .bind::<Text, _>(key)
         .bind::<BigInt, _>(after)
         .bind::<BigInt, _>(limit)
-        .load::<StreamItemRow>(&mut *conn)
+        .load::<CommitStreamRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
         let truncated = rows.len() > usize::from(request.limit);
@@ -617,7 +617,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .into_iter()
             .take(usize::from(request.limit))
             .map(|row| {
-                Ok(arkret_wire::StreamItem {
+                Ok(arkret_wire::StreamRow {
                     commit: decode_json(row.commit_json, "RealmCommit")?,
                     event: decode_json(row.envelope, "committed Event")?,
                 })
@@ -631,7 +631,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn resolve_committed(
         &self,
         refs: &[arkret_wire::CommittedEventRef],
-    ) -> PersistenceResult<Vec<arkret_wire::StreamItem>> {
+    ) -> PersistenceResult<Vec<arkret_wire::StreamRow>> {
         let mut conn = pg_conn(&self.pool).await?;
         let mut items = Vec::with_capacity(refs.len());
         for reference in refs {
@@ -649,14 +649,14 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .bind::<Text, _>(reference.commit_id.as_str())
             .bind::<Text, _>(key)
             .bind::<BigInt, _>(position)
-            .get_result::<StreamItemRow>(&mut *conn)
+            .get_result::<CommitStreamRow>(&mut *conn)
             .await
             .optional()
             .map_err(PersistenceError::database)?
             .ok_or_else(|| {
                 PersistenceError::NotFound("exact committed Event ref not found".into())
             })?;
-            let item = arkret_wire::StreamItem {
+            let item = arkret_wire::StreamRow {
                 commit: decode_json(row.commit_json, "RealmCommit")?,
                 event: decode_json(row.envelope, "committed Event")?,
             };

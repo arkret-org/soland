@@ -576,7 +576,7 @@ async fn build_fixture(pool: &crate::PgPool, marker: char) -> Fixture {
         prepared_plan,
         prepared_plan_digest,
         accepted_steps: Vec::new(),
-        terminal_result: None,
+        terminal_outcome: None,
     };
     resource
         .validate_structural()
@@ -620,7 +620,7 @@ async fn build_fixture(pool: &crate::PgPool, marker: char) -> Fixture {
             },
         }))
         .expect("fixture recovery completion attestation");
-    resource.terminal_result = Some(arkret_wire::SecurityTransactionTerminalOutcome {
+    resource.terminal_outcome = Some(arkret_wire::SecurityTransactionTerminalOutcome {
         result: arkret_wire::SecurityTransactionResultKind::Completed,
         completed_at: time,
         receipt_id: Some(terminal_receipt_id.parse().unwrap()),
@@ -678,7 +678,8 @@ async fn seed_transaction_and_session(pool: &crate::PgPool, fixture: &Fixture) {
     sql_query(
         "INSERT INTO security_transactions \
          (id, kind, principal_id, station_id, expires_at, created_at, request_digest, \
-          prepared_plan, prepared_plan_digest, accepted_steps, terminal_result, canonical_request) \
+          prepared_plan, prepared_plan_digest, accepted_steps, terminal_outcome, \
+          canonical_request) \
          VALUES ($1, 'recovery', $2, $3, $4, $5, $6, $7, $8, '[]'::jsonb, NULL, $9)",
     )
     .bind::<diesel::sql_types::Uuid, _>(crate::ids::typed_uuid_part_expect_internal(
@@ -844,7 +845,7 @@ async fn step_row_counts(pool: &crate::PgPool, transaction_id: &str) -> (i64, i6
     .value;
     let terminal = sql_query(
         "SELECT COUNT(*)::bigint AS value FROM security_transactions \
-         WHERE id = $1 AND terminal_result IS NOT NULL",
+         WHERE id = $1 AND terminal_outcome IS NOT NULL",
     )
     .bind::<diesel::sql_types::Uuid, _>(uuid)
     .get_result::<CountRow>(&mut *conn)

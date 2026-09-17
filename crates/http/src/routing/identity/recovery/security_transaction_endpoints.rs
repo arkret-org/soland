@@ -363,7 +363,7 @@ async fn accept_rotation_step(
         .next_required_step()
         .map_err(|error| AppError::internal(error.to_string()))?;
     if next.is_none() {
-        transaction.resource.terminal_result =
+        transaction.resource.terminal_outcome =
             Some(arkret_wire::SecurityTransactionTerminalOutcome {
                 result: arkret_wire::SecurityTransactionResultKind::Completed,
                 completed_at: chrono::Utc::now(),
@@ -643,7 +643,7 @@ fn initial_backup_erase_outcome(
             .map_err(|error| AppError::internal(format!("erase request digest failed: {error}")))?,
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
-    let series_results = request
+    let series_records = request
         .series
         .iter()
         .map(|rotation| {
@@ -665,7 +665,7 @@ fn initial_backup_erase_outcome(
         transaction_id: request.transaction_id.clone(),
         request_digest,
         status: BackupSeriesEraseStatus::Partial,
-        series_results,
+        series_records,
         confirmation: None,
     };
     outcome.validate_for_request(request).map_err(|error| {
@@ -699,7 +699,7 @@ fn refresh_backup_erase_completion(
     use arkret_models_crypto::{BackupSeriesEraseConfirmation, BackupSeriesEraseStatus};
 
     let complete = outcome
-        .series_results
+        .series_records
         .iter()
         .all(|result| result.remaining_backups.is_empty());
     outcome.status = if complete {
@@ -1028,8 +1028,8 @@ pub(crate) async fn backup_series_erase_command(
             .map_err(security_transaction_service_error)?,
     };
 
-    for result_index in 0..progress.outcome.series_results.len() {
-        let remaining = progress.outcome.series_results[result_index]
+    for result_index in 0..progress.outcome.series_records.len() {
+        let remaining = progress.outcome.series_records[result_index]
             .remaining_backups
             .clone();
         let mut storage_failed = false;
@@ -1066,7 +1066,7 @@ pub(crate) async fn backup_series_erase_command(
                 continue;
             }
             erase_failpoint.record_durable_step();
-            let result = &mut progress.outcome.series_results[result_index];
+            let result = &mut progress.outcome.series_records[result_index];
             result
                 .remaining_backups
                 .retain(|reference| reference.backup_id != old.backup_id);
@@ -1093,7 +1093,7 @@ pub(crate) async fn backup_series_erase_command(
                 .await
                 .map_err(security_transaction_service_error)?;
         }
-        let result = &mut progress.outcome.series_results[result_index];
+        let result = &mut progress.outcome.series_records[result_index];
         if storage_failed && !result.remaining_backups.is_empty() {
             result.status = BackupSeriesEraseRowStatus::FailedRetryable;
             result.reason_code = Some(arkret_wire::ReasonCode::from_wire(
@@ -1543,7 +1543,7 @@ async fn continue_commit_recovery_unit(
         output_digest: receipt_digest,
         accepted_at: committed_at,
     });
-    transaction.resource.terminal_result = Some(arkret_wire::SecurityTransactionTerminalOutcome {
+    transaction.resource.terminal_outcome = Some(arkret_wire::SecurityTransactionTerminalOutcome {
         result: arkret_wire::SecurityTransactionResultKind::Completed,
         completed_at: committed_at,
         receipt_id: Some(receipt.receipt_id.clone()),
