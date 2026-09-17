@@ -256,9 +256,9 @@ pub(crate) async fn commit_transaction_in_connection(
     let commit_json =
         serde_json::to_value(&transaction.commit).map_err(PersistenceError::database)?;
     let stream_position = to_i64(transaction.commit.stream_position, "stream position")?;
-    let authority_generation = to_i64(
-        transaction.commit.authority_generation,
-        "authority generation",
+    let governance_generation = to_i64(
+        transaction.commit.governance_generation,
+        "governance generation",
     )?;
 
     let current = locked_authority(conn, &transaction.expected_authority.realm_id)
@@ -329,7 +329,7 @@ pub(crate) async fn commit_transaction_in_connection(
 
     sql_query(
         "INSERT INTO realm_commits \
-         (commit_id, realm_id, stream_key, stream_ref, stream_position, previous_commit_ref, event_pk, authority_generation, commit_json, committed_at) \
+         (commit_id, realm_id, stream_key, stream_ref, stream_position, previous_commit_ref, event_pk, governance_generation, commit_json, committed_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind::<Text, _>(transaction.commit.commit_id.as_str())
@@ -339,7 +339,7 @@ pub(crate) async fn commit_transaction_in_connection(
     .bind::<BigInt, _>(stream_position)
     .bind::<Nullable<Text>, _>(transaction.commit.previous_commit_ref.as_ref().map(|id| id.as_str()))
     .bind::<BigInt, _>(event_row.event_pk)
-    .bind::<BigInt, _>(authority_generation)
+    .bind::<BigInt, _>(governance_generation)
     .bind::<Jsonb, _>(&commit_json)
     .bind::<Timestamptz, _>(transaction.commit.committed_at)
     .execute(&mut *conn)
@@ -697,7 +697,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         if heads_digest != handoff.final_stream_heads_digest
             || snapshot.snapshot_id != handoff.snapshot_ref
             || snapshot.realm_id != handoff.realm_id
-            || snapshot.authority_generation != handoff.from_generation
+            || snapshot.governance_generation != handoff.from_generation
             || snapshot.visible_stream_heads != final_stream_heads
             || snapshot.signature.signed_digest != handoff.snapshot_digest
             || snapshot.signature.context != arkret_wire::DetachedSignatureContext::RealmSnapshot
@@ -761,12 +761,12 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
 
             sql_query(
                 "INSERT INTO realm_state_snapshots \
-                 (snapshot_id, realm_id, authority_generation, snapshot_json, created_at) \
+                 (snapshot_id, realm_id, governance_generation, snapshot_json, created_at) \
                  VALUES ($1, $2, $3, $4, $5)",
             )
             .bind::<Text, _>(snapshot.snapshot_id.as_str())
             .bind::<Text, _>(snapshot.realm_id.as_str())
-            .bind::<BigInt, _>(to_i64(snapshot.authority_generation, "snapshot authority generation")?)
+            .bind::<BigInt, _>(to_i64(snapshot.governance_generation, "snapshot governance generation")?)
             .bind::<Jsonb, _>(&snapshot_json)
             .bind::<Timestamptz, _>(snapshot.created_at)
             .execute(&mut *conn)
@@ -827,7 +827,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
             "SELECT snapshot_json FROM realm_state_snapshots WHERE realm_id = $1 \
-             ORDER BY authority_generation DESC, created_at DESC LIMIT 1",
+             ORDER BY governance_generation DESC, created_at DESC LIMIT 1",
         )
         .bind::<Text, _>(realm_id.as_str())
         .get_result::<SnapshotRow>(&mut *conn)

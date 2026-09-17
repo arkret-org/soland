@@ -27,7 +27,6 @@ pub trait CursorStorePort: Send + Sync {
         request: &soland_storage::CurrentDetailRequest,
         progress: Option<&soland_storage::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> ServiceResult<soland_storage::CurrentDetailOutcome>;
     async fn timeline_window_scan(
         &self,
@@ -186,10 +185,9 @@ impl SyncService {
         request: &soland_storage::CurrentDetailRequest,
         progress: Option<&soland_storage::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
         self.cursors
-            .current_detail_page(request, progress, byte_budget, registry)
+            .current_detail_page(request, progress, byte_budget)
             .await
     }
 
@@ -389,7 +387,6 @@ mod tests {
             _: &soland_storage::CurrentDetailRequest,
             _: Option<&soland_storage::CurrentDetailProgress>,
             _: usize,
-            _: &dyn arkret_state::state::CellStateRegistry,
         ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
             Ok(soland_storage::CurrentDetailOutcome::Unavailable)
         }

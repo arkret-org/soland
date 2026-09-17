@@ -9,7 +9,6 @@ use soland_storage::contract_tests::{
     assert_atomic_batch_outbox_rollback_contract,
     assert_atomic_control_event_governance_dependency_contract,
     assert_consent_projection_commit_contract,
-    assert_control_proposal_authority_ack_store_contract,
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
     assert_federation_outbox_store_contract, assert_governance_unscoped_signer_evidence_contract,
@@ -27,7 +26,7 @@ use soland_storage::{
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
-    PgContactStore, PgControlProposalAuthorityAckStore, PgDeviceInventoryStore,
+    PgContactStore, PgDeviceInventoryStore,
     PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore,
     PgGovernanceDependencyStore, PgIdempotencyStore, PgInviteNewSourceLedgerStore,
     PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore, PgMlsKeyPackageStore,
@@ -2675,15 +2674,6 @@ async fn postgres_adapter_satisfies_mimi_consent_correlation_contract() {
     let store = PgMimiConsentCorrelationStore { pool };
     let namespace = format!("postgres-mimi-consent-{}", uuid::Uuid::now_v7());
     assert_mimi_consent_correlation_store_contract(&store, &namespace).await;
-}
-
-#[tokio::test]
-async fn postgres_adapter_satisfies_control_proposal_authority_ack_contract() {
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let store = PgControlProposalAuthorityAckStore { pool };
-    let namespace = format!("postgres-control-proposal-ack-{}", uuid::Uuid::now_v7());
-    assert_control_proposal_authority_ack_store_contract(&store, &namespace).await;
 }
 
 #[tokio::test]

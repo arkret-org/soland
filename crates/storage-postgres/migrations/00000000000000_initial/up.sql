@@ -628,7 +628,7 @@ CREATE TABLE public.realm_commits (
     stream_position bigint NOT NULL CHECK (stream_position >= 0),
     previous_commit_ref text,
     event_pk bigint NOT NULL UNIQUE REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    authority_generation bigint NOT NULL CHECK (authority_generation >= 0),
+    governance_generation bigint NOT NULL CHECK (governance_generation >= 0),
     commit_json jsonb NOT NULL,
     committed_at timestamptz NOT NULL,
     CONSTRAINT realm_commits_position_key UNIQUE (stream_key, stream_position),
@@ -660,13 +660,13 @@ CREATE TABLE public.realm_authority_handoffs (
 CREATE TABLE public.realm_state_snapshots (
     snapshot_id text PRIMARY KEY,
     realm_id text NOT NULL,
-    authority_generation bigint NOT NULL CHECK (authority_generation >= 0),
+    governance_generation bigint NOT NULL CHECK (governance_generation >= 0),
     snapshot_json jsonb NOT NULL,
     created_at timestamptz NOT NULL
 );
 
 CREATE INDEX realm_state_snapshots_latest_idx
-    ON public.realm_state_snapshots (realm_id, authority_generation DESC, created_at DESC);
+    ON public.realm_state_snapshots (realm_id, governance_generation DESC, created_at DESC);
 
 -- The staged OpenMLS successor is installed in the same transaction that
 -- commits its producer Event and queues every recipient Welcome.
@@ -3329,13 +3329,6 @@ CREATE TABLE public.moderation_franking_replay_nonces (
 
 CREATE INDEX moderation_franking_replay_nonces_expiry_idx
     ON public.moderation_franking_replay_nonces (realm_id, received_by, expires_at);
-
-CREATE TABLE public.control_proposal_authority_acks (
-    ack_key text PRIMARY KEY,
-    request_hash text NOT NULL,
-    response_body jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL
-);
 
 CREATE TABLE public.webvh_documents (
     id text PRIMARY KEY,

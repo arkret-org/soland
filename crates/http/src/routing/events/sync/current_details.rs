@@ -104,7 +104,6 @@ async fn frame_for_realm(
             &request,
             after.detail_positions.get(realm.as_str()),
             MAX_ATOMIC_CURRENT_ENTRY_CANONICAL_BYTES,
-            state.projections().cell_registry(),
         )
         .await;
     let mut positions = after.detail_positions.clone();

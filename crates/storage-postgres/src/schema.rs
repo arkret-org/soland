@@ -339,7 +339,7 @@ diesel::table! {
         stream_position -> Int8,
         previous_commit_ref -> Nullable<Text>,
         event_pk -> Int8,
-        authority_generation -> Int8,
+        governance_generation -> Int8,
         commit_json -> Jsonb,
         committed_at -> Timestamptz,
     }
@@ -362,7 +362,7 @@ diesel::table! {
     realm_state_snapshots (snapshot_id) {
         snapshot_id -> Text,
         realm_id -> Text,
-        authority_generation -> Int8,
+        governance_generation -> Int8,
         snapshot_json -> Jsonb,
         created_at -> Timestamptz,
     }
@@ -807,15 +807,6 @@ diesel::table! {
         response_status -> Int4,
         response_body -> Jsonb,
         expires_at -> Timestamptz,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    control_proposal_authority_acks (ack_key) {
-        ack_key -> Text,
-        request_hash -> Text,
-        response_body -> Jsonb,
         created_at -> Timestamptz,
     }
 }

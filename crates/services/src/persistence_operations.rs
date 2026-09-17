@@ -686,28 +686,6 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
         self.0.idempotency_keys().record(&record).await?;
         Ok(())
     }
-
-    async fn control_proposal_authority_ack(
-        &self,
-        ack_key: &str,
-    ) -> crate::ServiceResult<Option<crate::jobs::ControlProposalAuthorityAckState>> {
-        Ok(self
-            .0
-            .control_proposal_authority_acks()
-            .get(ack_key)
-            .await?)
-    }
-
-    async fn store_control_proposal_authority_ack(
-        &self,
-        record: crate::jobs::ControlProposalAuthorityAckState,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .control_proposal_authority_acks()
-            .record(&record)
-            .await?;
-        Ok(())
-    }
 }
 
 #[async_trait::async_trait]
@@ -731,12 +709,11 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
         request: &soland_storage::CurrentDetailRequest,
         progress: Option<&soland_storage::CurrentDetailProgress>,
         byte_budget: usize,
-        registry: &dyn arkret_state::state::CellStateRegistry,
     ) -> crate::ServiceResult<soland_storage::CurrentDetailOutcome> {
         Ok(self
             .0
             .sync_cursors()
-            .current_detail_page(request, progress, byte_budget, registry)
+            .current_detail_page(request, progress, byte_budget)
             .await?)
     }
     async fn timeline_window_scan(

@@ -190,7 +190,6 @@ DROP TABLE IF EXISTS moderation_franking_replay_nonces CASCADE;
 DROP INDEX IF EXISTS canonical_events_franking_target_idx;
 DROP INDEX IF EXISTS canonical_events_realm_actor_position_idx;
 DROP TABLE IF EXISTS idempotency_keys CASCADE;
-DROP TABLE IF EXISTS control_proposal_authority_acks CASCADE;
 DROP TABLE IF EXISTS service_identity_registrations CASCADE;
 DROP TABLE IF EXISTS service_route_cache CASCADE;
 DROP TABLE IF EXISTS service_resolution_fork_quarantine CASCADE;

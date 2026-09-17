@@ -402,10 +402,15 @@ async fn hydrate_canonical_realm_bootstraps(
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&typed_events).map_err(
+        // Realm creation is one producer-signed `ak.realm.create` Event; the
+        // multi-Event bootstrap unit it used to validate no longer exists.
+        // Ordering and predecessor binding are properties of the commit
+        // stream, so hydration validates the genesis Event itself and leaves
+        // the rest of the unit to the reducer replay below.
+        arkret_policy::realm_bootstrap::validate_realm_genesis_event(&create_event).map_err(
             |error| {
                 soland_storage::PersistenceError::Internal(format!(
-                    "canonical Realm bootstrap failed deterministic validation: {error}"
+                    "canonical Realm genesis failed deterministic validation: {error}"
                 ))
             },
         )?;

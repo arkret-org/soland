@@ -23,8 +23,7 @@ use super::{
     AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
     AppletIdentityCommit, AppletRecordCommit, AppletStore, CanonicalEventRecord, ConsentCellRecord,
     ConsentCellStore, ConsentGrantDot, ConsentProjectionCommit, ContactProjectionCommit,
-    ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
-    ControlProposalAuthorityAckStore, DeviceInventoryStore, DeviceKeyStore,
+    ContactRecord, ContactStore, DeviceInventoryStore, DeviceKeyStore,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
     DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
     DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
@@ -1315,45 +1314,6 @@ pub async fn assert_mimi_consent_correlation_store_contract(
             .expect("read first-writer MIMI correlation"),
         Some(first),
         "the first private correlation must win a duplicate-id race"
-    );
-}
-
-pub async fn assert_control_proposal_authority_ack_store_contract(
-    store: &dyn ControlProposalAuthorityAckStore,
-    namespace: &str,
-) {
-    let first = ControlProposalAuthorityAckRecord {
-        ack_key: format!("control-proposal-authority-ack:{namespace}"),
-        request_hash: "sha256:first".to_owned(),
-        response_body: serde_json::json!({"authority_ack": "first"}),
-        created_at: database_timestamp_now(),
-    };
-    store
-        .record(&first)
-        .await
-        .expect("record first authority Ack");
-    assert_eq!(
-        store
-            .get(&first.ack_key)
-            .await
-            .expect("read first authority Ack"),
-        Some(first.clone())
-    );
-
-    let mut competing = first.clone();
-    competing.request_hash = "sha256:competing".to_owned();
-    competing.response_body = serde_json::json!({"authority_ack": "competing"});
-    store
-        .record(&competing)
-        .await
-        .expect("record competing authority Ack");
-    assert_eq!(
-        store
-            .get(&first.ack_key)
-            .await
-            .expect("read winning authority Ack"),
-        Some(first),
-        "proposal authority Acks are permanent first-writer-wins evidence"
     );
 }
 

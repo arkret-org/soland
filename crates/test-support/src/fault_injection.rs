@@ -557,11 +557,6 @@ impl soland_storage::SyncStoreRegistry for FaultInjectingStore {
     fn idempotency_keys(&self) -> &dyn soland_storage::IdempotencyStore {
         self.inner.idempotency_keys()
     }
-    fn control_proposal_authority_acks(
-        &self,
-    ) -> &dyn soland_storage::ControlProposalAuthorityAckStore {
-        self.inner.control_proposal_authority_acks()
-    }
     fn websocket_auth(&self) -> &dyn soland_storage::WebsocketAuthStore {
         self.inner.websocket_auth()
     }

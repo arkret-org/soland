@@ -261,7 +261,6 @@ pub(in crate::routing) use validation::{
 };
 mod sdk_projection;
 pub(crate) use sdk_projection::*;
-mod control_proposal_ack_issue;
 pub(crate) mod lease_issue;
 
 #[cfg(test)]
