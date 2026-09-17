@@ -196,6 +196,58 @@ peer-merge graph.
   SDK, so `AUDIT_COMPLIANCE_PROFILES` is removed from
   `crates/domain/src/kinds.rs` and `crates/services/src/operation_semantics.rs`.
 
+### The checkboxes above are about code, not about what is mounted
+
+Measured 2026-09-17 by following `mod` declarations from `soland-http`'s crate
+root. The Seal surface is still **served**. `router_build.rs:335`
+(`arkret_protocol_router`) pushes `events::router()` under `self` and
+`events::peer_router()` under `peer`; `events/mod.rs:6` declares `mod event_log`;
+`event_log.rs:176` re-exports `endpoints::router`; and
+`event_log/endpoints.rs:255-269` registers:
+
+| live route | handler |
+|---|---|
+| `POST /_arkret/self/seals` | `submit_event_seal` |
+| `QUERY /_arkret/self/seals/frontier` | `seals_frontier` |
+| `QUERY /_arkret/self/seals/pending-control` | `pcr_pending_control` |
+| `POST /_arkret/self/seals/prepare` | `prepare_pcr_seal` |
+| `POST /_arkret/self/seals/prepare-fence-result` | `prepare_pcr_seal_fence_result` |
+| `POST /_arkret/self/seals/mls-governance-proof` | `governance_proof::mls_governance_proof` |
+| `POST /_arkret/self/seals/mls-accepted-artifact` | `mls_accepted_artifact::read` |
+| `POST /_arkret/self/seals/mls-welcome-refs` | `mls_welcome_refs::read` |
+| `POST /_arkret/self/seals/history-authority` | `history_authority::read` |
+| `QUERY /_arkret/peer/seals/frontier` | `peer.rs:179 peer_seals_frontier` |
+| `QUERY /_arkret/self/events/frontier` | `events_frontier` |
+
+Meanwhile `routing/authority_commit.rs` — which declares `self/events`,
+`self/streams/scan`, `peer/streams/resolve`, `peer/realm-authority/handoff` and
+`open/realm-authority/bundle` — has no `mod` declaration anywhere and is not
+compiled. A grep confirms `streams/scan`, `streams/resolve`,
+`realm-authority/handoff` and `realm-authority/bundle` appear nowhere else in
+the crate, so those four paths do not exist at runtime at all.
+
+**So the deployed protocol surface is still the removed one, and its replacement
+is the file nobody compiles.** The `[x]` marks above are honest about the
+mechanisms being deleted from the specification; they are not evidence about
+this crate.
+
+Two things follow that are easy to get wrong:
+
+- `authority_commit.rs` carries its own `#[cfg(test)]` block, including
+  `current_routes_are_registered_without_a_legacy_recovery_surface` and
+  `every_current_route_rejects_an_invalid_sdk_body_before_delegating`. Neither
+  has ever run: an unreachable module's tests are not compiled, so they are not
+  reported as skipped either. Do not read those test names as coverage.
+- Identifier counts for this crate, for scale rather than as a work estimate:
+  535 `Seal`-family occurrences, 585 `frontier`, 114 `cell_writes`, 112
+  `CellRef` in `crates/http/src` alone. These were checked by hand against
+  ordinary English — there is no plain-English "seal" in the sample; every hit
+  is a protocol identifier (`seal_basis` 127, `seal_id` 69, `SealId` 54,
+  `seal_ref` 49, `SealBasis` 23, `covering_seal_id` 16, and so on).
+
+Wiring `mod authority_commit;` on its own would therefore mount the new surface
+*beside* the old one rather than replacing it. The two have to move together.
+
 ## Mixed modules that must be split, not deleted
 
 - [x] Event admission and atomic unit-of-work code. Rebuilt in
