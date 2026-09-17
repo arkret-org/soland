@@ -436,7 +436,7 @@ impl ProjectionState {
             device_id: device_id.to_owned(),
             push_route: push_route.to_owned(),
         };
-        let expected_revision = payload.expected_revision();
+        let expected_revision = payload.expected_server_revision();
         let incoming_revision = match expected_revision.checked_add(1) {
             Some(revision) => revision,
             None => {

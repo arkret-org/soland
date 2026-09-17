@@ -67,7 +67,7 @@ impl AuthorityCommitTransaction {
             || self.commit.realm_id != self.event.realm_id
             || self.commit.event_ref != self.event.event_id
             || self.commit.stream_ref != expected_stream
-            || self.commit.authority_generation != self.expected_authority.generation
+            || self.commit.governance_generation != self.expected_authority.generation
             || self.commit.authority_ref != self.expected_authority.authority_ref
         {
             return Err(arkret_wire::WireError::Protocol(

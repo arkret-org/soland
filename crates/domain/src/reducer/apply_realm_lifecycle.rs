@@ -255,7 +255,7 @@ impl ProjectionState {
                 };
                 // The expected generation and Realm-stream head keep a stale
                 // administrator decision from re-routing the authority.
-                if payload.expected_authority_generation != authority_generation {
+                if payload.expected_governance_generation != authority_generation {
                     return ProjectionEffect::Rejected {
                         reason: "realm_authority_root_conflict".to_owned(),
                     };

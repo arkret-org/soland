@@ -194,7 +194,7 @@ mod tests {
                     )
                 }),
                 event_ref: event.event_id.clone(),
-                authority_generation: 0,
+                governance_generation: 0,
                 authority_ref: RealmCommitAuthorityRef::GenesisOrChangeEvent(EventId::from_digest(
                     DigestSuite::Sha256,
                     [0x55; 32],

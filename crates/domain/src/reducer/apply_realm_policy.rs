@@ -367,22 +367,22 @@ impl ProjectionState {
                     );
                 }
                 CallRosterDelta::Leave {
-                    observed_tag,
-                    actor_id,
-                    device_id,
+                    expected_revision: _,
+                    actor_id: _,
+                    device_id: _,
                 } => {
-                    // `observed_tag` names the exact join entry being removed;
-                    // a leave that does not observe a present join is not an
-                    // ordering artefact under a linear commit stream.
-                    if !remove_call_entry(&mut entries, observed_tag.as_str(), |entry| {
-                        entry.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
-                            && entry.get("device_id").and_then(Value::as_str)
-                                == Some(device_id.as_str())
-                    }) {
-                        return ProjectionEffect::Rejected {
-                            reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                        };
-                    }
+                    // The leave delta no longer names the join entry by an
+                    // observed tag: it carries `CurrentRevision { commit_id,
+                    // stream_position }` of the roster value the producer read,
+                    // and the compare is field-for-field. `SettledFacet` holds
+                    // only a write counter and `ProjectionContext` carries no
+                    // commit id or stream position, so this reducer cannot
+                    // evaluate that precondition at all. Rejecting is the only
+                    // honest outcome: dropping the compare would accept a stale
+                    // leave against a roster the producer never read.
+                    return ProjectionEffect::Rejected {
+                        reason: "call_roster_expected_revision_unevaluable".to_owned(),
+                    };
                 }
             }
             writes.push((roster, Value::Array(entries)));
@@ -405,19 +405,14 @@ impl ProjectionState {
                         operation.context.event_id.as_str(),
                     );
                 }
-                CallModerationDelta::RestoreParticipant {
-                    observed_tag,
-                    actor_id,
-                    ..
-                } => {
-                    if !remove_call_entry(&mut entries, observed_tag.as_str(), |entry| {
-                        entry.get("actor_id").and_then(Value::as_str) == Some(actor_id.as_str())
-                            && entry.get("action").and_then(Value::as_str) == Some("ban")
-                    }) {
-                        return ProjectionEffect::Rejected {
-                            reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
-                        };
-                    }
+                CallModerationDelta::RestoreParticipant { .. } => {
+                    // Same gap as `CallRosterDelta::Leave`: the restore now
+                    // carries a typed `expected_revision` of the moderation
+                    // value instead of the banned entry's observed tag, and
+                    // nothing in this projection can evaluate it.
+                    return ProjectionEffect::Rejected {
+                        reason: "call_moderation_expected_revision_unevaluable".to_owned(),
+                    };
                 }
             }
             writes.push((moderation, Value::Array(entries)));

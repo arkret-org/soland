@@ -555,6 +555,7 @@ fn validate_genesis_governance_binding(
     if parsed_binding(binding)?
         .mls_group_id()
         .map_err(|_| arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)?
+        .as_str()
         != group_id
     {
         return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
