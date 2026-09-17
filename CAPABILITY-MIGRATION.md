@@ -15,42 +15,96 @@ counts as absent.
 Measured by enumerating `src/**/*.rs` per crate and subtracting the set reachable
 from the crate root along `mod` declarations, including `#[path]` targets
 (`cargo bin` targets excluded, since Cargo reaches those without a `mod`).
-Re-measured 2026-09-16 after the reducer rewiring landed: **15 files, 5,029
-lines**, reach no crate root, so they do not compile and the capability in them
-counts as absent.
+
+**Resolved 2026-09-18/19.** The 2026-09-16 measurement found 15 files and judged
+every one of them "Rewire — the capability is in the specification". That
+judgement was made from the file names. Checking each module against the SDK and
+against the rest of the tree reverses it: in every case the capability **had
+already been migrated into a different file**, and the orphan is the
+pre-migration copy that was left on disk when its `mod` line went away. The
+count was also understated — the reachability scan used was not transitive, so
+the children of an orphaned parent were wrongly counted as reachable. A
+transitive closure gives 25 files, not 15.
+
+| commit | what went | files | lines |
+|---|---|---|---|
+| `147630d33` | `timeline_order` + the two ordering tables | 2 | 1,616 |
+| `0f81aea25` / `fa20b0cd9` | `sync_cursor/current_detail` + tests | 2 | 659 |
+| `0ed83faac` | the ten remaining old-mechanism groups | 23 | 7,308 |
+
+What remains orphaned:
 
 | crate | orphan files | lines |
 |---|---|---|
-| `soland-storage-postgres` | 14 | 4,706 |
 | `soland-http` | 1 | 323 |
 | all others | 0 | 0 |
 
-`soland-domain` is fully wired: every file under `crates/domain/src/reducer/` is
-now reachable and the crate's **library** compiles. Its 424 remaining errors are
-all in `#[cfg(test)]` code.
+The one survivor is `http/routing/authority_commit.rs` (323 lines), and it is
+the only entry from the 09-16 table whose "Rewire" verdict stands: it *is* the
+current-protocol route file. It needs `mod authority_commit;` plus a
+`router_build.rs` entry, and wiring it means simultaneously removing the eleven
+`/_arkret/self/seals/*` routes that are still serving. That switches the runtime
+protocol face and moves every wire assertion in cotest, so it is held for a
+separate round. **Until then the authority-commit HTTP surface does not exist at
+runtime.**
 
-Judgement per file. "Rewire" means the capability is in the specification and
-the module must be migrated onto accepted `StreamRow` / `CommittedEventRef`
-inputs; "Delete" means every responsibility in it belongs to a removed
-mechanism.
+### Why each deleted group was not a rewire
 
-| orphan | lines | verdict |
+Each line names the successor that already carries the capability.
+
+| group | lines | successor already in the tree |
 |---|---|---|
-| `http/routing/authority_commit.rs` | 323 | Rewire — this *is* the current-protocol route file. It needs `mod authority_commit;` plus a `router_build.rs` entry. Until then the authority-commit HTTP surface does not exist at runtime. |
-| `storage-postgres/current_data.rs` | 593 | Rewire — demand-sync current object head index. |
-| `storage-postgres/current_results.rs` | 112 | Rewire — durable typed current-result index. |
-| `storage-postgres/timeline_order.rs` | 658 | Rewire, then drop its inputs. The projection order it persists is `(causal_depth, hlc, actor_id, actor_seq, event_id)`; all five are producer-order values the protocol removed. Message timeline paging survives as a keyset over `realm_commits.stream_position` on one `CommitStreamRef`. The `realm_timeline_order` and `realm_timeline_pending_edges` tables go with the old ordering. |
-| `storage-postgres/mls_public_state.rs` | 287 | Rewire — public MLS genesis/commit tracker. |
-| `storage-postgres/principal_resolution/{current,genesis}.rs` | 238 | Rewire — principal resolution reads. `SyncCursorStore::current_principal` already dropped its `CellStateRegistry` parameter. |
-| `storage-postgres/devices/confirmed_history{,_tests}.rs` | 707 | Rewire — confirmed device history projection. |
-| `storage-postgres/device_revocations/{historical,material_cleanup}.rs` | 172 | Rewire — revocation history and key-material cleanup, both still in the specification. |
-| `storage-postgres/events/approval_publications.rs` | 458 | Rewire — approval publication evidence. |
-| `storage-postgres/events/transaction_locks.rs` | 75 | Rewire — row locks the single commit transaction needs. |
-| `storage-postgres/events/recovery_terminal_tests.rs` | 1,115 | Rewire — recovery terminal-unit tests. The completion criterion must become the pair rule below, not a terminal Seal. |
-| `storage-postgres/sync_cursor/current_detail.rs` | 291 | Rewire — resumable snapshot-and-tail detail page. |
+| `current_data` (5 files) | 1,813 | `RealmStateSnapshot.current_state_entries: Vec<TypedCurrentResult>` (SDK `wire/src/authority_commit.rs:479`). The orphan imports `arkret_wire::cbs::{ProjectedCellWrite, ProjectedOp}`, which the SDK no longer defines, and resolves conflicts by "greater causal depth wins". |
+| `current_results` (2) | 345 | `sync_cursor.rs:168-256`, where `current_detail_page` is already rewired. `CurrentResultEntry` is gone from the SDK. |
+| `mls_public_state` (4) | 1,560 | `MlsStateInstallation` (`authority_commit.rs:355-390`). `EventCommitRequest` no longer carries `mls_public_genesis` / `mls_public_producer`. |
+| `devices/confirmed_history` (2) | 707 | `devices.rs`, which writes `devices.verification_state` directly. The orphan's input type `ConfirmedDeviceControlProjection` was deleted from the trait crate in `c30ce6384`. |
+| `device_revocations/historical` (2) | 406 | nothing needed: it read `EventCommitRequest.historical_producer`, a field the protocol removed. |
+| `device_revocations/material_cleanup` (1) | 66 | `device_revocations.rs:256-300`, where both methods were rewritten from `covering_seal_id` to `committed_ref`. |
+| `principal_resolution/{current,genesis}` (4) | 762 | `principal_resolution.rs:131-143`, live caller at `post_commit.rs:235`. |
+| `events/approval_publications` (1) | 458 | `publication_evidence.rs:55`. |
+| `events/recovery_terminal_tests` (1) | 1,116 | `validate_recovery_commit_pair` — see the pair rule below. |
+| `events/transaction_locks` (1) | 75 | the three `FOR UPDATE` sites in `authority_commit.rs:149,199/273,305`. |
 
-Nothing in this list is a delete: every entry names a product capability that
-the specification kept.
+### Two things that must not vanish with the files
+
+1. **The MLS public-genesis lane is residue, but only its columns are - the
+   lane itself is still half-wired and will not compile.**
+   `soland_storage::MlsPublicGenesisRecord`
+   (`crates/storage/src/mls_public_state.rs:14-21`) carries
+   `producer_signing_key` and `producer_device_authorization` beside the full
+   `source_event` envelope. Those two are a denormalised cache: the accepted
+   Event is producer-signed (`zh/crypto-media/encryption-and-audit.md` §5.1) and
+   the specification puts the frozen producer key in the Event's own portable
+   provenance, not in a server-side projection (`zh/identity/key-management.md`
+   L288: verify the historical producer proof with the `producer_signing_key_did`
+   frozen in it, never by re-resolving current controller device state). Neither
+   column name occurs anywhere in `spec/v1/schemas` or `spec/v1/registries`.
+   Deleting the postgres half was therefore correct, and the successor is
+   `MlsStateInstallation`.
+   What is *not* done is the rest of the lane, which still names input fields
+   that `EventCommitRequest` (`crates/storage/src/unit_of_work.rs:84-103`) no
+   longer has:
+   - `services/src/events.rs:765` `EventCommitCommand.mls_public_genesis` and
+     `services/src/persistence_events.rs:92` forwarding it;
+   - `services/src/events.rs:1681` the `public_genesis_candidate` trait method
+     and its `persistence_events.rs:718-727` body, which calls a
+     `mls_commits().public_genesis_candidate` that no storage trait declares;
+   - `http/.../submit/commit_prepare.rs:126,286`,
+     `submit/ghost_provision.rs:379`, `submit/sidecar_ensure.rs:158`;
+   - `storage/src/contract_tests.rs`, five fixtures setting both fields.
+   These are compile errors today, not working code.
+2. **Eight tables are now permanently empty.** `current_result_versions`,
+   `current_result_heads`, `current_data_*` (4), `current_selector_origins`,
+   `agent_approval_publications`, `device_history_projections`,
+   `mls_public_genesis_states` and `mls_public_commit_states` have no writer
+   left. They cannot simply be dropped from `up.sql` and `schema.rs`: three live
+   sites still name them — `sync_cursor/retention.rs:185` sweeps
+   `current_result_versions`, `server/tests/http_api/identity.rs:306` deletes
+   from `current_result_heads`, and
+   `test-support/tests/account_device_control_storage.rs:180,315` still asserts
+   `device_history_projections` reaches 1. That last assertion is the one that
+   matters: it asserts a product behaviour, so it has to be re-pointed at
+   `devices.verification_state` rather than deleted.
 
 ### Recovery completion is two commits, never one
 
@@ -152,9 +206,12 @@ peer-merge graph.
   RFC 9420 through its own accepted `ak.mls.genesis`.
 - [~] Messages, moderation, notifications, push, Signals, and WebSocket sync.
   `apply_messages.rs` and `apply_moderation.rs` are wired and compile.
-  `crates/storage-postgres/src/timeline_order.rs` is still orphaned and still
-  orders by producer causal depth; message paging has to move onto
-  `realm_commits.stream_position`.
+  `crates/storage-postgres/src/timeline_order.rs` ordered by producer causal
+  depth and was deleted in `147630d33` together with the `realm_timeline_order`
+  and `realm_timeline_pending_edges` tables. Message paging still has to be
+  rebuilt as a keyset over `realm_commits.stream_position` on one
+  `CommitStreamRef`; the storage half is gone, the trait and service halves are
+  not yet written.
 - [ ] Blob upload/download and object storage.
 - [ ] MLS key packages, commits, installed state, and Welcome delivery. The
   commit/Welcome transaction exists and `crates/domain/src/reducer/mls.rs` is
@@ -162,7 +219,10 @@ peer-merge graph.
   KeyPackage compare-and-swap claim is a ledger projection, not an Event
   reducer, and `MlsEffect::KeyPackageClaimed` plus its tests still reference
   the removed function. `crates/storage-postgres/src/mls_public_state.rs`
-  remains orphaned. Proposals are inlined into the Commit, so
+  was deleted in `0ed83faac`: it read `EventCommitRequest.mls_public_genesis` /
+  `mls_public_producer`, fields the protocol removed, and `MlsStateInstallation`
+  is its successor. The one thing it carried that `MlsStateInstallation` does
+  not is the producer-device binding recorded above. Proposals are inlined into the Commit, so
   `apply_remove_proposal` is correctly gone; Welcome is a producer-signed
   `MlsWelcomeDelivery`, so `apply_welcome_enqueue` is correctly gone.
 - [~] Key backup, recovery sessions, and security transactions.
@@ -179,13 +239,18 @@ peer-merge graph.
   authority.~~ **The premise is wrong and this box was ticked in error**
   (corrected 2026-09-18). `arkret_wire::cbs` was never a fixture module. It is
   the Cell-write projection data model, and it is load-bearing in this
-  repository right now: **19 files, 49 references**, spread across `domain` (3),
-  `http` (12), `server` (2), `services` (1) and `storage-postgres` (1) --
-  `ProjectedCellWrite` (26), `ProjectedOp` (11), `LatticeOpType` (7),
-  `LatticeOp` (4), `ProjectionEffect` (3). The live consumers are the accepted
-  operation projection pipeline (`http/src/routing/events/projection/apply.rs`),
-  the governance proof builder, the submit value path and the postgres
-  `current_data` writer -- all product capability, none of it Seal synthesis.
+  repository right now: `ProjectedCellWrite`, `ProjectedOp`, `LatticeOpType`,
+  `LatticeOp`, `ProjectionEffect`. The live consumers are the accepted operation
+  projection pipeline (`http/src/routing/events/projection/apply.rs`), the
+  governance proof builder and the submit value path -- product capability, none
+  of it Seal synthesis.
+  **Second correction, 2026-09-19**: the file-and-reference counts first written
+  here (19 files, 49 references, including `storage-postgres` (1)) counted
+  orphans as live. The storage-postgres consumer was
+  `storage-postgres/src/current_data.rs`, which reached no crate root and has
+  since been deleted in `0ed83faac`; the live storage-postgres count is 0, and
+  "the postgres `current_data` writer" was never a live consumer. Re-measure
+  against the transitive `mod` closure, not against `grep -rl`.
   The module is gone from the SDK (`crates/wire/src/lib.rs` has no `pub mod
   cbs`; `ProjectedCellWrite` / `ProjectedOp` / `LatticeOp` have zero hits
   anywhere in the SDK). Its successors are `arkret_wire::patch::Patch` plus
@@ -286,9 +351,11 @@ Wiring `mod authority_commit;` on its own would therefore mount the new surface
   `federation::enqueue_federation_outbox_in_connection`,
   `idempotency::record_idempotency_in_connection`, and
   `device_revocations::commit_revocation_in_connection`.
-- [ ] Projection/current-result materialization. `current_data.rs`,
-  `current_results.rs`, `state_resolution/`, and `timeline_order.rs` are
-  orphaned; they must be rewired onto `CommittedEventRef` inputs.
+- [x] Projection/current-result materialization. `current_data.rs`,
+  `current_results.rs` and `timeline_order.rs` were the pre-migration copies and
+  are deleted (`147630d33`, `0ed83faac`); the live path is
+  `RealmStateSnapshot.current_state_entries` plus the already-rewired
+  `sync_cursor.rs:168-256`. `state_resolution/` no longer exists.
 - [ ] Federation delivery and outbox code. The outbox is atomic with the commit;
   `federation.rs` still carries frontier-exchange functions that have no
   protocol object to produce.
