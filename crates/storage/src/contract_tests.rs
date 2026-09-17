@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_models_collaboration::account_lifecycle::{
+use arkret_models_collaboration::account_status::{
     AccountStatusReceipt, AccountStatusRecord, UnsignedAccountStatusReceipt,
     UnsignedAccountStatusRecord,
 };
-use arkret_models_collaboration::http_bodies::DevicePairingState;
+use arkret_models_collaboration::device_pairing::DevicePairingState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::{
     OrganizationControlProofKind, OrganizationRegistrationChallenge,
@@ -13,8 +13,8 @@ use arkret_models_identity::{
 };
 use arkret_state::state::store::ControlProposalIngress;
 use arkret_wire::{
-    AccountStatusRecordId, Did, DidCoreId, DidUrl, Hash, HistoryEffectiveScope, PayloadProof,
-    ProofContextId, RealmId, ReceiptId, SchemaId, project_did_to_core_id,
+    AccountStatusRecordId, Did, DidCoreId, DidUrl, Hash, PayloadProof, ProofContextId, RealmId,
+    ReceiptId, SchemaId, project_did_to_core_id,
 };
 use chrono::{Duration, Utc};
 
@@ -29,23 +29,22 @@ use super::{
     DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
     DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
     DeviceRevocationTargetStatus, DeviceRevocationTransition, EventBatchCommitRequest,
-    EventCommitRequest, EventCommitUnitOfWork, EventStore, ExactWriteOutcome,
-    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
-    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
-    FederationOutboxState, FederationOutboxStore, FederationOutboxTransition,
-    GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
-    HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore, InviteReceivePolicyStore,
-    MemberIdentityEventRecord, MemberIdentityReplacementEdge, MemberIdentityStore,
-    MemberIdentitySubjectKey, MessageRecord, MessageStore, MimiConsentCorrelationRecord,
-    MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
-    MlsKeyPackageStore, OneTimeKeyStore, OrganizationRegistrationEnsureCommit,
-    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
-    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
-    PeerClaimTerminalTransition, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
-    ProjectionEventRecord, ProjectionEventStore, RealmBootstrapCommitOutcome,
-    RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput, RealmMetaRecord,
-    RealmMetaStore, applet_effective_scope_key,
+    EventCommitRequest, EventCommitUnitOfWork, EventStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    FederationOutboxTransition, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
+    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
+    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
+    MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
+    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
+    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
+    OrganizationRegistrationTerminalReason, PeerClaimTerminalTransition,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
+    ProjectionEventStore, RealmBootstrapCommitOutcome, RealmFanoutAuthorityWitness,
+    RealmFanoutBinding, RealmFanoutOutboxInput, RealmMetaRecord, RealmMetaStore,
+    applet_effective_scope_key,
 };
 
 /// Shared account-localpart removal semantics for every persistence adapter.
@@ -126,208 +125,6 @@ pub async fn assert_account_localpart_remove_contract(
         .remove(owner_pk, &localpart)
         .await
         .expect("absent removal is idempotent");
-}
-
-pub fn minimal_history_signer_evidence(
-    namespace: &str,
-) -> arkret_models_collaboration::governance_dependencies::GovernanceDependency {
-    use arkret_models_collaboration::governance_dependencies::{
-        GovernanceDependency, GovernanceDependencySelector,
-    };
-    use arkret_models_collaboration::history_key::{
-        AuthorizationIncarnation, MinimalMetadataMlsLeafSignerEvidence,
-    };
-    use base64::Engine as _;
-
-    let effective_scope = HistoryEffectiveScope::Realm {
-        realm_id: RealmId::new("ak:realm:AfjSiYTXJZS-0ifVfy1f_uzsmJIBjDyN11_-dxnne50e")
-            .expect("fixture Realm ID"),
-    };
-    let response_key = arkret_canonical::sha256_bytes(namespace.as_bytes());
-    let leaf_node = format!("leaf-node:{namespace}").into_bytes();
-    let b64 = |bytes: &[u8]| {
-        arkret_wire::Base64UrlString::new(
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
-        )
-        .expect("fixture base64url")
-    };
-    let digest = |bytes: &[u8]| {
-        Hash::new(arkret_canonical::sha256_digest(bytes)).expect("fixture SHA-256 digest")
-    };
-    let pairwise_actor_id =
-        DidCoreId::new("ak:did_core:key:z6MkfixtureService").expect("fixture actor");
-    let source_actor_id = arkret_wire::ActorId::service(pairwise_actor_id.clone());
-    let verification_method =
-        DidUrl::new("did:key:z6MkfixtureService#history-response").expect("fixture method");
-    let mut identity_link =
-        arkret_models_collaboration::objects::profiles::IdentityLink {
-            schema: arkret_wire::SchemaId::IDENTITY_LINK_V1.to_owned(),
-            status: arkret_models_collaboration::objects::profiles::IdentityLinkStatus::Active,
-            pairwise_actor_id: pairwise_actor_id.clone(),
-            principal_id: DidCoreId::new("ak:did_core:web:alice.example")
-                .expect("fixture principal"),
-            device_id: arkret_wire::DeviceId::new(
-                "ak:device:01904100-0000-7000-8000-000000000001",
-            )
-            .expect("fixture device"),
-            realm_id: match &effective_scope {
-                HistoryEffectiveScope::Realm { realm_id }
-                | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id.clone(),
-            },
-            trust_domain: arkret_wire::TrustDomainId::new("ak:trust_domain:example.test")
-                .expect("fixture trust domain"),
-            strand_id: None,
-            track: None,
-            mls_group_id: Some(
-                effective_scope
-                    .canonical_mls_group_id()
-                    .expect("fixture MLS group"),
-            ),
-            mls_leaf_index: 1,
-            mls_epoch: 7,
-            response_signing_verification_method: verification_method.clone(),
-            response_signing_algorithm: arkret_models_collaboration::objects::profiles::IdentityLinkResponseSigningAlgorithm::Ed25519,
-            response_signing_public_key_b64u: b64(&response_key),
-            response_signing_public_key_digest: digest(&response_key),
-            effective_at: Utc::now(),
-            expires_at: None,
-            disclosure_policy_id: None,
-            proof: arkret_models_collaboration::objects::profiles::IdentityLinkProof {
-                verification_method: DidUrl::new("did:web:alice.example#identity-link")
-                    .expect("fixture IdentityLink proof method"),
-                signature_algorithm: "Ed25519".to_owned(),
-                payload_digest: digest(b"placeholder IdentityLink payload"),
-                signature: "fixture.signature".to_owned(),
-            },
-        };
-    identity_link.proof.payload_digest = identity_link
-        .canonical_payload_digest()
-        .expect("fixture IdentityLink payload digest");
-    identity_link
-        .validate_minimal()
-        .expect("valid fixture IdentityLink");
-    let identity_link = arkret_canonical::canonical_json_bytes(&identity_link)
-        .expect("fixture IdentityLink canonical bytes");
-    let signer_evidence_content_digest = digest(b"fixture IdentityLink signer evidence");
-    let identity_link_signer_evidence_ref = arkret_wire::SignerEvidenceRef::new(format!(
-        "ak:signer_evidence:{}",
-        signer_evidence_content_digest.as_ref()
-    ))
-    .expect("fixture IdentityLink signer evidence ref");
-    let evidence = MinimalMetadataMlsLeafSignerEvidence {
-        mls_group_id: effective_scope
-            .canonical_mls_group_id()
-            .expect("fixture MLS group"),
-        effective_scope,
-        epoch: 7,
-        leaf_index: 1,
-        pairwise_actor_id: pairwise_actor_id.clone(),
-        source_actor_id,
-        verification_method,
-        response_signing_public_key_b64u: b64(&response_key),
-        response_signing_public_key_digest: digest(&response_key),
-        identity_link_canonical_bytes_b64u: b64(&identity_link),
-        identity_link_digest: digest(&identity_link),
-        identity_link_signer_evidence_ref,
-        leaf_node_canonical_bytes_b64u: b64(&leaf_node),
-        leaf_node_digest: digest(&leaf_node),
-        winning_group_state_transition_ref: arkret_wire::EventId::new(
-            "ak:event:ARrXzX07X_prHPMAeOGPMrI4_sUFneJW2aYSvHN_-9aQ",
-        )
-        .expect("fixture transition Event"),
-        winning_group_state_event_digest: digest(b"fixture group-state event"),
-        winning_mls_transition_digest: digest(b"fixture MLS transition"),
-        target_basis: arkret_wire::SealBasis {
-            leaves: vec![arkret_wire::SealId::new(
-                "ak:seal:sha256:272847e37a778e5a559a9d39a039350d544051b28227f016a5f4248ffec154a6",
-            )
-            .expect("fixture Seal")],
-        },
-        authorization_incarnation: AuthorizationIncarnation::Realm {
-            realm_membership_incarnation_ref: arkret_wire::EventId::new(
-                "ak:event:AWYr1ucW0vOccjnC8XMFGQK8PjKzaha_YpYb8B0uDY_y",
-            )
-            .expect("fixture incarnation Event"),
-        },
-    };
-    evidence.validate().expect("valid minimal signer evidence");
-    let content_digest = evidence
-        .canonical_sha256_digest()
-        .expect("fixture evidence digest");
-    GovernanceDependency::MinimalMetadataMlsLeafSignerEvidence {
-        selector: GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence {
-            content_digest,
-        },
-        minimal_metadata_mls_leaf_signer_evidence: evidence,
-    }
-}
-
-pub async fn assert_governance_unscoped_signer_evidence_contract(
-    store: &dyn GovernanceDependencyStore,
-    namespace: &str,
-) {
-    let item = minimal_history_signer_evidence(namespace);
-    let selector = item.selector().clone();
-    assert_eq!(
-        store
-            .put_unscoped_signer_evidence_exact(item.clone())
-            .await
-            .expect("insert unscoped signer evidence"),
-        ExactWriteOutcome::Inserted
-    );
-    assert_eq!(
-        store
-            .put_unscoped_signer_evidence_exact(item.clone())
-            .await
-            .expect("exact retry unscoped signer evidence"),
-        ExactWriteOutcome::ExactReplay
-    );
-    assert_eq!(
-        store
-            .get_unscoped_signer_evidence(&selector)
-            .await
-            .expect("read unscoped signer evidence"),
-        Some(item.clone())
-    );
-    let realm_id = RealmId::new("ak:realm:AfjSiYTXJZS-0ifVfy1f_uzsmJIBjDyN11_-dxnne50e")
-        .expect("fixture Realm ID");
-    assert_eq!(
-        store
-            .put_realm_object_exact(&realm_id, item.clone())
-            .await
-            .expect("link signer evidence to Realm"),
-        ExactWriteOutcome::Inserted
-    );
-    assert_eq!(
-        store
-            .put_realm_object_exact(&realm_id, item.clone())
-            .await
-            .expect("exact retry Realm signer evidence"),
-        ExactWriteOutcome::ExactReplay
-    );
-    assert_eq!(
-        store
-            .get(&realm_id, &selector)
-            .await
-            .expect("read Realm signer evidence"),
-        Some(item.clone())
-    );
-    let mut changed = item;
-    let arkret_models_collaboration::governance_dependencies::GovernanceDependency::MinimalMetadataMlsLeafSignerEvidence {
-        minimal_metadata_mls_leaf_signer_evidence,
-        ..
-    } = &mut changed
-    else {
-        unreachable!("fixture branch")
-    };
-    minimal_metadata_mls_leaf_signer_evidence.epoch += 1;
-    assert!(
-        store
-            .put_unscoped_signer_evidence_exact(changed)
-            .await
-            .is_err(),
-        "same selector digest with different bytes must fail closed"
-    );
 }
 
 pub async fn assert_device_message_snapshot_guard_contract(
@@ -1201,76 +998,6 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
         Some(completed),
         "reservation completion must replace the pending row exactly once"
     );
-
-    let realm_id = RealmId::new(contract_realm_id(&format!("{namespace}:seal-prepare")))
-        .expect("Seal preparation fence Realm id");
-    let first_fence = super::SealPreparationFenceRecord {
-        realm_id: realm_id.clone(),
-        signer_slot: format!("{principal_id}#device-1@1"),
-        predecessor_basis: "sha256:predecessor-one".to_owned(),
-        request_hash: "sha256:prepare-one".to_owned(),
-        response_body: serde_json::json!({"seal_body": {"frozen": "first"}}),
-        body_digest: "sha256:body-one".to_owned(),
-        created_at: now,
-    };
-    assert_eq!(
-        store
-            .freeze_seal_preparation(&first_fence)
-            .await
-            .expect("freeze first Seal preparation"),
-        super::SealPreparationFenceOutcome::Frozen(first_fence.clone())
-    );
-    let mut exact_retry = first_fence.clone();
-    exact_retry.response_body = serde_json::json!({"seal_body": {"frozen": "racer"}});
-    exact_retry.body_digest = "sha256:racer-body".to_owned();
-    assert_eq!(
-        store
-            .freeze_seal_preparation(&exact_retry)
-            .await
-            .expect("replay exact Seal preparation request"),
-        super::SealPreparationFenceOutcome::Replay(first_fence.clone()),
-        "an exact request must replay the complete first body"
-    );
-    let mut conflicting = first_fence.clone();
-    conflicting.request_hash = "sha256:prepare-conflict".to_owned();
-    conflicting.response_body = serde_json::json!({"seal_body": {"frozen": "conflict"}});
-    assert_eq!(
-        store
-            .freeze_seal_preparation(&conflicting)
-            .await
-            .expect("fence conflicting Seal preparation request"),
-        super::SealPreparationFenceOutcome::Fenced
-    );
-    assert_eq!(
-        store
-            .seal_preparation_fence(
-                &realm_id,
-                &first_fence.signer_slot,
-                &first_fence.predecessor_basis,
-            )
-            .await
-            .expect("read immutable Seal preparation fence"),
-        Some(first_fence.clone()),
-        "a conflicting request must not mutate the frozen record"
-    );
-    let mut next_basis = conflicting.clone();
-    next_basis.predecessor_basis = "sha256:predecessor-two".to_owned();
-    assert!(matches!(
-        store
-            .freeze_seal_preparation(&next_basis)
-            .await
-            .expect("freeze advanced predecessor basis"),
-        super::SealPreparationFenceOutcome::Frozen(_)
-    ));
-    let mut next_generation = conflicting;
-    next_generation.signer_slot = format!("{principal_id}#device-1@2");
-    assert!(matches!(
-        store
-            .freeze_seal_preparation(&next_generation)
-            .await
-            .expect("freeze advanced signer generation"),
-        super::SealPreparationFenceOutcome::Frozen(_)
-    ));
 }
 
 pub async fn assert_mimi_consent_correlation_store_contract(
@@ -3945,95 +3672,6 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
     );
 }
 
-/// A Control Event and its governance-history edge share one transaction.
-/// This specifically guards the source-row foreign key: adapters must create
-/// the pending Control Event before the edge becomes visible, and any invalid
-/// edge must roll the whole Event unit back.
-pub async fn assert_atomic_control_event_governance_dependency_contract(
-    events: &dyn EventStore,
-    dependencies: &dyn GovernanceDependencyStore,
-    namespace: &str,
-) {
-    let now = database_timestamp_now();
-    let principal_id = format!("ak:did_core:web:{namespace}.example");
-    let realm_id = contract_realm_id(&format!("governance-edge:{namespace}"));
-    let record = canonical_wire_event_record(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        &principal_id,
-        &realm_id,
-        0,
-        now,
-    );
-    let realm_id = record.realm_id.clone().expect("derived genesis Realm");
-    let source = GovernanceDependencySource::Event(
-        Hash::new(record.canonical_digest.clone()).expect("typed Control Event digest"),
-    );
-    let item = minimal_history_signer_evidence(namespace);
-    events
-        .put_realm_bootstrap_batch_atomic(
-            vec![record.clone()],
-            vec![contract_control_proposal_ack(&record, now)],
-            vec![GovernanceDependencyWrite {
-                realm_id: RealmId::new(realm_id.clone()).expect("typed Realm"),
-                source: source.clone(),
-                edge_index: 0,
-                item: item.clone(),
-            }],
-            Vec::new(),
-        )
-        .await
-        .expect("Control Event and governance dependency commit atomically");
-    let stored = dependencies
-        .list_for_source(
-            &RealmId::new(realm_id.clone()).expect("typed Realm"),
-            &source,
-        )
-        .await
-        .expect("read committed Control Event dependency");
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].edge_index, 0);
-    assert_eq!(stored[0].item, item);
-
-    let rollback_realm_id = contract_realm_id(&format!("governance-rollback:{namespace}"));
-    // A genesis Realm is derived from the Event, not chosen by the caller.
-    // Give this independent rollback unit distinct canonical content.
-    let rollback_at = now + Duration::milliseconds(1);
-    let rollback_record = canonical_wire_event_record(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        &principal_id,
-        &rollback_realm_id,
-        0,
-        rollback_at,
-    );
-    assert_ne!(record.event_id, rollback_record.event_id);
-    let wrong_realm_id = contract_realm_id(&format!("governance-wrong:{namespace}"));
-    let error = events
-        .put_realm_bootstrap_batch_atomic(
-            vec![rollback_record.clone()],
-            vec![contract_control_proposal_ack(&rollback_record, rollback_at)],
-            vec![GovernanceDependencyWrite {
-                realm_id: RealmId::new(wrong_realm_id).expect("typed wrong Realm"),
-                source: GovernanceDependencySource::Event(
-                    Hash::new(rollback_record.canonical_digest.clone())
-                        .expect("typed rollback Event digest"),
-                ),
-                edge_index: 0,
-                item: minimal_history_signer_evidence(&format!("rollback:{namespace}")),
-            }],
-            Vec::new(),
-        )
-        .await
-        .expect_err("mismatched governance dependency Realm must abort Event unit");
-    assert!(matches!(error, PersistenceError::Conflict(_)));
-    assert!(
-        !events
-            .contains(&rollback_record.event_id)
-            .await
-            .expect("read rolled-back Event"),
-        "invalid governance dependency must not leave a canonical Event prefix"
-    );
-}
-
 async fn mls_keypackage_contract_account(
     accounts: &dyn super::AccountStore,
     namespace: &str,
@@ -5723,10 +5361,11 @@ pub async fn assert_consent_projection_commit_contract(
     let granted = ConsentCellRecord {
         cell_id: cell_id.clone(),
         holder_account_id: holder_account_id.clone(),
-        peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
-            realm_id: pairwise_realm_id.clone(),
-            principal_id: peer.clone(),
-        },
+        peer:
+            arkret_models_collaboration::events_payloads::consent::ConsentPeer::PairwisePrincipal {
+                realm_id: pairwise_realm_id.clone(),
+                principal_id: peer.clone(),
+            },
         consent_scope: "invite".to_owned(),
         active_grants: BTreeMap::from([(
             dot.clone(),

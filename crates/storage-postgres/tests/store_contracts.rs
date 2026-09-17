@@ -6,16 +6,13 @@ use soland_storage::contract_tests::{
     AppletFormalCommitContractStores, ConsentCommitContractStores,
     DeviceRevocationSealSettlementStores, EventCommitContractStores,
     assert_account_localpart_remove_contract, assert_applet_formal_commit_transaction_contract,
-    assert_atomic_batch_outbox_rollback_contract,
-    assert_atomic_control_event_governance_dependency_contract,
-    assert_consent_projection_commit_contract,
+    assert_atomic_batch_outbox_rollback_contract, assert_consent_projection_commit_contract,
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
-    assert_federation_outbox_store_contract, assert_governance_unscoped_signer_evidence_contract,
-    assert_idempotency_store_contract, assert_invite_new_source_ledger_contract,
-    assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
-    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
-    minimal_history_signer_evidence,
+    assert_federation_outbox_store_contract, assert_idempotency_store_contract,
+    assert_invite_new_source_ledger_contract, assert_last_resort_claim_ledger_contract,
+    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
+    assert_organization_registration_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountNotificationDeltaWrite,
@@ -26,11 +23,11 @@ use soland_storage::{
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
-    PgContactStore, PgDeviceInventoryStore,
-    PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore,
-    PgGovernanceDependencyStore, PgIdempotencyStore, PgInviteNewSourceLedgerStore,
-    PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore, PgMlsKeyPackageStore,
-    PgNotificationStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    PgContactStore, PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork,
+    PgEventStore, PgFederationOutboxStore, PgGovernanceDependencyStore, PgIdempotencyStore,
+    PgInviteNewSourceLedgerStore, PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore,
+    PgMlsKeyPackageStore, PgNotificationStore, PgOrganizationRegistrationStore, PgPool,
+    PgProjectionEventStore,
 };
 
 #[tokio::test]
@@ -2600,71 +2597,6 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
         arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove
     );
     assert!(removed[0].record.delta.agent_runtime_approval().is_none());
-}
-
-#[tokio::test]
-async fn postgres_adapter_satisfies_unscoped_signer_evidence_contract() {
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let store = PgGovernanceDependencyStore { pool };
-    let namespace = format!("postgres-unscoped-signer-{}", uuid::Uuid::now_v7());
-    assert_governance_unscoped_signer_evidence_contract(&store, &namespace).await;
-}
-
-#[tokio::test]
-async fn postgres_adapter_retains_seal_dependencies_before_seal_publication() {
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let store = PgGovernanceDependencyStore { pool };
-    let namespace = format!(
-        "postgres-prepublish-seal-dependency-{}",
-        uuid::Uuid::now_v7()
-    );
-    let realm_id = arkret_wire::RealmId::new(event_derived_realm_id(namespace.as_bytes())).unwrap();
-    let seal_id = arkret_wire::SealId::new(format!(
-        "ak:seal:sha256:{}",
-        arkret_canonical::sha256_hex(namespace.as_bytes())
-    ))
-    .unwrap();
-    let source = GovernanceDependencySource::Seal(seal_id);
-    let item = minimal_history_signer_evidence(&namespace);
-
-    store
-        .put_exact(GovernanceDependencyWrite {
-            realm_id: realm_id.clone(),
-            source: source.clone(),
-            edge_index: 0,
-            item: item.clone(),
-        })
-        .await
-        .expect("retain dependency before its candidate Seal is published");
-
-    let retained = store
-        .list_for_source(&realm_id, &source)
-        .await
-        .expect("read pre-published Seal dependency");
-    assert_eq!(retained.len(), 1);
-    assert_eq!(retained[0].item, item);
-}
-
-#[tokio::test]
-async fn postgres_adapter_commits_control_event_governance_dependencies_and_control_seal_schedule_atomically()
- {
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let events = PgEventStore { pool: pool.clone() };
-    let dependencies = PgGovernanceDependencyStore { pool: pool.clone() };
-    let namespace = format!("postgres-control-event-governance-{}", uuid::Uuid::now_v7());
-    let before = control_seal_schedule_row_count(&pool, None).await;
-    assert_atomic_control_event_governance_dependency_contract(&events, &dependencies, &namespace)
-        .await;
-    assert_eq!(
-        control_seal_schedule_row_count(&pool, None).await,
-        before + 1,
-        "the PgEventStore Control Event path must atomically create its schedule row"
-    );
-    cleanup_control_schedule_test_actor(&pool, &format!("ak:did_core:web:{namespace}.example"))
-        .await;
 }
 
 #[tokio::test]

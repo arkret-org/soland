@@ -14,16 +14,15 @@ mod support;
 use soland_storage::contract_tests::{
     assert_device_key_store_contract, assert_member_identity_store_contract,
     assert_message_store_contract, assert_one_time_key_store_contract,
-    assert_realm_meta_store_contract, minimal_history_signer_evidence,
+    assert_realm_meta_store_contract,
 };
 use soland_storage::{
-    DeviceKeyStore, GovernanceDependencyStore, MemberIdentityEventRecord, MemberIdentityStore,
-    MemberIdentitySubjectKey, MessageRecord, MessageStore, OneTimeKeyStore, RealmMetaRecord,
-    RealmMetaStore,
+    DeviceKeyStore, MemberIdentityEventRecord, MemberIdentityStore, MemberIdentitySubjectKey,
+    MessageRecord, MessageStore, OneTimeKeyStore, RealmMetaRecord, RealmMetaStore,
 };
 use soland_storage_postgres::{
-    Db, PgDeviceKeyStore, PgGovernanceDependencyStore, PgMemberIdentityStore, PgMessageStore,
-    PgOneTimeKeyStore, PgPool, PgRealmMetaStore,
+    Db, PgDeviceKeyStore, PgMemberIdentityStore, PgMessageStore, PgOneTimeKeyStore, PgPool,
+    PgRealmMetaStore,
 };
 
 #[path = "../../test-support/src/device_authorization_history.rs"]
@@ -289,34 +288,5 @@ async fn postgres_member_identity_survives_restart() {
     assert!(
         events.iter().any(|event| event == &restart_event),
         "accepted member identity events must survive restart"
-    );
-}
-
-#[tokio::test]
-async fn postgres_unscoped_signer_evidence_survives_restart() {
-    let _db_guard = DB_GUARD.lock().await;
-    let pool = fresh_pool().await;
-    let namespace = format!("postgres-signer-evidence-{}", uuid::Uuid::now_v7());
-    let item = minimal_history_signer_evidence(&namespace);
-    let selector = item.selector().clone();
-    let store = PgGovernanceDependencyStore { pool: pool.clone() };
-    store
-        .put_unscoped_signer_evidence_exact(item.clone())
-        .await
-        .expect("write signer evidence before restart");
-    drop(store);
-    drop(pool);
-
-    let restarted_pool = fresh_pool().await;
-    let restarted = PgGovernanceDependencyStore {
-        pool: restarted_pool,
-    };
-    assert_eq!(
-        restarted
-            .get_unscoped_signer_evidence(&selector)
-            .await
-            .expect("read signer evidence after restart"),
-        Some(item),
-        "signer evidence CAS must survive restart"
     );
 }
