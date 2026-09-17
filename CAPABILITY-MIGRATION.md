@@ -289,6 +289,86 @@ in `arkret-rust-sdk` today. Soland must not define local substitutes.
 - `arkret_models_crypto::{MlsAcceptedLeafAuthorization, MlsEpochHead}`.
 - `arkret_models_identity::AuthenticatedSignerResolutionEvidence`.
 
+### Agent signer evidence: the whole module is gone, and prose requires it
+
+Measured 2026-09-17 against `arkret-rust-sdk` main. Every symbol below is a
+zero-hit across the entire SDK, `generated/` included:
+
+| Missing SDK symbol | soland references |
+|---|---|
+| `models_identity::agent_signer_evidence::AgentLifecycleStatus` | 23 |
+| `models_identity::agent_signer_evidence::AgentSignerEvidence` | 15 |
+| `models_identity::agent_signer_evidence::CurrentAgentSignerEvidence` | 6 |
+| `models_identity::agent_signer_evidence::AgentKeyCellEntry` | 3 |
+| `arkret::build_agent_signer_evidence` | 2 |
+| `arkret_signatures::agent_evidence::agent_authorization_cell_ref` | 2 |
+| `arkret_signatures::agent_evidence::sign_agent_authority_state_attestation` | 1 |
+| `arkret_signatures::agent_evidence::agent_admission_evidence_digest` | 1 |
+
+53 references, almost all in
+`crates/http/src/routing/identity/agents/evidence.rs` (1501 lines), with the
+rest in `agents/pairing.rs`, `agents/common.rs`, `agents/tests.rs`,
+`identity/current_signer_evidence.rs` and `server/tests/http_api/events.rs`.
+
+**This is not dead code.** `identity/mod.rs:7` declares `mod agents`,
+`agents.rs:77` declares `mod evidence` — the whole chain is in the compile
+graph, so these are live product surfaces that cannot build, not orphans.
+
+**Prose requires one of them by name.** `spec/v1/zh/identity/key-management.md:182`
+makes the Station the owner of Agent pairing material and says activation MUST
+build *exactly one* `CurrentSignerEvidence::Agent` from the frozen
+authorization / lifecycle / governance-Station / account-authority closure using
+the SDK's `build_agent_signer_evidence`, and that the Authority consumes only
+that exact outcome — it MUST NOT rebuild and compare, and MUST NOT substitute a
+fresh timestamp or signature. Without the SDK function there is no way to honour
+"exactly one, built once, by the Station".
+
+Note `models-identity/src/agent_signer_evidence.rs` **does exist** in the SDK
+and carries `AgentAuthorizedSigningKey`, `ControllerAccountGateAttestation` and
+friends. So this is a *partial* restoration, not an untouched module: the
+gate-attestation half came back and the signer-evidence half did not. Do not
+read the file's existence as evidence that the capability is present.
+
+Reference implementation: `e309b047^:crates/signatures/src/agent_evidence.rs`
+(1470 lines, about 40 public items). Two cautions when restoring it:
+
+- `AgentKeyCellEntry` and `agent_authorization_cell_ref` carry `Cell`, which is
+  removed vocabulary under the authority-commit clean break. Rebuild them under
+  the typed current result naming, do not copy the old names back.
+- `SignerKeyQueryResult`, `AccountSubscribeSnapshotResult` and
+  `ModerationQueueItem` are NC-TYPE-001 violations in the same area (`Result` is
+  not in the closed wrapper-word table; `Outcome` and `Row` are). Fix them in
+  the same pass rather than propagating them.
+
+Also stale and misleading:
+`arkret-rust-sdk/crates/models-identity/src/agent_signer_evidence.rs:130-141`
+hardcodes a schema id string and comments that the registry row has not landed.
+It has — `arkret-spec/spec/v1/artifacts/registry/contract-registry.json:3537`.
+
+### BackupSeriesErase has no SDK DTO at all
+
+`crates/http/src/routing/identity/recovery/security_transaction_endpoints.rs`
+references `arkret_models_crypto::BackupSeriesEraseOutcome`,
+`BackupSeriesEraseRow` and `BackupSeriesEraseRowStatus`. None exist. The spec
+side is complete — `keys-operations.schema.json` carries all four `$defs`, and
+the operation is registered (`operation_ids.rs:5993`,
+`grpc: Some("SelfKeys/BackupSeriesErase")`) — so the operation is registered but
+uncallable. This is why the nine `terminal_result` / `series_results` renames in
+that file have no compiler backing: the file could not build before the rename
+either.
+
+One thing to adjudicate before writing the DTO: the preimage domain
+`"ak.backup_series_erase_confirmation_preimage.v1"` covers only
+`{domain, transaction_id, series}` and not the two digests the schema's
+confirmation object carries. Check the prose first to decide whether the digest
+function is missing inputs or the schema carries extra fields. Do not split the
+difference.
+
+Naming to settle at the same time: the spec calls the element type
+`backup_series_erase_record`, soland calls it `BackupSeriesEraseRow`. Both `Row`
+and `Record` are legal NC-TYPE-001 wrapper words, but the same thing should not
+have two names across the boundary.
+
 `arkret_wire::UnsignedRecoveryCompletionAttestationBody` has already moved to
 `{reanchor_event_ref, device_authorization_event_ref}`;
 `crates/http/src/routing/identity/recovery/security_transaction_endpoints.rs`
