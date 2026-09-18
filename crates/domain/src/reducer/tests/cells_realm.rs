@@ -1446,6 +1446,59 @@ fn bootstrap_policy_bundle_uses_registered_value_without_projection_metadata() {
     );
 }
 
+/// Every Realm-bootstrap facet kind must reach the reducer through the
+/// dispatch registry, not only through a direct call.
+///
+/// `services::projection::apply_realm_bootstrap_to_state` turns
+/// `ProjectionEffect::Ignored` into a hard `RealmBootstrapProjectionError`,
+/// so a kind that the registry's no-op fallback swallows fails Realm
+/// bootstrap outright rather than degrading quietly. The direct-call tests
+/// above cannot see that: they bypass the registry.
+#[test]
+fn every_bootstrap_facet_kind_is_reachable_through_the_dispatch_registry() {
+    let cases = [
+        (
+            arkret_wire::EventKind::RealmAlias,
+            serde_json::json!({ "alias": "#room:example.org" }),
+        ),
+        (
+            arkret_wire::EventKind::RealmJoinRule,
+            serde_json::json!({ "value": "invite" }),
+        ),
+        (
+            arkret_wire::EventKind::RealmDiscovery,
+            serde_json::json!({ "value": "private" }),
+        ),
+        (
+            arkret_wire::EventKind::RealmPlaintextVisibleServices,
+            serde_json::json!({ "services": [] }),
+        ),
+    ];
+    let realm_id = "ak:realm:AZ5nQ0y2uZ3d1tVvJ7mK8sXbR4fPcHlWgEoNiTaUdY6B";
+    for (kind, payload) in cases {
+        let mut state = ProjectionState::new();
+        let operation = make_operation(kind.clone(), realm_id, payload.clone());
+        let effect = state.apply(&operation, &ServerHlc::new("test"));
+        assert!(
+            matches!(
+                effect,
+                ProjectionEffect::RealmBootstrapFacetProjected { .. }
+            ),
+            "{kind:?} must project a bootstrap facet, got {effect:?}"
+        );
+        // Write-once: the bootstrap sequence declares the opening policy and a
+        // second accepted Event of the same kind would silently redefine it.
+        assert!(
+            matches!(
+                state.apply(&operation, &ServerHlc::new("test")),
+                ProjectionEffect::Rejected { ref reason }
+                    if reason == arkret_wire::ErrorCode::CAS_CONFLICT
+            ),
+            "{kind:?} must be write-once"
+        );
+    }
+}
+
 // history_access is a two-state, narrowing-only transition.
 
 #[test]

@@ -637,6 +637,18 @@ fn apply_member_identity_update_dispatch(
     }
 }
 
+/// Dispatch for the four closed Realm-bootstrap facet kinds. Each writes
+/// exactly one Realm-singleton facet write-once; `apply_realm_bootstrap_facet`
+/// rejects every other kind with `out_of_order_bootstrap`, so only these four
+/// may be registered here.
+fn apply_realm_bootstrap_facet_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_bootstrap_facet(op)
+}
+
 /// Dispatch for `ak.realm.policy_bundle`; cell family is
 /// `ak.component.realm.policy_bundle.v1`.
 fn apply_realm_policy_bundle_dispatch(
@@ -1114,6 +1126,27 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmPolicyBundle,
         apply_realm_policy_bundle_dispatch,
+    );
+    // The Realm-bootstrap facet kinds. `bootstrap_event_kinds` in the Event
+    // kind registry lists them and
+    // `services::projection::apply_realm_bootstrap_to_state` turns an
+    // `Ignored` effect into a hard `RealmBootstrapProjectionError`, so an
+    // unregistered kind here fails Realm bootstrap outright.
+    m.insert(
+        arkret_wire::EventKind::RealmAlias,
+        apply_realm_bootstrap_facet_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::RealmJoinRule,
+        apply_realm_bootstrap_facet_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::RealmDiscovery,
+        apply_realm_bootstrap_facet_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::RealmPlaintextVisibleServices,
+        apply_realm_bootstrap_facet_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::RealmSearchPolicy,
