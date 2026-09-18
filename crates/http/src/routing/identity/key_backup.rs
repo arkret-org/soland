@@ -682,7 +682,20 @@ pub(crate) async fn recovery_unlock_manifest(
             "backup manifest changed during verification",
         ));
     }
-    Ok(
-        json!({"backups":manifest,"revision":revision,"actor_id":actor,"realm_id":pointers.control_realm_id,"seal_basis":pointers.seal_basis}),
-    )
+    // The frozen manifest is the `basis` object the unlock path re-validates:
+    // `key_backup_unlock::basis_committed_ref` reads a top-level
+    // `committed_ref` and parses it as `arkret_wire::CommittedEventRef`, then
+    // `validate_basis_is_stream_head` compares its `stream_position` against
+    // the current head of the same `stream_ref`. Emit exactly that key.
+    let mut frozen = json!({
+        "backups": manifest,
+        "revision": revision,
+        "actor_id": actor,
+        "realm_id": pointers.control_realm_id,
+    });
+    if let Some(committed_ref) = pointers.source_commit_ref.as_ref() {
+        frozen["committed_ref"] =
+            serde_json::to_value(committed_ref).map_err(|error| AppError::internal(error.to_string()))?;
+    }
+    Ok(frozen)
 }

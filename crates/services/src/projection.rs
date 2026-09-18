@@ -1,45 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_event_draft::{EventPayloadExt, ProjectedEventOperation as Operation};
-use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
-use arkret_models_collaboration::event_sync::{
-    ControlGovernanceHealth, ControlGovernanceHealthStatus, ControlProposalDecisionState,
-    ControlProposalFaultReason, PendingControlProposal,
-};
-use arkret_models_collaboration::history_key::{
-    AuthorizationIncarnation, HistoryReleaseAttestation,
-};
+use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
-use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressClass};
-use arkret_state::state::{
-    CellStateModelBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
-    ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
-    ControlSealScheduleRepairStats, ControlUnitIngressMember, DecidedControlEventRecord,
-    PendingControlEventRecord, PendingControlUnitRecord, SealDigestSuites, SealEffect,
-    SealLeafUnionProof, SealReject, SealStore, StoreError, StoreResult,
-};
-use arkret_state::state_model::ResolvedCellState;
-use arkret_state::state_model::ordered_log::IssuedOp;
-use arkret_state::{CellStateRegistry, CellStore, EffectiveSealView};
-use arkret_wire::cbs::ProjectedCellWrite;
-use arkret_wire::event_envelope::Event;
-use arkret_wire::{
-    ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy,
-    HistoryEffectiveScope, Seal,
-};
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
-    MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
+    FacetRef, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
     SolandMembershipState, SolandRealmState, object_stage_wire_value,
 };
-use soland_storage::{
-    HistoryAuthorityViewCas, PersistenceError, PersistenceResult, PersistenceStore,
-};
-use tokio::sync::Mutex as AsyncMutex;
+use soland_storage::{PersistenceResult, PersistenceStore};
 
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
 
@@ -55,21 +28,8 @@ fn projection_event_ref(operation: &Operation) -> String {
     operation.context.event_id.to_string()
 }
 
-fn invite_member_cell(member: &str) -> Option<CellRef> {
-    let actor: arkret_wire::ActorId = serde_json::from_str(member).ok()?;
-    let subject = arkret_wire::composite_subject(&[actor.to_string()]).ok()?;
-    CellRef::new(format!("ak:cell:ak.component.member.state.v1:{subject}")).ok()
-}
-
 pub fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
     soland_domain::reducer::morph_document_body(fields)
-}
-
-pub fn engine_grant_from_capability_cell_state(
-    grant_id: &str,
-    cell_state: &ResolvedCellState,
-) -> Option<arkret_policy::authz::authority::Grant> {
-    soland_domain::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
 }
 
 pub fn check_realm_link_admissible(
@@ -93,40 +53,6 @@ pub fn effective_policy_for_realm(
     realm_id: &str,
 ) -> arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyOutcome {
     soland_domain::reducer::realm_links::effective_policy_for_realm(projection, realm_id)
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct SealEffectiveStateCheckpoint {
-    pub realm_id: RealmId,
-    pub seal_id: SealId,
-    pub covered_event_digests: BTreeSet<Hash>,
-    pub covered_seal_ids: BTreeSet<SealId>,
-    pub state: BTreeMap<CellRef, ResolvedCellState>,
-}
-
-#[async_trait::async_trait]
-pub trait EventSealCommitPort: Send + Sync {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the atomic frontier CAS boundary keeps every compared and committed component explicit"
-    )]
-    async fn commit_if_head(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        expected_store_head: Option<&SealId>,
-        new_ops: &[(CellRef, IssuedOp)],
-        covered: &std::collections::BTreeSet<Hash>,
-        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> StoreResult<bool>;
-
-    async fn effective_state_checkpoint(
-        &self,
-        _seal_id: &SealId,
-    ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
-        Ok(None)
-    }
 }
 
 /// Process-local hybrid logical clock owned by the application layer.
@@ -164,14 +90,6 @@ impl std::ops::Deref for ServiceClock {
 #[derive(Clone)]
 pub struct ProjectionService {
     state: Arc<Mutex<ProjectionState>>,
-    conformance_fixture_realms: Arc<Mutex<BTreeSet<String>>>,
-    control_event_store: Arc<dyn ControlEventStore>,
-    seal_store: Arc<dyn SealStore>,
-    cell_store: Arc<dyn CellStore>,
-    cell_registry: Arc<dyn CellStateRegistry>,
-    event_seal_committer: Arc<dyn EventSealCommitPort>,
-    control_decision_commit_lock: Arc<AsyncMutex<()>>,
-    confirmed_projection_lock: Arc<AsyncMutex<()>>,
     pending_backup_metadata: Arc<Mutex<BTreeSet<(String, String)>>>,
     history_authority_view_cas_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
@@ -249,21 +167,8 @@ pub enum ProjectionEffectView {
 }
 
 pub struct StagedRealmBootstrap {
-    operations: Vec<ProjectedOperation>,
+    operations: Vec<Operation>,
     direct_conversation_founding: bool,
-}
-
-/// One reducer Operation paired with the registry-derived cell writes of the
-/// signed Event it was projected from.
-///
-/// The v1 Event wire carries no producer `effects[]`, so every reducer entry
-/// point that can hit a kind with a declared cell contract has to be handed the
-/// receiver's own projection alongside the Operation. Pairing them in one value
-/// keeps the two from drifting out of index alignment.
-#[derive(Clone, Debug)]
-pub struct ProjectedOperation {
-    pub operation: Operation,
-    pub cell_writes: Vec<ProjectedCellWrite>,
 }
 
 #[derive(Clone, Debug)]
@@ -395,24 +300,9 @@ impl ProjectionService {
     }
 
     #[must_use]
-    pub fn new(
-        control_event_store: Arc<dyn ControlEventStore>,
-        seal_store: Arc<dyn SealStore>,
-        cell_store: Arc<dyn CellStore>,
-        cell_registry: Arc<dyn CellStateRegistry>,
-        event_seal_committer: Arc<dyn EventSealCommitPort>,
-        clock_node: &str,
-    ) -> Self {
+    pub fn new(clock_node: &str) -> Self {
         Self {
             state: Arc::new(Mutex::new(ProjectionState::new())),
-            conformance_fixture_realms: Arc::new(Mutex::new(BTreeSet::new())),
-            control_event_store,
-            seal_store,
-            cell_store,
-            cell_registry,
-            event_seal_committer,
-            control_decision_commit_lock: Arc::new(AsyncMutex::new(())),
-            confirmed_projection_lock: Arc::new(AsyncMutex::new(())),
             pending_backup_metadata: Arc::new(Mutex::new(BTreeSet::new())),
             history_authority_view_cas_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
@@ -423,20 +313,12 @@ impl ProjectionService {
         &self,
         persistence: &dyn PersistenceStore,
         projection_adapter: &dyn HydrationProjectionAdapter,
-        realm_ids: impl IntoIterator<Item = RealmId>,
+        _realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
         let mut state = ProjectionState::new();
         hydrate_projections_from_persistence(persistence, &mut state, projection_adapter, self)
             .await?;
         state.replay_resolved_pending(self.clock());
-        for realm_id in realm_ids {
-            if let Err(error) = state
-                .reload_cells_from_store(&realm_id, self.cell_store(), self.cell_registry())
-                .await
-            {
-                tracing::warn!(%error, %realm_id, "failed to hydrate cells from state store");
-            }
-        }
         for record in persistence
             .realm_organization_statements()
             .snapshot_all()
@@ -473,917 +355,6 @@ impl ProjectionService {
         Ok(())
     }
 
-    #[must_use]
-    pub fn sdk_cell_registry() -> Arc<dyn CellStateRegistry> {
-        Self::try_sdk_cell_registry()
-            .expect("canonical shared transition registry must pass the startup closure gate")
-    }
-
-    pub fn try_sdk_cell_registry()
-    -> Result<Arc<dyn CellStateRegistry>, arkret_lattice_registry::ContractRegistryError> {
-        Ok(Arc::new(
-            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()?,
-        ))
-    }
-
-    fn control_event_store(&self) -> &dyn ControlEventStore {
-        self.control_event_store.as_ref()
-    }
-
-    fn seal_store(&self) -> &dyn SealStore {
-        self.seal_store.as_ref()
-    }
-
-    fn cell_store(&self) -> &dyn CellStore {
-        self.cell_store.as_ref()
-    }
-
-    /// The Realm's cell registry.
-    ///
-    /// Exposed because the notary derives each write's `supersedes` set from
-    /// the cell's state model (`event-auth-state-resolution.md` §9.3.1.3 item 4),
-    /// which it cannot ask without resolving the binding.
-    pub fn cell_registry(&self) -> &dyn CellStateRegistry {
-        self.cell_registry.as_ref()
-    }
-
-    /// A shared handle to the same registry, for durable commits that must
-    /// resolve cell bindings inside a caller-owned database transaction.
-    #[must_use]
-    pub fn cell_registry_handle(&self) -> Arc<dyn CellStateRegistry> {
-        self.cell_registry.clone()
-    }
-
-    fn event_seal_committer(&self) -> &dyn EventSealCommitPort {
-        self.event_seal_committer.as_ref()
-    }
-
-    pub async fn put_pending_control_event_with_ack(
-        &self,
-        event: &Event,
-        ack: &ControlProposalAck,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        self.put_pending_control_event(
-            event,
-            &ControlProposalIngress::AckRequired(ack.clone()),
-            digest_suite,
-        )
-        .await
-    }
-
-    /// Record an accepted Control Move before a Seal may cover it.
-    ///
-    /// The ingress classification is part of the durable row
-    /// (`event-auth-state-resolution.md` §7.2): `AckRequired` atomically binds
-    /// the canonical Control Proposal Ack (a genesis unit's
-    /// ingress-authority Ack included), while `AcklessSelfPrincipal` stores
-    /// the stable references its first admission was proven against. An
-    /// Ack-required Move without its Ack is unrepresentable here.
-    pub async fn put_pending_control_event(
-        &self,
-        event: &Event,
-        ingress: &ControlProposalIngress,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        self.control_event_store()
-            .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
-                event: event.clone(),
-                digest_suite,
-                ingress: ingress.clone(),
-            }])
-            .await
-            .map(|_| ())
-    }
-
-    /// Persist one already-validated atomic control command unit without
-    /// losing its normative member order.
-    pub async fn put_pending_control_unit(
-        &self,
-        members: &[ControlUnitIngressMember],
-    ) -> StoreResult<Vec<Hash>> {
-        self.control_event_store()
-            .put_pending_unit_with_ingress(members)
-            .await
-    }
-
-    /// Control-plane Events are keyed by their canonical `event_digest`, not by
-    /// `event_id`: an equivocated id must stay distinguishable (§6.3.2).
-    pub async fn control_event_by_digest(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
-        self.control_event_store().get(event_digest).await
-    }
-
-    pub async fn control_event_digest_suite(
-        &self,
-        event_digest: &Hash,
-    ) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
-        self.control_event_store().digest_suite(event_digest).await
-    }
-
-    pub async fn control_proposal_ack(
-        &self,
-        event_digest: &Hash,
-    ) -> StoreResult<Option<ControlProposalAck>> {
-        self.control_event_store()
-            .control_proposal_ack(event_digest)
-            .await
-    }
-
-    /// Load one exact proposal/Ack/decision/Seal view from the backend's
-    /// single durable snapshot. HTTP observation and decision admission use
-    /// this instead of composing independently-timed point reads.
-    pub async fn control_proposal_snapshot(
-        &self,
-        event_digest: &Hash,
-    ) -> StoreResult<Option<ControlProposalSnapshot>> {
-        self.control_event_store()
-            .control_proposal_snapshot(event_digest)
-            .await
-    }
-
-    pub async fn control_event(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
-        self.control_event_store().get(event_digest).await
-    }
-
-    pub async fn record_control_proposal_decision(
-        &self,
-        event_digest: &Hash,
-        decision: &ControlProposalDecision,
-        policy: ControlProposalDecisionPolicy,
-    ) -> StoreResult<()> {
-        self.control_event_store()
-            .record_proposal_decision(event_digest, decision, policy)
-            .await
-    }
-
-    pub async fn commit_control_proposal_decision(
-        &self,
-        event_digest: &Hash,
-        decision: &ControlProposalDecision,
-        policy: ControlProposalDecisionPolicy,
-    ) -> StoreResult<soland_storage::ControlProposalDecisionCommitOutcome> {
-        let _guard = self.control_decision_commit_lock.lock().await;
-        if self
-            .control_event_store()
-            .control_proposal_snapshot(event_digest)
-            .await?
-            .is_some_and(|snapshot| snapshot.decisions.contains(decision))
-        {
-            return Ok(soland_storage::ControlProposalDecisionCommitOutcome::Duplicate);
-        }
-        self.control_event_store()
-            .record_proposal_decision(event_digest, decision, policy)
-            .await?;
-        Ok(soland_storage::ControlProposalDecisionCommitOutcome::Accepted)
-    }
-
-    pub async fn pending_control_records(
-        &self,
-        realm_id: &RealmId,
-        limit: usize,
-    ) -> StoreResult<Vec<PendingControlEventRecord>> {
-        self.control_event_store()
-            .list_pending_records(realm_id, limit)
-            .await
-    }
-
-    pub async fn control_governance_health(
-        &self,
-        realm_id: &RealmId,
-        observed_at: DateTime<Utc>,
-        policy: ControlProposalDecisionPolicy,
-    ) -> StoreResult<ControlGovernanceHealth> {
-        self.control_governance_health_with_ackless_authorities(
-            realm_id,
-            observed_at,
-            policy,
-            &BTreeSet::new(),
-        )
-        .await
-    }
-
-    /// Build governance health while excluding Ack-less Moves whose proposal
-    /// authority was independently revalidated by the HTTP admission layer.
-    ///
-    /// The service layer cannot resolve accepted device generations. Callers
-    /// must therefore supply exact digests, never a Realm-wide boolean. An
-    /// empty set preserves the fail-closed behavior used by ordinary Realms,
-    /// Agent PCRs and reanchor control.
-    pub async fn control_governance_health_with_ackless_authorities(
-        &self,
-        realm_id: &RealmId,
-        observed_at: DateTime<Utc>,
-        policy: ControlProposalDecisionPolicy,
-        ackless_authorized: &BTreeSet<Hash>,
-    ) -> StoreResult<ControlGovernanceHealth> {
-        let mut records = self
-            .pending_control_records(realm_id, ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1)
-            .await?;
-        let pending_proposals_complete =
-            records.len() <= ControlGovernanceHealth::MAX_PENDING_PROPOSALS;
-        records.truncate(ControlGovernanceHealth::MAX_PENDING_PROPOSALS);
-        let mut pending_proposals = Vec::with_capacity(records.len());
-        for record in records {
-            let digest =
-                arkret_state::state::control_event_digest(&record.event, record.digest_suite)?;
-            let Some(ack) = record.control_proposal_ack else {
-                // Authority-authored self-principal PCR moves are deliberately
-                // outside the external proposal/Ack bounded-decision rail.
-                // They remain pending until successor-Seal finality, but are
-                // not governance-health proposals and have no decision clock.
-                // Only a row durably classified AcklessSelfPrincipal at
-                // ingress may take this branch; an Ack-required row missing
-                // its Ack is an integrity failure no revalidation can excuse.
-                if matches!(
-                    record.ingress_class,
-                    ControlProposalIngressClass::AcklessSelfPrincipal(_)
-                ) && ackless_authorized.contains(&digest)
-                {
-                    continue;
-                }
-                return Err(arkret_state::state::StoreError::Conflict(format!(
-                    "pending Control Move {digest} is missing its Control Proposal Ack"
-                )));
-            };
-            if matches!(
-                record.ingress_class,
-                ControlProposalIngressClass::AcklessSelfPrincipal(_)
-            ) {
-                return Err(arkret_state::state::StoreError::Conflict(format!(
-                    "pending Control Move {digest} carries a Control Proposal Ack but was \
-                     classified Ack-less at ingress"
-                )));
-            }
-            ack.validate_structural(policy).map_err(|error| {
-                arkret_state::state::StoreError::Conflict(format!(
-                    "pending Control Move {digest} has an invalid Control Proposal Ack \
-                     (received_at={}, decision_due_at={}, absolute_due_at={}, \
-                     expected_decision_window_ms={}, expected_absolute_horizon_ms={}): {error}",
-                    ack.received_at,
-                    ack.decision_due_at,
-                    ack.absolute_due_at,
-                    policy.decision_window.num_milliseconds(),
-                    policy.absolute_horizon.num_milliseconds(),
-                ))
-            })?;
-            let current_due_at = record
-                .decisions
-                .last()
-                .map(ControlProposalDecision::decision_due_at)
-                .unwrap_or(ack.decision_due_at);
-            let overdue = observed_at >= current_due_at;
-            pending_proposals.push(PendingControlProposal {
-                device_revocation_state: None,
-                decision_state: if overdue {
-                    ControlProposalDecisionState::Overdue
-                } else if record.decisions.is_empty() {
-                    ControlProposalDecisionState::Pending
-                } else {
-                    ControlProposalDecisionState::Deferred
-                },
-                fault_reason: overdue
-                    .then_some(ControlProposalFaultReason::ControlProposalDecisionOverdue),
-                control_proposal_ack: ack,
-                decisions: record.decisions,
-            });
-        }
-        pending_proposals.sort_by(|left, right| {
-            (
-                left.control_proposal_ack.absolute_due_at,
-                left.control_proposal_ack.proposal_digest.as_str(),
-            )
-                .cmp(&(
-                    right.control_proposal_ack.absolute_due_at,
-                    right.control_proposal_ack.proposal_digest.as_str(),
-                ))
-        });
-        let health = ControlGovernanceHealth {
-            status: if !pending_proposals_complete
-                || pending_proposals
-                    .iter()
-                    .any(|pending| pending.decision_state == ControlProposalDecisionState::Overdue)
-            {
-                ControlGovernanceHealthStatus::Degraded
-            } else {
-                ControlGovernanceHealthStatus::Healthy
-            },
-            pending_proposals,
-            pending_proposals_complete,
-        };
-        health
-            .validate_with_policy(policy)
-            .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
-        Ok(health)
-    }
-
-    pub async fn claim_due_control_seal_realms(
-        &self,
-        holder: &str,
-        now_ms: i64,
-        claim_until_ms: i64,
-        limit: usize,
-    ) -> StoreResult<Vec<ControlSealScheduleClaim>> {
-        self.control_event_store()
-            .claim_due_control_seal_realms(holder, now_ms, claim_until_ms, limit)
-            .await
-    }
-
-    pub async fn complete_control_seal_attempt(
-        &self,
-        claim: &ControlSealScheduleClaim,
-        outcome: &ControlSealAttemptOutcome,
-        observed_at_ms: i64,
-    ) -> StoreResult<ControlSealAttemptCompletion> {
-        self.control_event_store()
-            .complete_control_seal_attempt(claim, outcome, observed_at_ms)
-            .await
-    }
-
-    pub async fn repair_control_seal_schedule(
-        &self,
-        now_ms: i64,
-        limit: usize,
-    ) -> StoreResult<ControlSealScheduleRepairStats> {
-        self.control_event_store()
-            .repair_control_seal_schedule(now_ms, limit)
-            .await
-    }
-
-    pub async fn control_seal_schedule_stats(
-        &self,
-        now_ms: i64,
-    ) -> StoreResult<arkret_state::state::ControlSealScheduleStats> {
-        self.control_event_store()
-            .control_seal_schedule_stats(now_ms)
-            .await
-    }
-
-    pub async fn try_claim_control_signing_lease(
-        &self,
-        realm_id: &RealmId,
-        signer_slot: &str,
-        holder: &str,
-        now_ms: i64,
-        until_ms: i64,
-    ) -> StoreResult<Option<u64>> {
-        self.seal_store()
-            .try_claim_signing_lease(realm_id, signer_slot, holder, now_ms, until_ms)
-            .await
-    }
-
-    pub async fn release_control_signing_lease(
-        &self,
-        realm_id: &RealmId,
-        signer_slot: &str,
-        holder: &str,
-        fence: u64,
-    ) -> StoreResult<bool> {
-        self.seal_store()
-            .release_signing_lease(realm_id, signer_slot, holder, fence)
-            .await
-    }
-
-    pub async fn pending_control_units_for_notary(
-        &self,
-        realm_id: &RealmId,
-        cursor: Option<&Hash>,
-        limit: usize,
-    ) -> StoreResult<Vec<PendingControlUnitRecord>> {
-        self.control_event_store()
-            .list_pending_units_for_notary(realm_id, cursor, limit)
-            .await
-    }
-
-    pub async fn advance_control_seal_scan(
-        &self,
-        claim: &ControlSealScheduleClaim,
-        cursor: Option<&Hash>,
-        observed_at_ms: i64,
-    ) -> StoreResult<bool> {
-        self.control_event_store()
-            .advance_control_seal_scan(claim, cursor, observed_at_ms)
-            .await
-    }
-
-    pub async fn decided_control_events(
-        &self,
-        realm_id: &RealmId,
-        cursor: Option<&Hash>,
-        limit: usize,
-    ) -> StoreResult<Vec<DecidedControlEventRecord>> {
-        self.control_event_store()
-            .list_decided(realm_id, cursor, limit)
-            .await
-    }
-
-    pub async fn seal_by_id(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
-        self.seal_store().get(seal_id).await
-    }
-
-    /// Read only execution effects in the local durable confirmed prefix.
-    /// Canonical admission and timestamps never select or order these members.
-    pub async fn confirmed_command_events(
-        &self,
-        realm_id: &RealmId,
-    ) -> StoreResult<Vec<arkret_wire::Event>> {
-        self.confirmed_prefix_events(realm_id, false).await
-    }
-
-    /// Recover the exact genesis unit, including its ordinary initialization
-    /// members, from its single committed command outcome.
-    pub async fn confirmed_genesis_unit(
-        &self,
-        realm_id: &RealmId,
-    ) -> StoreResult<Option<Vec<arkret_wire::Event>>> {
-        let events = self.confirmed_prefix_events(realm_id, true).await?;
-        Ok((!events.is_empty()).then_some(events))
-    }
-
-    async fn confirmed_prefix_events(
-        &self,
-        realm_id: &RealmId,
-        genesis_only: bool,
-    ) -> StoreResult<Vec<arkret_wire::Event>> {
-        let Some(mut next) = self.realm_seal_head(realm_id).await? else {
-            return Ok(Vec::new());
-        };
-        let mut visited = BTreeSet::new();
-        let mut prefix = Vec::new();
-        loop {
-            if !visited.insert(next.clone()) {
-                return Err(StoreError::Conflict(
-                    "confirmed Seal predecessor cycle".into(),
-                ));
-            }
-            let seal = self
-                .seal_by_id(&next)
-                .await?
-                .ok_or_else(|| StoreError::Conflict("confirmed Seal is unavailable".into()))?;
-            if seal.realm_id != *realm_id || seal.id != next {
-                return Err(StoreError::Conflict(
-                    "confirmed Seal identity or Realm mismatch".into(),
-                ));
-            }
-            let previous = seal.predecessor_ref.clone();
-            prefix.push(seal);
-            match previous {
-                Some(id) => next = id,
-                None => break,
-            }
-        }
-        prefix.reverse();
-        let mut events = Vec::new();
-        for seal in prefix
-            .iter()
-            .take(if genesis_only { 1 } else { prefix.len() })
-        {
-            if seal.predecessor_ref.is_none() && seal.command_results.len() != 1 {
-                return Err(StoreError::Conflict(
-                    "genesis must have one command unit".into(),
-                ));
-            }
-            for (command_index, result) in seal.command_results.iter().enumerate() {
-                if result.outcome != arkret_wire::CommandOutcome::Committed {
-                    continue;
-                }
-                for (member_index, digest) in result.unit_event_digests.iter().enumerate() {
-                    let snapshot =
-                        self.control_proposal_snapshot(digest)
-                            .await?
-                            .ok_or_else(|| {
-                                StoreError::Conflict(
-                                    "confirmed command member is unavailable".into(),
-                                )
-                            })?;
-                    if !matches!(snapshot.command_decisions.as_slice(), [decision] if decision.seal_id == seal.id && decision.command_index as usize == command_index && decision.member_index as usize == member_index && decision.outcome == arkret_wire::CommandOutcome::Committed)
-                    {
-                        return Err(StoreError::Conflict(
-                            "confirmed command has no unique matching member decision".into(),
-                        ));
-                    }
-                    if snapshot.event.event_id.event_digest() != *digest
-                        || snapshot.event.realm_id != *realm_id
-                    {
-                        return Err(StoreError::Conflict(
-                            "confirmed command member identity mismatch".into(),
-                        ));
-                    }
-                    events.push(snapshot.event);
-                }
-            }
-        }
-        Ok(events)
-    }
-
-    pub async fn seals_covering_event(&self, event_digest: &Hash) -> StoreResult<Vec<Seal>> {
-        let seal_ids = self
-            .control_event_store()
-            .covering_seals(event_digest)
-            .await?;
-        let mut seals = Vec::with_capacity(seal_ids.len());
-        for seal_id in seal_ids {
-            let seal = self.seal_by_id(&seal_id).await?.ok_or_else(|| {
-                StoreError::Conflict(format!(
-                    "Control Move references missing covering Seal {seal_id}"
-                ))
-            })?;
-            seals.push(seal);
-        }
-        Ok(seals)
-    }
-
-    /// Point lookup for callers that require exactly one direct covering Seal.
-    /// Multi-Seal coverage is never collapsed implicitly.
-    pub async fn seal_covering_event(&self, event_digest: &Hash) -> StoreResult<Option<Seal>> {
-        let mut seals = self.seals_covering_event(event_digest).await?;
-        match seals.len() {
-            0 => Ok(None),
-            1 => Ok(seals.pop()),
-            count => Err(StoreError::Conflict(format!(
-                "Control Move has {count} direct covering Seals; singular lookup is undefined"
-            ))),
-        }
-    }
-
-    pub async fn realm_seal_head(&self, realm_id: &RealmId) -> StoreResult<Option<SealId>> {
-        self.seal_store().confirmed_head(realm_id).await
-    }
-
-    /// Return the current Realm head in the plural shape required by
-    /// cross-Realm `SealBasis.leaves` construction.
-    pub async fn realm_seal_basis_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
-        Ok(self.realm_seal_head(realm_id).await?.into_iter().collect())
-    }
-
-    pub async fn seal_predecessor_known(
-        &self,
-        predecessor_ref: Option<&SealId>,
-    ) -> StoreResult<bool> {
-        self.seal_store().predecessor_known(predecessor_ref).await
-    }
-
-    pub async fn seal_successors(
-        &self,
-        realm_id: &RealmId,
-        seal_id: &SealId,
-    ) -> StoreResult<Vec<SealId>> {
-        self.seal_store().successors(realm_id, seal_id).await
-    }
-
-    pub async fn realm_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
-        self.cell_store().list_cells(realm_id).await
-    }
-
-    pub async fn state_writes_for_cell(
-        &self,
-        realm_id: &RealmId,
-        cell: &CellRef,
-    ) -> StoreResult<Vec<IssuedOp>> {
-        self.cell_store()
-            .state_writes_for_cell(realm_id, cell)
-            .await
-    }
-
-    pub async fn confirmed_write_batches_for_cell(
-        &self,
-        realm_id: &RealmId,
-        cell: &CellRef,
-    ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
-        self.cell_store()
-            .confirmed_write_batches_for_cell(realm_id, cell)
-            .await
-    }
-
-    pub fn resolve_cell(
-        &self,
-        realm_id: &RealmId,
-        cell: &CellRef,
-    ) -> StoreResult<CellStateModelBinding> {
-        self.cell_registry().resolve(realm_id, cell)
-    }
-
-    /// Resolve one registry-projected write against a frozen pre-state.
-    ///
-    /// `event-and-patch.md` §2.4.2 leaves `transition_to`, `apply_patch`,
-    /// `remove_observed` and `reset` unresolved until a receiver supplies the
-    /// pre-state. That rule has exactly one implementation
-    /// (`arkret_state::resolve_projected_write`); this only binds the Realm's
-    /// cell registry to it so callers outside `verify_control_move` cannot
-    /// grow a second answer.
-    pub fn resolve_projected_write(
-        &self,
-        write: &ProjectedCellWrite,
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject> {
-        arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
-    }
-
-    async fn validated_effective_state_checkpoint(
-        &self,
-        seal_id: &SealId,
-        realm_id: &RealmId,
-    ) -> Result<Option<SealEffectiveStateCheckpoint>, SealReject> {
-        let Some(checkpoint) = self
-            .event_seal_committer()
-            .effective_state_checkpoint(seal_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-        if checkpoint.seal_id != *seal_id || checkpoint.realm_id != *realm_id {
-            return Err(SealReject::Store(
-                "effective-state checkpoint is bound to a different Seal or Realm".to_owned(),
-            ));
-        }
-        let seal =
-            self.seal_store().get(seal_id).await?.ok_or_else(|| {
-                SealReject::Store(format!("checkpoint Seal {seal_id} not in store"))
-            })?;
-        if seal.realm_id != *realm_id {
-            return Err(SealReject::Store(
-                "effective-state checkpoint Seal belongs to a different Realm".to_owned(),
-            ));
-        }
-        if !checkpoint.covered_seal_ids.contains(seal_id)
-            || !seal
-                .predecessor_ref
-                .iter()
-                .all(|predecessor| checkpoint.covered_seal_ids.contains(predecessor))
-        {
-            return Err(SealReject::Store(
-                "effective-state checkpoint has an invalid Seal closure index".to_owned(),
-            ));
-        }
-        let digest_suite = self
-            .seal_store()
-            .digest_suite(seal_id)
-            .await?
-            .ok_or_else(|| SealReject::Store(format!("checkpoint Seal {seal_id} has no suite")))?;
-        let state_root = arkret_state::compute_state_root(
-            arkret_state::GovernanceView::new(&checkpoint.state),
-            digest_suite,
-        )
-        .map_err(|error| SealReject::Store(format!("checkpoint state_root: {error}")))?;
-        if state_root != seal.state_root {
-            return Err(SealReject::StateRootMismatch {
-                declared: seal.state_root.as_str().to_owned(),
-                recomputed: state_root.as_str().to_owned(),
-            });
-        }
-        let coverage_root =
-            arkret_state::control_event_set_root(&checkpoint.covered_event_digests, digest_suite)?;
-        if coverage_root != seal.control_event_set_root {
-            return Err(SealReject::ControlEventSetRootMismatch {
-                declared: seal.control_event_set_root.as_str().to_owned(),
-                recomputed: coverage_root.as_str().to_owned(),
-            });
-        }
-        Ok(Some(checkpoint))
-    }
-
-    pub async fn predecessor_covered_events(
-        &self,
-        predecessor_ref: Option<&SealId>,
-    ) -> Result<std::collections::BTreeSet<Hash>, SealReject> {
-        if let Some(seal_id) = predecessor_ref {
-            let seal =
-                self.seal_store().get(seal_id).await?.ok_or_else(|| {
-                    SealReject::Store(format!("predecessor {seal_id} not in store"))
-                })?;
-            if let Some(checkpoint) = self
-                .validated_effective_state_checkpoint(seal_id, &seal.realm_id)
-                .await?
-            {
-                return Ok(checkpoint.covered_event_digests);
-            }
-        }
-        arkret_state::covered_events_for_seal_basis(
-            predecessor_ref
-                .map(std::slice::from_ref)
-                .unwrap_or_default(),
-            self.seal_store(),
-        )
-        .await
-    }
-
-    pub async fn seal_basis_covered_events(
-        &self,
-        basis_leaves: &[SealId],
-    ) -> Result<std::collections::BTreeSet<Hash>, SealReject> {
-        arkret_state::covered_events_for_seal_basis(basis_leaves, self.seal_store()).await
-    }
-
-    pub async fn seal_dependency_replay_context(
-        &self,
-        seal: &Seal,
-    ) -> Result<
-        (
-            arkret_state::mls_governance_proof::SealDependencyReplayContext,
-            BTreeMap<Hash, Event>,
-        ),
-        SealReject,
-    > {
-        let mut events = BTreeMap::new();
-        for digest in &seal.delta {
-            let event = self
-                .control_event_store()
-                .get(digest)
-                .await
-                .map_err(|error| SealReject::Store(error.to_string()))?
-                .ok_or_else(|| SealReject::MissingControlEvent {
-                    event_digest: digest.as_str().to_owned(),
-                })?;
-            events.insert(digest.clone(), event);
-        }
-        let digest_suites = self.seal_digest_suites(seal).await?;
-        let predecessor_state = self
-            .effective_state_at(seal.predecessor_ref.as_slice(), &seal.realm_id)
-            .await
-            .map_err(|error| SealReject::Store(error.to_string()))?;
-        let event_lookup = arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
-            self.control_event_store(),
-        );
-        let context = arkret_state::mls_governance_proof::derive_seal_dependency_replay_context(
-            seal,
-            &predecessor_state,
-            &event_lookup,
-            self.seal_store(),
-            self.cell_store(),
-            digest_suites,
-        )
-        .await
-        .map_err(|error| SealReject::Structural(error.to_string()))?;
-        Ok((context, events))
-    }
-
-    pub async fn seal_dependency_replay_context_with_events(
-        &self,
-        seal: &Seal,
-        events: BTreeMap<Hash, Event>,
-    ) -> Result<
-        (
-            arkret_state::mls_governance_proof::SealDependencyReplayContext,
-            BTreeMap<Hash, Event>,
-        ),
-        SealReject,
-    > {
-        let digest_suites = self.seal_digest_suites(seal).await?;
-        let predecessor_state = self
-            .effective_state_at(seal.predecessor_ref.as_slice(), &seal.realm_id)
-            .await
-            .map_err(|error| SealReject::Store(error.to_string()))?;
-        let context = arkret_state::mls_governance_proof::derive_seal_dependency_replay_context(
-            seal,
-            &predecessor_state,
-            &events,
-            self.seal_store(),
-            self.cell_store(),
-            digest_suites,
-        )
-        .await
-        .map_err(|error| SealReject::Structural(error.to_string()))?;
-        Ok((context, events))
-    }
-
-    pub async fn seal_leaf_union_proof(
-        &self,
-        leaves: &[SealId],
-    ) -> Result<Vec<SealLeafUnionProof>, SealReject> {
-        arkret_state::leaf_union_proof(leaves, self.seal_store()).await
-    }
-
-    pub async fn effective_seal_view(
-        &self,
-        leaves: &[SealId],
-        realm_id: &RealmId,
-    ) -> Result<EffectiveSealView, SealReject> {
-        let [head] = leaves else {
-            return Err(SealReject::Structural(
-                "a Realm effective view requires exactly one confirmed head".to_owned(),
-            ));
-        };
-        let digest_suite = self.predecessor_digest_suite(realm_id, head).await?;
-        self.effective_seal_view_with_digest_suite(leaves, realm_id, digest_suite)
-            .await
-    }
-
-    pub async fn effective_seal_view_with_digest_suite(
-        &self,
-        leaves: &[SealId],
-        realm_id: &RealmId,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> Result<EffectiveSealView, SealReject> {
-        arkret_state::effective_seal_view(
-            leaves,
-            realm_id,
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-            digest_suite,
-        )
-        .await
-    }
-
-    pub async fn effective_state_at(
-        &self,
-        leaves: &[SealId],
-        realm_id: &RealmId,
-    ) -> Result<BTreeMap<CellRef, ResolvedCellState>, SealReject> {
-        if let [seal_id] = leaves
-            && let Some(checkpoint) = self
-                .validated_effective_state_checkpoint(seal_id, realm_id)
-                .await?
-        {
-            return Ok(checkpoint.state);
-        }
-        arkret_state::effective_state_at(
-            leaves,
-            realm_id,
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-        )
-        .await
-    }
-
-    /// Derive exact membership from accepted reducer stores at the frozen
-    /// traversal basis, sharing the SDK's Realm/Circle activation rules.
-    pub async fn membership_at_verified_basis(
-        &self,
-        scope: &arkret_wire::HistoryEffectiveScope,
-        actor: &arkret_wire::ActorId,
-        basis: &arkret_wire::SealBasis,
-    ) -> arkret_wire::Result<arkret_state::history_authorization::VerifiedMembership> {
-        arkret_state::history_authorization::membership_at_verified_basis(
-            scope,
-            actor,
-            basis,
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-            &arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
-                self.control_event_store(),
-            ),
-        )
-        .await
-    }
-
-    /// Derive membership and its MLS floor from the same accepted basis.
-    pub async fn member_history_at_verified_basis(
-        &self,
-        scope: &arkret_wire::HistoryEffectiveScope,
-        actor: &arkret_wire::ActorId,
-        basis: &arkret_wire::SealBasis,
-        retained_events: &[arkret_wire::Event],
-    ) -> arkret_wire::Result<(
-        arkret_state::history_authorization::VerifiedMembership,
-        Option<u64>,
-    )> {
-        arkret_state::history_authorization::member_history_at_verified_basis(
-            scope,
-            actor,
-            basis,
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-            &arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
-                self.control_event_store(),
-            ),
-            retained_events,
-        )
-        .await
-    }
-
-    /// The Seals visible from `leaves`: the leaves themselves plus their whole
-    /// predecessor closure.
-    ///
-    /// Used by consumers that need the accepted Seal predecessor closure.
-    pub async fn seal_basis_closure(
-        &self,
-        basis_leaves: &[SealId],
-    ) -> Result<BTreeSet<SealId>, SealReject> {
-        if let [seal_id] = basis_leaves {
-            let seal =
-                self.seal_store().get(seal_id).await?.ok_or_else(|| {
-                    SealReject::Store(format!("predecessor {seal_id} not in store"))
-                })?;
-            if let Some(checkpoint) = self
-                .validated_effective_state_checkpoint(seal_id, &seal.realm_id)
-                .await?
-            {
-                return Ok(checkpoint.covered_seal_ids);
-            }
-        }
-        let mut closure = BTreeSet::new();
-        for leaf in basis_leaves {
-            closure.extend(
-                arkret_state::predecessor_seal_closure(Some(leaf), self.seal_store()).await?,
-            );
-        }
-        Ok(closure)
-    }
-
     /// The Realm's effective digest suite
     /// (`ak.component.realm.digest_suite.v1`). The registry projection derives
     /// `digest_of` members with it, so a Realm that transitioned to blake3 must
@@ -1396,590 +367,6 @@ impl ProjectionService {
             .realm_digest_algorithm(realm_id)
             .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
             .unwrap_or_default()
-    }
-
-    /// The receiver-derived cell writes for a signed Event.
-    ///
-    /// The v1 wire carries no producer `effects[]`: the only legitimate source
-    /// of cell targets and state model operations is the registered reducer
-    /// contract (`event-and-patch.md` §2.4.2).
-    pub fn project_cell_writes(&self, event: &Event) -> Result<Vec<ProjectedCellWrite>, String> {
-        self.project_cell_writes_with_digest_suite(
-            event,
-            self.realm_digest_suite(event.realm_id.as_str()),
-        )
-    }
-
-    pub fn project_cell_writes_with_digest_suite(
-        &self,
-        event: &Event,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> Result<Vec<ProjectedCellWrite>, String> {
-        self.state
-            .lock()
-            .project_registered_cell_writes(event, digest_suite)
-            .map_err(|error| error.to_string())
-    }
-
-    /// Re-project a durably accepted Event after its pre-state admission gate
-    /// has already succeeded.
-    ///
-    /// `ak.invite.cancel` is the only active contract with
-    /// `pre_state_requirements`. Its signed `payload.invitee_account_id` is not
-    /// authoritative during admission, but after the lock-protected frozen
-    /// check and durable commit it is safe for downstream live reduction and
-    /// control-Seal construction to reuse that verified binding. Callers MUST
-    /// only pass Events loaded from the accepted-event lane; untrusted inbound
-    /// Events must use `project_cell_writes_with_pre_state` instead.
-    pub fn project_accepted_cell_writes(
-        &self,
-        event: &Event,
-    ) -> Result<Vec<ProjectedCellWrite>, String> {
-        self.project_accepted_cell_writes_with_digest_suite(
-            event,
-            self.realm_digest_suite(event.realm_id.as_str()),
-        )
-    }
-
-    pub fn project_accepted_cell_writes_with_digest_suite(
-        &self,
-        event: &Event,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> Result<Vec<ProjectedCellWrite>, String> {
-        if event.kind != arkret_wire::EventKind::InviteCancel {
-            return self.project_cell_writes_with_digest_suite(event, digest_suite);
-        }
-        let invite_id = event
-            .payload
-            .get("invite_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "accepted ak.invite.cancel is missing invite_id".to_owned())?;
-        let invitee_account_id = event
-            .payload
-            .get("invitee_account_id")
-            .cloned()
-            .ok_or_else(|| {
-                "accepted ak.invite.cancel is missing verified invitee_account_id".to_owned()
-            })?;
-        let invitee_account_id =
-            serde_json::from_value::<arkret_wire::AccountId>(invitee_account_id).map_err(|_| {
-                "accepted ak.invite.cancel has invalid invitee_account_id".to_owned()
-            })?;
-        let lifecycle_cell = CellRef::new(format!(
-            "ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"
-        ))
-        .map_err(|error| error.to_string())?;
-        let frozen_pre_state = arkret_schema::FrozenPreState::from([(
-            lifecycle_cell,
-            serde_json::json!({"invitee_account_id": invitee_account_id}),
-        )]);
-        let projection = self.state.lock();
-        arkret_schema::project_registered_cell_writes_with_pre_state_and_authority_resolver(
-            event,
-            digest_suite,
-            &frozen_pre_state,
-            &|grant_id| projection.capability_authority_audit(grant_id),
-        )
-        .map_err(|error| error.to_string())
-    }
-
-    /// Project registered writes against one caller-frozen pre-state.
-    ///
-    /// Security-barrier contracts such as `ak.invite.cancel` inspect durable
-    /// lifecycle fields before exposing any write. The HTTP admission lane
-    /// freezes those fields while holding the lifecycle lock and passes the
-    /// same snapshot through the SDK projector and the remaining preflight.
-    pub fn project_cell_writes_with_pre_state(
-        &self,
-        event: &Event,
-        frozen_pre_state: &arkret_schema::FrozenPreState,
-    ) -> Result<Vec<ProjectedCellWrite>, arkret_schema::EventCellContractError> {
-        let digest_suite = self.realm_digest_suite(event.realm_id.as_str());
-        let projection = self.state.lock();
-        arkret_schema::project_registered_cell_writes_with_pre_state_and_authority_resolver(
-            event,
-            digest_suite,
-            frozen_pre_state,
-            &|grant_id| projection.capability_authority_audit(grant_id),
-        )
-    }
-
-    pub fn resolve_projected_cell_write(
-        &self,
-        write: &ProjectedCellWrite,
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject> {
-        arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
-    }
-
-    /// Run `event-auth-state-resolution.md` §5.1 steps 1-5 over one Control
-    /// Move and return its receiver-derived writes.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "signed basis, unit-entry revision state and staged values are distinct mandatory verification inputs"
-    )]
-    pub fn verify_accepted_control_move_in_context_with_digest_suite<F>(
-        &self,
-        event: &Event,
-        realm_id: &RealmId,
-        pre_state: &BTreeMap<CellRef, ResolvedCellState>,
-        signed_basis_state: &BTreeMap<CellRef, ResolvedCellState>,
-        revision_state: &BTreeMap<CellRef, ResolvedCellState>,
-        digest_suite: arkret_canonical::DigestSuite,
-        verify_proofs: F,
-        context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<Vec<arkret_wire::cbs::ProjectionEffect>, ControlMoveReject>
-    where
-        F: Fn(&Event) -> Result<(), String>,
-    {
-        let projection = arkret::project_control_writes_with_revision_guard(
-            event,
-            digest_suite,
-            pre_state,
-            signed_basis_state,
-            revision_state,
-            self.cell_registry(),
-        )?;
-        arkret_state::verify_accepted_control_move_in_context(
-            event,
-            arkret_state::ControlMoveVerificationContext {
-                realm_id,
-                pre_state,
-                signed_basis_state,
-                revision_state,
-                additional_security_reads: &projection.security_reads,
-                registry: self.cell_registry(),
-                digest_suite,
-                submit_context: context,
-            },
-            verify_proofs,
-            |_| Ok(projection.writes.clone()),
-        )
-    }
-
-    /// Resolve registry projections from the exact execution state and retain
-    /// every authority Cell consulted by the projection evaluator.
-    pub fn project_control_writes_at_state(
-        &self,
-        event: &Event,
-        digest_suite: arkret_canonical::DigestSuite,
-        state: &BTreeMap<CellRef, ResolvedCellState>,
-    ) -> Result<arkret_state::ControlProjection, String> {
-        arkret::project_control_writes_at_state(event, digest_suite, state)
-    }
-
-    pub async fn apply_seal<F>(
-        &self,
-        seal: &Seal,
-        verify_proofs: F,
-    ) -> Result<SealEffect, SealReject>
-    where
-        F: Fn(&Event) -> Result<(), String> + Copy,
-    {
-        self.apply_seal_in_context(
-            seal,
-            verify_proofs,
-            arkret_wire::event_envelope::EventSubmitContext::Standard,
-        )
-        .await
-    }
-
-    #[allow(
-        clippy::await_holding_lock,
-        reason = "the process-wide authority CAS intentionally spans async store reads; contenders acquire through block_in_place so they do not park a Tokio worker"
-    )]
-    pub async fn apply_seal_in_context<F>(
-        &self,
-        seal: &Seal,
-        verify_proofs: F,
-        context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<SealEffect, SealReject>
-    where
-        F: Fn(&Event) -> Result<(), String> + Copy,
-    {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let digest_suites = self.seal_digest_suites(seal).await?;
-        let prepared = arkret_state::prepare_seal_in_context(
-            seal,
-            self.control_event_store(),
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-            digest_suites,
-            |event, _digest_suite| verify_proofs(event),
-            |event, digest_suite, state| {
-                self.project_control_writes_at_state(event, digest_suite, state)
-            },
-            context,
-        )
-        .await?;
-        let committed = self
-            .commit_seal_with_metadata_fence(
-                seal,
-                digest_suites.seal_digest_suite,
-                seal.predecessor_ref.as_ref(),
-                &prepared.new_ops,
-                &prepared.covered_event_digests,
-                &[],
-                None,
-            )
-            .await?;
-        if !committed {
-            return Err(
-                StoreError::Conflict("Realm confirmed Seal head changed".to_owned()).into(),
-            );
-        }
-        Ok(prepared.effect)
-    }
-
-    /// Verify an incoming Seal completely while leaving every durable store
-    /// unchanged. Federation receivers use the returned immutable transition
-    /// as input to the atomic Seal/dependency/frontier commit.
-    #[allow(
-        clippy::await_holding_lock,
-        reason = "the process-wide authority CAS intentionally spans async store reads; contenders acquire through block_in_place so they do not park a Tokio worker"
-    )]
-    pub async fn prepare_seal_in_context<F>(
-        &self,
-        seal: &Seal,
-        verify_proofs: F,
-        context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<arkret_state::PreparedSealEffect, SealReject>
-    where
-        F: Fn(&Event) -> Result<(), String> + Copy,
-    {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let digest_suites = self.seal_digest_suites(seal).await?;
-        arkret_state::prepare_seal_in_context(
-            seal,
-            self.control_event_store(),
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-            digest_suites,
-            |event, _digest_suite| verify_proofs(event),
-            |event, digest_suite, state| {
-                self.project_control_writes_at_state(event, digest_suite, state)
-            },
-            context,
-        )
-        .await
-    }
-
-    /// Apply a locally constructed Seal whose delta contains only Events from
-    /// the durable accepted-event lane. Incoming peer Seals use the prepared
-    /// producer-submission path above and commit their receiver-owned evidence
-    /// atomically.
-    #[allow(
-        clippy::await_holding_lock,
-        reason = "the process-wide authority CAS intentionally spans async store reads; contenders acquire through block_in_place so they do not park a Tokio worker"
-    )]
-    pub async fn apply_accepted_seal_in_context<F>(
-        &self,
-        seal: &Seal,
-        verify_proofs: F,
-        context: arkret_wire::event_envelope::EventSubmitContext,
-    ) -> Result<SealEffect, SealReject>
-    where
-        F: Fn(&Event) -> Result<(), String> + Copy,
-    {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let digest_suites = self.seal_digest_suites(seal).await?;
-        let prepared = arkret_state::prepare_accepted_seal_in_context(
-            seal,
-            self.control_event_store(),
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-            digest_suites,
-            |event, _digest_suite| verify_proofs(event),
-            |event, digest_suite, state| {
-                self.project_control_writes_at_state(event, digest_suite, state)
-            },
-            context,
-        )
-        .await?;
-        let committed = self
-            .commit_seal_with_metadata_fence(
-                seal,
-                digest_suites.seal_digest_suite,
-                seal.predecessor_ref.as_ref(),
-                &prepared.new_ops,
-                &prepared.covered_event_digests,
-                &[],
-                None,
-            )
-            .await?;
-        if !committed {
-            return Err(
-                StoreError::Conflict("Realm confirmed Seal head changed".to_owned()).into(),
-            );
-        }
-        Ok(prepared.effect)
-    }
-
-    pub async fn seal_digest_suites(&self, seal: &Seal) -> Result<SealDigestSuites, SealReject> {
-        self.seal_digest_suites_for_delta(
-            &seal.realm_id,
-            seal.predecessor_ref.as_ref(),
-            &seal.delta,
-        )
-        .await
-    }
-
-    pub async fn seal_digest_suites_for_delta(
-        &self,
-        realm_id: &RealmId,
-        predecessor_ref: Option<&SealId>,
-        delta: &[Hash],
-    ) -> Result<SealDigestSuites, SealReject> {
-        let mut delta_events = Vec::with_capacity(delta.len());
-        for digest in delta {
-            let event = self
-                .control_event_store()
-                .get(digest)
-                .await?
-                .ok_or_else(|| SealReject::MissingControlEvent {
-                    event_digest: digest.to_string(),
-                })?;
-            delta_events.push(event);
-        }
-        if predecessor_ref.is_none() {
-            let create_events = delta_events
-                .iter()
-                .filter(|event| event.kind == arkret_wire::EventKind::RealmCreate)
-                .collect::<Vec<_>>();
-            let [create] = create_events.as_slice() else {
-                return Err(SealReject::Structural(
-                    "Genesis Seal must contain exactly one ak.realm.create Event".to_owned(),
-                ));
-            };
-            let declared = create
-                .payload
-                .get("object")
-                .and_then(|object| object.get("digest_algorithm"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    SealReject::Structural(
-                        "ak.realm.create payload omits object.digest_algorithm".to_owned(),
-                    )
-                })
-                .and_then(|value| {
-                    arkret_canonical::digest_suite(value)
-                        .map_err(|error| SealReject::Structural(error.to_string()))
-                })?;
-            return Ok(SealDigestSuites::standard(declared));
-        }
-
-        let live_suite = self
-            .predecessor_digest_suite(
-                realm_id,
-                predecessor_ref.expect("successor digest suite has a predecessor"),
-            )
-            .await?;
-        let transitions = delta_events
-            .iter()
-            .filter(|event| event.kind == arkret_wire::EventKind::RealmDigestSuiteTransition)
-            .collect::<Vec<_>>();
-        match transitions.as_slice() {
-            [] => Ok(SealDigestSuites::standard(live_suite)),
-            [transition] => {
-                let payload = transition
-                    .typed_payload::<arkret_wire::event_spec::RealmDigestSuiteTransition>()
-                    .map_err(|error| SealReject::Structural(error.to_string()))?;
-                if payload.from_digest_algorithm != live_suite {
-                    return Err(SealReject::Structural(
-                        "digest-suite transition does not start at the predecessor live suite"
-                            .to_owned(),
-                    ));
-                }
-                Ok(SealDigestSuites::transition(
-                    live_suite,
-                    payload.to_digest_algorithm,
-                ))
-            }
-            _ => Err(SealReject::Structural(
-                "Seal contains more than one digest-suite transition Move".to_owned(),
-            )),
-        }
-    }
-
-    pub async fn predecessor_digest_suite(
-        &self,
-        realm_id: &RealmId,
-        predecessor_ref: &SealId,
-    ) -> Result<arkret_canonical::DigestSuite, SealReject> {
-        let predecessor_state = self
-            .effective_state_at(std::slice::from_ref(predecessor_ref), realm_id)
-            .await?;
-        arkret_state::live_digest_suite_from_state(&predecessor_state)
-    }
-
-    pub async fn seal_basis_digest_suite(
-        &self,
-        realm_id: &RealmId,
-        basis_leaves: &[SealId],
-    ) -> Result<arkret_canonical::DigestSuite, SealReject> {
-        let [head] = basis_leaves else {
-            return Err(SealReject::Structural(
-                "a single-Realm SealBasis must contain exactly one confirmed head".to_owned(),
-            ));
-        };
-        self.predecessor_digest_suite(realm_id, head).await
-    }
-
-    #[allow(
-        clippy::await_holding_lock,
-        clippy::too_many_arguments,
-        reason = "the atomic frontier CAS intentionally spans the async commit and keeps every compared and committed component explicit; contenders acquire through block_in_place"
-    )]
-    pub async fn commit_event_seal_if_head(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        expected_store_head: Option<&SealId>,
-        new_ops: &[(CellRef, IssuedOp)],
-        covered: &std::collections::BTreeSet<Hash>,
-        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> StoreResult<bool> {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        self.commit_seal_with_metadata_fence(
-            seal,
-            digest_suite,
-            expected_store_head,
-            new_ops,
-            covered,
-            governance_dependencies,
-            confirmed_device_control,
-        )
-        .await
-    }
-
-    #[doc(hidden)]
-    #[allow(
-        clippy::await_holding_lock,
-        reason = "the conformance write participates in the same process-wide authority CAS; contenders acquire through block_in_place"
-    )]
-    pub async fn conformance_put_seal(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        self.seal_store()
-            .put_if_head(seal, seal.predecessor_ref.as_ref(), digest_suite)
-            .await?
-            .then_some(())
-            .ok_or(StoreError::Conflict(
-                "Realm confirmed Seal head changed".to_owned(),
-            ))
-    }
-
-    #[doc(hidden)]
-    pub async fn conformance_append_confirmed_effects(
-        &self,
-        realm_id: &RealmId,
-        seal_id: &SealId,
-        new_ops: &[(CellRef, IssuedOp)],
-    ) -> StoreResult<()> {
-        self.cell_store()
-            .append_confirmed_effects(realm_id, seal_id, new_ops)
-            .await
-    }
-
-    /// Mirror the synthetic Realm genesis cell into the application read
-    /// model used by normal admission. The conformance fixture has no accepted
-    /// `ak.realm.create` Event for the reducer to project, so persisting its
-    /// sealed cell effects alone cannot populate this cache.
-    #[doc(hidden)]
-    pub fn conformance_install_realm_bootstrap_facets(
-        &self,
-        realm_id: &RealmId,
-        genesis: Value,
-        reducer_profile: Value,
-    ) {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let mut state = self.state.lock();
-        for (cell, value) in [
-            (arkret_wire::REALM_GENESIS_CELL, genesis),
-            (arkret_wire::REALM_REDUCER_PROFILE_CELL, reducer_profile),
-        ] {
-            state.realm_null_subject_cells.insert(
-                (realm_id.to_string(), cell.to_owned()),
-                ResolvedCellState::Value(value),
-            );
-        }
-        self.conformance_fixture_realms
-            .lock()
-            .insert(realm_id.to_string());
-    }
-
-    #[doc(hidden)]
-    #[must_use]
-    pub fn is_conformance_fixture_realm(&self, realm_id: &RealmId) -> bool {
-        self.conformance_fixture_realms
-            .lock()
-            .contains(realm_id.as_str())
-    }
-
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub async fn test_put_seal(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        self.conformance_put_seal(seal, digest_suite).await
-    }
-
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub async fn test_append_confirmed_effects(
-        &self,
-        realm_id: &RealmId,
-        seal_id: &SealId,
-        new_ops: &[(CellRef, IssuedOp)],
-    ) -> StoreResult<()> {
-        self.conformance_append_confirmed_effects(realm_id, seal_id, new_ops)
-            .await
-    }
-
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub async fn test_mark_control_event_sealed(
-        &self,
-        event: &Event,
-        seal: &Seal,
-        ingress: &ControlProposalIngress,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        let digest = Hash::new(
-            event
-                .event_digest_with_digest_suite(digest_suite)
-                .map_err(|error| StoreError::Conflict(error.to_string()))?,
-        )
-        .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
-        self.control_event_store()
-            .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
-                event: event.clone(),
-                digest_suite,
-                ingress: ingress.clone(),
-            }])
-            .await?;
-        if !seal
-            .command_results
-            .iter()
-            .any(|result| result.unit_event_digests.contains(&digest))
-        {
-            return Err(StoreError::Conflict(
-                "test Seal does not decide the pending Control Event".to_owned(),
-            ));
-        }
-        self.control_event_store()
-            .record_seal_command_results(seal)
-            .await
     }
 
     #[must_use]
@@ -2066,6 +453,14 @@ impl ProjectionService {
             })
     }
 
+    /// Confirm that an accepted `ak.agent.action.approve` authorizes exactly
+    /// this Operation.
+    ///
+    /// The approval lives in the committed reducer projection: one request
+    /// resolves once, and the approval it carries names the exact approved
+    /// Event, nonce, agent, action and target. Nothing here re-derives an
+    /// order of its own; the projection only holds Events the current
+    /// governance Station has already committed.
     pub async fn validate_agent_action_approval(
         &self,
         operation: &Operation,
@@ -2075,79 +470,35 @@ impl ProjectionService {
         action: &str,
         _now: DateTime<Utc>,
     ) -> Result<(), &'static str> {
-        let head = self
-            .realm_seal_head(&operation.realm_id)
-            .await
-            .map_err(|_| "dependency_missing")?
+        let state = self.state.lock();
+        let request = state
+            .agent_action_requests
+            .get(request_id)
             .ok_or("dependency_missing")?;
-        let confirmed = self
-            .effective_state_at(&[head], &operation.realm_id)
-            .await
-            .map_err(|_| "dependency_missing")?;
-        let commands = self
-            .confirmed_command_events(&operation.realm_id)
-            .await
-            .map_err(|_| "dependency_missing")?;
-        for command in commands
-            .into_iter()
-            .filter(|command| command.kind == arkret_wire::EventKind::AgentActionApprove)
-        {
-            let approval: arkret_models_collaboration::events_payloads::agent::AgentActionApprovePayload =
-                serde_json::from_value(
-                    serde_json::to_value(&command.payload).map_err(|_| "dependency_missing")?,
-                )
-                .map_err(|_| "dependency_missing")?;
-            if approval.approval_nonce != approval_nonce
-                || approval.approved_event_id != operation.context.event_id
-            {
-                continue;
-            }
-            if approval.agent_id.as_str() != agent_id
-                || approval
-                    .request_id
-                    .as_deref()
-                    .is_some_and(|id| id != request_id)
-            {
-                return Err("agent_act_on_behalf_approval_agent_mismatch");
-            }
-            if command.executed_by.is_some() || command.actor_id.as_account_id().is_none() {
-                return Err("agent_act_on_behalf_approval_target_mismatch");
-            }
-            if approval.proposed_action != action {
-                return Err("agent_act_on_behalf_approval_action_mismatch");
-            }
-            if !agent_action_target_matches(
-                &serde_json::to_value(&approval.target).map_err(|_| "dependency_missing")?,
-                operation,
-            ) {
-                return Err("agent_act_on_behalf_approval_target_mismatch");
-            }
-            let subject = arkret_wire::composite_subject(&[
-                command.actor_id.to_string(),
-                approval_nonce.to_owned(),
-            ])
-            .map_err(|_| "dependency_missing")?;
-            let cell = CellRef::new(format!(
-                "ak:cell:{}:{subject}",
-                arkret_wire::CellFamilyId::AGENT_APPROVAL_CONSUMPTION_V1
-            ))
-            .map_err(|_| "dependency_missing")?;
-            let Some(ResolvedCellState::Sequenced(consumption)) = confirmed.get(&cell) else {
-                return Err("dependency_missing");
-            };
-            if consumption.revision_event_id != command.event_id
-                || consumption.value.as_str() != Some(operation.context.event_id.as_str())
-            {
-                return Err("agent_act_on_behalf_approval_event_mismatch");
-            }
-            return Ok(());
+        if request.status != soland_domain::reducer::AgentActionRequestStatus::Approved {
+            return Err("dependency_missing");
         }
-        Err("dependency_missing")
+        let approval = request.approval.as_ref().ok_or("dependency_missing")?;
+        if approval.approval_nonce != approval_nonce
+            || approval.approved_event_id != operation.context.event_id
+        {
+            return Err("dependency_missing");
+        }
+        if request.agent_id != agent_id {
+            return Err("agent_act_on_behalf_approval_agent_mismatch");
+        }
+        if approval.proposed_action != action {
+            return Err("agent_act_on_behalf_approval_action_mismatch");
+        }
+        if !agent_action_target_matches(&approval.target, operation) {
+            return Err("agent_act_on_behalf_approval_target_mismatch");
+        }
+        Ok(())
     }
 
     pub fn stage_realm_bootstrap(
         &self,
-        operations: &[ProjectedOperation],
+        operations: &[Operation],
         direct_conversation_founding: bool,
     ) -> Result<StagedRealmBootstrap, RealmBootstrapProjectionError> {
         let mut staged = self.state.lock().clone();
@@ -2165,30 +516,20 @@ impl ProjectionService {
 
     fn apply_realm_bootstrap_to_state(
         state: &mut ProjectionState,
-        operations: &[ProjectedOperation],
+        operations: &[Operation],
         direct_conversation_founding: bool,
         clock: &ServerHlc,
     ) -> Result<(), RealmBootstrapProjectionError> {
-        for (index, projected) in operations.iter().enumerate() {
-            let operation = &projected.operation;
-            let effect =
-                if uses_validated_realm_bootstrap_facet_reducer(operation.event_kind.as_str()) {
-                    state.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
-                } else if operation.event_kind == arkret_wire::EventKind::MemberState {
-                    if direct_conversation_founding {
-                        state.apply_validated_direct_conversation_bootstrap_membership(
-                            operation,
-                            &projected.cell_writes,
-                        )
-                    } else {
-                        state.apply_validated_realm_bootstrap_membership(
-                            operation,
-                            &projected.cell_writes,
-                        )
-                    }
+        for (index, operation) in operations.iter().enumerate() {
+            let effect = if operation.event_kind == arkret_wire::EventKind::MemberState {
+                if direct_conversation_founding {
+                    state.apply_validated_direct_conversation_bootstrap_membership(operation)
                 } else {
-                    state.apply_projected(operation, &projected.cell_writes, clock)
-                };
+                    state.apply_validated_realm_bootstrap_membership(operation)
+                }
+            } else {
+                state.apply_projected(operation, clock)
+            };
             match effect {
                 ProjectionEffect::Rejected { reason } => {
                     return Err(RealmBootstrapProjectionError {
@@ -2224,11 +565,9 @@ impl ProjectionService {
         // install: replaying the staged unit would otherwise reject with
         // `realm_already_exists` and, more importantly, could overwrite
         // successor projections that were applied after genesis.
-        if staged.operations.first().is_some_and(|projected| {
-            projected.operation.event_kind == arkret_wire::EventKind::RealmCreate
-                && live
-                    .realm_create_log(projected.operation.realm_id.as_str())
-                    .is_some()
+        if staged.operations.first().is_some_and(|operation| {
+            operation.event_kind == arkret_wire::EventKind::RealmCreate
+                && live.realm_create_log(operation.realm_id.as_str()).is_some()
         }) {
             return Ok(());
         }
@@ -2250,26 +589,27 @@ impl ProjectionService {
         self.state.lock().effective_engine_grant(grant_id)
     }
 
-    pub fn project_call_state_cell(
+    /// Cold-project one call's facet from the accepted Event sequence without
+    /// touching live projection state.
+    pub fn project_call_state_facet(
         &self,
-        operations: &[ProjectedOperation],
-        cell_id: &CellRef,
+        operations: &[Operation],
+        realm_id: &str,
+        target: &FacetRef,
     ) -> Option<Value> {
         let mut projection = ProjectionState::new();
-        for projected in operations {
-            if let ProjectionEffect::Rejected { reason } = projection.apply_projected(
-                &projected.operation,
-                &projected.cell_writes,
-                self.clock(),
-            ) {
+        for operation in operations {
+            if let ProjectionEffect::Rejected { reason } =
+                projection.apply_projected(operation, self.clock())
+            {
                 tracing::warn!(
-                    operation_id = %projected.operation.operation_id,
+                    operation_id = %operation.operation_id,
                     %reason,
                     "accepted call state operation did not project during cold projection"
                 );
             }
         }
-        projection.cell_value(cell_id).cloned()
+        projection.facet_value(realm_id, target).cloned()
     }
 
     pub fn projection_write_through_record(
@@ -2372,7 +712,11 @@ impl ProjectionService {
                         history_access: row.history_access.clone(),
                         content_encryption_floor: row.content_encryption_floor.clone(),
                         metadata_encryption_floor: row.metadata_encryption_floor.clone(),
-                        encryption_profile: row.encryption_profile.clone(),
+                        encryption_profile: if row.mls_group_ref.is_some() {
+                            "mls_rfc9420".to_owned()
+                        } else {
+                            "none".to_owned()
+                        },
                         content_scheme: row.content_scheme.clone(),
                         mls_group_ref: row.mls_group_ref.clone(),
                         durability_policy: row.durability_policy.clone(),
@@ -2549,34 +893,12 @@ impl ProjectionService {
     /// A kind that does declare writes fails closed here with
     /// `reducer_projection_failed`; use [`Self::apply_projected`] instead.
     pub fn apply(&self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffectView {
-        self.apply_projected(operation, &[], hlc)
+        self.apply_projected(operation, hlc)
     }
 
-    pub fn apply_projected(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-        hlc: &ServerHlc,
-    ) -> ProjectionEffectView {
+    pub fn apply_projected(&self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffectView {
         let _authority_guard = self.history_authority_view_cas_guard();
-        self.state
-            .lock()
-            .apply_projected(operation, cell_writes, hlc)
-            .into()
-    }
-
-    pub fn apply_via_state_model_registry(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-        hlc: &ServerHlc,
-    ) -> ProjectionEffectView {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let registry = soland_domain::reducer::state_model_kinds::default_cell_family_registry();
-        self.state
-            .lock()
-            .apply_via_state_model_registry(operation, cell_writes, hlc, &registry)
-            .into()
+        self.state.lock().apply_projected(operation, hlc).into()
     }
 
     /// Apply actor-private read-cursor state outside the durable-event reducer
@@ -2589,32 +911,18 @@ impl ProjectionService {
             .into()
     }
 
+    /// All-or-nothing install of one Sidecar-ensure run.
+    ///
+    /// Atomicity belongs to the authority-commit transaction, so the in-memory
+    /// fold must publish the whole run or none of it. `atomic_batch` owns that
+    /// fold; this entry point only discards the per-operation effects the
+    /// Sidecar-ensure caller does not read.
     pub fn apply_sidecar_ensure_atomic(
         &self,
-        operations: &[(&Operation, &[ProjectedCellWrite])],
+        operations: &[&Operation],
         hlc: &ServerHlc,
     ) -> Result<(), String> {
-        self.apply_operations_atomic(operations, hlc)
-    }
-
-    pub fn apply_operations_atomic(
-        &self,
-        operations: &[(&Operation, &[ProjectedCellWrite])],
-        hlc: &ServerHlc,
-    ) -> Result<(), String> {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let registry = soland_domain::reducer::state_model_kinds::default_cell_family_registry();
-        let mut state = self.state.lock();
-        let mut staged = state.clone();
-        for (operation, cell_writes) in operations {
-            if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
-                staged.apply_via_state_model_registry(operation, cell_writes, hlc, &registry)
-            {
-                return Err(reason);
-            }
-        }
-        *state = staged;
-        Ok(())
+        self.apply_operations_atomic(operations, hlc).map(|_| ())
     }
 
     pub fn apply_mls_keypackage_publish(
@@ -2718,14 +1026,9 @@ impl ProjectionService {
             })
     }
 
-    pub fn preflight_capability_rejection(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-    ) -> Option<String> {
+    pub fn preflight_capability_rejection(&self, operation: &Operation) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
-            cell_writes,
             &[
                 arkret_wire::EventKind::CapabilityGrant,
                 arkret_wire::EventKind::CapabilityRevoke,
@@ -2738,12 +1041,12 @@ impl ProjectionService {
     /// return the first reducer rejection without mutating live state.
     pub fn preflight_projected_batch_rejection<'a, I>(&self, operations: I) -> Option<String>
     where
-        I: IntoIterator<Item = (&'a Operation, &'a [ProjectedCellWrite])>,
+        I: IntoIterator<Item = &'a Operation>,
     {
         let mut state = self.state.lock().clone();
-        for (operation, cell_writes) in operations {
+        for operation in operations {
             if let ProjectionEffect::Rejected { reason } =
-                state.apply_projected(operation, cell_writes, self.clock())
+                state.apply_projected(operation, self.clock())
             {
                 return Some(reason);
             }
@@ -2751,14 +1054,9 @@ impl ProjectionService {
         None
     }
 
-    pub fn preflight_calendar_rejection(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-    ) -> Option<String> {
+    pub fn preflight_calendar_rejection(&self, operation: &Operation) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
-            cell_writes,
             &[
                 arkret_wire::EventKind::StrandCreate,
                 arkret_wire::EventKind::StrandUpdate,
@@ -2767,14 +1065,9 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_moderation_rejection(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-    ) -> Option<String> {
+    pub fn preflight_moderation_rejection(&self, operation: &Operation) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
-            cell_writes,
             &[
                 arkret_wire::EventKind::ModerationDecision,
                 arkret_wire::EventKind::ModerationDecisionLift,
@@ -2782,14 +1075,9 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_invite_rejection(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-    ) -> Option<String> {
+    pub fn preflight_invite_rejection(&self, operation: &Operation) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
-            cell_writes,
             &[
                 arkret_wire::EventKind::InviteThirdParty,
                 arkret_wire::EventKind::InviteClaim,
@@ -2797,14 +1085,9 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_realm_policy_rejection(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-    ) -> Option<String> {
+    pub fn preflight_realm_policy_rejection(&self, operation: &Operation) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
-            cell_writes,
             &[
                 arkret_wire::EventKind::RealmPolicyBundle,
                 arkret_wire::EventKind::RealmOwnerTransfer,
@@ -2817,30 +1100,8 @@ impl ProjectionService {
         let kind = soland_domain::kinds::canonical_kind_for_operation(operation)?;
         let mut state = self.state.lock().clone();
         let effect = match kind {
-            arkret_wire::EventKind::MlsKeypackage => {
-                match operation.payload.get("action").and_then(Value::as_str) {
-                    Some("publish") => ProjectionEffect::Rejected {
-                        reason: "mls_keypackage_publish_is_not_a_protocol_event".to_owned(),
-                    },
-                    Some("claim") => {
-                        soland_domain::reducer::mls::apply_keypackage_claim(&mut state, operation)
-                    }
-                    Some(other) => ProjectionEffect::Rejected {
-                        reason: format!("mls_keypackage_action_unknown:{other}"),
-                    },
-                    None => ProjectionEffect::Rejected {
-                        reason: "mls_keypackage_action_missing".to_owned(),
-                    },
-                }
-            }
-            arkret_wire::EventKind::MlsWelcome => {
-                soland_domain::reducer::mls::apply_welcome_enqueue(&mut state, operation)
-            }
             arkret_wire::EventKind::MlsGenesis => {
                 soland_domain::reducer::mls::apply_group_genesis(&mut state, operation)
-            }
-            arkret_wire::EventKind::MlsProposal => {
-                soland_domain::reducer::mls::apply_remove_proposal(&mut state, operation)
             }
             arkret_wire::EventKind::MlsCommit => {
                 soland_domain::reducer::mls::apply_commit_epoch(&mut state, operation)
@@ -2857,11 +1118,7 @@ impl ProjectionService {
     /// projection before the Event is made durable. The reducer remains the
     /// deterministic fold, but semantic rejection must not be deferred until
     /// the post-commit projection lane.
-    pub fn preflight_poll_rejection(
-        &self,
-        operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
-    ) -> Option<String> {
+    pub fn preflight_poll_rejection(&self, operation: &Operation) -> Option<String> {
         if soland_domain::kinds::canonical_kind_for_operation(operation)
             != Some(arkret_wire::EventKind::MessageCreate)
             || operation
@@ -2874,17 +1131,12 @@ impl ProjectionService {
         {
             return None;
         }
-        self.preflight_apply_rejection(
-            operation,
-            cell_writes,
-            &[arkret_wire::EventKind::MessageCreate],
-        )
+        self.preflight_apply_rejection(operation, &[arkret_wire::EventKind::MessageCreate])
     }
 
     fn preflight_apply_rejection(
         &self,
         operation: &Operation,
-        cell_writes: &[ProjectedCellWrite],
         accepted_kinds: &[arkret_wire::EventKind],
     ) -> Option<String> {
         let kind = soland_domain::kinds::canonical_kind_for_operation(operation)?;
@@ -2895,59 +1147,11 @@ impl ProjectionService {
             .state
             .lock()
             .clone()
-            .apply_projected(operation, cell_writes, self.clock())
+            .apply_projected(operation, self.clock())
         {
             ProjectionEffect::Rejected { reason } => Some(reason),
             _ => None,
         }
-    }
-
-    pub fn cache_cell(&self, cell_id: CellRef, value: Value) {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        self.state
-            .lock()
-            .cells
-            .insert(cell_id, ResolvedCellState::Value(value));
-    }
-
-    pub fn cell_value(&self, cell_id: &CellRef) -> Option<Value> {
-        self.state.lock().cell_value(cell_id).cloned()
-    }
-
-    pub fn realm_reducer_profile(&self, realm_id: &str) -> Option<String> {
-        self.state
-            .lock()
-            .realm_reducer_profile(realm_id)
-            .map(ToOwned::to_owned)
-    }
-
-    pub async fn reload_cells_from_store(
-        &self,
-        realm_id: &RealmId,
-    ) -> Result<(), arkret_state::StoreError> {
-        let mut resolved_cells = Vec::new();
-        for cell in self.cell_store().list_cells(realm_id).await? {
-            let ops = self
-                .cell_store()
-                .state_writes_for_cell(realm_id, &cell)
-                .await?;
-            let binding = self
-                .cell_registry()
-                .resolve(realm_id, &cell)
-                .map_err(|error| {
-                    arkret_state::StoreError::Backend(format!("cell registry resolve: {error}"))
-                })?;
-            let resolved =
-                arkret_state::join_cell(binding.model.as_ref(), &cell, &ops).map_err(|error| {
-                    arkret_state::StoreError::Backend(format!("cell state resolution: {error}"))
-                })?;
-            resolved_cells.push((cell, resolved));
-        }
-        let _authority_guard = self.history_authority_view_cas_guard();
-        self.state
-            .lock()
-            .install_reloaded_cells(realm_id, resolved_cells);
-        Ok(())
     }
 
     pub fn key_backup_active_series(
@@ -2987,7 +1191,7 @@ impl ProjectionService {
                         .map(arkret_identifiers::BackupSeriesId::new)
                         .collect::<Result<Vec<_>, _>>()
                         .ok()?,
-                    frontier_ref: row.frontier_ref.clone(),
+                    source_ref: row.source_ref.clone(),
                     issued_at: row.issued_at,
                     auth_data: row.auth_data.clone(),
                     extra: row.extra.clone(),
@@ -3014,10 +1218,6 @@ impl ProjectionService {
             };
             if circle.realm_id != realm_id {
                 tracing::warn!(%realm_id, %circle_id, circle_realm_id = %circle.realm_id, %group_id, "MLS circle scope realm mismatch");
-                return Vec::new();
-            }
-            if circle.encryption_profile != "mls_rfc9420" {
-                tracing::warn!(%realm_id, %circle_id, %group_id, "MLS scope bound to non-MLS Circle projection");
                 return Vec::new();
             }
             match circle.mls_group_ref.as_deref() {
@@ -3245,22 +1445,6 @@ pub(crate) fn restore_invite_acceptance_membership(
             reason: None,
         },
     );
-    if let Some(cell_id) = invite_member_cell(member) {
-        state.cells.insert(
-            cell_id,
-            ResolvedCellState::Value(Value::String("join".to_owned())),
-        );
-    }
-}
-
-pub(crate) fn uses_validated_realm_bootstrap_facet_reducer(kind: &str) -> bool {
-    kind.starts_with("ak.realm.")
-        && !matches!(
-            kind,
-            arkret_wire::event_kind_str::REALM_CREATE
-                | arkret_wire::event_kind_str::REALM_PROFILE
-                | arkret_wire::event_kind_str::REALM_HISTORY_ACCESS
-        )
 }
 
 fn mls_scope_parts(effective_scope: &Value) -> Option<(String, Option<String>)> {
@@ -3285,7 +1469,7 @@ fn actor_participates_in_mls_scope(
     match circle_id {
         Some(circle_id) => state.circles.get(circle_id).is_some_and(|circle| {
             circle.realm_id == realm_id
-                && circle.encryption_profile == "mls_rfc9420"
+                && circle.mls_group_ref.is_some()
                 && circle.members.contains(actor_id)
         }),
         None => {
@@ -3381,699 +1565,15 @@ fn pending_device_revoke_exists(
     })
 }
 
-#[async_trait::async_trait(?Send)]
-impl HistoryAuthorityViewCas for ProjectionService {
-    #[allow(
-        clippy::await_holding_lock,
-        reason = "release-authority validation and mutation are one process-wide CAS; contenders acquire through block_in_place so they do not park a Tokio worker"
-    )]
-    async fn with_current_release_authority(
-        &self,
-        attestation: &HistoryReleaseAttestation,
-        mutation: &mut dyn FnMut() -> PersistenceResult<()>,
-    ) -> PersistenceResult<()> {
-        attestation
-            .validate()
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let views = &attestation.accepted_authority_views;
-        let mut expected_bases = BTreeMap::<String, Vec<SealId>>::new();
-        let mut insert_basis = |realm_id: &RealmId, leaves: &[SealId]| -> PersistenceResult<()> {
-            let mut leaves = leaves.to_vec();
-            leaves.sort();
-            leaves.dedup();
-            if let Some(existing) = expected_bases.get(realm_id.as_str()) {
-                if existing != &leaves {
-                    return Err(PersistenceError::SchemaViolation(
-                        "history authority locators disagree on a Realm Seal basis".to_owned(),
-                    ));
-                }
-            } else {
-                expected_bases.insert(realm_id.as_str().to_owned(), leaves);
-            }
-            Ok(())
-        };
-        insert_basis(
-            &views.scope_realm.authority_realm_id,
-            &views.scope_realm.seal_basis.leaves,
-        )?;
-        if let Some(circle) = &views.scope_circle {
-            insert_basis(&circle.authority_realm_id, &circle.seal_basis.leaves)?;
-        }
-        if let Some(pcr) = &views.recipient_pcr_device {
-            insert_basis(&pcr.principal_control_realm_id, &pcr.pcr_seal_basis.leaves)?;
-        }
-        if let Some(agent) = &views.recipient_agent_control_evidence {
-            let mut authority_realm_id = None;
-            for leaf in &agent.control_basis.leaves {
-                let seal = self
-                    .seal_store()
-                    .get(leaf)
-                    .await
-                    .map_err(|error| PersistenceError::Internal(error.to_string()))?
-                    .ok_or_else(|| {
-                        PersistenceError::Conflict(
-                            "failed_precondition: Agent authority Seal is unavailable".to_owned(),
-                        )
-                    })?;
-                if authority_realm_id
-                    .as_ref()
-                    .is_some_and(|realm_id: &RealmId| realm_id != &seal.realm_id)
-                {
-                    return Err(PersistenceError::SchemaViolation(
-                        "Agent authority control basis spans multiple Realms".to_owned(),
-                    ));
-                }
-                authority_realm_id = Some(seal.realm_id);
-            }
-            insert_basis(
-                &authority_realm_id.ok_or_else(|| {
-                    PersistenceError::SchemaViolation(
-                        "Agent authority control basis is empty".to_owned(),
-                    )
-                })?,
-                &agent.control_basis.leaves,
-            )?;
-        }
-        for (realm_id, expected) in expected_bases {
-            let realm_id = RealmId::new(realm_id)
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            let current = self
-                .seal_store()
-                .confirmed_head(&realm_id)
-                .await
-                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-            if current.as_slice() != expected {
-                return Err(PersistenceError::Conflict(
-                    "failed_precondition: history authority Seal basis is no longer current"
-                        .to_owned(),
-                ));
-            }
-        }
-
-        let snapshot = self.snapshot();
-        let incarnation_is_current =
-            |actor_id: &arkret_wire::ActorId, incarnation: &AuthorizationIncarnation| -> bool {
-                let actor_key = actor_id.to_string();
-                let realm_id = match &attestation.effective_scope {
-                    HistoryEffectiveScope::Realm { realm_id }
-                    | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
-                };
-                let realm_membership_ref = snapshot
-                    .member(realm_id.as_str(), &actor_key)
-                    .filter(|member| member.state == "join")
-                    .and_then(|member| member.membership_event_ref.as_deref());
-                match (&attestation.effective_scope, incarnation) {
-                    (
-                        HistoryEffectiveScope::Realm { .. },
-                        AuthorizationIncarnation::Realm {
-                            realm_membership_incarnation_ref,
-                        },
-                    ) => realm_membership_ref == Some(realm_membership_incarnation_ref.as_str()),
-                    (
-                        HistoryEffectiveScope::Circle { circle_id, .. },
-                        AuthorizationIncarnation::Circle {
-                            realm_membership_incarnation_ref,
-                            circle_membership_incarnation_ref,
-                        },
-                    ) => {
-                        realm_membership_ref == Some(realm_membership_incarnation_ref.as_str())
-                            && snapshot
-                                .circle_membership(circle_id.as_str(), &actor_key)
-                                .is_some_and(|membership| membership.state == "active")
-                            && snapshot
-                                .circle_member_join_refs
-                                .get(&(circle_id.as_str().to_owned(), actor_key.clone()))
-                                .is_some_and(|event_id| {
-                                    event_id == circle_membership_incarnation_ref.as_str()
-                                })
-                    }
-                    _ => false,
-                }
-            };
-        if !incarnation_is_current(
-            &attestation.recipient_actor_id,
-            &attestation.recipient_authorization_incarnation,
-        ) || attestation.source_kind
-            == arkret_models_collaboration::history_key::SourceKind::Member
-            && !attestation
-                .source_authorization_incarnation
-                .as_ref()
-                .is_some_and(|incarnation| {
-                    incarnation_is_current(&attestation.source_actor_id, incarnation)
-                })
-        {
-            return Err(PersistenceError::Conflict(
-                "failed_precondition: history authority incarnation is no longer current"
-                    .to_owned(),
-            ));
-        }
-        let realm_id = views.scope_realm.authority_realm_id.as_str();
-        let realm = snapshot.realm_states.get(realm_id).ok_or_else(|| {
-            PersistenceError::Conflict(
-                "failed_precondition: history authority Realm projection is unavailable".to_owned(),
-            )
-        })?;
-        let live_history_access = snapshot
-            .realm_history_access(realm_id)
-            .ok_or_else(|| {
-                PersistenceError::Conflict(
-                    "failed_precondition: history_access projection is unavailable".to_owned(),
-                )
-            })?
-            .parse()
-            .map_err(|_| {
-                PersistenceError::Internal(
-                    "projected history_access has an invalid protocol value".to_owned(),
-                )
-            })?;
-        let realm_tombstoned = realm.deleted || realm.terminal_state.is_some();
-        let mut live_realm_projection = views.scope_realm.current_gate_projection.clone();
-        live_realm_projection.history_access = live_history_access;
-        live_realm_projection.realm_tombstoned = realm_tombstoned;
-        if live_realm_projection != views.scope_realm.current_gate_projection {
-            return Err(PersistenceError::Conflict(
-                "failed_precondition: history Realm current-gate projection changed".to_owned(),
-            ));
-        }
-
-        match (&attestation.effective_scope, &views.scope_circle) {
-            (HistoryEffectiveScope::Realm { .. }, None) => {}
-            (HistoryEffectiveScope::Circle { circle_id, .. }, Some(locator)) => {
-                let circle = snapshot.circle(circle_id.as_str()).ok_or_else(|| {
-                    PersistenceError::Conflict(
-                        "failed_precondition: history Circle projection is unavailable".to_owned(),
-                    )
-                })?;
-                let mut live_circle_projection = locator.current_gate_projection.clone();
-                live_circle_projection.history_access =
-                    circle.history_access.parse().map_err(|_| {
-                        PersistenceError::Internal(
-                            "projected Circle history_access has an invalid protocol value"
-                                .to_owned(),
-                        )
-                    })?;
-                live_circle_projection.realm_tombstoned = realm_tombstoned;
-                live_circle_projection.circle_tombstoned = circle.state.as_str() != "active";
-                if live_circle_projection != locator.current_gate_projection {
-                    return Err(PersistenceError::Conflict(
-                        "failed_precondition: history Circle current-gate projection changed"
-                            .to_owned(),
-                    ));
-                }
-            }
-            _ => {
-                return Err(PersistenceError::SchemaViolation(
-                    "history scope authority locator branch mismatch".to_owned(),
-                ));
-            }
-        }
-        mutation()
-    }
-}
-
 #[cfg(test)]
-mod effective_checkpoint_tests {
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use arkret_state::state::store::{CellStore, SealStore};
-    use arkret_state::state::{
-        MemoryCellStateRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
-    };
+mod projection_service_tests {
+    use arkret_wire::{Did, ScopeRef, project_did_to_core_id};
+    use soland_domain::reducer::facet;
 
     use super::*;
-
-    struct CountingCellStore {
-        inner: MemoryCellStore,
-        history_reads: AtomicUsize,
-    }
-
-    impl Default for CountingCellStore {
-        fn default() -> Self {
-            Self {
-                inner: MemoryCellStore::default(),
-                history_reads: AtomicUsize::new(0),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl CellStore for CountingCellStore {
-        async fn list_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
-            self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner.list_cells(realm_id).await
-        }
-
-        async fn state_writes_for_cell(
-            &self,
-            realm_id: &RealmId,
-            cell: &CellRef,
-        ) -> StoreResult<Vec<IssuedOp>> {
-            self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner.state_writes_for_cell(realm_id, cell).await
-        }
-
-        async fn confirmed_write_batches_for_cell(
-            &self,
-            realm_id: &RealmId,
-            cell: &CellRef,
-        ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
-            self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner
-                .confirmed_write_batches_for_cell(realm_id, cell)
-                .await
-        }
-
-        async fn cached_state(
-            &self,
-            realm_id: &RealmId,
-            cell: &CellRef,
-            view_hash: &Hash,
-        ) -> StoreResult<Option<ResolvedCellState>> {
-            self.inner.cached_state(realm_id, cell, view_hash).await
-        }
-
-        async fn put_cached_state(
-            &self,
-            realm_id: &RealmId,
-            cell: &CellRef,
-            view_hash: &Hash,
-            state: &ResolvedCellState,
-        ) -> StoreResult<()> {
-            self.inner
-                .put_cached_state(realm_id, cell, view_hash, state)
-                .await
-        }
-
-        async fn append_confirmed_effects(
-            &self,
-            realm_id: &RealmId,
-            seal: &SealId,
-            new_ops: &[(CellRef, IssuedOp)],
-        ) -> StoreResult<()> {
-            self.inner
-                .append_confirmed_effects(realm_id, seal, new_ops)
-                .await
-        }
-
-        async fn rollback_seal(&self, realm_id: &RealmId, seal: &SealId) -> StoreResult<()> {
-            self.inner.rollback_seal(realm_id, seal).await
-        }
-    }
-
-    struct CheckpointCommitter {
-        checkpoints: BTreeMap<SealId, SealEffectiveStateCheckpoint>,
-    }
-
-    #[async_trait::async_trait]
-    impl EventSealCommitPort for CheckpointCommitter {
-        async fn commit_if_head(
-            &self,
-            _seal: &Seal,
-            _digest_suite: arkret_canonical::DigestSuite,
-            _expected_store_head: Option<&SealId>,
-            _new_ops: &[(CellRef, IssuedOp)],
-            _covered: &BTreeSet<Hash>,
-            _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-            _confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-        ) -> StoreResult<bool> {
-            panic!("checkpoint lookup test must not commit a Seal")
-        }
-
-        async fn effective_state_checkpoint(
-            &self,
-            seal_id: &SealId,
-        ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
-            Ok(self.checkpoints.get(seal_id).cloned())
-        }
-    }
-
-    fn test_hash(marker: u8) -> Hash {
-        Hash::new(format!("sha256:{}", format!("{marker:02x}").repeat(32))).unwrap()
-    }
-
-    fn chain_seal(
-        realm_id: &RealmId,
-        predecessor_ref: Option<SealId>,
-        notary_seq: u64,
-        control_event_set_root: Hash,
-        state_root: Hash,
-    ) -> Seal {
-        let mut seal = Seal {
-            id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
-            realm_id: realm_id.clone(),
-            predecessor_ref,
-            delta: Vec::new(),
-            data_delta: Vec::new(),
-            data_event_set_root: arkret_wire::empty_data_event_set_root(
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .unwrap(),
-            control_event_set_root,
-            state_root,
-            notary_seq,
-            availability_receipt_digests: Vec::new(),
-            covered_event_digests: Vec::new(),
-            previous_state_root: None,
-            previous_digest_algorithm: None,
-            notary_signature: arkret_wire::SealSignature {
-                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
-                payload_digest: test_hash(0xff),
-                jws: "AAAA.BBBB.CCCC".to_owned(),
-            },
-            sealed_at: chrono::DateTime::from_timestamp(1_800_000_000 + notary_seq as i64, 0)
-                .unwrap(),
-            hlc: arkret_wire::Hlc::new(format!("019f00000000-{:04x}-aabbccdd", notary_seq))
-                .unwrap(),
-            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
-                .unwrap(),
-            command_results: Vec::new(),
-            authorization_closures: Vec::new(),
-            data_closure_announcements: Vec::new(),
-            data_closures: Vec::new(),
-            existence_anchors: Vec::new(),
-        };
-        seal.id = seal
-            .derive_id(arkret_canonical::DigestSuite::Sha256)
-            .unwrap();
-        seal
-    }
-
-    #[tokio::test]
-    async fn long_successor_checkpoint_queries_do_not_reload_cell_history() {
-        const SUCCESSORS: u64 = 128;
-        let realm_id =
-            RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
-                .unwrap();
-        let seal_store = Arc::new(MemorySealStore::default());
-        let cell_store = Arc::new(CountingCellStore::default());
-        let state = BTreeMap::new();
-        let covered = BTreeSet::new();
-        let state_root = arkret_state::compute_state_root(
-            arkret_state::GovernanceView::new(&state),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
-        let control_root =
-            arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
-                .unwrap();
-        let mut checkpoints = BTreeMap::new();
-        let mut closure = BTreeSet::new();
-        let mut leaf = None;
-
-        for notary_seq in 1..=SUCCESSORS {
-            let predecessor = leaf.clone();
-            let seal = chain_seal(
-                &realm_id,
-                predecessor.clone(),
-                notary_seq,
-                control_root.clone(),
-                state_root.clone(),
-            );
-            assert!(
-                seal_store
-                    .put_if_head(
-                        &seal,
-                        predecessor.as_ref(),
-                        arkret_canonical::DigestSuite::Sha256,
-                    )
-                    .await
-                    .unwrap()
-            );
-            closure.insert(seal.id.clone());
-            checkpoints.insert(
-                seal.id.clone(),
-                SealEffectiveStateCheckpoint {
-                    realm_id: realm_id.clone(),
-                    seal_id: seal.id.clone(),
-                    covered_event_digests: covered.clone(),
-                    covered_seal_ids: closure.clone(),
-                    state: state.clone(),
-                },
-            );
-            leaf = Some(seal.id);
-        }
-
-        let service = ProjectionService::new(
-            Arc::new(MemoryControlEventStore::default()),
-            seal_store,
-            cell_store.clone(),
-            Arc::new(MemoryCellStateRegistry::default()),
-            Arc::new(CheckpointCommitter { checkpoints }),
-            "checkpoint-chain-test",
-        );
-        let leaf = leaf.unwrap();
-        for _ in 0..SUCCESSORS {
-            assert_eq!(
-                service
-                    .effective_state_at(std::slice::from_ref(&leaf), &realm_id)
-                    .await
-                    .unwrap(),
-                state
-            );
-            assert_eq!(
-                service
-                    .predecessor_covered_events(Some(&leaf))
-                    .await
-                    .unwrap(),
-                covered
-            );
-            assert_eq!(
-                service
-                    .seal_basis_closure(std::slice::from_ref(&leaf))
-                    .await
-                    .unwrap(),
-                closure
-            );
-        }
-        assert_eq!(cell_store.history_reads.load(Ordering::Relaxed), 0);
-    }
-}
-
-#[cfg(test)]
-mod control_governance_health_tests {
-    use arkret_state::state::{
-        MemoryCellStateRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
-    };
-    use arkret_wire::{Did, Hlc, ScopeRef, project_did_to_core_id};
-
-    use super::*;
-
-    struct UnusedEventSealCommitter;
-
-    #[async_trait::async_trait]
-    impl EventSealCommitPort for UnusedEventSealCommitter {
-        async fn commit_if_head(
-            &self,
-            _seal: &Seal,
-            _digest_suite: arkret_canonical::DigestSuite,
-            _expected_store_head: Option<&SealId>,
-            _new_ops: &[(CellRef, IssuedOp)],
-            _covered: &BTreeSet<Hash>,
-            _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-            _confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-        ) -> StoreResult<bool> {
-            panic!("governance health must not commit a Seal")
-        }
-    }
 
     fn service() -> ProjectionService {
-        ProjectionService::new(
-            Arc::new(MemoryControlEventStore::default()),
-            Arc::new(MemorySealStore::default()),
-            Arc::new(MemoryCellStore::default()),
-            Arc::new(MemoryCellStateRegistry::default()),
-            Arc::new(UnusedEventSealCommitter),
-            "governance-health-test",
-        )
-    }
-
-    fn deadline_ack(event: &Event, received_at: DateTime<Utc>) -> ControlProposalAck {
-        let policy = ControlProposalDecisionPolicy::default();
-        let mut member = arkret_wire::ControlProposalAck {
-            kind: arkret_wire::ControlProposalAckKind::SignedAck,
-            defer_count: 0,
-            realm_id: event.realm_id.clone(),
-            proposal_digest: arkret_state::state::control_event_digest(
-                event,
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .unwrap(),
-            received_at,
-            decision_due_at: received_at + policy.decision_window,
-            absolute_due_at: received_at + policy.absolute_horizon,
-            authority_set_ref: Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
-            signature: arkret_wire::PayloadSignature {
-                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#key")
-                    .unwrap(),
-                payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
-                created_at: received_at,
-                jws: "a..b".to_owned(),
-            },
-        };
-        member.signature.payload_digest = member.ack_body_digest().unwrap();
-        member
-    }
-
-    #[tokio::test]
-    async fn resolved_fault_history_is_paginated_without_degrading_current_health() {
-        let service = service();
-        let received_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
-        let mut realm_id = None;
-        let hash = || Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-        for index in 0..1000 {
-            let event = ackless_event(&format!("late-{index}"));
-            realm_id = Some(event.realm_id.clone());
-            let ack = deadline_ack(&event, received_at);
-            let mut seal = Seal {
-                id: SealId::new(format!("ak:seal:sha256:{index:064x}")).unwrap(),
-                realm_id: event.realm_id.clone(),
-                predecessor_ref: None,
-                delta: vec![ack.proposal_digest.clone()],
-                data_delta: Vec::new(),
-                data_event_set_root: arkret_wire::empty_data_event_set_root(
-                    arkret_canonical::DigestSuite::Sha256,
-                )
-                .unwrap(),
-                control_event_set_root: hash(),
-                state_root: hash(),
-                notary_seq: index,
-                availability_receipt_digests: Vec::new(),
-                covered_event_digests: Vec::new(),
-                previous_state_root: None,
-                previous_digest_algorithm: None,
-                notary_signature: arkret_wire::SealSignature {
-                    verification_method: arkret_wire::DidUrl::new("did:web:notary.example#key")
-                        .unwrap(),
-                    payload_digest: hash(),
-                    jws: "a..b".to_owned(),
-                },
-                sealed_at: ack.absolute_due_at + chrono::Duration::seconds(1),
-                hlc: Hlc::new("019f00000000-0000-00000001").unwrap(),
-                configuration_ref: arkret_wire::EventId::new(format!(
-                    "ak:event:A{}",
-                    "a".repeat(42)
-                ))
-                .unwrap(),
-                command_results: Vec::new(),
-                authorization_closures: Vec::new(),
-                data_closure_announcements: Vec::new(),
-                data_closures: Vec::new(),
-                existence_anchors: Vec::new(),
-            };
-            let store = service.control_event_store();
-            store
-                .put_pending_unit_with_ingress(&[ControlUnitIngressMember {
-                    event: event.clone(),
-                    digest_suite: arkret_canonical::DigestSuite::Sha256,
-                    ingress: ControlProposalIngress::AckRequired(ack.clone()),
-                }])
-                .await
-                .unwrap();
-            seal.command_results = vec![
-                arkret_wire::SealCommandOutcome::committed(
-                    ack.proposal_digest.clone(),
-                    vec![ack.proposal_digest.clone()],
-                    Vec::new(),
-                    arkret_canonical::DigestSuite::Sha256,
-                )
-                .unwrap(),
-            ];
-            store.record_seal_command_results(&seal).await.unwrap();
-            if index == 128 || index == 999 {
-                let health = service
-                    .control_governance_health(
-                        &event.realm_id,
-                        seal.sealed_at,
-                        ControlProposalDecisionPolicy::default(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(health.status, ControlGovernanceHealthStatus::Healthy);
-                assert!(health.pending_proposals_complete);
-            }
-        }
-        let realm_id = realm_id.unwrap();
-        let mut cursor = None;
-        let mut count = 0;
-        loop {
-            let page = service
-                .decided_control_events(&realm_id, cursor.as_ref(), 73)
-                .await
-                .unwrap();
-            if page.is_empty() {
-                break;
-            }
-            for record in &page {
-                assert!(record.decision_overdue);
-                assert!(record.control_proposal_ack.is_some());
-            }
-            count += page.len();
-            cursor = Some(
-                arkret_state::state::control_event_digest(
-                    &page.last().unwrap().event,
-                    arkret_canonical::DigestSuite::Sha256,
-                )
-                .unwrap(),
-            );
-        }
-        assert_eq!(count, 1000);
-    }
-
-    #[tokio::test]
-    async fn pending_overflow_is_explicit_and_does_not_discard_obligations() {
-        let service = service();
-        let received_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
-        let mut realm_id = None;
-        let mut expected = Vec::new();
-        for index in 0..129 {
-            let event = ackless_event(&format!("pending-{index}"));
-            realm_id = Some(event.realm_id.clone());
-            let ack = deadline_ack(&event, received_at + chrono::Duration::seconds(129 - index));
-            expected.push((ack.absolute_due_at, ack.proposal_digest.clone()));
-            service
-                .put_pending_control_event(
-                    &event,
-                    &ControlProposalIngress::AckRequired(ack),
-                    arkret_canonical::DigestSuite::Sha256,
-                )
-                .await
-                .unwrap();
-        }
-        let realm_id = realm_id.unwrap();
-        let health = service
-            .control_governance_health(
-                &realm_id,
-                received_at,
-                ControlProposalDecisionPolicy::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(health.pending_proposals.len(), 128);
-        assert!(!health.pending_proposals_complete);
-        assert_eq!(health.status, ControlGovernanceHealthStatus::Degraded);
-        expected.sort();
-        expected.truncate(128);
-        assert_eq!(
-            health
-                .pending_proposals
-                .iter()
-                .map(|row| (
-                    row.control_proposal_ack.absolute_due_at,
-                    row.control_proposal_ack.proposal_digest.clone(),
-                ))
-                .collect::<Vec<_>>(),
-            expected
-        );
-        assert_eq!(
-            service
-                .pending_control_records(&realm_id, 1000)
-                .await
-                .unwrap()
-                .len(),
-            129
-        );
+        ProjectionService::new("projection-service-test")
     }
 
     #[test]
@@ -4159,8 +1659,6 @@ mod control_governance_health_tests {
             ScopeRef::RealmGenesis,
             actor,
             station,
-            0,
-            Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"object": {"purpose": "collaboration"}}),
             Utc::now(),
         )
@@ -4179,18 +1677,16 @@ mod control_governance_health_tests {
         .unwrap();
         {
             let mut live = service.state.lock();
-            live.realm_create_cells.insert(
-                realm_id.clone(),
-                arkret_state::state_model::ResolvedCellState::Value(serde_json::json!([realm_id])),
+            live.set_realm_facet(
+                realm_id.as_str(),
+                facet::REALM_CREATE,
+                serde_json::json!([realm_id]),
             );
             live.realm_join_rules
                 .insert(genesis.realm_id.to_string(), "public".to_owned());
         }
         let staged = StagedRealmBootstrap {
-            operations: vec![ProjectedOperation {
-                operation,
-                cell_writes: Vec::new(),
-            }],
+            operations: vec![operation],
             direct_conversation_founding: false,
         };
 
@@ -4205,199 +1701,5 @@ mod control_governance_health_tests {
             Some("public"),
             "an exact bootstrap replay must not replace a concurrent successor projection",
         );
-    }
-
-    fn ackless_event(seed: &str) -> Event {
-        let realm_id =
-            RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
-                .unwrap();
-        arkret_wire::test_support::raw_event_at(
-            "ak.test.control",
-            ScopeRef::Realm {
-                realm_id: realm_id.clone(),
-            },
-            project_did_to_core_id(&Did::new("did:web:alice.example".to_owned()).unwrap()).unwrap(),
-            project_did_to_core_id(&Did::new("did:web:service.example".to_owned()).unwrap())
-                .unwrap(),
-            0,
-            Hlc::new("019f00000000-0000-00000001").unwrap(),
-            serde_json::json!({"seed": seed}),
-            Utc::now(),
-        )
-        .unwrap()
-    }
-
-    fn ackless_class() -> arkret_state::state::store::AcklessSelfPrincipalIngress {
-        arkret_state::state::store::AcklessSelfPrincipalIngress {
-            device_id: "ak:device:fixture".to_owned(),
-            device_authorize_event_id: "ak:event:fixture".to_owned(),
-            device_generation_ref: 1,
-            seal_basis_digest: "sha256:fixture".to_owned(),
-        }
-    }
-
-    #[test]
-    fn accepted_invite_cancel_reprojects_complete_account_identity() {
-        let service = service();
-        let realm = RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq").unwrap();
-        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
-        let station = arkret_wire::DidCoreId::new("ak:did_core:web:service.example").unwrap();
-        let make_event = |payload| {
-            arkret_wire::test_support::raw_event_at(
-                "ak.invite.cancel",
-                ScopeRef::Realm {
-                    realm_id: realm.clone(),
-                },
-                principal.clone(),
-                station.clone(),
-                1,
-                Hlc::new("019f00000000-0000-00000001").unwrap(),
-                payload,
-                Utc::now(),
-            )
-            .unwrap()
-        };
-        let invite_id = "ak:invite:AVcbARXDOZuMaYlp1-g60cl4c6Y5NzY10J6VMsgtrakA";
-        let mut slots = Vec::new();
-        for station in [
-            "ak:did_core:web:station-a.example",
-            "ak:did_core:web:station-b.example",
-        ] {
-            let event = make_event(serde_json::json!({
-                "invite_id": invite_id,
-                "invitee_account_id": arkret_wire::AccountId::new(
-                    principal.clone(), arkret_wire::DidCoreId::new(station).unwrap(),
-                ),
-                "target_state": "revoked",
-            }));
-            let writes = service.project_accepted_cell_writes(&event).unwrap();
-            // The lifecycle transition plus the live-target release, whose
-            // subject is derived from the complete AccountId — which is the
-            // point of this test: the same principal at a different Station is
-            // a different slot, so the two loop iterations must not collide.
-            assert_eq!(writes.len(), 2);
-            assert_eq!(
-                writes[0].cell_id.as_str(),
-                format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}")
-            );
-            assert!(
-                writes[1].cell_id.as_str().starts_with(&format!(
-                    "ak:cell:{}:",
-                    arkret_wire::CellFamilyId::INVITE_LIVE_TARGET_V1
-                )),
-                "second write releases the live-target slot, got {}",
-                writes[1].cell_id.as_str()
-            );
-            slots.push(writes[1].cell_id.as_str().to_owned());
-        }
-        assert_ne!(
-            slots[0], slots[1],
-            "one principal at two Stations holds two distinct live-target slots"
-        );
-    }
-
-    #[tokio::test]
-    async fn ackless_governance_exemption_is_exact_digest_and_default_fail_closed() {
-        let service = service();
-        let event = ackless_event("authorized");
-        service
-            .put_pending_control_event(
-                &event,
-                &ControlProposalIngress::AcklessSelfPrincipal(ackless_class()),
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .await
-            .unwrap();
-        let realm_id = event.realm_id.clone();
-
-        let default_error = service
-            .control_governance_health(
-                &realm_id,
-                Utc::now(),
-                ControlProposalDecisionPolicy::default(),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            default_error
-                .to_string()
-                .contains("missing its Control Proposal Ack")
-        );
-
-        let unrelated = ackless_event("unrelated");
-        let unrelated_digest = arkret_state::state::control_event_digest(
-            &unrelated,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
-        let unrelated_error = service
-            .control_governance_health_with_ackless_authorities(
-                &realm_id,
-                Utc::now(),
-                ControlProposalDecisionPolicy::default(),
-                &BTreeSet::from([unrelated_digest]),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            unrelated_error
-                .to_string()
-                .contains("missing its Control Proposal Ack")
-        );
-
-        let digest = arkret_state::state::control_event_digest(
-            &event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
-        let health = service
-            .control_governance_health_with_ackless_authorities(
-                &realm_id,
-                Utc::now(),
-                ControlProposalDecisionPolicy::default(),
-                &BTreeSet::from([digest]),
-            )
-            .await
-            .unwrap();
-        assert!(health.pending_proposals.is_empty());
-        assert!(health.pending_proposals_complete);
-    }
-}
-
-#[cfg(test)]
-mod transition_registry_tests {
-    use super::*;
-
-    #[test]
-    fn realm_profile_uses_lifecycle_reducer_inside_bootstrap() {
-        assert!(!uses_validated_realm_bootstrap_facet_reducer(
-            arkret_wire::EventKind::RealmProfile.as_str(),
-        ));
-        assert!(!uses_validated_realm_bootstrap_facet_reducer(
-            arkret_wire::EventKind::RealmHistoryAccess.as_str(),
-        ));
-        assert!(uses_validated_realm_bootstrap_facet_reducer(
-            arkret_wire::EventKind::RealmAlias.as_str(),
-        ));
-    }
-
-    #[test]
-    fn live_projection_registry_resolves_the_exact_canonical_transition_closure() {
-        let registry = ProjectionService::try_sdk_cell_registry().unwrap();
-        let contracts = arkret_lattice_registry::canonical_transition_contracts().unwrap();
-        let realm =
-            RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
-                .unwrap();
-        for contract in contracts {
-            let cell =
-                CellRef::new(format!("ak:cell:{}:live-admission", contract.cell_family)).unwrap();
-            let binding = registry.resolve(&realm, &cell).unwrap();
-            let (_, _, model, _) = arkret_lattice_registry::state_model_bindings_for_sdk_registry()
-                .into_iter()
-                .find(|(family, ..)| *family == contract.cell_family)
-                .unwrap();
-            assert_eq!(binding.model.kind(), model);
-            assert!(binding.domain_transition.is_some());
-        }
     }
 }
