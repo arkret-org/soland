@@ -346,6 +346,25 @@ peer-merge graph.
 
   `submit/realm_bootstrap.rs:315` (`mint_control_proposal_acks`) is neither: it
   mints the retired object and is a straight delete.
+- [~] The six SDK modules `soland-http` still imports that no longer exist
+  (measured 2026-09-19 by extracting every `arkret_*::<module>` path in
+  `crates/http/src` and testing each against the SDK tree). 148 references in
+  total. **Four of the six are ports with a named target; only the lease family
+  is genuinely blocked.**
+
+  | missing module | http files / refs | verdict |
+  |---|---|---|
+  | `arkret_models_collaboration::governance_dependencies` | 19 / 36 | **port.** Nearly all of it is `GovernanceDependency{,Selector}::AuthenticatedSignerResolutionEvidence`, and the target is `arkret_models_identity::AuthenticatedSignerResolutionEvidence` (`models-identity/src/authenticated_signer_resolution_evidence.rs:58`, exported at `lib.rs:19,50`). The SDK gap ledger listed this as open because it looked under `models-collaboration`; corrected there in `acdc61a5`. |
+  | `arkret_wire::cbs` | 12 / 40 | **port.** Successors are `arkret_wire::patch::Patch` and `TypedCurrentResult`, different shape. |
+  | `arkret_wire::cbs_proof_bundle` | 10 / 31 | **delete.** The SDK ledger adjudicates `EventFederationSubmission` and `CbsProofBundle` as removed: "CBS is a removed unit". |
+  | `arkret_models_collaboration::direct_conversation_ops` | 8 / 19 | **mixed.** `DirectConversationFoundingAuthorityEvidence` (11 refs) is a port onto `models-collaboration/src/objects/direct_conversation.rs:330` -- another stale SDK gap line, corrected in `bbca85ef`. `DirectConversationFoundingFederationSubmission` (2) goes with CBS. `DirectConversationFoundingPlan` (2) has zero hits in the SDK and zero `founding_plan` hits in `direct-conversation-operations.schema.json`; it is a local name with no protocol object. |
+  | `arkret_models_collaboration::history_key` | 6 / 13 | **delete, except one.** RHRK is an adjudicated removal. `DirectorySourceRefAccess` only moved house, to `arkret_models_discovery::directory`. |
+  | `arkret_wire::offline_publication` | 5 / 9 | **blocked.** `AuthorizationLease` and `IngressReceipt` are still normative (`zh/overview/glossary.md`, `zh/identity/security-transactions.md` L213) and the SDK ledger still carries them as an open gap; `AuthoritySetRef`, `LeaseBasisRef` and `RiskTier` have zero SDK hits too. soland cannot close these without the SDK, and must not hand-roll them locally. |
+
+  The lesson for the next pass: two of the four ports read as "blocked on the
+  SDK" only because the SDK's own gap ledger had gone stale, in both cases
+  because the type had landed under a path the gap line did not name. Check the
+  SDK tree, not the SDK ledger.
 - [x] Audited-E2EE compliance profiles: `ak.profile.attested_audit_e2ee.v1` and
   `ak.profile.disclosed_audit_e2ee.v1` are gone from the specification and the
   SDK, so `AUDIT_COMPLIANCE_PROFILES` is removed from
