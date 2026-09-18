@@ -35,7 +35,7 @@ mod audit;
 mod authority_commit;
 mod blobs;
 mod contacts;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod contract_tests;
 mod device_pairings;

@@ -385,12 +385,49 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
         arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes()),
     ));
     let now = chrono::Utc::now();
+    // Both writers claim the Realm stream's genesis position, so the authority
+    // commit is the mutual exclusion the racing holders contend on.
+    let authority = soland_storage::CurrentRealmAuthority {
+        realm_id: realm.clone(),
+        generation: 0,
+        service_id: station.clone(),
+        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+            arkret_identifiers::EventIdentityKey::new(realm.digest_suite_code(), realm.digest_bytes())
+                .event_id(),
+        ),
+        last_handoff_ref: None,
+    };
+    soland_storage::AuthorityCommitStore::install_genesis_authority(
+        &soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() },
+        &authority,
+    )
+    .await
+    .unwrap();
     let make = |value| {
-        let event=arkret_wire::test_support::raw_event_at("ak.account_data.set",arkret_wire::ScopeRef::Realm{realm_id:realm.clone()},principal.clone(),station.clone(),0,arkret_wire::Hlc::new("000000000001-0000-00000000").unwrap(),serde_json::json!({"key":"ak.dnd_schedule","expected_revision":0,"body":{"value":value}}),now).unwrap();
+        let mut event=arkret_wire::test_support::raw_event_at("ak.account_data.set",arkret_wire::ScopeRef::Realm{realm_id:realm.clone()},principal.clone(),station.clone(),serde_json::json!({"key":"ak.dnd_schedule","expected_revision":0,"body":{"value":value}}),now).unwrap();
+        let event_digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
+        event.proofs = vec![arkret_wire::ProducerEventProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "did:{}#cas-device",
+                principal.as_str().strip_prefix("ak:did_core:").unwrap()
+            ))
+            .unwrap(),
+            event_digest: event_digest.clone(),
+            created_at: arkret_canonical::normalize_timestamp_canonical(now),
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
+        }];
         let record = soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),
             actor_id: event.actor_id.to_string(),
-            actor_seq: 0,
             realm_id: Some(realm.to_string()),
             kind: event.kind.to_string(),
             schema_id: "schemas/event-payload.schema.json#/$defs/account_data_set_payload".into(),
@@ -406,21 +443,45 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
             received_at: now,
         };
         soland_storage::EventCommitRequest {
-            publication_event: None,
-            mls_public_producer: None,
-            mls_public_genesis: None,
-            mls_frontier_leaves: None,
-            replicated: true,
+            authority_commit: soland_storage::AuthorityCommitTransaction {
+                expected_authority: authority.clone(),
+                commit: arkret_wire::RealmCommit {
+                    commit_id: arkret_wire::RealmCommitId::from_digest(
+                        arkret_canonical::sha256_bytes(event.event_id.as_str().as_bytes()),
+                    ),
+                    realm_id: realm.clone(),
+                    stream_ref: arkret_wire::CommitStreamRef::Realm {
+                        realm_id: realm.clone(),
+                    },
+                    stream_position: 0,
+                    previous_commit_ref: None,
+                    event_ref: event.event_id.clone(),
+                    governance_generation: 0,
+                    authority_ref: authority.authority_ref.clone(),
+                    committed_at: now,
+                    signature: arkret_wire::DetachedObjectSignature {
+                        context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                        signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                        verification_method: arkret_wire::DidUrl::new(format!(
+                            "did:{}#authority",
+                            station.as_str().strip_prefix("ak:did_core:").unwrap()
+                        ))
+                        .unwrap(),
+                        signed_digest: event_digest,
+                        created_at: now,
+                        sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+                    },
+                },
+                event,
+                mls_state: None,
+                welcomes: Vec::new(),
+            },
             event: record,
-            membership_compensation_evidence: None,
-            governance_dependencies: vec![],
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
-            control_proposal_ingress: None,
             device_revocation_transition: None,
             device_revocation_gate: None,
-            historical_producer: None,
             projections: vec![],
             idempotency: None,
             outbox: vec![],
@@ -444,8 +505,11 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
         .err()
         .or_else(|| b_result.as_ref().err())
         .unwrap();
+    // The Realm stream position is the durable compare-and-set the racing
+    // holders contend on, so the loser fails on stream ordering rather than on
+    // an unrelated error.
     assert!(
-        rejected_error.to_string().contains("cas_conflict"),
+        rejected_error.to_string().contains("stream_position"),
         "{rejected_error}"
     );
     let rejected = if a_result.is_err() { a_id } else { b_id };

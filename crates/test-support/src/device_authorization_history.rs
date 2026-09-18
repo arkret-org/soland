@@ -1,18 +1,18 @@
 //! Signed canonical PCR material for device persistence/recovery tests.
-//! No helper constructs an opaque verified history without running its verifier.
-
-use std::collections::{BTreeMap, BTreeSet};
+//!
+//! Every signature the SDK can still produce is real: the webvh principal
+//! inception, the device-possession signature over the authorize payload, and
+//! the producer detached JWS on each Event. Ordering is the authority-commit
+//! model -- the current governance Station appends exactly one `RealmCommit`
+//! per Event on the Realm's stream -- so a consumer that has to prove a device
+//! authorization was accepted cites its `CommittedEventRef`.
 
 use arkret_canonical::DigestSuite;
 use arkret_models_collaboration::events_payloads::*;
 use arkret_models_identity::{DidDocument, PrincipalRegistrationAnchor, ResolutionCommitment};
-use arkret_state::{
-    CommandEventResult, OrderedControlUnit, OrderedControlUnitEvent, ResolvedCellState,
-};
 use arkret_wire::*;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signer, SigningKey};
-use serde_json::json;
 
 fn hash(label: &str) -> Hash {
     Hash::new(arkret_canonical::sha256_digest(label.as_bytes())).unwrap()
@@ -23,8 +23,16 @@ pub fn device(index: u8) -> DeviceId {
 fn at() -> DateTime<Utc> {
     "2026-09-12T00:00:00Z".parse().unwrap()
 }
-fn hlc(sequence: usize) -> Hlc {
-    Hlc::new(format!("0198d35d9800-{sequence:04x}-a13f9c2e")).unwrap()
+/// Project a stable core id back to the DID it was derived from, so a
+/// verification method names the same controller the core id does.
+fn did_of(core_id: &DidCoreId) -> String {
+    format!(
+        "did:{}",
+        core_id
+            .as_str()
+            .strip_prefix("ak:did_core:")
+            .expect("a core id always carries the projected prefix")
+    )
 }
 pub fn possession(
     account: &AccountId,
@@ -73,36 +81,41 @@ pub fn possession_with(
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(&key.verifying_key().to_bytes());
     let mut hpke = vec![0xec, 0x01];
     hpke.extend(spec.hpke_seed);
-    let mut unsigned = UnsignedDeviceAuthorizePayload::new(
-        spec.device_id,
-        NonEmptyString::new(format!("did:key:{public}")).unwrap(),
-        NonEmptyString::new(arkret_canonical::encode_multibase_base58btc(hpke)).unwrap(),
-        vec![NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap()],
-        Some(NonEmptyString::new("Ed25519").unwrap()),
-        spec.authorized_by,
-        None,
-        spec.not_before,
-        spec.expires_at.map(Some),
-        spec.binding,
-        (spec.binding == DeviceAuthorizationBindingKind::PcrRecovery).then(|| {
-            RecoverySessionId::new("ak:recovery_session:01904100-0000-7000-8000-000000000002")
-                .unwrap()
-        }),
-        spec.applet_id,
-    )
-    .unwrap();
-    if spec.binding == DeviceAuthorizationBindingKind::AcceptedDevice {
-        unsigned = unsigned.with_pairing_challenge_transcript_digest(hash("pairing"));
-    }
-    let bytes = unsigned.device_possession_signature_input(account).unwrap();
-    unsigned
-        .attach_signature(
-            Base64UrlString::new(arkret_canonical::base64url_encode(
-                key.sign(&bytes).to_bytes(),
-            ))
-            .unwrap(),
-        )
-        .unwrap()
+    let mut payload = DeviceAuthorizePayload {
+        device_id: spec.device_id,
+        device_public_key_did: NonEmptyString::new(format!("did:key:{public}")).unwrap(),
+        hpke_key: NonEmptyString::new(arkret_canonical::encode_multibase_base58btc(hpke)).unwrap(),
+        algorithms: vec![NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap()],
+        device_key_algorithm: NonEmptyString::new("Ed25519").unwrap(),
+        authorized_by: spec.authorized_by,
+        scopes: None,
+        not_before: spec.not_before,
+        expires_at: spec.expires_at.map(Some),
+        authorization_binding_kind: spec.binding,
+        // The possession transcript excludes this field, so the placeholder is
+        // replaced below by the real signature over that transcript.
+        device_signature: SignatureMaterial::NonEmptyString(
+            NonEmptyString::new("unsigned").unwrap(),
+        ),
+        recovery_session_id: (spec.binding == DeviceAuthorizationBindingKind::PcrRecovery).then(
+            || {
+                RecoverySessionId::new("ak:recovery_session:01904100-0000-7000-8000-000000000002")
+                    .unwrap()
+            },
+        ),
+        pairing_challenge_transcript_digest: (spec.binding
+            == DeviceAuthorizationBindingKind::AcceptedDevice)
+            .then(|| hash("pairing")),
+        applet_id: spec.applet_id,
+    };
+    let bytes = payload.device_possession_signature_input(account).unwrap();
+    payload.device_signature = SignatureMaterial::NonEmptyString(
+        NonEmptyString::new(arkret_canonical::base64url_encode(
+            key.sign(&bytes).to_bytes(),
+        ))
+        .unwrap(),
+    );
+    payload
 }
 
 #[derive(Clone)]
@@ -142,7 +155,6 @@ fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
         kind: proof_kind::DETACHED_JWS.into(),
         verification_method: method,
         event_digest: event.event_id.event_digest(),
-        signer_resolution_evidence_ref: None,
         created_at: event.created_at,
         domain: None,
         audience: None,
@@ -157,25 +169,39 @@ fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
     event.proofs.push(proof);
     event
 }
+
+/// One device authorization the governance Station accepted, together with the
+/// commit that ordered it.
+///
+/// The committed reference is the whole evidence: the revocation gate compares
+/// it against the reference the durable device row carries, so a replacement
+/// authorization cannot alias its predecessor.
+#[derive(Clone, Debug)]
+pub struct CommittedDeviceAuthorization {
+    pub device_id: DeviceId,
+    pub authorization_ref: CommittedEventRef,
+    pub payload: DeviceAuthorizePayload,
+}
+
 pub struct DeviceHistoryFixture {
     pub account: AccountId,
     pub did: Did,
-    pub configuration: NotaryValue,
     pub inception: arkret_models_identity::DidOperationSubmitRequestBody,
     pub registration_anchor: PrincipalRegistrationAnchor,
     pub events: Vec<Event>,
-    pub seals: Vec<Seal>,
-    pub state: BTreeMap<CellRef, ResolvedCellState>,
-    pub covered: BTreeSet<Hash>,
-    pub sealed_ops: Vec<Vec<(CellRef, arkret_state::state_model::ordered_log::IssuedOp)>>,
+    /// One accepted `RealmCommit` per Event in `events`, in the same order.
+    pub commits: Vec<RealmCommit>,
     pub founding_device_id: DeviceId,
     pub founding_device_signing_seed: [u8; 32],
-    pub(crate) notary_signing_seed: [u8; 32],
+    /// The founding device's verification method; every Event the fixture
+    /// appends after the PCR create is signed with the founding device key.
+    pub device_verification_method: DidUrl,
     created_at: DateTime<Utc>,
 }
 impl DeviceHistoryFixture {
-    // Real inception/root/device/Seal signatures and deterministic effects.
-    // This fixture does not assert HTTP admission or recovery-session policy.
+    // Real inception/root/device/producer signatures and a deterministic
+    // commit chain. This fixture does not assert HTTP admission, authority
+    // signature verification or recovery-session policy.
     pub fn new(station_id: DidCoreId) -> Self {
         Self::new_with(station_id, DeviceHistoryFixtureOptions::default())
     }
@@ -227,21 +253,8 @@ impl DeviceHistoryFixture {
                 applet_id: None,
             },
         );
-        let key = SigningKey::from_bytes(&options.founding_device_signing_seed);
-        let configuration = NotaryValue::new(
-            NotarySignerDescriptor {
-                actor_id: ActorId::account(account.clone()),
-                verification_method: DidUrl::new(format!("{did}#{}", options.founding_device_id))
-                    .unwrap(),
-                key_kind: NotaryKeyKind::Ed25519Raw32,
-                jose_algorithm: NotaryJoseAlgorithm::Ed25519,
-                frozen_public_key_b64u: arkret_canonical::base64url_encode(
-                    key.verifying_key().to_bytes(),
-                ),
-            },
-            0,
-        )
-        .unwrap();
+        let device_verification_method =
+            DidUrl::new(format!("{did}#{}", options.founding_device_id)).unwrap();
         let root = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             &SigningKey::from_bytes(&options.root_seed)
                 .verifying_key()
@@ -297,211 +310,175 @@ impl DeviceHistoryFixture {
         let mut fixture = Self {
             account,
             did,
-            configuration,
             inception: prepared.submit_body,
             registration_anchor,
             events: Vec::new(),
-            seals: Vec::new(),
-            state: BTreeMap::new(),
-            covered: BTreeSet::new(),
-            sealed_ops: Vec::new(),
+            commits: Vec::new(),
             founding_device_id: options.founding_device_id,
             founding_device_signing_seed: options.founding_device_signing_seed,
-            notary_signing_seed: options.founding_device_signing_seed,
+            device_verification_method,
             created_at: options.created_at,
         };
-        let mut authorize = fixture.raw_event(
+        let authorize = fixture.raw_event(
             EventKind::DeviceAuthorize,
             serde_json::to_value(payload).unwrap(),
             &create.realm_id,
-            1,
         );
-        authorize.prev_refs = vec![create.event_id.clone()];
-        authorize = sign_event(
+        let authorize = sign_event(
             authorize,
-            fixture.configuration.signer.verification_method.clone(),
-            fixture.notary_signing_seed,
+            fixture.device_verification_method.clone(),
+            fixture.founding_device_signing_seed,
         );
         fixture.append(vec![create, authorize]);
         fixture
     }
-    pub fn raw_event(
-        &self,
-        kind: EventKind,
-        payload: serde_json::Value,
-        realm: &RealmId,
-        sequence: u64,
-    ) -> Event {
-        let mut event = test_support::raw_event_at(
+
+    pub fn raw_event(&self, kind: EventKind, payload: serde_json::Value, realm: &RealmId) -> Event {
+        test_support::raw_event_at(
             kind.as_str(),
             ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
             self.account.principal_id.clone(),
             self.account.station_id.clone(),
-            sequence,
-            hlc(sequence as usize),
             payload,
             self.created_at,
         )
-        .unwrap();
-        event.auth_context = None;
-        event.unsigned.clear();
-        event
+        .unwrap()
     }
+
     pub fn event(&self, kind: EventKind, payload: serde_json::Value) -> Event {
-        let mut event = self.raw_event(
-            kind,
-            payload,
-            &self.events[0].realm_id,
-            self.events.len() as u64,
-        );
-        event.prev_refs = vec![self.events.last().unwrap().event_id.clone()];
+        let event = self.raw_event(kind, payload, &self.events[0].realm_id);
         sign_event(
             event,
-            self.configuration.signer.verification_method.clone(),
-            self.notary_signing_seed,
-        )
-    }
-    pub fn append(&mut self, events: Vec<Event>) {
-        let registry = arkret_lattice_registry::try_build_sdk_state_registry().unwrap();
-        let unit = OrderedControlUnit {
-            events: events
-                .iter()
-                .map(|event| OrderedControlUnitEvent {
-                    digest: event.event_id.event_digest(),
-                    event: event.clone(),
-                    digest_suite: DigestSuite::Sha256,
-                })
-                .collect(),
-        };
-        let batch = arkret_state::execute_ordered_control_units(
-            &events[0].realm_id,
-            &self.state,
-            &registry,
-            &[unit],
-            DigestSuite::Sha256,
-            self.seals.is_empty(),
-            |member, stage, _| {
-                let projection = arkret::project_control_writes_at_state(
-                    &member.event,
-                    DigestSuite::Sha256,
-                    stage,
-                )
-                .unwrap();
-                let effects = projection
-                    .writes
-                    .iter()
-                    .flat_map(|write| {
-                        arkret_state::resolve_projected_write(
-                            write,
-                            &member.event.realm_id,
-                            stage,
-                            &registry,
-                        )
-                        .unwrap()
-                    })
-                    .collect();
-                Ok(CommandEventResult::Applied(effects))
-            },
-        )
-        .unwrap();
-        self.covered
-            .extend(batch.committed_event_digests.iter().cloned());
-        self.sealed_ops.push(batch.committed_ops.clone());
-        let body = UnsignedSeal {
-            realm_id: events[0].realm_id.clone(),
-            predecessor_ref: self.seals.last().map(|seal| seal.id.clone()),
-            delta: batch.committed_event_digests,
-            data_delta: vec![],
-            data_event_set_root: arkret_wire::empty_data_event_set_root(DigestSuite::Sha256)
-                .unwrap(),
-            control_event_set_root: arkret_state::control_event_set_root(
-                &self.covered,
-                DigestSuite::Sha256,
-            )
-            .unwrap(),
-            state_root: arkret_state::compute_state_root(
-                arkret_state::GovernanceView::new(&batch.post_state),
-                DigestSuite::Sha256,
-            )
-            .unwrap(),
-            notary_seq: self.seals.len() as u64,
-            availability_receipt_digests: vec![],
-            covered_event_digests: vec![],
-            previous_state_root: None,
-            previous_digest_algorithm: None,
-            sealed_at: self.created_at,
-            hlc: hlc(self.seals.len() + 10),
-            configuration_ref: self
-                .events
-                .first()
-                .map(|event| event.event_id.clone())
-                .unwrap_or_else(|| events[0].event_id.clone()),
-            command_results: batch.command_results,
-            authorization_closures: vec![],
-            data_closure_announcements: vec![],
-            data_closures: vec![],
-            existence_anchors: vec![],
-        };
-        let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-            self.notary_signing_seed,
-            self.did.clone(),
-            self.configuration.signer.verification_method.clone(),
-        );
-        let seal = Seal::sign_with_signer(body, DigestSuite::Sha256, &signer).unwrap();
-        self.state = batch.post_state;
-        self.seals.push(seal);
-        self.events.extend(events);
-    }
-    pub fn verify(
-        &self,
-    ) -> std::result::Result<
-        arkret::DeviceAuthorizationHistory,
-        arkret_state::ordinary_history::HistoryEvidenceError,
-    > {
-        arkret::DeviceAuthorizationHistory::verify(
-            &self.account,
-            &self.events[0].event_id,
-            &self.configuration,
-            &self.registration_anchor,
-            &self.seals.last().unwrap().id,
-            &self.seals,
-            &self.events,
-            DigestSuite::Sha256,
+            self.device_verification_method.clone(),
+            self.founding_device_signing_seed,
         )
     }
 
-    pub fn reanchor(&self, null_basis: bool) -> Vec<Event> {
-        let payload = possession(
-            &self.account,
-            3,
-            DeviceAuthorizationBindingKind::PcrRecovery,
-        );
-        let previous = self.seals.last().unwrap();
-        let reanchor=self.event(EventKind::DeviceReanchor,json!({
-            "account_id":self.account,"recovery_authority_kind":"pcr_policy","recovery_policy_id":"ak:policy:01904100-0000-7000-8000-000000000001",
-            "recovery_policy_version":1,"recovery_session_id":"ak:recovery_session:01904100-0000-7000-8000-000000000002",
-            "previous_device_generation":1,"new_device_generation":2,
-            "pre_fence_seal_frontier":if null_basis {serde_json::Value::Null} else {json!({"leaves":[previous.id],"state_root":previous.state_root,"control_event_set_root":previous.control_event_set_root})},
-            "replacement_authorize_payload_digest":typed_device_authorize_payload_digest(&payload,DigestSuite::Sha256).unwrap(),
-        }));
-        let reanchor = sign_event(
-            reanchor,
-            DidUrl::new(format!("{}#{}", self.did, device(3))).unwrap(),
-            [83; 32],
-        );
-        let mut authorize = self.event(
-            EventKind::DeviceAuthorize,
-            serde_json::to_value(payload).unwrap(),
-        );
-        authorize.actor_seq = reanchor.actor_seq + 1;
-        authorize.prev_refs = vec![reanchor.event_id.clone()];
-        authorize = sign_event(
-            authorize,
-            DidUrl::new(format!("{}#{}", self.did, device(3))).unwrap(),
-            [83; 32],
-        );
-        vec![reanchor, authorize]
+    /// Accept `events` in order: each one takes the next position on the
+    /// Realm's commit stream and gets a `RealmCommit` chained to the current
+    /// head.
+    pub fn append(&mut self, events: Vec<Event>) {
+        let genesis_event_ref = self.events.first().unwrap_or(&events[0]).event_id.clone();
+        let authority_ref = RealmCommitAuthorityRef::GenesisOrChangeEvent(genesis_event_ref);
+        for event in events {
+            let stream_ref =
+                CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
+                    .expect("a fixture Event scope always names one commit stream");
+            let stream_position = self.commits.len() as u64;
+            let commit = RealmCommit {
+                commit_id: RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                    format!("{}:{stream_position}", event.event_id).as_bytes(),
+                )),
+                realm_id: event.realm_id.clone(),
+                stream_ref,
+                stream_position,
+                previous_commit_ref: self.commits.last().map(|commit| commit.commit_id.clone()),
+                event_ref: event.event_id.clone(),
+                governance_generation: 0,
+                authority_ref: authority_ref.clone(),
+                committed_at: self.created_at,
+                signature: self.authority_signature(),
+            };
+            commit
+                .validate_shape()
+                .expect("a fixture RealmCommit is well shaped");
+            self.commits.push(commit);
+            self.events.push(event);
+        }
+    }
+
+    /// The governance Station's detached signature over a fixture commit.
+    ///
+    /// Ordering authority is not what these storage fixtures assert, so the
+    /// signature names the Station's real controller and carries a placeholder
+    /// signature value rather than a key the fixture would also have to mint.
+    fn authority_signature(&self) -> DetachedObjectSignature {
+        DetachedObjectSignature {
+            context: DetachedSignatureContext::RealmCommit,
+            signature_algorithm: DetachedSignatureAlgorithm::Ed25519,
+            verification_method: DidUrl::new(format!(
+                "{}#authority",
+                did_of(&self.account.station_id)
+            ))
+            .expect("a station core id projects to a DID URL"),
+            signed_digest: hash("fixture-realm-commit"),
+            created_at: self.created_at,
+            sig: Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+        }
+    }
+
+    /// The commit that ordered `event_id`.
+    pub fn committed_ref(&self, event_id: &EventId) -> CommittedEventRef {
+        let commit = self
+            .commits
+            .iter()
+            .find(|commit| &commit.event_ref == event_id)
+            .expect("the fixture only hands out committed Event ids");
+        CommittedEventRef {
+            event_id: event_id.clone(),
+            commit_id: commit.commit_id.clone(),
+            stream_ref: commit.stream_ref.clone(),
+            stream_position: commit.stream_position,
+        }
+    }
+
+    /// Every device authorization this fixture committed, oldest first.
+    pub fn authorizations(&self) -> Vec<CommittedDeviceAuthorization> {
+        self.events
+            .iter()
+            .filter(|event| event.kind == EventKind::DeviceAuthorize)
+            .map(|event| {
+                let payload = DeviceAuthorizePayload::try_from(event)
+                    .expect("a fixture authorize Event carries a typed payload");
+                CommittedDeviceAuthorization {
+                    device_id: payload.device_id.clone(),
+                    authorization_ref: self.committed_ref(&event.event_id),
+                    payload,
+                }
+            })
+            .collect()
+    }
+
+    /// Durable device-inventory rows for every committed authorization.
+    ///
+    /// The revocation gate reads the committed reference back out of the row
+    /// and compares it whole, so a seeded row carries the exact commit that
+    /// ordered its authorize Event.
+    pub fn device_inventory_records(&self) -> Vec<soland_storage::DeviceInventoryRecord> {
+        self.authorizations()
+            .into_iter()
+            .map(|authorization| soland_storage::DeviceInventoryRecord {
+                actor: self.account.principal_id.to_string(),
+                device_id: authorization.device_id.to_string(),
+                display_name: None,
+                verification_state: "verified".to_owned(),
+                payload: serde_json::json!({
+                    "device_id": authorization.device_id,
+                    "device_authorization_ref": authorization.authorization_ref,
+                    "device_authorize_payload": authorization.payload,
+                }),
+                created_at: self.created_at,
+                updated_at: self.created_at,
+                revoked_at: None,
+            })
+            .collect()
+    }
+
+    /// The revocation-gate selector for every committed authorization, in the
+    /// same order as [`Self::authorizations`].
+    pub fn gate_selectors(&self) -> Vec<soland_storage::DeviceRevocationGateSelector> {
+        self.authorizations()
+            .into_iter()
+            .map(
+                |authorization| soland_storage::DeviceRevocationGateSelector {
+                    principal_id: self.account.principal_id.clone(),
+                    station_id: self.account.station_id.clone(),
+                    device_id: authorization.device_id.to_string(),
+                    authorization_ref: authorization.authorization_ref,
+                },
+            )
+            .collect()
     }
 }

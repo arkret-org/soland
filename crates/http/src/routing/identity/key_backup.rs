@@ -685,8 +685,10 @@ pub(crate) async fn recovery_unlock_manifest(
     // The frozen manifest is the `basis` object the unlock path re-validates:
     // `key_backup_unlock::basis_committed_ref` reads a top-level
     // `committed_ref` and parses it as `arkret_wire::CommittedEventRef`, then
-    // `validate_basis_is_stream_head` compares its `stream_position` against
-    // the current head of the same `stream_ref`. Emit exactly that key.
+    // `validate_active_basis` checks that exact Commit is still on its stream.
+    // A later Commit on the same stream does not make the manifest stale
+    // (key-management.md §7.6); the `revision` field below is the staleness
+    // gate for the backup set itself. Emit exactly that key.
     let mut frozen = json!({
         "backups": manifest,
         "revision": revision,

@@ -3570,7 +3570,7 @@ fn projected_operation_id(event_id: &str) -> String {
 /// overflows and aborts the whole binary before libtest can print a
 /// `test result:` line.
 ///
-/// `RUST_MIN_STACK` is not a fix: `work/done/2026-08-17-1805` forbids pinning
+/// `RUST_MIN_STACK` is not a fix: `tasks/impl-done/2026-08-17-1805` forbids pinning
 /// it in `.cargo/config.toml` or CI, and an environment variable that every
 /// caller must remember is not a property of the test. The affected tests run
 /// their body on a dedicated thread with headroom instead.

@@ -662,7 +662,6 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             // lock also excludes backup insert/delete phantoms while the frozen manifest commits.
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(realm).execute(&mut *conn).await.map_err(PersistenceError::database)?;
             sql_query("LOCK TABLE key_backups IN SHARE MODE").execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            crate::key_backup_unlock::validate_basis_is_stream_head(conn,&snapshot).await?;
             let revision=sql_query("SELECT COALESCE((SELECT revision FROM key_backup_list_revisions WHERE actor_id=$1),0)::bigint AS revision")
                 .bind::<Text,_>(snapshot["actor_id"].as_str().ok_or_else(||PersistenceError::Conflict("manifest actor missing".to_owned()))?).get_result::<SnapshotRevision>(&mut *conn).await.map_err(PersistenceError::database)?.revision;
             if Some(revision)!=snapshot["revision"].as_i64(){return Err(PersistenceError::Conflict("backup manifest changed before verification".to_owned()).into());}

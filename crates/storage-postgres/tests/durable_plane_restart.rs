@@ -28,11 +28,11 @@ use soland_storage_postgres::{
 #[path = "../../test-support/src/device_authorization_history.rs"]
 mod device_history_fixture;
 
-/// Seed the confirmed-storage boundary using genuinely verified history.
-/// Direct Seal insertion here does not stand in for HTTP admission coverage.
+/// Seed the confirmed-storage boundary from genuinely signed fixture history.
+/// Direct inventory seeding here does not stand in for HTTP admission coverage.
 async fn device_authority(pool: &PgPool) -> soland_storage::DeviceRevocationGateSelector {
     use diesel::sql_query;
-    use diesel::sql_types::{Binary, Bool, Jsonb, Nullable, Text};
+    use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
     use soland_storage::DeviceInventoryStore;
     #[derive(diesel::QueryableByName)]
@@ -46,29 +46,18 @@ async fn device_authority(pool: &PgPool) -> soland_storage::DeviceRevocationGate
         .get_result::<Station>(&mut *conn)
         .await
         .unwrap();
+    drop(conn);
     let source =
         device_history_fixture::DeviceHistoryFixture::new(station.station_id.parse().unwrap());
-    let history = source.verify().unwrap();
-    for seal in &source.seals {
-        sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_ref,is_genesis) VALUES($1,'sha256',$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
-            .bind::<Text,_>(seal.id.as_str()).bind::<Text,_>(seal.realm_id.as_str())
-            .bind::<Binary,_>(seal.canonical_bytes_for_id().unwrap()).bind::<Binary,_>(arkret_wire::seal::seal_canonical_bytes(seal).unwrap())
-            .bind::<Jsonb,_>(serde_json::to_value(seal).unwrap()).bind::<Nullable<Text>,_>(seal.predecessor_ref.as_ref().map(|id|id.as_str()))
-            .bind::<Bool,_>(seal.predecessor_ref.is_none()).execute(&mut *conn).await.unwrap();
+    let inventory = soland_storage_postgres::PgDeviceInventoryStore { pool: pool.clone() };
+    for device in source.device_inventory_records() {
+        inventory.seed_test_record(&device).await.unwrap();
     }
-    drop(conn);
-    soland_storage_postgres::PgDeviceInventoryStore { pool: pool.clone() }
-        .seed_test_confirmed_history_without_control_roots(&history)
-        .await
-        .unwrap();
-    let authorization = history.authorizations().first().unwrap();
-    soland_storage::DeviceRevocationGateSelector {
-        principal_id: source.account.principal_id,
-        station_id: source.account.station_id,
-        device_id: authorization.device_id().to_string(),
-        target_device_authorize_event_id: authorization.authorization_event_id().to_string(),
-        target_device_generation_ref: authorization.authorized_generation_ref(),
-    }
+    source
+        .gate_selectors()
+        .into_iter()
+        .next()
+        .expect("the founding device carries a committed authorization")
 }
 
 /// Build a fresh pool against the configured database. Migrations are

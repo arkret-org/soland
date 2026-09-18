@@ -3,28 +3,24 @@ mod device_history_fixture;
 mod support;
 
 use soland_storage::contract_tests::{
-    AppletFormalCommitContractStores, ConsentCommitContractStores,
-    DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    AppletFormalCommitContractStores, ConsentCommitContractStores, EventCommitContractStores,
     assert_account_localpart_remove_contract, assert_applet_formal_commit_transaction_contract,
-    assert_atomic_batch_outbox_rollback_contract, assert_consent_projection_commit_contract,
-    assert_device_message_snapshot_guard_contract,
-    assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
-    assert_federation_outbox_store_contract, assert_idempotency_store_contract,
-    assert_invite_new_source_ledger_contract, assert_last_resort_claim_ledger_contract,
-    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
-    assert_organization_registration_store_contract,
+    assert_consent_projection_commit_contract, assert_device_message_snapshot_guard_contract,
+    assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
+    assert_idempotency_store_contract, assert_invite_new_source_ledger_contract,
+    assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
+    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountNotificationDeltaWrite,
     AgentPrincipalRecord, AgentStore, AppletAuthoringPreviewRecord, AppletStore,
-    GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
-    MlsKeyPackageStore, NotificationStore, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult,
+    AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, MlsKeyPackageStore,
+    NotificationStore, PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
-    PgContactStore, PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork,
-    PgEventStore, PgFederationOutboxStore, PgGovernanceDependencyStore, PgIdempotencyStore,
+    PgAuthorityCommitStore, PgContactStore, PgDeviceInventoryStore, PgDeviceMessageStore,
+    PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
     PgInviteNewSourceLedgerStore, PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore,
     PgMlsKeyPackageStore, PgNotificationStore, PgOrganizationRegistrationStore, PgPool,
     PgProjectionEventStore,
@@ -56,7 +52,7 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
         diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,'ak:did_core:web:storage-contract.example') ON CONFLICT(singleton) DO NOTHING")
             .execute(&mut *conn).await.unwrap();
     }
-    use diesel::sql_types::{Binary, Bool, Jsonb, Nullable, Text};
+    use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
     use soland_storage::DeviceInventoryStore;
     #[derive(diesel::QueryableByName)]
@@ -70,38 +66,19 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
             .get_result::<Station>(&mut *conn)
             .await
             .unwrap();
+    drop(conn);
     let mut source =
         device_history_fixture::DeviceHistoryFixture::new(station.station_id.parse().unwrap());
     let second = source.event(arkret_wire::EventKind::DeviceAuthorize,
         serde_json::to_value(device_history_fixture::possession(&source.account, 2,
             arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice)).unwrap());
     source.append(vec![second]);
-    let history = source.verify().unwrap();
     // Already-confirmed storage fixture; all source signatures are real.
-    for seal in &source.seals {
-        diesel::sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_ref,is_genesis) VALUES($1,'sha256',$2,$3,$4,$5,$6,$7)")
-            .bind::<Text,_>(seal.id.as_str()).bind::<Text,_>(seal.realm_id.as_str())
-            .bind::<Binary,_>(seal.canonical_bytes_for_id().unwrap()).bind::<Binary,_>(arkret_wire::seal::seal_canonical_bytes(seal).unwrap())
-            .bind::<Jsonb,_>(serde_json::to_value(seal).unwrap()).bind::<Nullable<Text>,_>(seal.predecessor_ref.as_ref().map(|id|id.as_str()))
-            .bind::<Bool,_>(seal.predecessor_ref.is_none()).execute(&mut *conn).await.unwrap();
-    }
-    drop(conn);
     let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-    inventory
-        .seed_test_confirmed_history_without_control_roots(&history)
-        .await
-        .unwrap();
-    let selectors = history
-        .authorizations()
-        .iter()
-        .map(|a| soland_storage::DeviceRevocationGateSelector {
-            principal_id: source.account.principal_id.clone(),
-            station_id: source.account.station_id.clone(),
-            device_id: a.device_id().to_string(),
-            target_device_authorize_event_id: a.authorization_event_id().to_string(),
-            target_device_generation_ref: a.authorized_generation_ref(),
-        })
-        .collect::<Vec<_>>();
+    for device in source.device_inventory_records() {
+        inventory.seed_test_record(&device).await.unwrap();
+    }
+    let selectors = source.gate_selectors();
     let messages = PgDeviceMessageStore { pool };
     let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
     assert_device_message_snapshot_guard_contract(
@@ -230,20 +207,25 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             .status,
         "healthy"
     );
-    // The cell subject is the disputed position alone, so both overflow
-    // evidence shapes at one position key the same confirmed-evidence row.
-    let subject =
-        arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventSiblingPosition {
-            actor_id: arkret_wire::ActorId::service(peer.clone()),
-            actor_seq: 9,
-        };
-    let evidence_scope_key = subject.cell_subject_key().unwrap();
+    // The disputed scope is one position on one commit stream, and the store
+    // keys confirmed evidence by that opaque scope key alone, so both overflow
+    // evidence shapes at one position land on the same row.
+    let disputed_position = 9_u64;
+    let evidence_scope = serde_json::json!({
+        "kind": "commit_stream_position",
+        "stream_ref": {"kind": "realm", "realm_id": realm.as_str()},
+        "stream_position": disputed_position,
+    });
+    let evidence_scope_key = format!(
+        "commit_stream_position:{}:{disputed_position}",
+        realm.as_str()
+    );
     let evidence_record = soland_storage::FederationFrontierConfirmedEvidenceRecord {
         realm_id: realm.to_string(),
         peer_id: peer.clone(),
-        evidence_scope_key: evidence_scope_key.to_string(),
+        evidence_scope_key: evidence_scope_key.clone(),
         reason: "fork_quarantine".to_owned(),
-        evidence_scope: serde_json::to_value(&subject).unwrap(),
+        evidence_scope: evidence_scope.clone(),
         observed_at: 5,
         local_resolution_kind: None,
         local_resolution_digest: None,
@@ -324,8 +306,8 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
         .record_local_normalization(
             &soland_storage::FederationFrontierResolutionRecord {
                 realm_id: realm.to_string(),
-                cell_subject_key: evidence_scope_key.to_string(),
-                subject: serde_json::to_value(&subject).unwrap(),
+                cell_subject_key: evidence_scope_key.clone(),
+                subject: evidence_scope.clone(),
                 verdict: serde_json::json!({"kind": "void_all"}),
                 conflict_evidence_digest: format!("sha256:{}", "2".repeat(64)),
                 resolution_event_digest: format!("sha256:{}", "3".repeat(64)),
@@ -333,7 +315,7 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             },
             &soland_storage::FederationForkNormalizationScope::SiblingPosition {
                 actor_id: arkret_wire::ActorId::service(peer.clone()).to_string(),
-                actor_seq: 9,
+                actor_seq: disputed_position,
                 winner_event_id: None,
             },
         )
@@ -575,12 +557,8 @@ async fn postgres_structured_projection_and_invite_identities_round_trip() {
             directory_visibility: "members".into(),
             join_rule: "invite".into(),
             history_access: "since_join".into(),
-            content_encryption_floor: None,
-            metadata_encryption_floor: None,
             encryption_profile: "none".into(),
-            content_scheme: None,
             mls_group_ref: None,
-            durability_policy: None,
             realm_id: realm_id.into(),
             state: "active".into(),
             state_changed_at: None,
@@ -806,24 +784,172 @@ async fn test_pool() -> PgPool {
         .clone()
 }
 
+/// Whether the fixture expects the adapter to keep this commit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FixtureCommitSettlement {
+    /// The adapter accepts it, so it advances the durable stream head.
+    Accepted,
+    /// The adapter rolls it back, so the head stays where it is and the next
+    /// accepted Event reuses the position this attempt claimed.
+    RolledBack,
+}
+
+/// One independent commit stream a Postgres fixture drives.
+///
+/// A `RealmCommit` orders exactly one Event, so a fixture that commits several
+/// Events into one Realm owes a chained sequence: consecutive `stream_position`s
+/// and a `previous_commit_ref` naming the current stream head.
+struct FixtureCommitStream {
+    authority: CurrentRealmAuthority,
+    next_position: u64,
+    previous_commit_ref: Option<arkret_wire::RealmCommitId>,
+}
+
+impl FixtureCommitStream {
+    /// A Realm id retypes the 33-byte token of the Event that created the
+    /// Realm, so the genesis authority reference is recoverable from the Realm
+    /// id alone and no fixture has to carry the same seed twice.
+    fn new(realm_id: &arkret_identifiers::RealmId, station_id: &arkret_wire::DidCoreId) -> Self {
+        let genesis_event_ref = arkret_identifiers::EventIdentityKey::new(
+            realm_id.digest_suite_code(),
+            realm_id.digest_bytes(),
+        )
+        .event_id();
+        Self {
+            authority: CurrentRealmAuthority {
+                realm_id: realm_id.clone(),
+                generation: 0,
+                service_id: station_id.clone(),
+                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    genesis_event_ref,
+                ),
+                last_handoff_ref: None,
+            },
+            next_position: 0,
+            previous_commit_ref: None,
+        }
+    }
+
+    /// The adapter refuses to order an Event for a Realm whose current
+    /// authority it cannot read, so the genesis decision is installed first.
+    async fn install(&self, pool: &PgPool) {
+        PgAuthorityCommitStore { pool: pool.clone() }
+            .install_genesis_authority(&self.authority)
+            .await
+            .expect("install fixture genesis authority");
+    }
+
+    fn order(
+        &mut self,
+        settlement: FixtureCommitSettlement,
+        event: &arkret_wire::Event,
+        committed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AuthorityCommitTransaction {
+        let stream_ref = arkret_wire::CommitStreamRef::from_scope(
+            &event.scope_ref,
+            Some(event.realm_id.clone()),
+        )
+        .expect("fixture Event scope names one commit stream");
+        let commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            format!("{}:{}", event.event_id, self.next_position).as_bytes(),
+        ));
+        let transaction = AuthorityCommitTransaction {
+            expected_authority: self.authority.clone(),
+            commit: arkret_wire::RealmCommit {
+                commit_id: commit_id.clone(),
+                realm_id: event.realm_id.clone(),
+                stream_ref,
+                stream_position: self.next_position,
+                previous_commit_ref: self.previous_commit_ref.clone(),
+                event_ref: event.event_id.clone(),
+                governance_generation: self.authority.generation,
+                authority_ref: self.authority.authority_ref.clone(),
+                committed_at,
+                signature: fixture_authority_signature(&self.authority.service_id, committed_at),
+            },
+            event: event.clone(),
+            mls_state: None,
+            welcomes: Vec::new(),
+        };
+        if settlement == FixtureCommitSettlement::Accepted {
+            self.next_position += 1;
+            self.previous_commit_ref = Some(commit_id);
+        }
+        transaction
+    }
+}
+
+/// The DID a fixture core id projects from.
+fn fixture_did(core_id: &arkret_wire::DidCoreId) -> String {
+    format!(
+        "did:{}",
+        core_id
+            .as_str()
+            .strip_prefix("ak:did_core:")
+            .expect("fixture core id carries the projected prefix")
+    )
+}
+
+/// The current Station's detached signature over a fixture `RealmCommit`.
+///
+/// The adapter authenticates the signer by projecting the verification
+/// method's controller to a service id, so the method has to name the same
+/// service the genesis authority carries.
+fn fixture_authority_signature(
+    service_id: &arkret_wire::DidCoreId,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::DetachedObjectSignature {
+    arkret_wire::DetachedObjectSignature {
+        context: arkret_wire::DetachedSignatureContext::RealmCommit,
+        signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+        verification_method: arkret_wire::DidUrl::new(format!(
+            "{}#authority",
+            fixture_did(service_id)
+        ))
+        .expect("fixture authority verification method"),
+        signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+            .expect("fixture authority signed digest"),
+        created_at,
+        sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned())
+            .expect("fixture authority signature bytes"),
+    }
+}
+
+/// One idempotency row bound to a fixture Event's own authenticated actor.
+fn fixture_idempotency_record(
+    request: &soland_storage::EventCommitRequest,
+    idempotency_key: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> soland_storage::IdempotencyRecord {
+    soland_storage::IdempotencyRecord {
+        authenticated_actor: request.authority_commit.event.actor_id.clone(),
+        operation_id: "ak.moderation.franking_proof.submit".to_owned(),
+        idempotency_key,
+        request_hash: request.event.canonical_digest.clone(),
+        response_status: 202,
+        response_body: serde_json::json!({"event_id": request.event.event_id}),
+        created_at,
+        expires_at: created_at + chrono::TimeDelta::hours(24),
+    }
+}
+
 fn franking_event_request(
+    stream: &mut FixtureCommitStream,
+    settlement: FixtureCommitSettlement,
     realm_id: &arkret_identifiers::RealmId,
     actor_id: arkret_wire::DidCoreId,
     station_id: &arkret_wire::DidCoreId,
-    marker: u64,
     kind: &str,
     payload: serde_json::Value,
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> soland_storage::EventCommitRequest {
-    let event = arkret_wire::test_support::raw_event_at(
+    let mut event = arkret_wire::test_support::raw_event_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
         actor_id.clone(),
         station_id.clone(),
-        0,
-        arkret_identifiers::Hlc::new(format!("019f00000000-{marker:04x}-aabbccdd")).unwrap(),
         payload,
         received_at,
     )
@@ -831,137 +957,51 @@ fn franking_event_request(
     let canonical_digest = event
         .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
         .unwrap();
+    // Every admitted Event carries exactly one producer proof. This fixture's
+    // case is the storage boundary and not signature verification, so it
+    // carries the structural-only detached JWS bound to these exact bytes.
+    let event_digest =
+        arkret_wire::Hash::new(canonical_digest.clone()).expect("fixture event digest hash");
+    event.proofs = vec![arkret_wire::ProducerEventProof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+        verification_method: arkret_wire::DidUrl::new(format!(
+            "{}#franking-device",
+            fixture_did(&actor_id)
+        ))
+        .expect("fixture producer verification method"),
+        event_digest: event_digest.clone(),
+        created_at: arkret_canonical::normalize_timestamp_canonical(received_at),
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
+    }];
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    let authority_commit = stream.order(settlement, &event, received_at);
     soland_storage::EventCommitRequest {
-        publication_event: None,
-        mls_public_producer: None,
-        mls_public_genesis: None,
-        mls_frontier_leaves: None,
-        replicated: false,
-        governance_dependencies: Vec::new(),
-        membership_compensation_evidence: None,
+        authority_commit,
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
         event: soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),
-            actor_id: actor_id.to_string(),
-            actor_seq: 0,
+            actor_id: event.actor_id.to_string(),
             realm_id: Some(realm_id.to_string()),
             kind: kind.to_owned(),
             schema_id: "ak.schema.franking_fixture.v1".to_owned(),
             digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest,
             canonical_bytes,
-            envelope: serde_json::to_value(event).unwrap(),
+            envelope: serde_json::to_value(&event).unwrap(),
             received_at,
         },
         device_revocation_transition: None,
         device_revocation_gate: None,
-        historical_producer: None,
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),
     }
-}
-
-#[tokio::test]
-async fn postgres_mls_frontier_input_commits_atomically_and_survives_adapter_restart() {
-    use diesel::sql_types::{Binary, Text};
-    use diesel_async::RunQueryDsl;
-    use soland_storage::{EventCommitUnitOfWork, EventStore};
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
-        format!("mls-frontier-input:{}", uuid::Uuid::now_v7()).as_bytes(),
-    ))
-    .unwrap();
-    let station = arkret_wire::DidCoreId::new("ak:did_core:web:mls-input.example").unwrap();
-    let actor = arkret_wire::DidCoreId::new("ak:did_core:web:mls-author.example").unwrap();
-    // Storage owns atomic evidence retention. HTTP admission separately verifies
-    // this input against the signed binding and the exact accepted basis.
-    let mut request = franking_event_request(
-        &realm_id,
-        actor,
-        &station,
-        107,
-        arkret_wire::EventKind::MlsGenesis.as_str(),
-        serde_json::json!({}),
-        now,
-    );
-    let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone()).unwrap();
-    let leaves = vec![arkret_wire::mls_transition::MlsSecurityFrontierLeaf {
-        leaf_index: 0,
-        actor_id: event.actor_id.clone(),
-        credential_ref: arkret_wire::NonEmptyString::new("device-a").unwrap(),
-    }];
-    request.mls_frontier_leaves = Some(leaves.clone());
-    let event_id = request.event.event_id.clone();
-    let store = PgEventStore { pool: pool.clone() };
-    let mut missing = request.clone();
-    missing.mls_frontier_leaves = None;
-    assert!(
-        PgEventCommitUnitOfWork::new(pool.clone())
-            .commit_event(missing)
-            .await
-            .is_err()
-    );
-    assert!(!store.contains(&event_id).await.unwrap());
-    assert!(
-        store
-            .mls_frontier_leaves(&event_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    PgEventCommitUnitOfWork::new(pool.clone())
-        .commit_event(request.clone())
-        .await
-        .unwrap();
-    let restarted = PgEventStore { pool: pool.clone() };
-    assert_eq!(
-        restarted.mls_frontier_leaves(&event_id).await.unwrap(),
-        Some(leaves.clone())
-    );
-    PgEventCommitUnitOfWork::new(pool.clone())
-        .commit_event(request.clone())
-        .await
-        .unwrap();
-    let mut conflicting = request;
-    conflicting.mls_frontier_leaves.as_mut().unwrap()[0].credential_ref =
-        arkret_wire::NonEmptyString::new("device-b").unwrap();
-    assert!(
-        PgEventCommitUnitOfWork::new(pool.clone())
-            .commit_event(conflicting)
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        restarted.mls_frontier_leaves(&event_id).await.unwrap(),
-        Some(leaves)
-    );
-    let mut conn = pool.get().await.unwrap();
-    diesel::sql_query("UPDATE canonical_events SET state = $1 WHERE id = $2")
-        .bind::<Text, _>("quarantined")
-        .bind::<Binary, _>(
-            soland_storage::ids::parse_event_id(&event_id)
-                .unwrap()
-                .to_vec(),
-        )
-        .execute(&mut *conn)
-        .await
-        .unwrap();
-    drop(conn);
-    assert!(
-        restarted
-            .mls_frontier_leaves(&event_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
 }
 
 #[tokio::test]
@@ -981,38 +1021,47 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     .unwrap();
     let received_by =
         arkret_wire::DidCoreId::new("ak:did_core:web:franking-ledger.example".to_owned()).unwrap();
-    let make_request =
-        |marker: u64, replay_nonce: &str, consumed_at: chrono::DateTime<chrono::Utc>| {
-            let actor_id = arkret_wire::DidCoreId::new(format!(
-                "ak:did_core:web:franking-reporter-{marker}.example"
-            ))
-            .unwrap();
-            let event = franking_event_request(
-                &realm_id,
-                actor_id,
-                &received_by,
-                marker,
-                arkret_wire::EventKind::SelfModerationReport.as_str(),
-                serde_json::json!({
-                    "franking_proof": {
-                        "received_by": received_by.as_str(),
-                        "replay_nonce": replay_nonce,
-                    }
-                }),
+    // Every report in this ledger belongs to one Realm, so they share one
+    // authority and one chained commit stream; the nonce binding requires the
+    // report and its nonce commit to name the same Realm.
+    let mut stream = FixtureCommitStream::new(&realm_id, &received_by);
+    stream.install(&pool).await;
+    let make_request = |stream: &mut FixtureCommitStream,
+                        settlement: FixtureCommitSettlement,
+                        marker: u64,
+                        replay_nonce: &str,
+                        consumed_at: chrono::DateTime<chrono::Utc>| {
+        let actor_id = arkret_wire::DidCoreId::new(format!(
+            "ak:did_core:web:franking-reporter-{marker}.example"
+        ))
+        .unwrap();
+        let event = franking_event_request(
+            stream,
+            settlement,
+            &realm_id,
+            actor_id,
+            &received_by,
+            arkret_wire::EventKind::SelfModerationReport.as_str(),
+            serde_json::json!({
+                "franking_proof": {
+                    "received_by": received_by.as_str(),
+                    "replay_nonce": replay_nonce,
+                }
+            }),
+            consumed_at,
+        );
+        let event_id = event.event.event_id.clone();
+        (
+            event,
+            FrankingReplayNonceCommit {
+                realm_id: realm_id.to_string(),
+                received_by: received_by.clone(),
+                replay_nonce: replay_nonce.to_owned(),
+                report_event_id: event_id,
                 consumed_at,
-            );
-            let event_id = event.event.event_id.clone();
-            (
-                event,
-                FrankingReplayNonceCommit {
-                    realm_id: realm_id.to_string(),
-                    received_by: received_by.clone(),
-                    replay_nonce: replay_nonce.to_owned(),
-                    report_event_id: event_id,
-                    consumed_at,
-                },
-            )
-        };
+            },
+        )
+    };
     let commit = |event, nonce| EventBatchCommitRequest {
         events: vec![event],
         franking_replay_nonce: Some(nonce),
@@ -1023,7 +1072,13 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     let consumed_at =
         chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
     let replay_nonce = "shared_nonce_0123456789";
-    let (first_event, first_nonce) = make_request(1, replay_nonce, consumed_at);
+    let (first_event, first_nonce) = make_request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
+        1,
+        replay_nonce,
+        consumed_at,
+    );
     let first_event_id = first_event.event.event_id.clone();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event_batch(commit(first_event, first_nonce))
@@ -1032,8 +1087,13 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
 
     // Treat the successful write above as a lost response: reconstruct the
     // adapter and retry the same durable nonce with a competing Event.
-    let (replay_event, replay_commit) =
-        make_request(2, replay_nonce, consumed_at + chrono::TimeDelta::seconds(1));
+    let (replay_event, replay_commit) = make_request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        2,
+        replay_nonce,
+        consumed_at + chrono::TimeDelta::seconds(1),
+    );
     let replay_event_id = replay_event.event.event_id.clone();
     let replay_error = PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event_batch(commit(replay_event, replay_commit))
@@ -1063,6 +1123,8 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     assert_eq!(stored_expiry, expires_at);
 
     let (just_before_event, just_before_nonce) = make_request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
         5,
         replay_nonce,
         expires_at - chrono::TimeDelta::microseconds(1),
@@ -1078,7 +1140,13 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     ));
     assert!(!event_store.contains(&just_before_event_id).await.unwrap());
 
-    let (at_expiry_event, at_expiry_nonce) = make_request(6, replay_nonce, expires_at);
+    let (at_expiry_event, at_expiry_nonce) = make_request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
+        6,
+        replay_nonce,
+        expires_at,
+    );
     let at_expiry_event_id = at_expiry_event.event.event_id.clone();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event_batch(commit(at_expiry_event, at_expiry_nonce))
@@ -1101,6 +1169,8 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     .unwrap();
     drop(conn);
     let (after_expiry_event, after_expiry_nonce) = make_request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
         3,
         "after_expiry_nonce_0123456789",
         consumed_at + chrono::TimeDelta::seconds(2),
@@ -1147,6 +1217,8 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     .unwrap();
     drop(conn);
     let (overflow_event, overflow_nonce) = make_request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
         4,
         "overflow_nonce_0123456789",
         consumed_at + chrono::TimeDelta::seconds(3),
@@ -1194,28 +1266,42 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
         arkret_wire::DidCoreId::new("ak:did_core:web:franking-service.example".to_owned()).unwrap();
     let created_at =
         chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+    // Both Events belong to one Realm, so the batch orders them at consecutive
+    // positions on that Realm's single commit stream.
+    let mut stream = FixtureCommitStream::new(&realm_id, &received_by);
+    stream.install(&pool).await;
     let target = franking_event_request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
         &realm_id,
         arkret_wire::DidCoreId::new("ak:did_core:web:franking-sender.example".to_owned()).unwrap(),
         &received_by,
-        100,
         arkret_wire::EventKind::MessageCreate.as_str(),
         serde_json::json!({"encrypted_content": {"ciphertext": "fixture"}}),
         created_at,
     );
     let target_event_id = target.event.event_id.clone();
     let mut proof = franking_event_request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
         &realm_id,
         received_by.clone(),
         &received_by,
-        101,
         arkret_wire::EventKind::ModerationFrankingProof.as_str(),
         serde_json::json!({"event_id": target_event_id}),
         created_at,
     );
     let proof_event_id = proof.event.event_id.clone();
-    let clean_schema_id = proof.event.schema_id.clone();
-    proof.event.schema_id.push('\0');
+    // The fault has to fail inside the database rather than before it, so it
+    // rides the proof element's last durable write: a NUL byte cannot be
+    // stored in a text column, and the idempotency row is written after the
+    // proof Event's own commit and inside the same batch transaction.
+    let clean_idempotency_key = format!("franking-proof-{}", uuid::Uuid::now_v7());
+    proof.idempotency = Some(fixture_idempotency_record(
+        &proof,
+        format!("{clean_idempotency_key}\0"),
+        created_at,
+    ));
     let failing_batch = EventBatchCommitRequest {
         events: vec![target.clone(), proof.clone()],
         franking_replay_nonce: None,
@@ -1241,7 +1327,11 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
         "a database error while inserting the proof must roll back its target prefix"
     );
 
-    proof.event.schema_id = clean_schema_id;
+    proof.idempotency = Some(fixture_idempotency_record(
+        &proof,
+        clean_idempotency_key,
+        created_at,
+    ));
     let clean_batch = EventBatchCommitRequest {
         events: vec![target, proof],
         franking_replay_nonce: None,
@@ -1404,14 +1494,14 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
     };
 
     let upsert = |expires_at: &str| {
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+        arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta::try_new(
             arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
                 notification_id.clone(),
             ),
-            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
+            arkret_models_collaboration::sync_frames::account_subscribe::NotificationDeltaAction::Upsert,
             Some(
-                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
-                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
+                arkret_models_collaboration::sync_frames::account_subscribe::NotificationData::AgentRuntimeApproval(
+                    arkret_models_collaboration::account_subscribe_projections::AgentRuntimeApprovalNotificationData {
                         approval_request_id: approval_request_id.clone(),
                         agent_id: agent_id.clone(),
                         requested_at: timestamp("2026-08-26T10:00:00.000Z"),
@@ -1441,7 +1531,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
     assert_eq!(inserted.len(), 1);
     assert_eq!(
         inserted[0].record.delta.action,
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert
+        arkret_models_collaboration::sync_frames::account_subscribe::NotificationDeltaAction::Upsert
     );
     assert!(
         store
@@ -1497,15 +1587,15 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
     let updated_position = updated[0].projection_position;
 
     let removal =
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+        arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta::try_new(
             arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
                 notification_id,
             ),
-            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove,
+            arkret_models_collaboration::sync_frames::account_subscribe::NotificationDeltaAction::Remove,
             Some(
-                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApprovalRemoval(
-                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationRemovalData {
-                        reason: arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved,
+                arkret_models_collaboration::sync_frames::account_subscribe::NotificationData::AgentRuntimeApprovalRemoval(
+                    arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalNotificationRemovalData {
+                        reason: arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Approved,
                     },
                 ),
             ),
@@ -1523,7 +1613,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
     assert_eq!(removed.len(), 1);
     assert_eq!(
         removed[0].record.delta.action,
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove
+        arkret_models_collaboration::sync_frames::account_subscribe::NotificationDeltaAction::Remove
     );
     assert!(removed[0].record.delta.agent_runtime_approval().is_none());
 }
@@ -1542,6 +1632,7 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract() {
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
+    let authority = PgAuthorityCommitStore { pool: pool.clone() };
     let events = PgEventStore { pool: pool.clone() };
     let projections = PgProjectionEventStore { pool: pool.clone() };
     let idempotency = PgIdempotencyStore { pool: pool.clone() };
@@ -1553,6 +1644,7 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract() {
     assert_event_commit_unit_of_work_contract(
         EventCommitContractStores {
             unit_of_work: &unit_of_work,
+            authority: &authority,
             events: &events,
             projections: &projections,
             idempotency: &idempotency,
@@ -1571,12 +1663,14 @@ async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract() 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
+    let authority = PgAuthorityCommitStore { pool: pool.clone() };
     let events = PgEventStore { pool: pool.clone() };
     let applets = PgAppletStore { pool };
     let namespace = format!("postgres-formal-applet-{}", uuid::Uuid::now_v7().simple());
     assert_applet_formal_commit_transaction_contract(
         AppletFormalCommitContractStores {
             unit_of_work: &unit_of_work,
+            authority: &authority,
             events: &events,
             applets: &applets,
         },
@@ -1663,682 +1757,22 @@ async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract() 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
+    let authority = PgAuthorityCommitStore { pool: pool.clone() };
     let events = PgEventStore { pool: pool.clone() };
-    let consent_cells = soland_storage_postgres::PgConsentCellStore { pool: pool.clone() };
+    let consent_grants = soland_storage_postgres::PgConsentGrantStore { pool: pool.clone() };
     let account_data = PgAccountDataStore { pool: pool.clone() };
     let namespace = format!("pg-consent-commit-{}", uuid::Uuid::now_v7());
     assert_consent_projection_commit_contract(
         ConsentCommitContractStores {
             unit_of_work: &unit_of_work,
+            authority: &authority,
             events: &events,
-            consent_cells: &consent_cells,
+            consent_grants: &consent_grants,
             account_data: &account_data,
         },
         &namespace,
     )
     .await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn postgres_adapter_settles_sealed_device_revocations() {
-    use diesel::sql_types::Text;
-    use diesel::{QueryableByName, sql_query};
-    use diesel_async::RunQueryDsl;
-    use soland_storage::DeviceRevocationStore;
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let cell_registry: std::sync::Arc<dyn arkret_state::state::CellStateRegistry> =
-        std::sync::Arc::new(
-            soland_domain::reducer::state_model_kinds::try_build_validated_sdk_cell_registry()
-                .expect("validated SDK cell registry"),
-        );
-    let stores =
-        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), cell_registry);
-    let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
-    let revocations = soland_storage_postgres::PgDeviceRevocationStore { pool: pool.clone() };
-    let namespace = format!("pgrevseal{}", uuid::Uuid::now_v7().simple());
-    assert_device_revocation_seal_settlement_contract(
-        DeviceRevocationSealSettlementStores {
-            unit_of_work: &unit_of_work,
-            revocations: &revocations,
-            control_events: stores.control_event_store.as_ref(),
-            seals: stores.seal_store.as_ref(),
-        },
-        &namespace,
-    )
-    .await;
-
-    #[derive(QueryableByName)]
-    struct ProposalRow {
-        #[diesel(sql_type = Text)]
-        proposal_digest: String,
-    }
-    let mut conn = pool.get().await.unwrap();
-    let original =
-        sql_query("SELECT proposal_digest FROM device_revocation_targets WHERE principal_id = $1")
-            .bind::<Text, _>(format!("ak:did_core:web:{namespace}.example"))
-            .get_result::<ProposalRow>(&mut conn)
-            .await
-            .unwrap();
-    let expected = revocations
-        .target_for_proposal(&original.proposal_digest)
-        .await
-        .unwrap()
-        .unwrap();
-    let damaged_digest = arkret_canonical::canonical_sha256(&namespace).unwrap();
-    let damaged_event_id = arkret_wire::EventId::from_event_digest(
-        &arkret_wire::Hash::new(damaged_digest.clone()).unwrap(),
-    )
-    .unwrap();
-    // Inject damaged persistence alongside the valid target. This is a fault
-    // fixture, never a second admitted or accepted canonical Event.
-    sql_query(
-        "INSERT INTO state_control_events \
-         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class, command_unit_event_digests) \
-         SELECT $1, digest_suite, realm_id, event_json, '{}'::jsonb, ingress_class, jsonb_build_array($1) \
-         FROM state_control_events WHERE event_digest = $2",
-    )
-    .bind::<Text, _>(&damaged_digest)
-    .bind::<Text, _>(&original.proposal_digest)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    sql_query(
-        "INSERT INTO device_revocation_targets \
-         (proposal_digest, principal_id, station_id, device_id, target_device_authorize_event_id, \
-          target_device_generation_ref, proposal_event_id, accepted_at, acceptance_seq, control_proposal_ack) \
-         SELECT $1, principal_id, station_id, device_id, target_device_authorize_event_id, \
-          target_device_generation_ref, $2, accepted_at, acceptance_seq + 1, '{}'::jsonb \
-         FROM device_revocation_targets WHERE proposal_digest = $3",
-    )
-    .bind::<Text, _>(&damaged_digest)
-    .bind::<Text, _>(damaged_event_id.as_str())
-    .bind::<Text, _>(&original.proposal_digest)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    drop(conn);
-    let exact = revocations
-        .target_for_proposal(&original.proposal_digest)
-        .await;
-    let damaged = revocations.target_for_proposal(&damaged_digest).await;
-    let all = revocations.list_targets(&expected.selector).await;
-    let mut conn = pool.get().await.unwrap();
-    sql_query("DELETE FROM device_revocation_targets WHERE proposal_digest = $1")
-        .bind::<Text, _>(&damaged_digest)
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    sql_query("DELETE FROM state_control_events WHERE event_digest = $1")
-        .bind::<Text, _>(&damaged_digest)
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    assert_eq!(exact.unwrap(), Some(expected));
-    assert!(
-        damaged.is_err(),
-        "the corrupt target itself must fail closed"
-    );
-    assert!(
-        all.is_err(),
-        "a complete generation read must expose corruption"
-    );
-}
-
-/// The closed exemption to whole-group quarantine.
-///
-/// `operations-sync.md` section 12 quarantines every variant of a colliding
-/// identity until a verdict arrives, and then stops: an accepted
-/// `canonical_winner` settles the identity, so a redelivered variant is
-/// evidence to keep, not grounds to reopen it. This walks all three arrivals
-/// that can follow a verdict — the winner, the loser, and anything at all after
-/// `void_all` — because the failure mode is silent: each one that
-/// requarantines undoes the verdict and puts the Realm back where it was.
-#[tokio::test]
-async fn postgres_settled_collision_admits_the_winner_and_refuses_the_rest() {
-    use diesel::sql_types::{BigInt, Binary, SmallInt, Text};
-    use diesel::{QueryableByName, sql_query};
-    use diesel_async::RunQueryDsl;
-    use soland_storage::{
-        CanonicalEventRecord, EventStore, FederationFrontierExchangeStore, PersistenceError, ids,
-    };
-    use soland_storage_postgres::PgFederationFrontierExchangeStore;
-
-    #[derive(QueryableByName)]
-    struct PkRow {
-        #[diesel(sql_type = BigInt)]
-        pk: i64,
-    }
-    #[derive(QueryableByName)]
-    struct StateRow {
-        #[diesel(sql_type = Text)]
-        state: String,
-    }
-
-    async fn stored_event_state(pool: &PgPool, event_pk: i64) -> String {
-        let mut conn = pool.get().await.unwrap();
-        sql_query("SELECT state FROM canonical_events WHERE pk = $1")
-            .bind::<BigInt, _>(event_pk)
-            .get_result::<StateRow>(&mut conn)
-            .await
-            .unwrap()
-            .state
-    }
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let events = PgEventStore { pool: pool.clone() };
-    let federation = PgFederationFrontierExchangeStore { pool: pool.clone() };
-    let now = chrono::Utc::now();
-    // The admission timestamp is the covering Seal's, so it is deliberately not
-    // `now`: a Station that only ever held the loser has to land on the same
-    // value as one that held the winner all along.
-    let sealed_at = chrono::DateTime::from_timestamp_millis(
-        (now - chrono::Duration::hours(5)).timestamp_millis(),
-    )
-    .unwrap();
-
-    // Every arrival below is a real preimage of its own identity — only the
-    // arriving record is revalidated against the digest — while the row already
-    // in the table carries the other variant's bytes. That is exactly the state
-    // a Station is in when it admitted one variant of a collision and never saw
-    // the other, and it is the only way to stage a collision without one.
-    let run_id = uuid::Uuid::now_v7();
-    let realm_id =
-        event_derived_realm_id(format!("postgres-settled-collision-realm-{run_id}").as_bytes());
-    let actor_id = format!("ak:did_core:web:settled-collision-{run_id}.example");
-    let mut conn = pool.get().await.unwrap();
-    let realm_identity = ids::realm_identity_parts(&realm_id).unwrap();
-    let realm_pk = sql_query(
-        "INSERT INTO canonical_realms (id, digest_suite, digest, wire_id) \
-         VALUES ($1, $2, $3, $4) RETURNING pk",
-    )
-    .bind::<Binary, _>(realm_identity.id.to_vec())
-    .bind::<SmallInt, _>(i16::from(realm_identity.digest_suite))
-    .bind::<Binary, _>(realm_identity.digest.to_vec())
-    .bind::<Text, _>(&realm_id)
-    .get_result::<PkRow>(&mut conn)
-    .await
-    .unwrap()
-    .pk;
-
-    // Three independent identities, one per arrival being exercised.
-    let mut staged = Vec::new();
-    for (index, resident_bytes) in [
-        // 0: the Station holds the loser and the winner arrives.
-        br#"{"variant":"resident-loser"}"#.to_vec(),
-        // 1: the Station holds the winner and the loser arrives.
-        br#"{"variant":"resident-winner"}"#.to_vec(),
-        // 2: `void_all`, and any variant arrives.
-        br#"{"variant":"resident-voided"}"#.to_vec(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let preimage = format!(r#"{{"arriving":"{run_id}","slot":{index}}}"#).into_bytes();
-        let digest = arkret_canonical::sha256_bytes(&preimage);
-        let mut id = [0_u8; ids::EVENT_ID_BYTES];
-        id[0] = 0x01;
-        id[1..].copy_from_slice(&digest);
-        let event_id = ids::format_event_id(&id);
-        let event_pk = sql_query(
-            "INSERT INTO canonical_events \
-             (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, \
-              canonical_bytes, envelope, received_at) \
-             VALUES ($1, 1, $2, $3, $4, $5, $6, 'ak.test.data', 'arkret://events/test/v1', \
-                     $7, $8, $9) RETURNING pk",
-        )
-        .bind::<Binary, _>(id.to_vec())
-        .bind::<Binary, _>(digest.to_vec())
-        .bind::<Text, _>(&actor_id)
-        .bind::<BigInt, _>(20 + index as i64)
-        .bind::<Text, _>(&realm_id)
-        .bind::<BigInt, _>(realm_pk)
-        .bind::<Binary, _>(resident_bytes.clone())
-        .bind::<diesel::sql_types::Jsonb, _>(
-            serde_json::json!({"proofs": [{"jws": "already-verified"}], "variant": "resident"}),
-        )
-        .bind::<diesel::sql_types::Timestamptz, _>(now)
-        .get_result::<PkRow>(&mut conn)
-        .await
-        .unwrap()
-        .pk;
-        staged.push((
-            event_id.clone(),
-            event_pk,
-            resident_bytes,
-            CanonicalEventRecord {
-                event_id,
-                actor_id: actor_id.clone(),
-                actor_seq: 20 + index as u64,
-                realm_id: Some(realm_id.clone()),
-                kind: "ak.test.data".to_owned(),
-                schema_id: "arkret://events/test/v1".to_owned(),
-                digest_suite: arkret_canonical::DigestSuite::Sha256,
-                canonical_digest: ids::format_event_digest(0x01, &digest).unwrap(),
-                canonical_bytes: preimage,
-                envelope: serde_json::json!({"variant": "arriving"}),
-                received_at: now,
-            },
-        ));
-    }
-    drop(conn);
-
-    // The verdicts. Slot 0 names the arriving bytes, slot 1 names the bytes
-    // already resident, slot 2 voids the identity outright.
-    for (index, (event_id, _, resident_bytes, arriving)) in staged.iter().enumerate() {
-        let winner_canonical_bytes = match index {
-            0 => Some(arriving.canonical_bytes.clone()),
-            1 => Some(resident_bytes.clone()),
-            _ => None,
-        };
-        let subject =
-            arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventIdCollision {
-                event_id: arkret_wire::EventId::new(event_id.clone()).unwrap(),
-            };
-        federation
-            .record_local_normalization(
-                &soland_storage::FederationFrontierResolutionRecord {
-                    realm_id: realm_id.clone(),
-                    cell_subject_key: subject.cell_subject_key().unwrap().to_string(),
-                    subject: serde_json::to_value(&subject).unwrap(),
-                    verdict: match index {
-                        2 => serde_json::json!({"kind": "void_all"}),
-                        _ => serde_json::json!({"kind": "canonical_winner", "winner_index": 0}),
-                    },
-                    conflict_evidence_digest: format!("sha256:{}", "6".repeat(64)),
-                    resolution_event_digest: format!("sha256:{}", "7".repeat(64)),
-                    normalized_at: 30 + index as i64,
-                },
-                &soland_storage::FederationForkNormalizationScope::EventIdCollision {
-                    event_id: event_id.clone(),
-                    winner_sealed_at_ms: winner_canonical_bytes
-                        .is_some()
-                        .then(|| sealed_at.timestamp_millis()),
-                    winner_canonical_bytes,
-                },
-            )
-            .await
-            .unwrap();
-    }
-
-    // Slot 0: the verdict already admitted the winner when it was recorded, so
-    // redelivering the same bytes is an ordinary replay rather than a conflict.
-    let (event_id, event_pk, resident_bytes, arriving) = &staged[0];
-    events.put(arriving.clone()).await.unwrap();
-    let admitted = events
-        .get(event_id)
-        .await
-        .unwrap()
-        .expect("the winner is the accepted variant of a settled identity");
-    assert_eq!(admitted.canonical_bytes, arriving.canonical_bytes);
-    assert_eq!(
-        admitted.received_at, sealed_at,
-        "the admitted Event is timestamped from the covering Seal, not a local clock",
-    );
-    assert_eq!(
-        admitted.envelope.get("proofs"),
-        Some(&serde_json::json!([{"jws": "already-verified"}])),
-        "both variants bind the same event_digest, so the proofs this Station already \
-         verified for the identity carry over instead of being re-derived",
-    );
-    assert_eq!(
-        events
-            .collision_variants(event_id)
-            .await
-            .unwrap()
-            .iter()
-            .map(|variant| variant.canonical_bytes.clone())
-            .collect::<Vec<_>>(),
-        vec![resident_bytes.clone()],
-        "the displaced loser is retained as a forensic variant",
-    );
-    assert_eq!(stored_event_state(&pool, *event_pk).await, "accepted");
-
-    // Slot 1: the loser arrives at a Station holding the winner. Refused, kept,
-    // and the accepted row is left exactly as the verdict left it.
-    let (event_id, event_pk, resident_bytes, arriving) = &staged[1];
-    let error = events.put(arriving.clone()).await.unwrap_err();
-    assert!(
-        matches!(error, PersistenceError::Conflict(reason) if reason == "event_hash_collision"),
-        "a settled identity still refuses a second preimage",
-    );
-    assert_eq!(
-        events
-            .get(event_id)
-            .await
-            .unwrap()
-            .expect("the winner stays readable")
-            .canonical_bytes,
-        resident_bytes.clone(),
-    );
-    assert_eq!(
-        events.collision_variants(event_id).await.unwrap().len(),
-        1,
-        "the refused loser is retained as a forensic variant",
-    );
-    assert_eq!(
-        stored_event_state(&pool, *event_pk).await,
-        "accepted",
-        "a settled identity is not requarantined by a redelivered loser",
-    );
-
-    // Slot 2: after `void_all` the identity has no accepted variant here, and
-    // an arrival must not revive it.
-    let (event_id, event_pk, _, arriving) = &staged[2];
-    let error = events.put(arriving.clone()).await.unwrap_err();
-    assert!(
-        matches!(error, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
-    );
-    assert!(
-        events.get(event_id).await.unwrap().is_none(),
-        "void_all leaves the identity with no accepted variant",
-    );
-    assert_eq!(
-        stored_event_state(&pool, *event_pk).await,
-        "accepted",
-        "void_all is enforced by the read surface, not by requarantining the row",
-    );
-}
-
-#[tokio::test]
-async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_conflict() {
-    use diesel::sql_types::{BigInt, Binary, SmallInt, Text};
-    use diesel::{QueryableByName, sql_query};
-    use diesel_async::RunQueryDsl;
-    use soland_storage::{
-        CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
-        EventStore, FederationOutboxStore, PersistenceError, ids,
-    };
-
-    #[derive(QueryableByName)]
-    struct PkRow {
-        #[diesel(sql_type = BigInt)]
-        pk: i64,
-    }
-    #[derive(QueryableByName)]
-    struct StateRow {
-        #[diesel(sql_type = Text)]
-        state: String,
-    }
-    #[derive(QueryableByName)]
-    struct CountRow {
-        #[diesel(sql_type = BigInt)]
-        value: i64,
-    }
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    // The colliding event, its realm row and the quarantine evidence all stay
-    // in the database by design, so every run needs its own identities or a
-    // rerun collides with the previous run's residue.
-    let run_id = uuid::Uuid::now_v7();
-    let preimage = format!("validated-digest-preimage-{run_id}").into_bytes();
-    let digest = arkret_canonical::sha256_bytes(&preimage);
-    let mut id = [0_u8; ids::EVENT_ID_BYTES];
-    id[0] = 0x01;
-    id[1..].copy_from_slice(&digest);
-    let event_id = ids::format_event_id(&id);
-    let canonical_digest = ids::format_event_digest(0x01, &digest).unwrap();
-    let now = chrono::Utc::now();
-    let realm_id =
-        event_derived_realm_id(format!("postgres-collision-contract-realm-{run_id}").as_bytes());
-    let actor_id = format!("ak:did_core:web:collision-{run_id}.example");
-    let incoming = CanonicalEventRecord {
-        event_id: event_id.clone(),
-        actor_id: actor_id.clone(),
-        actor_seq: 0,
-        realm_id: Some(realm_id.clone()),
-        kind: "ak.test.data".to_owned(),
-        schema_id: "arkret://events/test/v1".to_owned(),
-        digest_suite: arkret_canonical::DigestSuite::Sha256,
-        canonical_digest: canonical_digest.clone(),
-        canonical_bytes: preimage,
-        envelope: serde_json::json!({"variant": "incoming", "proofs": [{"jws": "full-evidence"}]}),
-        received_at: now,
-    };
-    let mut conn = pool.get().await.unwrap();
-    let realm_identity = ids::realm_identity_parts(&realm_id).unwrap();
-    let realm_pk = sql_query(
-        "INSERT INTO canonical_realms \
-         (id, digest_suite, digest, wire_id) \
-         VALUES ($1, $2, $3, $4) RETURNING pk",
-    )
-    .bind::<Binary, _>(realm_identity.id.to_vec())
-    .bind::<SmallInt, _>(i16::from(realm_identity.digest_suite))
-    .bind::<Binary, _>(realm_identity.digest.to_vec())
-    .bind::<Text, _>(&realm_id)
-    .get_result::<PkRow>(&mut conn)
-    .await
-    .unwrap()
-    .pk;
-    let event_pk = sql_query(
-        "INSERT INTO canonical_events \
-         (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, canonical_bytes, envelope, received_at) \
-         VALUES ($1, 1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10) RETURNING pk",
-    )
-    .bind::<Binary, _>(id.to_vec())
-    .bind::<Binary, _>(digest.to_vec())
-    .bind::<Text, _>(&actor_id)
-    .bind::<Text, _>(&realm_id)
-    .bind::<BigInt, _>(realm_pk)
-    .bind::<Text, _>(&incoming.kind)
-    .bind::<Text, _>(&incoming.schema_id)
-    .bind::<Binary, _>(b"hypothetical-colliding-preimage".to_vec())
-    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"variant": "accepted"}))
-    .bind::<diesel::sql_types::Timestamptz, _>(now)
-    .get_result::<PkRow>(&mut conn)
-    .await
-    .unwrap()
-    .pk;
-    sql_query(
-        "INSERT INTO projection_events \
-         (event_pk, realm_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
-         VALUES ($1, $2, $3, $4, 'test', '{}'::jsonb, $5, $5)",
-    )
-    .bind::<BigInt, _>(event_pk)
-    .bind::<BigInt, _>(realm_pk)
-    .bind::<Text, _>(&realm_id)
-    .bind::<Text, _>(&incoming.kind)
-    .bind::<diesel::sql_types::Timestamptz, _>(now)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    let outbox_id = format!("collision-outbox:{}", uuid::Uuid::now_v7());
-    sql_query(
-        "INSERT INTO federation_outbox \
-         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
-         VALUES ($1, 'ak:did_core:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
-    )
-    .bind::<Text, _>(&outbox_id)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    sql_query("INSERT INTO event_federation_outbox (event_pk, outbox_id) VALUES ($1, $2)")
-        .bind::<BigInt, _>(event_pk)
-        .bind::<Text, _>(&outbox_id)
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    drop(conn);
-
-    let store = PgEventStore { pool: pool.clone() };
-    let error = store.put(incoming.clone()).await.unwrap_err();
-    assert!(
-        matches!(error, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
-    );
-    assert!(store.get(&event_id).await.unwrap().is_none());
-    assert_eq!(store.collision_variants(&event_id).await.unwrap().len(), 2);
-
-    let mut conn = pool.get().await.unwrap();
-    let projections =
-        sql_query("SELECT COUNT(*) AS value FROM projection_events WHERE event_pk = $1")
-            .bind::<BigInt, _>(event_pk)
-            .get_result::<CountRow>(&mut conn)
-            .await
-            .unwrap()
-            .value;
-    assert_eq!(projections, 0, "unsealed projection must be withdrawn");
-    sql_query(
-        "INSERT INTO state_control_events \
-         (event_digest, digest_suite, realm_id, event_json, ingress_class, command_unit_event_digests) \
-         VALUES ($1, 'sha256', $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb, jsonb_build_array($1))",
-    )
-    .bind::<Text, _>(&canonical_digest)
-    .bind::<Text, _>(&realm_id)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    let seal_id = format!("ak:seal:test:{}", uuid::Uuid::now_v7().simple());
-    sql_query(
-        "INSERT INTO state_seals \
-         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_ref, is_genesis) \
-         VALUES ($1, 'sha256', $2, decode('00', 'hex'), decode('00', 'hex'), \
-                 '{}'::jsonb, NULL, true)",
-    )
-    .bind::<Text, _>(&seal_id)
-    .bind::<Text, _>(&realm_id)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    sql_query(
-        "INSERT INTO state_seal_control_events \
-         (seal_id, realm_id, event_digest, command_index, member_index, outcome, reason_code, accepted_event_bytes_digest, \
-          accepted_event_bytes, sealed_at, decision_overdue) \
-         VALUES ($1, $2, $3, 0, 0, 'committed', NULL, $3, decode('00', 'hex'), $4, false)",
-    )
-    .bind::<Text, _>(&seal_id)
-    .bind::<Text, _>(&realm_id)
-    .bind::<Text, _>(&canonical_digest)
-    .bind::<diesel::sql_types::Timestamptz, _>(now)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    sql_query(
-        "INSERT INTO projection_events \
-         (event_pk, realm_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
-         VALUES ($1, $2, $3, $4, 'sealed-test', '{}'::jsonb, $5, $5)",
-    )
-    .bind::<BigInt, _>(event_pk)
-    .bind::<BigInt, _>(realm_pk)
-    .bind::<Text, _>(&realm_id)
-    .bind::<Text, _>(&incoming.kind)
-    .bind::<diesel::sql_types::Timestamptz, _>(now)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    drop(conn);
-
-    let repeated = store.put(incoming.clone()).await.unwrap_err();
-    assert!(
-        matches!(repeated, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
-    );
-    assert_eq!(store.collision_variants(&event_id).await.unwrap().len(), 2);
-
-    let prefix_preimage = b"batch-prefix-must-not-land".to_vec();
-    let prefix_digest = arkret_canonical::sha256_bytes(&prefix_preimage);
-    let mut prefix_id_bytes = [0_u8; ids::EVENT_ID_BYTES];
-    prefix_id_bytes[0] = 0x01;
-    prefix_id_bytes[1..].copy_from_slice(&prefix_digest);
-    let prefix_id = ids::format_event_id(&prefix_id_bytes);
-    let prefix = CanonicalEventRecord {
-        event_id: prefix_id.clone(),
-        canonical_digest: ids::format_event_digest(0x01, &prefix_digest).unwrap(),
-        canonical_bytes: prefix_preimage,
-        envelope: serde_json::json!({"prefix": true}),
-        ..incoming.clone()
-    };
-    let batch_error = PgEventCommitUnitOfWork::new(pool.clone())
-        .commit_event_batch(EventBatchCommitRequest {
-            events: vec![
-                EventCommitRequest {
-                    publication_event: None,
-                    mls_public_producer: None,
-                    mls_public_genesis: None,
-                    mls_frontier_leaves: None,
-                    replicated: false,
-                    governance_dependencies: Vec::new(),
-                    membership_compensation_evidence: None,
-                    device_pairing_authorization: None,
-                    contact_projection: None,
-                    consent_projection: None,
-                    event: prefix,
-                    device_revocation_transition: None,
-                    device_revocation_gate: None,
-                    historical_producer: None,
-                    projections: Vec::new(),
-                    idempotency: None,
-                    outbox: Vec::new(),
-                },
-                EventCommitRequest {
-                    publication_event: None,
-                    mls_public_producer: None,
-                    mls_public_genesis: None,
-                    mls_frontier_leaves: None,
-                    replicated: false,
-                    governance_dependencies: Vec::new(),
-                    membership_compensation_evidence: None,
-                    device_pairing_authorization: None,
-                    contact_projection: None,
-                    consent_projection: None,
-                    event: incoming,
-                    device_revocation_transition: None,
-                    device_revocation_gate: None,
-                    historical_producer: None,
-                    projections: Vec::new(),
-                    idempotency: None,
-                    outbox: Vec::new(),
-                },
-            ],
-            franking_replay_nonce: None,
-            applet_record: None,
-            applet_authoring_preview: None,
-            agent_membership_cascade: None,
-        })
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(batch_error, PersistenceError::Conflict(ref reason) if reason == "event_hash_collision"),
-        "unexpected collision batch rejection: {batch_error:?}"
-    );
-    assert!(!store.contains(&prefix_id).await.unwrap());
-
-    let mut conn = pool.get().await.unwrap();
-    let state = sql_query("SELECT state FROM canonical_events WHERE pk = $1")
-        .bind::<BigInt, _>(event_pk)
-        .get_result::<StateRow>(&mut conn)
-        .await
-        .unwrap()
-        .state;
-    assert_eq!(state, "quarantined");
-    let projections =
-        sql_query("SELECT COUNT(*) AS value FROM projection_events WHERE event_pk = $1")
-            .bind::<BigInt, _>(event_pk)
-            .get_result::<CountRow>(&mut conn)
-            .await
-            .unwrap()
-            .value;
-    assert_eq!(
-        projections, 1,
-        "accepted sealed history must survive repeated collision quarantine"
-    );
-    let outbox = PgFederationOutboxStore { pool };
-    let delivery = outbox.get(&outbox_id).await.unwrap().unwrap();
-    assert_eq!(
-        delivery.last_error_code.as_deref(),
-        Some("witness_disagreement")
-    );
-}
-
-#[tokio::test]
-async fn postgres_adapter_rolls_atomic_batches_back_with_their_outbox() {
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let events = PgEventStore { pool: pool.clone() };
-    let outbox = PgFederationOutboxStore { pool };
-    let namespace = format!("postgres-batch-outbox-{}", uuid::Uuid::now_v7());
-    assert_atomic_batch_outbox_rollback_contract(&events, &outbox, &namespace).await;
 }
 
 #[tokio::test]
@@ -2597,581 +2031,4 @@ async fn postgres_adapter_satisfies_invite_new_source_ledger_contract() {
     let accounts = PgAccountStore { pool };
     let namespace = format!("postgres-invite-new-source-{}", uuid::Uuid::now_v7());
     assert_invite_new_source_ledger_contract(&ledger, &accounts, &namespace).await;
-}
-
-/// A fresh Realm per run so the `(realm_id, cell_subject_key)` normalization
-/// key is never carried over from an earlier execution against the same
-/// database.
-fn fork_normalization_realm() -> arkret_wire::RealmId {
-    let mut seed = [0_u8; 32];
-    seed[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
-    arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
-        arkret_canonical::DigestSuite::Sha256,
-        seed,
-    ))
-}
-
-fn fork_normalization_actor() -> arkret_wire::ActorId {
-    arkret_wire::ActorId::service(
-        arkret_wire::DidCoreId::new(format!(
-            "ak:did_core:web:fork-{}.example",
-            uuid::Uuid::now_v7().simple()
-        ))
-        .unwrap(),
-    )
-}
-
-/// One sibling at an exact position. `marker` is what makes the canonical
-/// bytes — and therefore the Event identity — distinct.
-fn fork_sibling_record(
-    realm: &arkret_wire::RealmId,
-    actor_id: &str,
-    actor_seq: u64,
-    marker: &str,
-    received_at: chrono::DateTime<chrono::Utc>,
-) -> soland_storage::CanonicalEventRecord {
-    use soland_storage::ids;
-    let canonical_bytes =
-        format!("{}|{actor_id}|{actor_seq}|{marker}", realm.as_str()).into_bytes();
-    let digest = arkret_canonical::sha256_bytes(&canonical_bytes);
-    let mut id = [0_u8; ids::EVENT_ID_BYTES];
-    id[0] = 0x01;
-    id[1..].copy_from_slice(&digest);
-    soland_storage::CanonicalEventRecord {
-        event_id: ids::format_event_id(&id),
-        actor_id: actor_id.to_owned(),
-        actor_seq,
-        realm_id: Some(realm.to_string()),
-        kind: "ak.test.data".to_owned(),
-        schema_id: "arkret://events/test/v1".to_owned(),
-        digest_suite: arkret_canonical::DigestSuite::Sha256,
-        canonical_digest: ids::format_event_digest(0x01, &digest).unwrap(),
-        canonical_bytes,
-        envelope: serde_json::json!({"marker": marker}),
-        received_at,
-    }
-}
-
-async fn fork_projection_append(
-    projections: &PgProjectionEventStore,
-    record: &soland_storage::CanonicalEventRecord,
-) {
-    use soland_storage::ProjectionEventStore;
-    projections
-        .append(soland_storage::ProjectionEventRecord {
-            event_id: record.event_id.clone(),
-            realm_id: record.realm_id.clone().unwrap(),
-            event_kind: record.kind.clone(),
-            operation_kind: "fork-normalization-test".to_owned(),
-            operation_id: None,
-            sender: None,
-            payload: serde_json::json!({}),
-            created_at: record.received_at,
-            received_at: record.received_at,
-        })
-        .await
-        .unwrap();
-}
-
-/// Pin one Event's canonical bytes under a Seal, the way an accepted Seal does.
-async fn fork_seal_pin(pool: &PgPool, record: &soland_storage::CanonicalEventRecord) {
-    use diesel::sql_query;
-    use diesel::sql_types::{Binary, Text, Timestamptz};
-    use diesel_async::RunQueryDsl;
-    let realm_id = record.realm_id.clone().unwrap();
-    let seal_id = format!("ak:seal:test:{}", uuid::Uuid::now_v7().simple());
-    let mut conn = pool.get().await.unwrap();
-    sql_query(
-        "INSERT INTO state_control_events \
-         (event_digest, digest_suite, realm_id, event_json, ingress_class, command_unit_event_digests) \
-         VALUES ($1, 'sha256', $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb, jsonb_build_array($1))",
-    )
-    .bind::<Text, _>(&record.canonical_digest)
-    .bind::<Text, _>(&realm_id)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    sql_query(
-        "INSERT INTO state_seals \
-         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, \
-          predecessor_ref, is_genesis) \
-         VALUES ($1, 'sha256', $2, decode('00', 'hex'), decode('00', 'hex'), \
-                 '{}'::jsonb, NULL, true)",
-    )
-    .bind::<Text, _>(&seal_id)
-    .bind::<Text, _>(&realm_id)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    sql_query(
-        "INSERT INTO state_seal_control_events \
-         (seal_id, realm_id, event_digest, command_index, member_index, outcome, reason_code, accepted_event_bytes_digest, \
-          accepted_event_bytes, sealed_at, decision_overdue) \
-         VALUES ($1, $2, $3, 0, 0, 'committed', NULL, $3, $4, $5, false)",
-    )
-    .bind::<Text, _>(&seal_id)
-    .bind::<Text, _>(&realm_id)
-    .bind::<Text, _>(&record.canonical_digest)
-    .bind::<Binary, _>(&record.canonical_bytes)
-    .bind::<Timestamptz, _>(record.received_at)
-    .execute(&mut conn)
-    .await
-    .unwrap();
-}
-
-/// A `canonical_winner` verdict has to leave exactly the winner readable —
-/// through every accepted read, not just the one the alignment challenge uses.
-///
-/// `sync/federation.md` §4.5.3 phase one. `PgEventStore` is the only
-/// `EventStore` there is, so these are the contract tests for it.
-#[tokio::test]
-async fn postgres_fork_resolution_canonical_winner_leaves_exactly_the_winner_readable() {
-    use diesel::sql_types::{Binary, Text};
-    use diesel::{QueryableByName, sql_query};
-    use diesel_async::RunQueryDsl;
-    use soland_storage::{EventStore, FederationFrontierExchangeStore, ProjectionEventStore, ids};
-    use soland_storage_postgres::PgFederationFrontierExchangeStore;
-
-    #[derive(QueryableByName)]
-    struct ValueCountRow {
-        #[diesel(sql_type = diesel::sql_types::BigInt)]
-        value: i64,
-    }
-    #[derive(QueryableByName)]
-    struct SealedBytesRow {
-        #[diesel(sql_type = Binary)]
-        accepted_event_bytes: Vec<u8>,
-    }
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let events = PgEventStore { pool: pool.clone() };
-    let projections = PgProjectionEventStore { pool: pool.clone() };
-    let federation = PgFederationFrontierExchangeStore { pool: pool.clone() };
-    let now = chrono::Utc::now();
-    let realm = fork_normalization_realm();
-    let actor_id = fork_normalization_actor();
-    let actor = actor_id.to_string();
-
-    let earlier = fork_sibling_record(&realm, &actor, 3, "earlier", now);
-    let winner = fork_sibling_record(&realm, &actor, 4, "winner", now);
-    let loser_sealed = fork_sibling_record(&realm, &actor, 4, "loser-sealed", now);
-    let loser_plain = fork_sibling_record(&realm, &actor, 4, "loser-plain", now);
-    for record in [&earlier, &winner, &loser_sealed, &loser_plain] {
-        events.put(record.clone()).await.unwrap();
-        fork_projection_append(&projections, record).await;
-    }
-    // The losing sibling is one an earlier Seal already pinned. Normalization
-    // must not touch those bytes: the verdict governs what is read now, not
-    // what a Seal committed to then.
-    fork_seal_pin(&pool, &loser_sealed).await;
-
-    assert_eq!(
-        events
-            .list_at_realm_actor_position(realm.as_str(), &actor, 4, 65)
-            .await
-            .unwrap()
-            .len(),
-        3,
-        "the disputed position starts with every sibling readable"
-    );
-
-    let subject =
-        arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventSiblingPosition {
-            actor_id: actor_id.clone(),
-            actor_seq: 4,
-        };
-    federation
-        .record_local_normalization(
-            &soland_storage::FederationFrontierResolutionRecord {
-                realm_id: realm.to_string(),
-                cell_subject_key: subject.cell_subject_key().unwrap().to_string(),
-                subject: serde_json::to_value(&subject).unwrap(),
-                verdict: serde_json::json!({
-                    "kind": "canonical_winner",
-                    "winner_event_id": winner.event_id,
-                }),
-                conflict_evidence_digest: format!("sha256:{}", "2".repeat(64)),
-                resolution_event_digest: format!("sha256:{}", "3".repeat(64)),
-                normalized_at: 1,
-            },
-            &soland_storage::FederationForkNormalizationScope::SiblingPosition {
-                actor_id: actor.clone(),
-                actor_seq: 4,
-                winner_event_id: Some(winner.event_id.clone()),
-            },
-        )
-        .await
-        .unwrap();
-
-    // 1. The exact-position read the sibling-positions disclosure handler makes is now the verdict
-    //    itself: precisely one element.
-    assert_eq!(
-        events
-            .list_at_realm_actor_position(realm.as_str(), &actor, 4, 65)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|record| record.event_id)
-            .collect::<Vec<_>>(),
-        vec![winner.event_id.clone()],
-    );
-    // 2. Ordinary reads agree, because they are the same projection.
-    assert!(events.get(&loser_sealed.event_id).await.unwrap().is_none());
-    assert!(!events.contains(&loser_plain.event_id).await.unwrap());
-    assert!(events.get(&winner.event_id).await.unwrap().is_some());
-    // 3. So does the actor chain the published frontier is built from: the losers are gone, the
-    //    untouched position 3 is not.
-    assert_eq!(
-        events
-            .list_for_realm_actor(realm.as_str(), &actor)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|record| record.event_id)
-            .collect::<Vec<_>>(),
-        vec![earlier.event_id.clone(), winner.event_id.clone()],
-    );
-    assert_eq!(events.max_actor_seq(&actor).await.unwrap(), Some(4));
-    // 4. And so does the reducer's input.
-    let mut projected = projections
-        .snapshot_realm(realm.as_str())
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|record| record.event_id)
-        .collect::<Vec<_>>();
-    projected.sort();
-    let mut expected = vec![earlier.event_id.clone(), winner.event_id.clone()];
-    expected.sort();
-    assert_eq!(projected, expected);
-
-    // 5. Nothing was deleted. The rows, the projection rows and the bytes the Seal pinned are all
-    //    still exactly where they were.
-    let mut conn = pool.get().await.unwrap();
-    let retained = sql_query(
-        "SELECT COUNT(*) AS value FROM canonical_events \
-         WHERE realm_id = $1 AND actor_id = $2 AND actor_seq = 4",
-    )
-    .bind::<Text, _>(realm.as_str())
-    .bind::<Text, _>(&actor)
-    .get_result::<ValueCountRow>(&mut conn)
-    .await
-    .unwrap()
-    .value;
-    assert_eq!(
-        retained, 3,
-        "normalization must not delete adjudicated bytes"
-    );
-    let loser_id = ids::parse_event_id(&loser_plain.event_id).unwrap().to_vec();
-    let retained_projection = sql_query(
-        "SELECT COUNT(*) AS value FROM projection_events projected \
-         JOIN canonical_events parent ON parent.pk = projected.event_pk \
-         WHERE parent.id = $1",
-    )
-    .bind::<Binary, _>(loser_id)
-    .get_result::<ValueCountRow>(&mut conn)
-    .await
-    .unwrap()
-    .value;
-    assert_eq!(
-        retained_projection, 1,
-        "an adjudicated sibling leaves the reducer's input without losing its row"
-    );
-    let sealed = sql_query(
-        "SELECT accepted_event_bytes FROM state_seal_control_events WHERE event_digest = $1",
-    )
-    .bind::<Text, _>(&loser_sealed.canonical_digest)
-    .get_result::<SealedBytesRow>(&mut conn)
-    .await
-    .unwrap()
-    .accepted_event_bytes;
-    assert_eq!(
-        sealed, loser_sealed.canonical_bytes,
-        "historic Seal bytes survive the verdict verbatim"
-    );
-}
-
-/// A `void_all` verdict has to empty the position exactly, and keep it empty.
-///
-/// `event-and-patch.md` §2.6 makes the position final: the actor's chain stops
-/// at the last accepted sequence, and a variant that shows up afterwards must
-/// not reopen the subject as a fresh first-seen winner.
-#[tokio::test]
-async fn postgres_fork_resolution_void_all_empties_the_position_and_keeps_it_empty() {
-    use diesel::sql_types::Text;
-    use diesel::{QueryableByName, sql_query};
-    use diesel_async::RunQueryDsl;
-    use soland_storage::{EventStore, FederationFrontierExchangeStore};
-    use soland_storage_postgres::PgFederationFrontierExchangeStore;
-
-    #[derive(QueryableByName)]
-    struct ValueCountRow {
-        #[diesel(sql_type = diesel::sql_types::BigInt)]
-        value: i64,
-    }
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let events = PgEventStore { pool: pool.clone() };
-    let federation = PgFederationFrontierExchangeStore { pool: pool.clone() };
-    let now = chrono::Utc::now();
-    let realm = fork_normalization_realm();
-    let actor_id = fork_normalization_actor();
-    let actor = actor_id.to_string();
-
-    let kept = fork_sibling_record(&realm, &actor, 5, "kept", now);
-    let voided_a = fork_sibling_record(&realm, &actor, 6, "voided-a", now);
-    let voided_b = fork_sibling_record(&realm, &actor, 6, "voided-b", now);
-    for record in [&kept, &voided_a, &voided_b] {
-        events.put(record.clone()).await.unwrap();
-    }
-    assert_eq!(events.max_actor_seq(&actor).await.unwrap(), Some(6));
-
-    let subject =
-        arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventSiblingPosition {
-            actor_id: actor_id.clone(),
-            actor_seq: 6,
-        };
-    federation
-        .record_local_normalization(
-            &soland_storage::FederationFrontierResolutionRecord {
-                realm_id: realm.to_string(),
-                cell_subject_key: subject.cell_subject_key().unwrap().to_string(),
-                subject: serde_json::to_value(&subject).unwrap(),
-                verdict: serde_json::json!({"kind": "void_all"}),
-                conflict_evidence_digest: format!("sha256:{}", "4".repeat(64)),
-                resolution_event_digest: format!("sha256:{}", "5".repeat(64)),
-                normalized_at: 2,
-            },
-            &soland_storage::FederationForkNormalizationScope::SiblingPosition {
-                actor_id: actor.clone(),
-                actor_seq: 6,
-                winner_event_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-    assert!(
-        events
-            .list_at_realm_actor_position(realm.as_str(), &actor, 6, 65)
-            .await
-            .unwrap()
-            .is_empty(),
-        "void_all reads back as the empty set, which is what alignment compares against"
-    );
-    assert_eq!(
-        events
-            .list_for_realm_actor(realm.as_str(), &actor)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|record| record.event_id)
-            .collect::<Vec<_>>(),
-        vec![kept.event_id.clone()],
-    );
-    assert_eq!(
-        events.max_actor_seq(&actor).await.unwrap(),
-        Some(5),
-        "the authoring chain stops at the last position that survived"
-    );
-
-    // A variant that arrives after the verdict is excluded on arrival. The
-    // subtraction keys on the position, not on the ids the verdict happened to
-    // have seen, so `void_all` cannot be reopened by a late first-seen sibling.
-    let late = fork_sibling_record(&realm, &actor, 6, "late", now);
-    events.put(late.clone()).await.unwrap();
-    assert!(
-        events
-            .list_at_realm_actor_position(realm.as_str(), &actor, 6, 65)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(events.get(&late.event_id).await.unwrap().is_none());
-    assert_eq!(events.max_actor_seq(&actor).await.unwrap(), Some(5));
-
-    let mut conn = pool.get().await.unwrap();
-    let retained = sql_query(
-        "SELECT COUNT(*) AS value FROM canonical_events \
-         WHERE realm_id = $1 AND actor_id = $2 AND actor_seq = 6",
-    )
-    .bind::<Text, _>(realm.as_str())
-    .bind::<Text, _>(&actor)
-    .get_result::<ValueCountRow>(&mut conn)
-    .await
-    .unwrap()
-    .value;
-    assert_eq!(retained, 3, "voided variants are retained, not deleted");
-}
-
-/// A collision verdict can only be applied on complete canonical bytes.
-///
-/// Two variants of one full hash are indistinguishable by id, so the verdict
-/// compares preimages. It does not merely subtract: `event-auth-state-resolution.md`
-/// section 6.3.3 point 3 makes an accepted `canonical_winner` the admission
-/// authority for the winner's bytes, so the Station that happens to hold the
-/// loser adopts the winner rather than being left unable to answer for that
-/// identity at all. A verdict from another Realm still governs nothing here.
-#[tokio::test]
-async fn postgres_fork_resolution_collision_verdict_admits_the_winning_preimage() {
-    use diesel::sql_types::{BigInt, Binary, SmallInt, Text, Timestamptz};
-    use diesel::{QueryableByName, sql_query};
-    use diesel_async::RunQueryDsl;
-    use soland_storage::{EventStore, FederationFrontierExchangeStore, ids};
-    use soland_storage_postgres::PgFederationFrontierExchangeStore;
-
-    #[derive(QueryableByName)]
-    struct RealmPkRow {
-        #[diesel(sql_type = BigInt)]
-        pk: i64,
-    }
-
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let events = PgEventStore { pool: pool.clone() };
-    let federation = PgFederationFrontierExchangeStore { pool: pool.clone() };
-    let now = chrono::Utc::now();
-    let realm = fork_normalization_realm();
-    let actor_id = fork_normalization_actor();
-    let actor = actor_id.to_string();
-
-    let mut conn = pool.get().await.unwrap();
-    let realm_identity = ids::realm_identity_parts(realm.as_str()).unwrap();
-    let realm_pk = sql_query(
-        "INSERT INTO canonical_realms (id, digest_suite, digest, wire_id) \
-         VALUES ($1, $2, $3, $4) RETURNING pk",
-    )
-    .bind::<Binary, _>(realm_identity.id.to_vec())
-    .bind::<SmallInt, _>(i16::from(realm_identity.digest_suite))
-    .bind::<Binary, _>(realm_identity.digest.to_vec())
-    .bind::<Text, _>(realm.as_str())
-    .get_result::<RealmPkRow>(&mut conn)
-    .await
-    .unwrap()
-    .pk;
-
-    // Two identities, each holding one of a colliding pair. The rows are
-    // written directly because no real preimage pair collides on SHA-256; the
-    // stored bytes deliberately differ from the identity's digest preimage,
-    // which is exactly the state a Station is in when it admitted one variant
-    // and never saw the other.
-    let winning_preimage = br#"{"kind":"ak.test.data","note":"winner"}"#.to_vec();
-    let losing_preimage = br#"{"kind":"ak.test.data","note":"loser"}"#.to_vec();
-    // The admission timestamp is the covering Seal's, so it is deliberately not
-    // `now`: a Station that only ever held the loser has to land on the same
-    // value as one that held the winner all along.
-    let winner_sealed_at = chrono::DateTime::from_timestamp_millis(
-        (now - chrono::Duration::hours(3)).timestamp_millis(),
-    )
-    .unwrap();
-    let mut identities = Vec::new();
-    for (index, stored_bytes) in [&losing_preimage, &winning_preimage, &losing_preimage]
-        .into_iter()
-        .enumerate()
-    {
-        let digest =
-            arkret_canonical::sha256_bytes(format!("{}|collision|{index}", realm.as_str()));
-        let mut id = [0_u8; ids::EVENT_ID_BYTES];
-        id[0] = 0x01;
-        id[1..].copy_from_slice(&digest);
-        sql_query(
-            "INSERT INTO canonical_events \
-             (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, \
-              canonical_bytes, envelope, received_at) \
-             VALUES ($1, 1, $2, $3, $4, $5, $6, 'ak.test.data', 'arkret://events/test/v1', \
-                     $7, '{}'::jsonb, $8)",
-        )
-        .bind::<Binary, _>(id.to_vec())
-        .bind::<Binary, _>(digest.to_vec())
-        .bind::<Text, _>(&actor)
-        .bind::<BigInt, _>(10 + index as i64)
-        .bind::<Text, _>(realm.as_str())
-        .bind::<BigInt, _>(realm_pk)
-        .bind::<Binary, _>(stored_bytes.clone())
-        .bind::<Timestamptz, _>(now)
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        identities.push(ids::format_event_id(&id));
-    }
-    drop(conn);
-
-    // A collision group can span Realms. The third identity is adjudicated by
-    // another Realm's recovery authority, which has no say over this Realm's
-    // projection (`event-auth-state-resolution.md` section 6.3.3).
-    let foreign_realm = fork_normalization_realm();
-    for (index, event_id) in identities.iter().enumerate() {
-        let realm_of_verdict = if index == 2 { &foreign_realm } else { &realm };
-        let subject =
-            arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventIdCollision {
-                event_id: arkret_wire::EventId::new(event_id.clone()).unwrap(),
-            };
-        federation
-            .record_local_normalization(
-                &soland_storage::FederationFrontierResolutionRecord {
-                    realm_id: realm_of_verdict.to_string(),
-                    cell_subject_key: subject.cell_subject_key().unwrap().to_string(),
-                    subject: serde_json::to_value(&subject).unwrap(),
-                    verdict: serde_json::json!({
-                        "kind": "canonical_winner",
-                        "winner_index": 0,
-                    }),
-                    conflict_evidence_digest: format!("sha256:{}", "6".repeat(64)),
-                    resolution_event_digest: format!("sha256:{}", "7".repeat(64)),
-                    normalized_at: 3 + index as i64,
-                },
-                &soland_storage::FederationForkNormalizationScope::EventIdCollision {
-                    event_id: event_id.clone(),
-                    winner_canonical_bytes: Some(winning_preimage.clone()),
-                    winner_sealed_at_ms: Some(winner_sealed_at.timestamp_millis()),
-                },
-            )
-            .await
-            .unwrap();
-    }
-
-    let admitted = events
-        .get(&identities[0])
-        .await
-        .unwrap()
-        .expect("the verdict admits the winner on the Station that held the loser");
-    assert_eq!(
-        admitted.canonical_bytes, winning_preimage,
-        "an accepted canonical_winner is the admission authority for the winner's bytes",
-    );
-    assert_eq!(
-        admitted.received_at, winner_sealed_at,
-        "the admitted Event is timestamped from the covering Seal, not a local clock",
-    );
-    assert_eq!(
-        events
-            .collision_variants(&identities[0])
-            .await
-            .unwrap()
-            .iter()
-            .map(|variant| variant.canonical_bytes.clone())
-            .collect::<Vec<_>>(),
-        vec![losing_preimage.clone()],
-        "the displaced loser is retained as a forensic variant",
-    );
-    assert_eq!(
-        events
-            .get(&identities[1])
-            .await
-            .unwrap()
-            .expect("the winning preimage stays readable")
-            .canonical_bytes,
-        winning_preimage,
-    );
-    assert_eq!(
-        events
-            .get(&identities[2])
-            .await
-            .unwrap()
-            .expect("another Realm's verdict must not rewrite this Realm's variant")
-            .canonical_bytes,
-        losing_preimage,
-    );
 }

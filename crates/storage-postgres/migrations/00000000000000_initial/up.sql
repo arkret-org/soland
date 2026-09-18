@@ -1576,7 +1576,7 @@ CREATE TABLE public.mimi_consent_correlations (
     -- with no implementable comparison: consent-model.md section 6.1 compares an
     -- ordinary peer by complete ActorId, so the facade had to either reduce
     -- dimensions or invent a Station of its own. Ruling
-    -- review/spec-done/2026-09-05-1240.
+    -- tasks/spec-done/2026-09-05-1240.
     requester_actor_id text NOT NULL,
     holder_account_id text NOT NULL,
     purpose text NOT NULL,

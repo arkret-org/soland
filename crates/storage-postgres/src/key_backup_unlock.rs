@@ -367,41 +367,5 @@ pub(crate) async fn validate_active_basis(
     Ok(())
 }
 
-/// Reject a frozen manifest whose stream has moved past the commit it was
-/// measured at.
-///
-/// There is no Seal frontier to recompute under a total per-stream commit
-/// order: staleness is exactly one position comparison on the stream the
-/// manifest cites.
-pub(crate) async fn validate_basis_is_stream_head(
-    conn: &mut crate::AsyncPgConnection,
-    basis: &Value,
-) -> Result<(), PgTransactionError> {
-    #[derive(QueryableByName)]
-    struct AdvancedRow {
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        advanced: bool,
-    }
-    let reference = basis_committed_ref(basis)?;
-    let advanced = sql_query(
-        "SELECT EXISTS(SELECT 1 FROM realm_commits c \
-         WHERE c.stream_ref=$1 AND c.stream_position>$2) AS advanced",
-    )
-    .bind::<Jsonb, _>(
-        serde_json::to_value(&reference.stream_ref).map_err(PersistenceError::database)?,
-    )
-    .bind::<BigInt, _>(
-        i64::try_from(reference.stream_position).map_err(PersistenceError::database)?,
-    )
-    .get_result::<AdvancedRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?
-    .advanced;
-    if advanced {
-        return Err(rejected("backup_frontier_stale").into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod pg_tests;

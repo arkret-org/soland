@@ -472,7 +472,9 @@ impl NotificationStore for PgNotificationStore {
               END, \
               updated_at = NOW()",
         )
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(record.delta.id.as_str()))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
+            record.delta.id.as_str(),
+        ))
         .bind::<Text, _>(record.recipient_actor_id.to_string())
         .bind::<BigInt, _>(record.controller_account_pk.get())
         .bind::<Text, _>(record.recipient_id.as_str())

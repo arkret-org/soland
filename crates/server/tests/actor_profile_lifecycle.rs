@@ -405,7 +405,7 @@ async fn resolve_actor_profiles(
 }
 
 #[test]
-#[ignore = "no soland fixture can submit an ordinary data-plane Event yet: the producer-proof gate requires a retained AuthenticatedSignerResolutionEvidence and neither DeviceHistoryFixture nor project_authorized_principal_device persists one. Owned by work/active/2026-09-13-0848-confirmed-device-history-test-fixture-migration."]
+#[ignore = "no soland fixture can submit an ordinary data-plane Event yet: the producer-proof gate requires a retained AuthenticatedSignerResolutionEvidence and neither DeviceHistoryFixture nor project_authorized_principal_device persists one. Owned by tasks/impl-active/2026-09-13-0848-confirmed-device-history-test-fixture-migration."]
 fn create_and_update_share_one_cell_and_a_patch_is_a_delta() {
     run_large_stack_async_test(create_and_update_share_one_cell_and_a_patch_is_a_delta_body);
 }
@@ -479,7 +479,7 @@ async fn create_and_update_share_one_cell_and_a_patch_is_a_delta_body() {
 }
 
 #[test]
-#[ignore = "no soland fixture can submit an ordinary data-plane Event yet: the producer-proof gate requires a retained AuthenticatedSignerResolutionEvidence and neither DeviceHistoryFixture nor project_authorized_principal_device persists one. Owned by work/active/2026-09-13-0848-confirmed-device-history-test-fixture-migration."]
+#[ignore = "no soland fixture can submit an ordinary data-plane Event yet: the producer-proof gate requires a retained AuthenticatedSignerResolutionEvidence and neither DeviceHistoryFixture nor project_authorized_principal_device persists one. Owned by tasks/impl-active/2026-09-13-0848-confirmed-device-history-test-fixture-migration."]
 fn a_stale_expected_state_digest_refuses_the_profile_update() {
     run_large_stack_async_test(a_stale_expected_state_digest_refuses_the_profile_update_body);
 }
@@ -543,7 +543,7 @@ async fn a_stale_expected_state_digest_refuses_the_profile_update_body() {
 }
 
 #[test]
-#[ignore = "no soland fixture can submit an ordinary data-plane Event yet: the producer-proof gate requires a retained AuthenticatedSignerResolutionEvidence and neither DeviceHistoryFixture nor project_authorized_principal_device persists one. Owned by work/active/2026-09-13-0848-confirmed-device-history-test-fixture-migration."]
+#[ignore = "no soland fixture can submit an ordinary data-plane Event yet: the producer-proof gate requires a retained AuthenticatedSignerResolutionEvidence and neither DeviceHistoryFixture nor project_authorized_principal_device persists one. Owned by tasks/impl-active/2026-09-13-0848-confirmed-device-history-test-fixture-migration."]
 fn an_authorized_co_member_resolves_the_exact_signed_profile_event() {
     run_large_stack_async_test(
         an_authorized_co_member_resolves_the_exact_signed_profile_event_body,

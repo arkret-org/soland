@@ -181,5 +181,4 @@ impl IdempotencyStore for PgIdempotencyStore {
             .await
             .map_err(PersistenceError::database)
     }
-
 }

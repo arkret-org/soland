@@ -197,7 +197,6 @@ impl PushDeviceStore for PgPushDeviceStore {
 }
 #[cfg(test)]
 mod tests {
-    use diesel::sql_types::{Binary, Bool, Nullable};
     use soland_storage::DeviceInventoryStore;
 
     use super::*;
@@ -215,7 +214,6 @@ mod tests {
         let station_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:push-registration.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
-        let history = source.verify().unwrap();
         {
             let mut conn = store.pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -223,23 +221,13 @@ mod tests {
                 .execute(&mut *conn)
                 .await
                 .unwrap();
-            for seal in &source.seals {
-                sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json,predecessor_ref,is_genesis) VALUES($1,'sha256',$2,$3,$4,$5,$6,$7)")
-                    .bind::<Text,_>(seal.id.as_str()).bind::<Text,_>(seal.realm_id.as_str())
-                    .bind::<Binary,_>(seal.canonical_bytes_for_id().unwrap())
-                    .bind::<Binary,_>(arkret_wire::seal::seal_canonical_bytes(seal).unwrap())
-                    .bind::<Jsonb,_>(serde_json::to_value(seal).unwrap())
-                    .bind::<Nullable<Text>,_>(seal.predecessor_ref.as_ref().map(|id|id.as_str()))
-                    .bind::<Bool,_>(seal.predecessor_ref.is_none())
-                    .execute(&mut *conn).await.unwrap();
-            }
         }
-        PgDeviceInventoryStore {
+        let inventory = PgDeviceInventoryStore {
             pool: store.pool.clone(),
+        };
+        for device in source.device_inventory_records() {
+            inventory.seed_test_record(&device).await.unwrap();
         }
-        .seed_test_confirmed_history_without_control_roots(&history)
-        .await
-        .unwrap();
         let mut record: arkret_models_integration::PushRegistrationRecord = serde_json::from_value(serde_json::json!({
             "registration_id":"push_registration:first", "account_id":{"principal_id":"ak:did_core:web:alice.example", "station_id":"ak:did_core:web:station.example"},
             "device_id":"ak:device:0196419b-0000-7000-8000-000000000001",
@@ -250,16 +238,11 @@ mod tests {
         })).unwrap();
         record.account_id = source.account.clone();
         record.device_id = device_history_fixture::device(1);
-        let device_authorization = history.authorization(&source.events[1].event_id).unwrap();
-        let authorization = soland_storage::DeviceRevocationGateSelector {
-            principal_id: record.account_id.principal_id.clone(),
-            station_id: record.account_id.station_id.clone(),
-            device_id: record.device_id.to_string(),
-            target_device_authorize_event_id: device_authorization
-                .authorization_event_id()
-                .to_string(),
-            target_device_generation_ref: device_authorization.authorized_generation_ref(),
-        };
+        let authorization = source
+            .gate_selectors()
+            .into_iter()
+            .find(|selector| selector.device_id == record.device_id.as_str())
+            .expect("the founding device carries a committed authorization");
         store
             .register(&authorization, serde_json::to_value(&record).unwrap())
             .await

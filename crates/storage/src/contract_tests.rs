@@ -20,13 +20,15 @@ use chrono::{Duration, Utc};
 use super::{
     AccountDataStore, AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
     AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
-    AppletIdentityCommit, AppletRecordCommit, AppletStore, CanonicalEventRecord, ConsentCellRecord,
-    ConsentCellStore, ConsentGrantDot, ConsentProjectionCommit, ContactProjectionCommit,
+    AppletIdentityCommit, AppletRecordCommit, AppletStore, AuthorityCommitStore,
+    AuthorityCommitTransaction, CanonicalEventRecord, ConsentGrantDot,
+    ConsentGrantRecord, ConsentGrantStore, ConsentProjectionCommit, ContactProjectionCommit,
     ContactRecord, ContactStore, DeviceInventoryStore, DeviceKeyStore,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
     DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
     DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
-    DeviceRevocationGateSelector, EventBatchCommitRequest, EventCommitRequest,
+    CurrentRealmAuthority, DeviceRevocationGateSelector, EventBatchCommitRequest,
+    EventCommitRequest,
     EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
@@ -1271,6 +1273,7 @@ pub async fn assert_device_pairing_finalize_supersession_contract(
 
 pub struct EventCommitContractStores<'a> {
     pub unit_of_work: &'a dyn EventCommitUnitOfWork,
+    pub authority: &'a dyn AuthorityCommitStore,
     pub events: &'a dyn EventStore,
     pub projections: &'a dyn ProjectionEventStore,
     pub idempotency: &'a dyn IdempotencyStore,
@@ -1287,11 +1290,130 @@ fn contract_realm_id(seed: &str) -> String {
     arkret_identifiers::RealmId::from_event_id(&event_id).to_string()
 }
 
+/// The genesis authority a contract Realm commits under.
+///
+/// A Realm id retypes the 33-byte token of the Event that created the Realm,
+/// so the genesis authority reference is recoverable from the Realm id alone
+/// and no fixture has to carry the same seed twice.
+fn contract_genesis_authority(realm_id: &arkret_identifiers::RealmId) -> CurrentRealmAuthority {
+    let genesis_event_ref = arkret_identifiers::EventIdentityKey::new(
+        realm_id.digest_suite_code(),
+        realm_id.digest_bytes(),
+    )
+    .event_id();
+    CurrentRealmAuthority {
+        realm_id: realm_id.clone(),
+        generation: 0,
+        service_id: DidCoreId::new("ak:did_core:web:station.example")
+            .expect("contract authority service id"),
+        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+            genesis_event_ref,
+        ),
+        last_handoff_ref: None,
+    }
+}
+
+/// The current Station's detached signature over a contract `RealmCommit`.
+///
+/// The adapter authenticates the signer by projecting the verification
+/// method's controller to a service id, so the method has to name the same
+/// service the genesis authority carries.
+fn contract_authority_signature(
+    created_at: chrono::DateTime<Utc>,
+) -> arkret_wire::DetachedObjectSignature {
+    arkret_wire::DetachedObjectSignature {
+        context: arkret_wire::DetachedSignatureContext::RealmCommit,
+        signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+        verification_method: DidUrl::new("did:web:station.example#authority")
+            .expect("contract authority verification method"),
+        signed_digest: Hash::new(format!("sha256:{}", "3".repeat(64)))
+            .expect("contract authority signed digest"),
+        created_at,
+        sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned())
+            .expect("contract authority signature bytes"),
+    }
+}
+
+/// One independent commit stream a contract drives.
+///
+/// A `RealmCommit` orders exactly one Event, so a contract that commits
+/// several Events into one Realm owes a chained sequence: consecutive
+/// `stream_position`s and a `previous_commit_ref` naming the current stream
+/// head. Attempts the contract expects the adapter to roll back never advance
+/// that head, so the next accepted Event reuses the position they claimed.
+struct ContractCommitStream {
+    authority: CurrentRealmAuthority,
+    next_position: u64,
+    previous_commit_ref: Option<arkret_wire::RealmCommitId>,
+}
+
+impl ContractCommitStream {
+    fn new(realm_id: &str) -> Self {
+        let realm_id =
+            arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("contract stream Realm id");
+        Self {
+            authority: contract_genesis_authority(&realm_id),
+            next_position: 0,
+            previous_commit_ref: None,
+        }
+    }
+
+    /// Install the Realm's genesis authority. The adapter refuses to order an
+    /// Event for a Realm whose current authority it cannot read, and
+    /// installing the same genesis decision twice is the same decision.
+    async fn install(&self, store: &dyn AuthorityCommitStore) {
+        store
+            .install_genesis_authority(&self.authority)
+            .await
+            .expect("install contract genesis authority");
+    }
+
+    /// Order `record` at the current stream head without advancing it, for an
+    /// attempt the contract expects the adapter to reject or roll back.
+    fn order(&self, record: &CanonicalEventRecord) -> AuthorityCommitTransaction {
+        let event: arkret_wire::Event = serde_json::from_value(record.envelope.clone())
+            .expect("contract canonical record carries its wire Event");
+        let stream_ref =
+            arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
+                .expect("contract Event scope names one commit stream");
+        let commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            format!("{}:{}", event.event_id, self.next_position).as_bytes(),
+        ));
+        AuthorityCommitTransaction {
+            expected_authority: self.authority.clone(),
+            commit: arkret_wire::RealmCommit {
+                commit_id,
+                realm_id: event.realm_id.clone(),
+                stream_ref,
+                stream_position: self.next_position,
+                previous_commit_ref: self.previous_commit_ref.clone(),
+                event_ref: event.event_id.clone(),
+                governance_generation: self.authority.generation,
+                authority_ref: self.authority.authority_ref.clone(),
+                committed_at: record.received_at,
+                signature: contract_authority_signature(record.received_at),
+            },
+            event,
+            mls_state: None,
+            welcomes: Vec::new(),
+        }
+    }
+
+    /// Order `record` and advance the stream head, for an attempt the contract
+    /// expects the adapter to accept.
+    fn accept(&mut self, record: &CanonicalEventRecord) -> AuthorityCommitTransaction {
+        let transaction = self.order(record);
+        self.next_position += 1;
+        self.previous_commit_ref = Some(transaction.commit.commit_id.clone());
+        transaction
+    }
+}
+
 fn canonical_wire_event_record(
     event_kind: &str,
     actor_id: &str,
     realm_id: &str,
-    actor_seq: u64,
+    sequence: u64,
     now: chrono::DateTime<Utc>,
 ) -> CanonicalEventRecord {
     let event_kind = if event_kind.is_empty() {
@@ -1309,24 +1431,42 @@ fn canonical_wire_event_record(
                 .expect("contract realm id"),
         }
     };
-    let event = arkret_wire::test_support::raw_event_at(
+    // An Event id is derived from the Event's own bytes, so the fixture folds
+    // its position in the contract's sequence into the payload: two Events
+    // that differed in nothing else would otherwise share one id.
+    let mut event = arkret_wire::test_support::raw_event_at(
         event_kind,
         scope_ref,
         actor_id.clone(),
         actor_id.clone(),
-        actor_seq,
-        arkret_identifiers::Hlc::new(format!(
-            "{:012x}-0000-00000000",
-            now.timestamp_millis().max(0) as u64
-        ))
-        .expect("contract HLC"),
-        serde_json::json!({"body": "contract"}),
+        serde_json::json!({"body": "contract", "sequence": sequence}),
         now,
     )
     .expect("contract wire event");
     let canonical_digest = event
         .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
         .expect("contract event digest");
+    // Every admitted Event carries exactly one producer proof. This fixture's
+    // case is the storage boundary and not signature verification, so it
+    // carries the structural-only detached JWS bound to these exact bytes.
+    let event_digest = Hash::new(canonical_digest.clone()).expect("contract event digest hash");
+    event.proofs = vec![arkret_wire::ProducerEventProof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+        verification_method: DidUrl::new(format!(
+            "did:{}#contract-device",
+            actor_id
+                .as_str()
+                .strip_prefix("ak:did_core:")
+                .expect("contract actor core id carries the projected prefix")
+        ))
+        .expect("contract producer verification method"),
+        event_digest: event_digest.clone(),
+        created_at: arkret_canonical::normalize_timestamp_canonical(now),
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
+    }];
     let envelope = serde_json::to_value(&event).expect("contract wire event encodes");
     let decoded: arkret_wire::Event =
         serde_json::from_value(envelope.clone()).expect("contract Event decodes");
@@ -1341,7 +1481,6 @@ fn canonical_wire_event_record(
     CanonicalEventRecord {
         event_id: event.event_id.as_str().to_owned(),
         actor_id: event.actor_id.to_string(),
-        actor_seq,
         realm_id: Some(event.realm_id.to_string()),
         kind: event_kind.to_owned(),
         schema_id: arkret_wire::EventKind::try_new(event_kind)
@@ -1359,6 +1498,7 @@ fn canonical_wire_event_record(
 
 pub struct AppletFormalCommitContractStores<'a> {
     pub unit_of_work: &'a dyn EventCommitUnitOfWork,
+    pub authority: &'a dyn AuthorityCommitStore,
     pub events: &'a dyn EventStore,
     pub applets: &'a dyn AppletStore,
 }
@@ -1450,45 +1590,55 @@ fn contract_ghost(
     })
 }
 
-fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequest {
+fn contract_applet_event_request(
+    stream: &mut ContractCommitStream,
+    event: CanonicalEventRecord,
+) -> EventCommitRequest {
     EventCommitRequest {
-        publication_event: None,
-        mls_frontier_leaves: None,
-        replicated: false,
-        governance_dependencies: Vec::new(),
-        membership_compensation_evidence: None,
+        authority_commit: stream.accept(&event),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
         event,
         device_revocation_transition: None,
         device_revocation_gate: None,
-        historical_producer: None,
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),
     }
 }
 
-fn contract_applet_event_group(
+/// One Applet authority Event group, ordered on its own commit stream.
+///
+/// A batch is all-or-nothing, so every group gets its own Realm: a group the
+/// adapter rolls back leaves that stream empty and the retry of the same batch
+/// replays the same chained positions, while two groups racing for one Applet
+/// record never contend for a stream position and therefore fail on the Applet
+/// compare-and-set the contract is actually asserting.
+async fn contract_applet_event_group(
+    authority: &dyn AuthorityCommitStore,
     namespace: &str,
-    realm_id: &str,
+    realm_seed: &str,
     group: &str,
     count: u64,
 ) -> Vec<EventCommitRequest> {
     let actor_id = format!("ak:did_core:web:{namespace}-{group}.example");
     let now = database_timestamp_now();
-    (0..count)
-        .map(|actor_seq| {
-            contract_applet_event_request(canonical_wire_event_record(
-                arkret_wire::EventKind::AppletRegistration.as_str(),
-                &actor_id,
-                realm_id,
-                actor_seq,
-                now + chrono::Duration::milliseconds(actor_seq as i64),
-            ))
-        })
-        .collect()
+    let mut stream = ContractCommitStream::new(&contract_realm_id(&format!("{realm_seed}:{group}")));
+    stream.install(authority).await;
+    let realm_id = stream.authority.realm_id.to_string();
+    let mut requests = Vec::new();
+    for sequence in 0..count {
+        let event = canonical_wire_event_record(
+            arkret_wire::EventKind::AppletRegistration.as_str(),
+            &actor_id,
+            &realm_id,
+            sequence,
+            now + chrono::Duration::milliseconds(sequence as i64),
+        );
+        requests.push(contract_applet_event_request(&mut stream, event));
+    }
+    requests
 }
 
 fn contract_applet_batch(
@@ -1556,7 +1706,7 @@ async fn install_contract_applet(
         .unit_of_work
         .commit_event_batch(contract_applet_batch(
             applet_id,
-            contract_applet_event_group(namespace, realm_id, "install", 1),
+            contract_applet_event_group(stores.authority, namespace, realm_id, "install", 1).await,
             None,
             record,
         ))
@@ -1591,11 +1741,13 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         let mut batch = contract_applet_batch(
             &applet_id,
             contract_applet_event_group(
+                stores.authority,
                 namespace,
                 &contract_realm_id(&format!("{namespace}:{case}")),
                 case,
                 1,
-            ),
+            )
+            .await,
             None,
             contract_applet_record(&applet_id, "1", Vec::new()),
         );
@@ -1640,7 +1792,8 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         .unit_of_work
         .commit_event_batch(contract_applet_batch(
             &stale_applet_id,
-            contract_applet_event_group(namespace, &stale_realm_id, "stale-winner", 4),
+            contract_applet_event_group(stores.authority, namespace, &stale_realm_id, "stale-winner", 4)
+                .await,
             Some(stale_base.clone()),
             committed_record.clone(),
         ))
@@ -1651,7 +1804,8 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let stale_record = contract_applet_record(&stale_applet_id, "1", vec![stale_ghost.clone()]);
     let stale_batch = contract_applet_batch(
         &stale_applet_id,
-        contract_applet_event_group(namespace, &stale_realm_id, "stale-loser", 4),
+        contract_applet_event_group(stores.authority, namespace, &stale_realm_id, "stale-loser", 4)
+            .await,
         Some(stale_base),
         stale_record,
     );
@@ -1737,13 +1891,15 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let same_right_record = contract_applet_record(&same_applet_id, "4", vec![same_ghost_right]);
     let same_left = contract_applet_batch(
         &same_applet_id,
-        contract_applet_event_group(namespace, &same_realm_id, "same-left", 4),
+        contract_applet_event_group(stores.authority, namespace, &same_realm_id, "same-left", 4)
+            .await,
         Some(same_base.clone()),
         same_left_record.clone(),
     );
     let same_right = contract_applet_batch(
         &same_applet_id,
-        contract_applet_event_group(namespace, &same_realm_id, "same-right", 4),
+        contract_applet_event_group(stores.authority, namespace, &same_realm_id, "same-right", 4)
+            .await,
         Some(same_base),
         same_right_record.clone(),
     );
@@ -1829,13 +1985,27 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     );
     let different_left = contract_applet_batch(
         &different_applet_id,
-        contract_applet_event_group(namespace, &different_realm_id, "different-left", 4),
+        contract_applet_event_group(
+            stores.authority,
+            namespace,
+            &different_realm_id,
+            "different-left",
+            4,
+        )
+        .await,
         Some(different_base.clone()),
         different_left_record.clone(),
     );
     let different_right = contract_applet_batch(
         &different_applet_id,
-        contract_applet_event_group(namespace, &different_realm_id, "different-right", 4),
+        contract_applet_event_group(
+            stores.authority,
+            namespace,
+            &different_realm_id,
+            "different-right",
+            4,
+        )
+        .await,
         Some(different_base),
         different_right_record.clone(),
     );
@@ -1947,22 +2117,26 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let winner_left = contract_applet_batch(
         &winner_applet_id,
         contract_applet_event_group(
+            stores.authority,
             namespace,
             &contract_realm_id(&format!("{namespace}:winner-left-event")),
             "winner-left",
             1,
-        ),
+        )
+        .await,
         None,
         winner_left_record.clone(),
     );
     let winner_right = contract_applet_batch(
         &winner_applet_id,
         contract_applet_event_group(
+            stores.authority,
             namespace,
             &contract_realm_id(&format!("{namespace}:winner-right-event")),
             "winner-right",
             1,
-        ),
+        )
+        .await,
         None,
         winner_right_record.clone(),
     );
@@ -2048,11 +2222,13 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let mut conflicting_winner = contract_applet_batch(
         &winner_applet_id,
         contract_applet_event_group(
+            stores.authority,
             namespace,
             &contract_realm_id(&format!("{namespace}:winner-conflict-event")),
             "winner-conflict",
             1,
-        ),
+        )
+        .await,
         None,
         contract_applet_record_for_scope(&winner_applet_id, "14", conflicting_scope, Vec::new()),
     );
@@ -2131,11 +2307,13 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let mut right_install = contract_applet_batch(
         &fence_applet_id,
         contract_applet_event_group(
+            stores.authority,
             namespace,
             &contract_realm_id(&format!("{namespace}:fence-right-event")),
             "fence-right-install",
             1,
-        ),
+        )
+        .await,
         None,
         right_record.clone(),
     );
@@ -2216,21 +2394,20 @@ pub async fn assert_event_commit_unit_of_work_contract(
         DidCoreId::new(principal_id.clone()).expect("idempotency principal id");
     let idempotency_key = format!("event-commit:{namespace}:{event_uuid}");
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
+    // Every Event this contract commits belongs to one Realm, so they share
+    // one authority and one chained commit stream.
+    let mut stream = ContractCommitStream::new(&realm_id);
+    stream.install(stores.authority).await;
     let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
     let event_id = event.event_id.clone();
     let request = EventCommitRequest {
-        publication_event: None,
-        mls_frontier_leaves: None,
-        replicated: false,
-        governance_dependencies: Vec::new(),
-        membership_compensation_evidence: None,
+        authority_commit: stream.accept(&event),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
         event,
         device_revocation_transition: None,
         device_revocation_gate: None,
-        historical_producer: None,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: realm_id.clone(),
@@ -2377,11 +2554,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     );
     let pairing_event_id = pairing_event.event_id.clone();
     let pairing_commit = EventCommitRequest {
-        publication_event: None,
-        mls_frontier_leaves: None,
-        replicated: false,
-        governance_dependencies: Vec::new(),
-        membership_compensation_evidence: None,
+        authority_commit: stream.accept(&pairing_event),
         device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
             device_pairing_request_id: pairing_request_id.clone(),
             pairing_code: pairing_code.clone(),
@@ -2397,7 +2570,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event: pairing_event,
         device_revocation_transition: None,
         device_revocation_gate: None,
-        historical_producer: None,
         projections: vec![ProjectionEventRecord {
             event_id: pairing_event_id.clone(),
             realm_id: realm_id.clone(),
@@ -2546,11 +2718,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         updated_at: now,
     };
     let contact_commit = EventCommitRequest {
-        publication_event: None,
-        mls_frontier_leaves: None,
-        replicated: false,
-        governance_dependencies: Vec::new(),
-        membership_compensation_evidence: None,
+        authority_commit: stream.accept(&contact_event),
         device_pairing_authorization: None,
         contact_projection: Some(ContactProjectionCommit {
             completion_intent: None,
@@ -2564,7 +2732,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event: contact_event,
         device_revocation_transition: None,
         device_revocation_gate: None,
-        historical_producer: None,
         projections: Vec::new(),
         idempotency: Some(IdempotencyRecord {
             authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
@@ -2642,11 +2809,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let failed_contact_commit = stores
         .unit_of_work
         .commit_event(EventCommitRequest {
-            publication_event: None,
-            mls_frontier_leaves: None,
-            replicated: false,
-            governance_dependencies: Vec::new(),
-            membership_compensation_evidence: None,
+            authority_commit: stream.accept(&failed_contact_event),
             device_pairing_authorization: None,
             contact_projection: Some(ContactProjectionCommit {
                 completion_intent: None,
@@ -2660,7 +2823,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
             event: failed_contact_event,
             device_revocation_transition: None,
             device_revocation_gate: None,
-            historical_producer: None,
             projections: Vec::new(),
             idempotency: None,
             outbox: vec![FederationOutboxRecord::pending(
@@ -2708,18 +2870,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_event = canonical_wire_event_record("", &principal_id, &realm_id, 4, now);
     let rollback_event_id = rollback_event.event_id.clone();
     let failed = EventCommitRequest {
-        publication_event: None,
-        mls_frontier_leaves: None,
-        replicated: false,
-        governance_dependencies: Vec::new(),
-        membership_compensation_evidence: None,
+        authority_commit: stream.order(&rollback_event),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
         event: rollback_event,
         device_revocation_transition: None,
         device_revocation_gate: None,
-        historical_producer: None,
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),
             realm_id: "not-a-typed-realm-id".to_owned(),
@@ -3483,6 +3640,28 @@ fn mls_keypackage_contract_row(
     }
 }
 
+/// The committed device-authorization the KeyPackage fixtures name.
+///
+/// The revocation gate compares the whole reference, so the authorize Event id
+/// and the commit that ordered it travel together instead of as an Event id
+/// plus a separate generation counter.
+fn contract_device_authorization_ref() -> arkret_wire::CommittedEventRef {
+    let event_id =
+        arkret_wire::EventId::new("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD")
+            .expect("contract device authorize Event id");
+    arkret_wire::CommittedEventRef {
+        commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            event_id.as_str().as_bytes(),
+        )),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: arkret_wire::RealmId::new(contract_realm_id("device-authorization"))
+                .expect("contract device authorization Realm id"),
+        },
+        stream_position: 1,
+        event_id,
+    }
+}
+
 fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPackageClaim<'a> {
     MlsKeyPackageClaim {
         id,
@@ -3496,9 +3675,7 @@ fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPac
             station_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example")
                 .unwrap(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
-            target_device_authorize_event_id:
-                "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
-            target_device_generation_ref: 1,
+            authorization_ref: contract_device_authorization_ref(),
         }),
         claimed_at: 10,
         claim_expires_at_unix_ms: Some(20_500),
@@ -4761,8 +4938,9 @@ pub async fn assert_member_identity_store_contract(
 /// Stores one consent-projection commit contract needs.
 pub struct ConsentCommitContractStores<'a> {
     pub unit_of_work: &'a dyn EventCommitUnitOfWork,
+    pub authority: &'a dyn AuthorityCommitStore,
     pub events: &'a dyn EventStore,
-    pub consent_cells: &'a dyn ConsentCellStore,
+    pub consent_grants: &'a dyn ConsentGrantStore,
     pub account_data: &'a dyn AccountDataStore,
 }
 
@@ -4784,12 +4962,14 @@ pub async fn assert_consent_projection_commit_contract(
     // projection has to round-trip `(realm_id, principal_id)` as one key.
     let pairwise_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
     let peer = DidCoreId::new("ak:did_core:key:z6MkContractPairwisePeer".to_owned()).unwrap();
-    let cell_id = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-{:012x}",
+    let consent_id = arkret_identifiers::ConsentId::new(format!(
+        "ak:consent:01964137-0000-7000-8000-{:012x}",
         namespace.len()
     ))
     .unwrap();
 
+    let mut stream = ContractCommitStream::new(&realm_id);
+    stream.install(stores.authority).await;
     let grant_event = canonical_wire_event_record(
         arkret_wire::EventKind::ConsentGrant.as_str(),
         holder.as_str(),
@@ -4804,8 +4984,8 @@ pub async fn assert_consent_projection_commit_contract(
         .expect("contract consent account actor")
         .clone();
     let dot = format!("{grant_event_id}:0");
-    let granted = ConsentCellRecord {
-        cell_id: cell_id.clone(),
+    let granted = ConsentGrantRecord {
+        consent_id: consent_id.clone(),
         holder_account_id: holder_account_id.clone(),
         peer:
             arkret_models_collaboration::events_payloads::consent::ConsentPeer::PairwisePrincipal {
@@ -4828,9 +5008,10 @@ pub async fn assert_consent_projection_commit_contract(
     stores
         .unit_of_work
         .commit_event(consent_commit_request(
+            stream.accept(&grant_event),
             grant_event,
             ConsentProjectionCommit {
-                cell: granted.clone(),
+                grant: granted.clone(),
                 holder_quarantine: None,
             },
         ))
@@ -4839,8 +5020,8 @@ pub async fn assert_consent_projection_commit_contract(
     assert!(stores.events.get(&grant_event_id).await.unwrap().is_some());
     assert!(
         stores
-            .consent_cells
-            .get(&holder_account_id, &cell_id)
+            .consent_grants
+            .get(&holder_account_id, &consent_id)
             .await
             .unwrap()
             .is_none(),
@@ -4849,22 +5030,18 @@ pub async fn assert_consent_projection_commit_contract(
 }
 
 fn consent_commit_request(
+    authority_commit: AuthorityCommitTransaction,
     event: CanonicalEventRecord,
     consent_projection: ConsentProjectionCommit,
 ) -> EventCommitRequest {
     EventCommitRequest {
-        publication_event: None,
-        mls_frontier_leaves: None,
-        replicated: false,
-        governance_dependencies: Vec::new(),
-        membership_compensation_evidence: None,
+        authority_commit,
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: Some(consent_projection),
         event,
         device_revocation_transition: None,
         device_revocation_gate: None,
-        historical_producer: None,
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),
