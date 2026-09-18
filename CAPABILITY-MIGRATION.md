@@ -317,6 +317,35 @@ peer-merge graph.
   This is marked `[~]` and not `[x]` because two of the fifteen files are held
   behind the open Seal-frontier ruling, so the lane cannot be closed in one
   pass.
+
+  **The successors are known; the wiring is not there.** Two distinct uses hide
+  behind "notary", and only one of them needs a ruling:
+
+  1. `NotaryWorker::current_notary_value_for_events(state, &realm, &[])` is
+     "who is this Realm's current authority". The successor is live end to end
+     already: `storage/src/authority_commit.rs:121 current_authority` ->
+     `services/src/authority_commit.rs:69` -> `storage-postgres/src/authority_commit.rs:453`,
+     reading `realm_authorities`. The SDK even renamed the user-visible symptom:
+     `DirectConversationSendBlocker::NotaryUnavailable` is gone and
+     `CurrentAuthorityUnavailable` is in its place
+     (`models-collaboration/src/direct_conversation.rs:29-42`). So
+     `identity/account.rs:1887`, `spaces/directory/realm_resolution.rs:803`,
+     `conformance/handlers.rs:439` and `submit/value.rs:1296` are ports with a
+     named target, not open questions.
+     **What blocks them is that `AppState` cannot reach that service.** It has
+     `notary_signing_key`, `notary_verifying_key` and `notary_signing_key_origin`
+     baked into it and no authority-commit accessor at all; `current_authority`
+     has zero call sites in the whole of `soland-http`. This is the same
+     unwired seam as the orphaned `routing/authority_commit.rs`, so the ack
+     unwind and the route wiring have to land together.
+  2. `crate::notary::ensure_realm_seal_head(state, &realm)` is the Seal frontier,
+     used by `interop/moderation.rs:147`, `interop/mimi/payload.rs:64` and
+     `identity/account/social/contact_write.rs:709`. Those three join
+     `governance_proof.rs` and `event_log/endpoints.rs` behind the open ruling,
+     bringing the held count to five of fifteen.
+
+  `submit/realm_bootstrap.rs:315` (`mint_control_proposal_acks`) is neither: it
+  mints the retired object and is a straight delete.
 - [x] Audited-E2EE compliance profiles: `ak.profile.attested_audit_e2ee.v1` and
   `ak.profile.disclosed_audit_e2ee.v1` are gone from the specification and the
   SDK, so `AUDIT_COMPLIANCE_PROFILES` is removed from
