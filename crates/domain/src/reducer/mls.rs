@@ -225,8 +225,7 @@ pub fn apply_keypackage_claim_projection(
         return reject(arkret_wire::ReasonCode::KEYPACKAGE_EXPIRED);
     }
     if row.device_authorize_event_id != projection.trust_binding.device_authorize_event_id
-        || row.agent_key_authorize_event_id
-            != projection.trust_binding.agent_key_authorize_event_id
+        || row.agent_key_authorize_event_id != projection.trust_binding.agent_key_authorize_event_id
     {
         return reject(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
     }
@@ -728,7 +727,6 @@ fn non_empty_trimmed(value: Option<String>) -> Option<String> {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
 }
-
 
 /// Derive the private commit-material identity used to detect concurrent
 /// commits. The wire payload carries the bytes and may carry a content-addressed

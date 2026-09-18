@@ -85,16 +85,11 @@ fn poll_reducer_accepts_valid_multi_selection() {
         response(&mut state, &hlc, REALM_A, serde_json::json!(["yes", "no"]),),
         ProjectionEffect::Ignored
     ));
+    // A response settles the actor's selection list verbatim, in the order the
+    // signed payload named it.
     assert_eq!(
-        state
-            .poll(POLL_ID)
-            .unwrap()
-            .votes
-            .values()
-            .next()
-            .unwrap()
-            .selections,
-        BTreeSet::from(["no".to_owned(), "yes".to_owned()])
+        state.poll(POLL_ID).unwrap().votes.values().next().unwrap(),
+        &vec!["yes".to_owned(), "no".to_owned()]
     );
 }
 
@@ -165,18 +160,18 @@ fn poll_reducer_accepts_only_exact_scope_known_answers_within_limit() {
         ProjectionEffect::Ignored
     ));
     let vote = state.poll(POLL_ID).unwrap().votes.values().next().unwrap();
-    assert_eq!(vote.selections, BTreeSet::from(["yes".to_owned()]));
+    assert_eq!(vote, &vec!["yes".to_owned()]);
 
     for (realm, selections, reason) in [
         (
             REALM_A,
             serde_json::json!(["unknown"]),
-            "poll_selection_unknown",
+            "poll_selection_unknown_answer",
         ),
         (
             REALM_A,
             serde_json::json!(["yes", "no"]),
-            "poll_selection_limit_exceeded",
+            "poll_selection_over_max",
         ),
         (REALM_B, serde_json::json!(["yes"]), "poll_ref_cross_scope"),
     ] {
@@ -196,116 +191,4 @@ fn poll_reducer_rejects_unknown_poll_instead_of_silently_ignoring() {
         effect,
         ProjectionEffect::Rejected { ref reason } if reason == "poll_ref_unknown"
     ));
-}
-
-#[test]
-fn poll_reducer_causal_successor_wins_even_with_lower_digest() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("poll-test");
-    create_poll(&mut state, &hlc);
-    let current_digest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    let candidate_digest =
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-    let mut current = response_operation(REALM_A, serde_json::json!(["yes"]));
-    current.context.canonical_event_digest = arkret_identifiers::Hash::new(current_digest).unwrap();
-    state.apply(&current, &hlc);
-    let mut candidate = response_operation(REALM_A, serde_json::json!(["no"]));
-    candidate.context.canonical_event_digest =
-        arkret_identifiers::Hash::new(candidate_digest).unwrap();
-    candidate.context.envelope_causal_refs =
-        vec![arkret_identifiers::Hash::new(current_digest).unwrap()];
-    state.apply(&candidate, &hlc);
-
-    let vote = state.poll(POLL_ID).unwrap().votes.values().next().unwrap();
-    assert_eq!(vote.selections, BTreeSet::from(["no".to_owned()]));
-    assert_eq!(vote.winner.as_ref().unwrap().as_str(), candidate_digest);
-}
-
-#[test]
-fn poll_reducer_concurrent_digest_order_is_arrival_independent() {
-    let hlc = ServerHlc::new("poll-test");
-    let mut base = ProjectionState::new();
-    create_poll(&mut base, &hlc);
-    let low_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-    let high_digest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    let mut low = response_operation(REALM_A, serde_json::json!(["yes"]));
-    low.context.canonical_event_digest = arkret_identifiers::Hash::new(low_digest).unwrap();
-    let mut high = response_operation(REALM_A, serde_json::json!(["no"]));
-    high.context.canonical_event_digest = arkret_identifiers::Hash::new(high_digest).unwrap();
-
-    let mut low_then_high = base.clone();
-    low_then_high.apply(&low, &hlc);
-    low_then_high.apply(&high, &hlc);
-    let mut high_then_low = base;
-    high_then_low.apply(&high, &hlc);
-    high_then_low.apply(&low, &hlc);
-
-    for state in [&low_then_high, &high_then_low] {
-        let vote = state.poll(POLL_ID).unwrap().votes.values().next().unwrap();
-        assert_eq!(vote.selections, BTreeSet::from(["no".to_owned()]));
-        assert_eq!(vote.winner.as_ref().unwrap().as_str(), high_digest);
-    }
-}
-
-#[test]
-fn poll_reducer_keeps_losing_heads_and_resolves_late_dependencies() {
-    let hlc = ServerHlc::new("poll-causal-set");
-    let mut base = ProjectionState::new();
-    create_poll(&mut base, &hlc);
-    let mut operations = Vec::new();
-    for (digit, choice) in [('d', "yes"), ('c', "no"), ('b', "yes")] {
-        let mut operation = response_operation(REALM_A, serde_json::json!([choice]));
-        operation.context.canonical_event_digest =
-            arkret_wire::Hash::new(format!("sha256:{}", digit.to_string().repeat(64))).unwrap();
-        operations.push(operation);
-    }
-    operations[2].context.envelope_causal_refs =
-        vec![operations[0].context.canonical_event_digest.clone()];
-    for order in [
-        [0, 1, 2],
-        [0, 2, 1],
-        [1, 0, 2],
-        [1, 2, 0],
-        [2, 0, 1],
-        [2, 1, 0],
-    ] {
-        let mut state = base.clone();
-        for index in order {
-            state.apply(&operations[index], &hlc);
-            state.apply(&operations[index], &hlc);
-            if index == 2 && state.poll_responses.responses().len() == 1 {
-                assert!(state.poll(POLL_ID).unwrap().votes.is_empty());
-            }
-        }
-        let vote = state.poll(POLL_ID).unwrap().votes.values().next().unwrap();
-        assert_eq!(
-            vote.winner.as_ref().unwrap().as_str(),
-            operations[1].context.canonical_event_digest.as_str()
-        );
-        assert_eq!(vote.selections, BTreeSet::from(["no".to_owned()]));
-        assert_eq!(state.poll_responses.responses().len(), 3);
-        assert_eq!(
-            state.messages.len(),
-            1,
-            "responses do not create timeline Messages"
-        );
-    }
-}
-
-#[test]
-fn poll_reducer_unknown_nonresponse_dependency_waits_then_reprojects() {
-    let hlc = ServerHlc::new("poll-dependency");
-    let mut state = ProjectionState::new();
-    create_poll(&mut state, &hlc);
-    let dependency = make_operation(
-        arkret_wire::EventKind::MessageCreate,
-        REALM_A,
-        serde_json::json!({"strand_id": STRAND_A, "track_name": "discussion", "content": {"kind": "ak.content.text", "body": "context"}}),
-    );
-    let mut vote = response_operation(REALM_A, serde_json::json!(["yes"]));
-    vote.context.envelope_causal_refs = vec![dependency.context.canonical_event_digest.clone()];
-    state.apply(&vote, &hlc);
-    assert!(state.poll(POLL_ID).unwrap().votes.is_empty());
-    state.apply(&dependency, &hlc);
-    assert_eq!(state.poll(POLL_ID).unwrap().votes.len(), 1);
 }

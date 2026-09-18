@@ -31,7 +31,7 @@ fn active_series_payload() -> Value {
 }
 
 #[test]
-fn key_backup_active_series_projects_pointer_and_cell() {
+fn key_backup_active_series_projects_pointer_and_facet() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("key-backup-active-series");
 
@@ -66,16 +66,14 @@ fn key_backup_active_series_projects_pointer_and_cell() {
         "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
     );
 
-    let subject = arkret_wire::composite_subject(&[actor.as_str(), "secret_storage"])
-        .expect("active series composite subject");
-    let cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.key_backup.active_series.v1:{subject}"
-    ))
-    .expect("active series cell ref");
-    assert!(state.cell_value(&cell).is_some());
+    let active_series = FacetRef::composite(
+        facet::KEY_BACKUP_ACTIVE_SERIES,
+        &[actor.as_str(), "secret_storage"],
+    );
+    assert!(state.facet_value(REALM, &active_series).is_some());
     assert!(
         state
-            .cell_value(&cell)
+            .facet_value(REALM, &active_series)
             .is_some_and(|value| value.get("accepted_event_id").is_none())
     );
 }

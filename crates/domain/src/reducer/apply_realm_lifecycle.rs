@@ -401,7 +401,7 @@ impl ProjectionState {
     /// Conversation founding unit.
     ///
     /// Both Events are authored by the founder: one names the peer and the
-    /// final genesis `head_eq null` slot names the founder. The closed
+    /// final genesis membership slot names the founder. The closed
     /// four-Event validator has already established those relationships and
     /// the exact pair. Keep this reducer-side bootstrap bypass scoped to that
     /// caller context and independently require the Direct Conversation Realm

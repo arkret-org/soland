@@ -1,5 +1,3 @@
-use arkret_identifiers::CellRef;
-
 use super::*;
 
 const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
@@ -195,9 +193,13 @@ fn pin_rejects_quarantined_message_target() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_scoped_message(&mut state, &hlc);
-    state.cells.insert(
-        CellRef::new("ak:cell:ak.component.moderation_state.v1:decision-pin-quarantine").unwrap(),
-        ResolvedCellState::Value(serde_json::json!([{
+    // The decision is deliberately filed under a facet subject that is NOT the
+    // message: an active decision must be found by the `target_ref` it carries,
+    // not by the coordinate it happens to be stored at.
+    state.set_facet(
+        REALM_ID,
+        FacetRef::new(facet::MODERATION_STATE, "decision-pin-quarantine"),
+        serde_json::json!([{
             "tag": "decision-pin-quarantine",
             "value": {
                 "decision_id": "decision-pin-quarantine",
@@ -205,7 +207,7 @@ fn pin_rejects_quarantined_message_target() {
                 "decision": "quarantine",
                 "realm_id": REALM_ID
             }
-        }])),
+        }]),
     );
 
     let operation = pin_add(serde_json::json!({"kind": "circle", "id": CIRCLE_ID}));
@@ -218,13 +220,11 @@ fn pin_rejects_active_moderation_decision_head() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_scoped_message(&mut state, &hlc);
-    state.cells.insert(
-        CellRef::new(format!(
-            "ak:cell:ak.component.moderation_state.v1:{MESSAGE_EVENT_ID}"
-        ))
-        .unwrap(),
-        ResolvedCellState::Value(serde_json::json!([{
-            "tag": "hard_deny:ak:did_core:web:mod.example:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    state.set_facet(
+        REALM_ID,
+        FacetRef::new(facet::MODERATION_STATE, MESSAGE_EVENT_ID),
+        serde_json::json!([{
+            "tag": "ak:did_core:web:mod.example/sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "value": {
                 "decision_id": "ak:event:AaCSkmkJGCJsdlTB9SXNQ9Ohes5_op9NMMetO0Trkf0q",
                 "target_ref": MESSAGE_EVENT_ID,
@@ -234,7 +234,7 @@ fn pin_rejects_active_moderation_decision_head() {
                 "realm_id": REALM_ID
             }
         }, {
-            "tag": "require_review:ak:did_core:web:other.example:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "tag": "ak:did_core:web:other.example/sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
             "value": {
                 "decision_id": "ak:event:AcOfKRN6NaqA5lqbkGhhOD5HiIfpgFRFDsl7ay0xainV",
                 "target_ref": MESSAGE_EVENT_ID,
@@ -243,7 +243,7 @@ fn pin_rejects_active_moderation_decision_head() {
                 "request_canonical_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 "realm_id": REALM_ID
             }
-        }])),
+        }]),
     );
 
     let operation = pin_add(serde_json::json!({"kind": "circle", "id": CIRCLE_ID}));

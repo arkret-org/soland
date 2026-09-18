@@ -2,27 +2,35 @@ use super::*;
 
 // ── P2 moderation control-plane projection (apply_moderation.rs) ──────
 //
-// decision -> moderation_state or_set add; lift -> observed-remove.
+// decision -> moderation-state facet entry; lift -> removal of exactly the
+// entry the named `decision_ref` wrote.
 
 const MOD_REALM: &str = "ak:realm:AUFiO2if_pcrsCPNPTKGbSLg0Q25_sBaNHxyQyo5pn7z";
 const MOD_DECISION_ID: &str = "ak:event:AaE8e4n3nA8AyIlk8Sh9_DhbS-5fInpC8DrDoA81pxI-";
+const OTHER_DECISION_ID: &str = "ak:event:AaE8e4n3nA8AyIlk8Sh9_DhbS-5fInpC8DrDoA81pxJ-";
 const MOD_TARGET_REF: &str = "ak:message:AUDcGyskAu9_TgDdHy4-tLmIbJp1s_rpjKSw3apHadK8";
 const MOD_REQUEST_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-/// The registered add dot of the seeded decision: `ak.moderation.decision`
-/// declares one `cell_writes[]` entry, so `event-and-patch.md` §2.4.2 makes it
-/// `<decision event id>:0`. `content-moderation.md` §2.6 requires the lift to
-/// name exactly this value in `observed_dot_ids[]`.
-const MOD_DECISION_DOT: &str = "ak:event:AaE8e4n3nA8AyIlk8Sh9_DhbS-5fInpC8DrDoA81pxI-:0";
+const OTHER_REQUEST_DIGEST: &str =
+    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-fn mod_decision_cell_ref() -> CellRef {
-    CellRef::new(format!(
-        "ak:cell:ak.component.moderation_state.v1:{MOD_TARGET_REF}"
-    ))
-    .unwrap()
+/// The facet a decision on `MOD_TARGET_REF` settles on.
+fn mod_decision_facet() -> FacetRef {
+    FacetRef::new(facet::MODERATION_STATE, MOD_TARGET_REF)
 }
 
-fn moderation_decision_operation(issuer: &str) -> Operation {
+/// The keyed-set add tag of a decision: `content-moderation.md` section 2.6
+/// makes it the `(issuer_id, request_canonical_digest)` pair, so re-issuing the
+/// same review replaces its own entry and never another issuer's.
+fn entry_tag(issuer: &str, request_digest: &str) -> String {
+    format!("{issuer}/{request_digest}")
+}
+
+fn moderation_decision_operation(
+    decision_id: &str,
+    issuer: &str,
+    request_digest: &str,
+) -> Operation {
     let mut operation = make_operation(
         arkret_wire::EventKind::ModerationDecision,
         MOD_REALM,
@@ -31,17 +39,17 @@ fn moderation_decision_operation(issuer: &str) -> Operation {
             "target_ref": MOD_TARGET_REF,
             "decision": "quarantine",
             "action": "quarantine_message",
-            "request_canonical_digest": MOD_REQUEST_DIGEST,
+            "request_canonical_digest": request_digest,
         }),
     );
-    let event_id = arkret_identifiers::EventId::new(MOD_DECISION_ID).unwrap();
+    let event_id = arkret_identifiers::EventId::new(decision_id).unwrap();
     operation.context.event_id = event_id.clone();
     operation.context.accepted_event_id = event_id;
     operation
 }
 
 fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
-    let op = moderation_decision_operation(issuer);
+    let op = moderation_decision_operation(MOD_DECISION_ID, issuer, MOD_REQUEST_DIGEST);
     let effect = state.apply(&op, hlc);
     assert!(
         matches!(effect, ProjectionEffect::ModerationDecisionProjected { .. }),
@@ -49,9 +57,26 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
     );
 }
 
+fn lift_operation(decision_id: &str, expected_revision: u64) -> Operation {
+    make_operation(
+        arkret_wire::EventKind::ModerationDecisionLift,
+        MOD_REALM,
+        serde_json::json!({
+            "decision_ref": decision_id,
+            "expected_revision": expected_revision,
+            "target_ref": MOD_TARGET_REF,
+            "realm_id": MOD_REALM,
+        }),
+    )
+}
+
 #[test]
 fn moderation_decision_identity_uses_accepted_event_context() {
-    let operation = moderation_decision_operation("ak:did_core:web:mod.example");
+    let operation = moderation_decision_operation(
+        MOD_DECISION_ID,
+        "ak:did_core:web:mod.example",
+        MOD_REQUEST_DIGEST,
+    );
     assert!(operation.payload.get("decision_id").is_none());
     assert!(operation.payload.get("event_id").is_none());
     let mut replay = operation.clone();
@@ -74,13 +99,13 @@ fn moderation_decision_identity_uses_accepted_event_context() {
         assert!(state.moderation_decision_is_live(MOD_DECISION_ID));
     }
     assert_eq!(
-        original_state.cells.get(&mod_decision_cell_ref()),
-        replay_state.cells.get(&mod_decision_cell_ref())
+        original_state.facet_value(MOD_REALM, &mod_decision_facet()),
+        replay_state.facet_value(MOD_REALM, &mod_decision_facet())
     );
 }
 
 #[test]
-fn moderation_decision_then_lift_converges_on_cell() {
+fn moderation_decision_then_lift_converges_on_the_target_facet() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("ak:did_core:web:test.soland");
     seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
@@ -90,28 +115,30 @@ fn moderation_decision_then_lift_converges_on_cell() {
         state.moderation_decision_issuer(MOD_DECISION_ID).as_deref(),
         Some("ak:did_core:web:mod.example")
     );
-    let items = match state.cells.get(&mod_decision_cell_ref()) {
-        Some(ResolvedCellState::Value(Value::Array(items))) => items,
-        other => panic!("moderation target cell should contain an or_set array, got {other:?}"),
+    let items = match state.facet_value(MOD_REALM, &mod_decision_facet()) {
+        Some(Value::Array(items)) => items.clone(),
+        other => panic!("moderation target facet should hold a keyed set, got {other:?}"),
     };
-    // The add tag is the registered dot, not a decision/issuer/digest triple:
-    // it is what the lift's `observed_dot_ids[]` has to name byte for byte
-    // (`content-moderation.md` §2.6).
+    // The add tag is the registered `(issuer_id, request_canonical_digest)`
+    // pair, not a decision/issuer/digest triple: it is what scopes a lift to
+    // one issuer's review (`content-moderation.md` section 2.6).
     assert_eq!(
         items[0].get("tag").and_then(Value::as_str),
-        Some(MOD_DECISION_DOT)
+        Some(entry_tag("ak:did_core:web:mod.example", MOD_REQUEST_DIGEST).as_str())
     );
+    assert_eq!(state.facet_revision(MOD_REALM, &mod_decision_facet()), 1);
 
-    let lift = make_operation(
-        arkret_wire::EventKind::ModerationDecisionLift,
-        MOD_REALM,
-        serde_json::json!({
-            "decision_ref": MOD_DECISION_ID,
-            "observed_dot_ids": [MOD_DECISION_DOT],
-            "target_ref": MOD_TARGET_REF,
-            "realm_id": MOD_REALM,
-        }),
-    );
+    // Section 2.6 -- a lift names the exact revision it observed, and a stale
+    // one is rejected with zero writes.
+    let stale = lift_operation(MOD_DECISION_ID, 0);
+    assert!(matches!(
+        state.apply(&stale, &hlc),
+        ProjectionEffect::Rejected { ref reason }
+            if reason.as_str() == arkret_wire::ErrorCode::CAS_CONFLICT
+    ));
+    assert!(state.moderation_decision_is_live(MOD_DECISION_ID));
+
+    let lift = lift_operation(MOD_DECISION_ID, 1);
     let effect = state.apply(&lift, &hlc);
     assert!(matches!(
         effect,
@@ -119,12 +146,48 @@ fn moderation_decision_then_lift_converges_on_cell() {
     ));
     assert!(state.moderation_decision_is_lifted(MOD_DECISION_ID));
     assert!(!state.moderation_decision_is_live(MOD_DECISION_ID));
+}
 
-    // 2.6 terminal: a re-add stays lifted.
+#[test]
+fn lifting_one_review_never_lifts_another_issuers_decision() {
+    // `content-moderation.md` section 2.6 -- lifting one review must not
+    // implicitly lift another issuer's decision. Two issuers hold decisions on
+    // the same target; the lift removes exactly the entry its `decision_ref`
+    // wrote.
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
     seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
-    assert!(state.moderation_decision_is_lifted(MOD_DECISION_ID));
+    let other = moderation_decision_operation(
+        OTHER_DECISION_ID,
+        "ak:did_core:web:other-mod.example",
+        OTHER_REQUEST_DIGEST,
+    );
     assert!(matches!(
-        state.cells.get(&mod_decision_cell_ref()),
-        Some(ResolvedCellState::Value(Value::Array(_)))
+        state.apply(&other, &hlc),
+        ProjectionEffect::ModerationDecisionProjected { .. }
     ));
+    assert!(state.moderation_decision_is_live(MOD_DECISION_ID));
+    assert!(state.moderation_decision_is_live(OTHER_DECISION_ID));
+
+    let lift = lift_operation(MOD_DECISION_ID, 2);
+    assert!(matches!(
+        state.apply(&lift, &hlc),
+        ProjectionEffect::ModerationDecisionLifted { .. }
+    ));
+    assert!(state.moderation_decision_is_lifted(MOD_DECISION_ID));
+    assert!(state.moderation_decision_is_live(OTHER_DECISION_ID));
+    // The surviving decision still drives the effective verdict.
+    assert_eq!(
+        state.effective_moderation_verdict(MOD_TARGET_REF),
+        "quarantine"
+    );
+    let items = match state.facet_value(MOD_REALM, &mod_decision_facet()) {
+        Some(Value::Array(items)) => items.clone(),
+        other => panic!("moderation target facet should hold a keyed set, got {other:?}"),
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].get("tag").and_then(Value::as_str),
+        Some(entry_tag("ak:did_core:web:other-mod.example", OTHER_REQUEST_DIGEST).as_str())
+    );
 }

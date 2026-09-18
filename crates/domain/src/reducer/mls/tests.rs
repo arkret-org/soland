@@ -61,6 +61,7 @@ fn scope_group(scope: &Value) -> String {
         .unwrap()
         .canonical_mls_group_id()
         .unwrap()
+        .to_string()
 }
 
 fn realm_group() -> &'static str {

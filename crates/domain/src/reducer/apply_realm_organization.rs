@@ -385,10 +385,13 @@ mod tests {
         assert_eq!(verified.len(), 1);
         assert_eq!(verified[0].organization_id, org_id(ORG));
         assert_eq!(verified[0].relationship, "owner");
-        // Cell written under the composite subject.
+        // Facet written under the composite subject.
         assert!(
-            ProjectionState::realm_organization_cell_id(&org_id(ORG), "owner")
-                .and_then(|cell| state.cell_value(&cell))
+            state
+                .facet_value(
+                    REALM,
+                    &ProjectionState::realm_organization_facet(&org_id(ORG), "owner")
+                )
                 .is_some()
         );
     }

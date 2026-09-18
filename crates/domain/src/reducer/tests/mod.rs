@@ -20,21 +20,6 @@ mod space_container;
 mod stage_axis;
 mod strand_morph;
 
-pub(super) fn test_notary(did: &str) -> arkret_wire::NotaryValue {
-    let did = arkret_identifiers::Did::new(did.to_owned()).unwrap();
-    let descriptor = arkret_wire::NotarySignerDescriptor {
-        actor_id: arkret_wire::ActorId::service(arkret_wire::project_did_to_core_id(&did).unwrap()),
-        verification_method: arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap(),
-        key_kind: arkret_wire::NotaryKeyKind::Ed25519Raw32,
-        jose_algorithm: arkret_wire::NotaryJoseAlgorithm::Ed25519,
-        // RFC 8032 test-vector public key; the matching private fixture is
-        // intentionally not needed by pure reducer tests.
-        frozen_public_key_b64u: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
-    };
-    descriptor.validate().unwrap();
-    arkret_wire::NotaryValue::new(descriptor, 0).expect("test single-authority notary")
-}
-
 pub(super) fn account_actor(principal_id: &str) -> arkret_wire::ActorId {
     let principal_id = arkret_identifiers::DidCoreId::new(principal_id).unwrap();
     arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -47,33 +32,44 @@ pub(super) fn account_actor_string(principal_id: &str) -> String {
     account_actor(principal_id).to_string()
 }
 
-pub(super) fn actor_cell_subject(actor: &arkret_wire::ActorId) -> String {
-    arkret_wire::composite_subject(&[actor.canonical_key().unwrap()]).unwrap()
+/// The facet subject a member-scoped facet is keyed by.
+///
+/// Production keys every actor-scoped facet by the ActorId's canonical key
+/// (see `ProjectionState::member_transition_state`), so a test addresses the
+/// same subject through the same projection.
+pub(super) fn actor_facet_subject(actor: &arkret_wire::ActorId) -> String {
+    actor.canonical_key().unwrap()
 }
 
-/// Materialize the registered genesis authority-root cell for a Realm.
+/// The generation-0 governance Station every reducer fixture Realm is created
+/// under. `realm-genesis.schema.json` requires it and the create reducer folds
+/// it into the authority-root facet.
+pub(super) const FIXTURE_GOVERNANCE_STATION: &str = "ak:did_core:web:reducer-test.example";
+
+/// Materialize the genesis authority-root facet for a Realm.
 ///
-/// `realm-and-space.md` section 2.5 makes this cell the sole source of Realm
-/// owner authority, so a reducer test that needs an owner installs the cell
-/// rather than a self-issued grant. The value is built through the SDK
-/// projection type so a test can never seed a shape the create reducer would
-/// not derive.
+/// `realm-and-space.md` section 2.5 makes this facet the sole source of Realm
+/// owner authority, so a reducer test that needs an owner installs the facet
+/// rather than a self-issued grant. The shape is exactly what
+/// `genesis_authority_root_value` derives from an `ak.realm.create` payload,
+/// so a test can never seed a shape the create reducer would not produce.
 pub(super) fn install_realm_authority_root(
     state: &mut ProjectionState,
     realm_id: &str,
     controller_actor_id: &str,
 ) {
-    let value = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-        arkret_wire::ActorId::service(
-            arkret_identifiers::DidCoreId::new(controller_actor_id).unwrap(),
-        ),
+    let controller = arkret_wire::ActorId::service(
+        arkret_identifiers::DidCoreId::new(controller_actor_id).unwrap(),
     );
-    state.realm_null_subject_cells.insert(
-        (
-            realm_id.to_owned(),
-            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-        ),
-        ResolvedCellState::Value(serde_json::to_value(value).unwrap()),
+    state.set_realm_facet(
+        realm_id,
+        facet::REALM_AUTHORITY_ROOT,
+        serde_json::json!({
+            "controller_actor_id": controller,
+            "controller_epoch": 0,
+            "governance_station_id": FIXTURE_GOVERNANCE_STATION,
+            "authority_generation": 0,
+        }),
     );
 }
 
@@ -167,12 +163,4 @@ pub(super) fn derived_event_id_for_actor(
     )
     .expect("event envelope")
     .event_id
-}
-
-pub(super) fn derived_event_id(
-    object_kind: impl AsRef<str>,
-    realm_id: &str,
-    payload: &Value,
-) -> arkret_identifiers::EventId {
-    derived_event_id_at_seq(object_kind, realm_id, 0, payload)
 }

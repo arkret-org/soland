@@ -572,7 +572,7 @@ fn space_container_child_order_tracks_rank_updates() {
         &hlc,
     );
 
-    let value = state.child_order_cell_value(board_id);
+    let value = state.child_order_facet_value(board_id);
     let titles = value["children"]
         .as_array()
         .expect("children array")

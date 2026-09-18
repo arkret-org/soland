@@ -856,16 +856,12 @@ pub struct ReactionState {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// One accepted write in an `ak.component.calendar.rsvp.v1` causal register.
-///
-/// The state model value is the whole `payload.entry`. History remains available
-/// so out-of-order delivery can recompute depth after a predecessor arrives.
-#[derive(Clone, Debug, PartialEq)]
 /// Settled RSVP of one `(event_ref, occurrence, actor_id)` subject.
 ///
-/// Every response rides the Realm's own commit stream, so the newest accepted
-/// one replaces the previous outright; there is no covered-write set to retain
-/// and no winner to select.
+/// The state model value is the whole `payload.entry`. Every response rides the
+/// Realm's own commit stream, so the newest accepted one replaces the previous
+/// outright; there is no covered-write set to retain and no winner to select.
+#[derive(Clone, Debug, PartialEq)]
 pub struct RsvpProjection {
     pub event_ref: String,
     pub occurrence: Option<String>,

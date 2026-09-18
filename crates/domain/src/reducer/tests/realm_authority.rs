@@ -15,19 +15,50 @@ fn operation(kind: impl AsRef<str>, payload: Value) -> Operation {
 }
 
 fn root_digest(state: &ProjectionState) -> String {
-    arkret_canonical::canonical_sha256(&state.realm_authority_root(REALM).unwrap()).unwrap()
+    arkret_canonical::canonical_sha256(state.realm_authority_root(REALM).unwrap()).unwrap()
+}
+
+fn controller(state: &ProjectionState) -> arkret_wire::ActorId {
+    serde_json::from_value(
+        state
+            .realm_authority_root(REALM)
+            .unwrap()
+            .get("controller_actor_id")
+            .unwrap()
+            .clone(),
+    )
+    .unwrap()
+}
+
+fn controller_epoch(state: &ProjectionState) -> u64 {
+    state
+        .realm_authority_root(REALM)
+        .unwrap()
+        .get("controller_epoch")
+        .and_then(Value::as_u64)
+        .unwrap()
+}
+
+fn authority_generation(state: &ProjectionState) -> u64 {
+    state
+        .realm_authority_root(REALM)
+        .unwrap()
+        .get("authority_generation")
+        .and_then(Value::as_u64)
+        .unwrap()
 }
 
 fn state_with_successor() -> ProjectionState {
     let mut state = ProjectionState::default();
-    let value =
-        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(account_actor(OWNER));
-    state.realm_null_subject_cells.insert(
-        (
-            REALM.to_owned(),
-            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-        ),
-        ResolvedCellState::Value(serde_json::to_value(value).unwrap()),
+    state.set_realm_facet(
+        REALM,
+        facet::REALM_AUTHORITY_ROOT,
+        serde_json::json!({
+            "controller_actor_id": account_actor(OWNER),
+            "controller_epoch": 0,
+            "governance_station_id": FIXTURE_GOVERNANCE_STATION,
+            "authority_generation": 0,
+        }),
     );
     let now = chrono::Utc::now();
     let successor = account_actor_string(SUCCESSOR);
@@ -51,7 +82,8 @@ fn state_with_successor() -> ProjectionState {
 #[test]
 fn transfer_changes_only_controller_and_epoch() {
     let mut state = state_with_successor();
-    let before = state.realm_authority_root(REALM).unwrap();
+    let before_epoch = controller_epoch(&state);
+    let before_generation = authority_generation(&state);
     let effect = state.apply_realm_authority_transition(
         &operation(
             arkret_wire::EventKind::RealmOwnerTransfer,
@@ -68,13 +100,12 @@ fn transfer_changes_only_controller_and_epoch() {
         arkret_wire::EventKind::RealmOwnerTransfer,
     );
     assert!(matches!(effect, ProjectionEffect::RealmLifecycle { .. }));
-    let after = state.realm_authority_root(REALM).unwrap();
     assert_eq!(
-        after.controller_actor_id.signing_principal_id().as_str(),
+        controller(&state).signing_principal_id().as_str(),
         SUCCESSOR
     );
-    assert_eq!(after.controller_epoch, before.controller_epoch + 1);
-    assert_eq!(after.authority_generation, before.authority_generation);
+    assert_eq!(controller_epoch(&state), before_epoch + 1);
+    assert_eq!(authority_generation(&state), before_generation);
 }
 
 #[test]
@@ -126,7 +157,8 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
 #[test]
 fn reset_changes_only_generation() {
     let mut state = state_with_successor();
-    let before = state.realm_authority_root(REALM).unwrap();
+    let before_controller = controller(&state);
+    let before_epoch = controller_epoch(&state);
     let reset = state.apply_realm_authority_transition(
         &operation(
             arkret_wire::EventKind::RealmAuthorityReset,
@@ -140,24 +172,17 @@ fn reset_changes_only_generation() {
         arkret_wire::EventKind::RealmAuthorityReset,
     );
     assert!(matches!(reset, ProjectionEffect::RealmLifecycle { .. }));
-    let after_reset = state.realm_authority_root(REALM).unwrap();
-    assert_eq!(after_reset.controller_actor_id, before.controller_actor_id);
-    assert_eq!(after_reset.controller_epoch, before.controller_epoch);
-    assert_eq!(after_reset.authority_generation, 1);
+    assert_eq!(controller(&state), before_controller);
+    assert_eq!(controller_epoch(&state), before_epoch);
+    assert_eq!(authority_generation(&state), 1);
 }
 
 #[test]
 fn successor_counter_overflow_fails_closed_without_mutation() {
     let mut state = state_with_successor();
-    let mut root = state.realm_authority_root(REALM).unwrap();
-    root.authority_generation = 9_007_199_254_740_991;
-    state.realm_null_subject_cells.insert(
-        (
-            REALM.to_owned(),
-            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-        ),
-        arkret_state::state_model::ResolvedCellState::Value(serde_json::to_value(&root).unwrap()),
-    );
+    let mut root = state.realm_authority_root(REALM).unwrap().clone();
+    root["authority_generation"] = serde_json::json!(9_007_199_254_740_991u64);
+    state.set_realm_facet(REALM, facet::REALM_AUTHORITY_ROOT, root.clone());
     let effect = state.apply_realm_authority_transition(
         &operation(
             arkret_wire::EventKind::RealmAuthorityReset,
@@ -174,5 +199,5 @@ fn successor_counter_overflow_fails_closed_without_mutation() {
         effect,
         ProjectionEffect::Rejected { reason } if reason == "reducer_projection_failed"
     ));
-    assert_eq!(state.realm_authority_root(REALM).unwrap(), root);
+    assert_eq!(state.realm_authority_root(REALM), Some(&root));
 }

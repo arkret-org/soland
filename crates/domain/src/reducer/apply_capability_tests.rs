@@ -16,55 +16,69 @@ fn fixture_event_id_for_operation(operation_id: &str) -> String {
         .to_string()
 }
 
-mod cbs_capability_cell_tests {
-    use arkret_state::state_model::ResolvedCellState;
+/// The genesis authority ref a fixture grant is issued under.
+///
+/// `capabilities.md` section 10 roots an owner-issued grant in the Realm's
+/// authority-root facet, named by the committed Event that installed it, so a
+/// fixture carries the same `realm_authority` ref a real producer would.
+fn realm_authority_ref(realm_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "realm_authority",
+        "realm_id": realm_id,
+        "governance_station_id": crate::reducer::tests::FIXTURE_GOVERNANCE_STATION,
+        "authority_generation": 0,
+        "basis": {
+            "event_id": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk",
+            "commit_id": "ak:realm_commit:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk",
+            "stream_ref": { "kind": "realm", "realm_id": realm_id },
+            "stream_position": 1
+        }
+    })
+}
+
+mod capability_facet_tests {
     use serde_json::{Value, json};
 
-    use super::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
+    use super::{engine_grant_from_capability_facet, engine_grant_from_cell_body};
 
     fn actor(value: &str) -> arkret_wire::ActorId {
         arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(value).unwrap())
     }
 
     #[test]
-    fn engine_grant_reads_registry_projected_wrapper() {
+    fn engine_grant_reads_the_canonical_genesis_wrapper() {
         let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
         let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
-        let state = ResolvedCellState::Sequenced(arkret_state::state_model::SequencedStateValue {
-            revision_event_id: arkret_wire::EventId::from_digest(
-                arkret_canonical::DigestSuite::Sha256,
-                [1; 32],
-            ),
-            value: Value::Array(vec![json!({
-                "tag_id": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk:0",
-                "value": {
-                    "grant_id": grant_id,
-                    "grant": {
-                        "id": grant_id,
-                        "realm_id": realm_id,
-                        "issuer_id": actor("ak:did_core:web:owner.example"),
-                        "issuer_authority_refs": [{
-                            "kind": "realm_root",
-                            "realm_id": realm_id,
-                            "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                            "controller_epoch_at_issuance": 0,
-                            "authority_generation": 0
-                        }],
-                        "subject": actor("ak:did_core:web:owner.example"),
-                        "actions": ["ak.realm.admin"],
-                        "resources": [{
-                            "kind": "realm",
-                            "realm_id": realm_id,
-                            "match_scope": "realm_wide"
-                        }],
-                        "issued_at": "2026-07-28T00:00:00.000Z"
+        let settled = json!({
+            "grant": {
+                "id": grant_id,
+                "realm_id": realm_id,
+                "issuer_id": actor("ak:did_core:web:owner.example"),
+                "issuer_authority_refs": [{
+                    "kind": "realm_authority",
+                    "realm_id": realm_id,
+                    "governance_station_id": "ak:did_core:web:reducer-test.example",
+                    "authority_generation": 0,
+                    "basis": {
+                        "event_id": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk",
+                        "commit_id": "ak:realm_commit:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk",
+                        "stream_ref": { "kind": "realm", "realm_id": realm_id },
+                        "stream_position": 1
                     }
-                }
-            })]),
+                }],
+                "subject": actor("ak:did_core:web:owner.example"),
+                "actions": ["ak.realm.admin"],
+                "resources": [{
+                    "kind": "realm",
+                    "realm_id": realm_id,
+                    "match_scope": "realm_wide"
+                }],
+                "issued_at": "2026-07-28T00:00:00.000Z"
+            }
         });
 
-        let grant = engine_grant_from_capability_cell_state(grant_id, &state)
-            .expect("the CBS registry wrapper must resolve to an effective grant");
+        let grant = engine_grant_from_capability_facet(grant_id, &settled)
+            .expect("the canonical genesis wrapper must resolve to an effective grant");
         assert_eq!(grant.grant_id, grant_id);
         assert_eq!(grant.realm_id, realm_id);
         assert_eq!(
@@ -77,6 +91,9 @@ mod cbs_capability_cell_tests {
                 .iter()
                 .any(|action| action == "ak.realm.admin")
         );
+        // A revoked or relinquished grant keeps its facet carrying a JSON
+        // `null`, and that tombstone must never resolve to a live grant.
+        assert!(engine_grant_from_capability_facet(grant_id, &Value::Null).is_none());
     }
 
     #[test]
@@ -127,7 +144,7 @@ mod agent_key_tests {
     use arkret_wire::EventKind;
     use serde_json::json;
 
-    use crate::reducer::{ProjectionState, SolandRealmState};
+    use crate::reducer::{FacetRef, ProjectionState, SolandRealmState, facet};
 
     const AGENT: &str = "ak:did_core:web:agent.example";
     const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
@@ -223,13 +240,7 @@ mod agent_key_tests {
                 "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
                 "issuer_id": actor(issuer),
-                "issuer_authority_refs": [{
-                    "kind": "realm_root",
-                    "realm_id": REALM,
-                    "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                    "controller_epoch_at_issuance": 0,
-                    "authority_generation": 0
-                }],
+                "issuer_authority_refs": [super::realm_authority_ref(REALM)],
                 "subject": actor(subject),
                 "actions": actions,
                 "resources": resources,
@@ -809,7 +820,7 @@ mod agent_key_tests {
     }
 
     #[test]
-    fn ancestor_revoke_invalidates_child_without_rewriting_child_cell() {
+    fn ancestor_revoke_invalidates_child_without_rewriting_the_child_facet() {
         let mut state = ProjectionState::default();
         seed_realm_authority(&mut state);
         let now = chrono::Utc::now();
@@ -853,8 +864,9 @@ mod agent_key_tests {
             REALM,
             now,
         ));
-        let child_cell = ProjectionState::capability_grant_cell_ref(GRANT_2).unwrap();
-        let child_before = state.cells.get(&child_cell).cloned();
+        let child_facet = FacetRef::new(facet::CAPABILITY_GRANT, GRANT_2);
+        let child_before = state.facet_value(REALM, &child_facet).cloned();
+        assert!(child_before.is_some());
 
         assert!(matches!(
             state.apply_capability_revoke(
@@ -870,7 +882,10 @@ mod agent_key_tests {
             REALM,
             now,
         ));
-        assert_eq!(state.cells.get(&child_cell).cloned(), child_before);
+        assert_eq!(
+            state.facet_value(REALM, &child_facet).cloned(),
+            child_before
+        );
     }
 
     #[test]
@@ -890,18 +905,12 @@ mod agent_key_tests {
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
 
-        let mut root = state.realm_authority_root(REALM).unwrap();
-        root.controller_actor_id = actor("ak:did_core:web:bob.example");
-        root.controller_epoch += 1;
-        state.realm_null_subject_cells.insert(
-            (
-                REALM.to_owned(),
-                arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-            ),
-            arkret_state::state_model::ResolvedCellState::Value(
-                serde_json::to_value(&root).unwrap(),
-            ),
-        );
+        let mut root = state.realm_authority_root(REALM).unwrap().clone();
+        root["controller_actor_id"] = serde_json::to_value(actor("ak:did_core:web:bob.example"))
+            .expect("controller actor serializes");
+        root["controller_epoch"] =
+            json!(root["controller_epoch"].as_u64().expect("controller epoch") + 1);
+        state.set_realm_facet(REALM, facet::REALM_AUTHORITY_ROOT, root.clone());
         assert!(state.issuer_has_projected_capability(
             &actor(AGENT),
             REALM,
@@ -910,16 +919,13 @@ mod agent_key_tests {
             now,
         ));
 
-        root.authority_generation += 1;
-        state.realm_null_subject_cells.insert(
-            (
-                REALM.to_owned(),
-                arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-            ),
-            arkret_state::state_model::ResolvedCellState::Value(
-                serde_json::to_value(root).unwrap(),
-            ),
+        root["authority_generation"] = json!(
+            root["authority_generation"]
+                .as_u64()
+                .expect("authority generation")
+                + 1
         );
+        state.set_realm_facet(REALM, facet::REALM_AUTHORITY_ROOT, root);
         assert!(!state.issuer_has_projected_capability(
             &actor(AGENT),
             REALM,
@@ -944,8 +950,9 @@ mod agent_key_tests {
                 if target_ref == GRANT_3
         ));
         assert!(
-            ProjectionState::capability_grant_cell_ref(GRANT_3)
-                .is_some_and(|cell| !state.cells.contains_key(&cell))
+            state
+                .facet_value(REALM, &FacetRef::new(facet::CAPABILITY_GRANT, GRANT_3))
+                .is_none()
         );
 
         let grant = grant_payload(
@@ -981,8 +988,12 @@ mod agent_key_tests {
         ));
         assert!(state.effective_engine_grant(GRANT).is_none());
         assert!(state.capability_grant_metadata[GRANT].revoked);
-        let cell = ProjectionState::capability_grant_cell_ref(GRANT).unwrap();
-        assert_eq!(state.cells[&cell].settled_value(), Some(&json!([])));
+        // The facet survives the relinquish carrying a JSON `null`, so a
+        // replay of the original grant Event cannot revive it.
+        assert_eq!(
+            state.facet_value(REALM, &FacetRef::new(facet::CAPABILITY_GRANT, GRANT)),
+            Some(&serde_json::Value::Null)
+        );
     }
 }
 
@@ -991,7 +1002,7 @@ mod authority_cycle_tests {
     use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;
 
-    use crate::reducer::{ProjectionState, SolandRealmState};
+    use crate::reducer::{FacetRef, ProjectionState, SolandRealmState, facet};
 
     const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
     const G_A: &str = "ak:grant:AY8nTS0IYFI6o2WxxtlIGtu1bu_J1zcv4KXXmyb5hV1q";
@@ -1003,7 +1014,7 @@ mod authority_cycle_tests {
     }
 
     /// A re-grant: same `ak.capability.grant` kind as a root issue, with a
-    /// `grant` authority ref instead of a `realm_root` one. That ref type is
+    /// `grant` authority ref instead of a `realm_authority` one. That ref type is
     /// the only thing that distinguishes the two.
     fn regrant_op(grant_id: &str, authority_grant_id: &str) -> Operation {
         regrant_op_with_constraints(grant_id, authority_grant_id, json!([]))
@@ -1058,21 +1069,8 @@ mod authority_cycle_tests {
                 "sender": issuer,
                 "grant": {
                     "issuer_id": actor(issuer),
-                    "issuer_authority_refs": [{
-                        "kind": "realm_root",
-                        "realm_id": REALM,
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
-                        "authority_generation": 0
-                    }],
+                    "issuer_authority_refs": [super::realm_authority_ref(REALM)],
                     "subject": actor(subject),
-                    "issuer_authority_refs": [{
-                        "kind": "realm_root",
-                        "realm_id": REALM,
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
-                        "authority_generation": 0
-                    }],
                     "actions": ["ak.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
                     "constraints": constraints,
@@ -1339,7 +1337,7 @@ mod authority_cycle_tests {
     }
 
     #[test]
-    fn regrant_derives_parent_audit_after_sealed_cell_reload() {
+    fn regrant_derives_parent_audit_after_a_facet_reload() {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
         assert!(matches!(
@@ -1359,23 +1357,18 @@ mod authority_cycle_tests {
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
 
-        // CellStore persists the registry-projected producer body; simulate
-        // the authoritative reload that replaces the live enriched cache.
-        let parent_cell = ProjectionState::capability_grant_cell_ref(G_A).unwrap();
-        let arkret_state::state_model::ResolvedCellState::Sequenced(state) =
-            proj.cells.get_mut(&parent_cell).unwrap()
-        else {
-            panic!("capability parent cell must be sequenced");
-        };
-        for item in state.value.as_array_mut().unwrap() {
-            let body = if item.get("value").is_some() {
-                item.get_mut("value").unwrap()
-            } else {
-                item
-            };
-            body.as_object_mut().unwrap().remove("authority_depth");
-            body.as_object_mut().unwrap().remove("authority_root_refs");
-        }
+        // The store persists the producer-authored grant body; simulate the
+        // authoritative reload that replaces the live enriched cache, so the
+        // reducer-derived audit has to be re-derived rather than read back.
+        let parent_facet = FacetRef::new(facet::CAPABILITY_GRANT, G_A);
+        let mut body = proj
+            .facet_value(REALM, &parent_facet)
+            .expect("parent grant facet")
+            .clone();
+        let object = body.as_object_mut().expect("grant body object");
+        object.remove("authority_depth");
+        object.remove("authority_root_refs");
+        proj.set_facet(REALM, parent_facet, body);
 
         let parent = proj.effective_engine_grant(G_A).unwrap();
         assert_eq!(parent.authority_depth, Some(1));
@@ -1440,7 +1433,7 @@ mod realm_owner_authority_tests {
     use arkret_wire::CapabilityActionId;
     use serde_json::json;
 
-    use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
+    use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState, facet};
 
     const REALM: &str = "ak:realm:ATKefSdBA52dfl_b0kwuiBO-JG0nPTlnS_bXWGh3Z57K";
     const OWNER: &str = "ak:did_core:web:owner.example";
@@ -1471,13 +1464,7 @@ mod realm_owner_authority_tests {
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
                     "issuer_id": actor(issuer),
-                    "issuer_authority_refs": [{
-                        "kind": "realm_root",
-                        "realm_id": REALM,
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
-                        "authority_generation": 0
-                    }],
+                    "issuer_authority_refs": [super::realm_authority_ref(REALM)],
                     "subject": actor(subject),
                     "actions": actions,
                     "resources": [{
@@ -1539,11 +1526,10 @@ mod realm_owner_authority_tests {
     }
 
     fn declare_profiles(state: &mut ProjectionState, profiles: &[&str]) {
-        state.realm_null_subject_cells.insert(
-            (REALM.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-            arkret_state::state_model::ResolvedCellState::Value(json!({
-                "schema_refs": profiles,
-            })),
+        state.set_realm_facet(
+            REALM,
+            facet::REALM_GENESIS,
+            json!({ "schema_refs": profiles }),
         );
     }
 
@@ -1552,7 +1538,8 @@ mod realm_owner_authority_tests {
         let issuer = super::grant_issuer(&operation.payload).expect("fixture grant issuer");
         let current_controller = state
             .realm_authority_root(REALM)
-            .map(|root| root.controller_actor_id);
+            .and_then(|root| root.get("controller_actor_id"))
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok());
         if current_controller.as_ref() != Some(&issuer)
             && let Some(parent) = state
                 .projected_capability_grants()
@@ -1589,7 +1576,8 @@ mod realm_owner_authority_tests {
     #[test]
     fn only_the_authority_root_controller_is_the_owner() {
         // A forged `realm_states[..].owner` is a discardable presentation
-        // mirror. It never authorizes anything; only the registered cell does.
+        // mirror. It never authorizes anything; only the authority-root facet
+        // does.
         let forged = realm(None, Some(OWNER));
         assert!(!forged.actor_holds_effective_realm_owner(
             REALM,
