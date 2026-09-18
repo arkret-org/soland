@@ -1,4 +1,4 @@
-use arkret_models_collaboration::session_grant_bodies::{
+use arkret_models_collaboration::session_grants::{
     AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SessionGrantIntrospectByJwt,
 };
 use chrono::{DateTime, Utc};

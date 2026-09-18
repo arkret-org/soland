@@ -1605,10 +1605,7 @@ impl AppState {
         // Build the hydrated views off-lock (the async DB reads must not hold
         // a std::sync Mutex guard across `.await`), then merge under a short
         // synchronous critical section.
-        let realm_updates = self
-            .persistence
-            .hydrate_realm_directory(&self.projections)
-            .await?;
+        let realm_updates = self.persistence.hydrate_realm_directory().await?;
         for (_, entry) in realm_updates.entries_iter() {
             self.realm_directory.upsert(entry.clone());
         }

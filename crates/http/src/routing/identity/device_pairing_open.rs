@@ -18,12 +18,12 @@
 //! The resolve token is accepted only in the JSON body, never the URL.
 
 use arkret_identifiers::{DeviceId, EventId};
-use arkret_models_collaboration::governance::agent_artifacts::{DeviceMetadata, PublicKey};
-use arkret_models_collaboration::http_bodies::{
+use arkret_models_collaboration::device_pairing::{
     DevicePairingBootstrap, DevicePairingCode, DevicePairingNonce, DevicePairingRequestId,
     DevicePairingResolveRequestBody, DevicePairingStageOutcome, DevicePairingStageRequestBody,
     DevicePairingState, DevicePairingStatusOutcome, DevicePairingStatusRequestBody,
 };
+use arkret_models_collaboration::governance::agent_artifacts::{DeviceMetadata, PublicKey};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::oapi::endpoint;

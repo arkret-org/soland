@@ -372,16 +372,14 @@ fn projection_member_is_joined(
     let Ok(actor_key) = actor.canonical_key() else {
         return false;
     };
-    let Ok(subject) = arkret_wire::composite_subject(&[actor_key]) else {
-        return false;
-    };
-    let Ok(cell_id) =
-        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{subject}"))
-    else {
-        return false;
-    };
     projection
-        .realm_cell_value(realm_id, &cell_id)
+        .facet_value(
+            realm_id,
+            &soland_domain::reducer::FacetRef::new(
+                soland_domain::reducer::facet::MEMBER_STATE,
+                actor_key,
+            ),
+        )
         .and_then(Value::as_str)
         == Some("join")
 }
@@ -460,7 +458,7 @@ pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> S
     let projected = {
         let projection = state.projections().snapshot();
         projection
-            .realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_DISCOVERY_V1)
+            .realm_facet_value(realm_id, soland_domain::reducer::facet::REALM_DISCOVERY)
             .and_then(|value| {
                 value
                     .get("value")

@@ -177,7 +177,7 @@ pub(crate) async fn build_sync_snapshot(
         realms: Some(arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeRealms {
             entries: sync_realms,
         }),
-        to_device: Some(arkret_models_collaboration::sync_frames::account_sync::DeviceMessageContainer {
+        to_device: Some(arkret_models_collaboration::sync_frames::account_subscribe::DeviceMessageContainer {
             messages: to_device,
             ack_token: to_device_ack_token,
             lost: to_device_lost,
@@ -372,17 +372,17 @@ mod account_notification_tests {
     #[test]
     fn typed_agent_approval_uses_discriminator_free_notification_delta() {
         let delta =
-            arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+            arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta::try_new(
                 arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
                     arkret_wire::NotificationId::new(
                         "ak:notification:019fa1ef-00ee-77e0-9f06-2f2d36bf2475".to_owned(),
                     )
                     .expect("test notification id"),
                 ),
-                arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
+                arkret_models_collaboration::sync_frames::account_subscribe::NotificationDeltaAction::Upsert,
                 Some(
-                    arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
-                        arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
+                    arkret_models_collaboration::sync_frames::account_subscribe::NotificationData::AgentRuntimeApproval(
+                        arkret_models_collaboration::account_subscribe_projections::AgentRuntimeApprovalNotificationData {
                             approval_request_id: arkret_wire::OpaqueLocalId::new(
                                 "agent_runtime_approval:019fa1ef-00ee-77e0-9f06-2f1d9ed5e3fa",
                             )

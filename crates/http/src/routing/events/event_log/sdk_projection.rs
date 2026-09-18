@@ -758,29 +758,18 @@ fn circle_event_visible_to_session(
         )
 }
 
-/// Scan the projected cell or durable Event store for the most recent
-/// `ak.realm.read_receipt_policy` event in `realm_id` and return its typed
-/// SDK policy payload. Returns `None` when no policy event has been written
-/// for this Realm; callers use `ReadReceiptPolicy::default()`.
+/// Settled `realm.read_receipt_policy` facet of `realm_id`, as its typed SDK
+/// policy payload. Returns `None` when no accepted `ak.realm.read_receipt_policy`
+/// Event has written the facet; callers use `ReadReceiptPolicy::default()`.
 ///
-/// Used by ephemeral `ak.receipt.read` admission and future receipt fanout
-/// handlers to enforce the Realm policy.
+/// Used by ephemeral `ak.receipt.read` admission and receipt fanout handlers
+/// to enforce the Realm policy.
 pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy> {
-    // Cell-keyed fast path. The Move/Seal pipeline writes the
-    // `ak.component.realm.read_receipt_policy.v1` resolved SequencedState
-    // value into `ProjectionState::cells` after every apply_seal; we
-    // read directly from there. (R1.2 renamed the cell family from
-    // `ak.component.realm.read_receipt_policy.v1` along with the event
-    // kind.)
     let proj = state.projections().snapshot();
-    let cell_id = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
-    ))
-    .ok()?;
-    proj.cell_value(&cell_id)
+    proj.read_receipt_policy_value(realm_id)
         .and_then(read_receipt_policy_from_value)
 }
 

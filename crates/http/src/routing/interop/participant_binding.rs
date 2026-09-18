@@ -1,10 +1,9 @@
 //! Verify the compact media binding against its exact enclosing roster tuple.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::CellRef;
 use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
 use arkret_signatures::media::{ParticipantBindingContext, participant_binding_signing_input};
-use arkret_wire::{ActorId, CallId, DeviceId, DidCoreId, REALM_MEDIA_SERVICE_CELL_FAMILY};
+use arkret_wire::{ActorId, CallId, DeviceId, DidCoreId};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
 
@@ -67,15 +66,13 @@ pub(crate) fn verify_call_state_participant_bindings(
         .map_err(|_| "participant_binding_invalid: enclosing device_id is invalid")?;
     let participant_id = required_string(participant, "participant_id")?;
     let focus_id = required_string(participant, "focus_id")?;
-    let focus_cell = CellRef::new(format!(
-        "ak:cell:{}:{}",
-        arkret_wire::CellFamilyId::CALL_FOCUS_V1,
-        call_id
-    ))
-    .map_err(|_| "participant_binding_invalid: invalid focus cell")?;
+    let focus_facet = soland_domain::reducer::FacetRef::new(
+        soland_domain::reducer::facet::CALL_FOCUS,
+        call_id.as_str(),
+    );
     let projection = state.projections().snapshot();
     let current_focus = projection
-        .cell_value(&focus_cell)
+        .facet_value(operation.realm_id.as_str(), &focus_facet)
         .and_then(|focus| focus.get("session_focus"))
         .and_then(Value::as_str);
     let selected_focus = current_focus.or_else(|| {
@@ -87,12 +84,11 @@ pub(crate) fn verify_call_state_participant_bindings(
     if selected_focus != Some(focus_id) {
         return Err("participant_binding_invalid: roster focus does not equal the selected focus");
     }
-    let media_cell = CellRef::new(arkret_wire::null_subject_cell(
-        REALM_MEDIA_SERVICE_CELL_FAMILY,
-    ))
-    .map_err(|_| "token_issuer_unauthorised: invalid media service cell")?;
     let media = projection
-        .realm_cell_value(operation.realm_id.as_str(), &media_cell)
+        .realm_facet_value(
+            operation.realm_id.as_str(),
+            soland_domain::reducer::facet::REALM_MEDIA_SERVICE,
+        )
         .ok_or("token_issuer_unauthorised: current media service is missing")?;
     let service_id = DidCoreId::new(
         media

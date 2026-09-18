@@ -1,5 +1,5 @@
 use arkret_identifiers::EventId;
-use arkret_models_collaboration::http_bodies::AppletEventTransactionRequestBody;
+use arkret_models_integration::applet_models::AppletEventTransactionRequestBody;
 use arkret_models_integration::{
     AppletEventRejection, AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionStatus,
     namespace_pattern_matches,

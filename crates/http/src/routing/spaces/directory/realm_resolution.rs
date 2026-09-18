@@ -379,7 +379,7 @@ pub(super) fn target_kind_for_address(
 
 fn effective_realm_alias(projection: &ProjectionState, realm_id: &str) -> Option<String> {
     projection
-        .realm_null_subject_cell_value(realm_id, CellFamilyId::REALM_ALIAS_V1)
+        .realm_facet_value(realm_id, soland_domain::reducer::facet::REALM_ALIAS)
         .and_then(realm_alias_from_cell_value)
 }
 

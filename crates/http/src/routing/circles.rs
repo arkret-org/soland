@@ -33,7 +33,7 @@ use arkret_identifiers::{CircleId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
     CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody, CircleMemberRequestBody,
     CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
-    CircleScopeRotateRequestBody, CircleView, EncryptionFloor,
+    CircleScopeRotateRequestBody, CircleView,
 };
 use arkret_wire::{ActorId, Event};
 use salvo::oapi::endpoint;
@@ -102,28 +102,7 @@ fn circle_view_from(
         directory_visibility: parse_sdk_field("directory_visibility", &c.directory_visibility)?,
         join_rule: parse_sdk_field("join_rule", &c.join_rule)?,
         history_access: parse_sdk_field("history_access", &c.history_access)?,
-        content_encryption_floor: c
-            .content_encryption_floor
-            .as_ref()
-            .map(|floor| parse_sdk_field::<EncryptionFloor>("content_encryption_floor", floor))
-            .transpose()?,
-        metadata_encryption_floor: c
-            .metadata_encryption_floor
-            .as_ref()
-            .map(|floor| parse_sdk_field::<EncryptionFloor>("metadata_encryption_floor", floor))
-            .transpose()?,
-        encryption_profile: parse_sdk_field("encryption_profile", &c.encryption_profile)?,
-        content_scheme: c
-            .content_scheme
-            .as_ref()
-            .map(|scheme| parse_sdk_field("content_scheme", scheme))
-            .transpose()?,
         mls_group_id: c.mls_group_ref.clone(),
-        durability_policy: c
-            .durability_policy
-            .as_ref()
-            .map(|policy| parse_sdk_field("durability_policy", policy))
-            .transpose()?,
         state: parse_sdk_field("state", c.state.as_str())?,
         viewer_membership,
         member_ids: if include_member_details {
@@ -209,10 +188,14 @@ fn validate_scope_rotate_events(
             "circle scope rotation requires an active Circle",
         ));
     }
-    if circle.encryption_profile != "mls_rfc9420" {
+    // An installed `mls_group_ref` is what makes a Circle scope MLS-backed:
+    // the reducer sets it from the Circle's own accepted `ak.mls.genesis` and
+    // never clears it, so `None` is exactly the plaintext scope this rotation
+    // cannot act on.
+    if circle.mls_group_ref.is_none() {
         return Err(scope_rotate_failed(
             "circle_scope_not_mls_backed",
-            "circle scope rotation requires encryption_profile=mls_rfc9420",
+            "circle scope rotation requires an installed RFC 9420 group",
         ));
     }
     if events.is_empty() {
@@ -227,10 +210,7 @@ fn validate_scope_rotate_events(
     for event in events {
         let kind = &event.kind;
         match kind {
-            arkret_wire::EventKind::MlsGenesis
-            | arkret_wire::EventKind::MlsProposal
-            | arkret_wire::EventKind::MlsCommit
-            | arkret_wire::EventKind::MlsWelcome => {}
+            arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit => {}
             _ => {
                 return Err(scope_rotate_failed(
                     "mls_rotate_event_kind_invalid",

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{CellRef, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::events_payloads::RealmMediaServicePayload;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -83,13 +83,13 @@ async fn admin_get_realm_media_service(
             "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
         )));
     }
-    let cell_id = CellRef::new(arkret_wire::null_subject_cell(
-        arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
-    ))
-    .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
         let proj = state.projections().snapshot();
-        proj.realm_cell_value(&realm_id, &cell_id).cloned()
+        proj.realm_facet_value(
+            &realm_id,
+            soland_domain::reducer::facet::REALM_MEDIA_SERVICE,
+        )
+        .cloned()
     };
 
     append_audit_log(

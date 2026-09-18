@@ -20,7 +20,7 @@ use arkret_identifiers::{DeviceId, EventId};
 use arkret_models_collaboration::account_lifecycle::{
     SessionRevokeOutcome, SessionRevokeRequestBody,
 };
-use arkret_models_collaboration::http_bodies::{
+use arkret_models_collaboration::device_pairing::{
     AccountDevicePairOutcome, AccountDevicePairRequestBody,
 };
 use arkret_models_identity::AccountLogoutOutcome;

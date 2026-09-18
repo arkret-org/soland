@@ -168,7 +168,8 @@ async fn authorize_account_device_pair(
         .ok_or_else(device_pairing_not_found)?;
     // A record still in `staged` has no account binding and MUST NOT be
     // admitted: the whole account half of the transcript would be missing.
-    if record.state != arkret_models_collaboration::http_bodies::DevicePairingState::ReadyForClaim
+    if record.state
+        != arkret_models_collaboration::device_pairing::DevicePairingState::ReadyForClaim
         || record.expires_at <= authorized_at
         || record.pairing_code != pairing_code
         || record.new_device_pubkey != staged_new_device_pubkey
@@ -193,7 +194,7 @@ async fn authorize_account_device_pair(
             .map(serde_json::from_value)
             .transpose()
             .map_err(|error| AppError::internal(error.to_string()))?,
-        client_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
+        client_nonce: arkret_models_collaboration::device_pairing::DevicePairingNonce::new(
             record.client_nonce,
         )
         .map_err(|error| AppError::internal(format!("stored client_nonce invalid: {error}")))?,
@@ -201,7 +202,7 @@ async fn authorize_account_device_pair(
         expires_at: record.expires_at,
         gate_audience_uri: record.gate_audience,
         pairing_code: body.pairing_code.clone(),
-        server_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
+        server_nonce: arkret_models_collaboration::device_pairing::DevicePairingNonce::new(
             record.server_nonce,
         )
         .map_err(|error| AppError::internal(format!("stored server_nonce invalid: {error}")))?,
@@ -234,7 +235,7 @@ async fn authorize_account_device_pair(
         .with_wire_code("schema_violation"));
     }
     let target_proof =
-        arkret_models_collaboration::http_bodies::DevicePairingTargetProof {
+        arkret_models_collaboration::device_pairing::DevicePairingTargetProof {
             account_id: bound_account_id.clone(),
             device_id: authorize_payload.device_id.clone(),
             device_public_key_did: arkret_wire::DidKey::new(
@@ -248,7 +249,7 @@ async fn authorize_account_device_pair(
             hpke_key: authorize_payload.hpke_key.clone(),
             algorithms: authorize_payload.algorithms.clone(),
             device_key_algorithm:
-                arkret_models_collaboration::http_bodies::DevicePairingTargetKeyAlgorithm::Ed25519,
+                arkret_models_collaboration::device_pairing::DevicePairingTargetKeyAlgorithm::Ed25519,
             authorization_binding_kind:
                 arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice,
             pairing_challenge_transcript_digest: authorize_payload.pairing_challenge_transcript_digest.clone().ok_or_else(|| AppError::param_missing("pairing challenge digest is required"))?,
@@ -501,7 +502,7 @@ mod tests {
             signing_key.verifying_key().as_bytes(),
         );
         let unsigned =
-            arkret_models_collaboration::http_bodies::UnsignedDevicePairingTargetProof::new(
+            arkret_models_collaboration::device_pairing::UnsignedDevicePairingTargetProof::new(
                 arkret_wire::AccountId::new(
                     arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
                     arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap(),

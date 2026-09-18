@@ -1,7 +1,7 @@
 use arkret_models_collaboration::sync_frames::account_subscribe::{
     AccountDataContainer, StationCasAccountDataContainer, StationCasAccountDataRemoval,
 };
-use arkret_models_collaboration::sync_frames::account_sync::{
+use arkret_models_collaboration::sync_frames::account_subscribe::{
     AccountSubscribeDeviceListChanges, NotificationContainer,
 };
 use arkret_models_collaboration::sync_frames::demand_sync::{
