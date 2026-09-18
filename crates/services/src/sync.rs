@@ -1,26 +1,22 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 pub use soland_storage::{
-    CursorRevocation as CursorRevocationState, SyncCursorRecord as CursorState,
+    CursorRevocation as CursorRevocationState, RealmJoinDownload, SyncCursorRecord as CursorState,
 };
 
 use crate::ServiceResult;
 
 #[async_trait]
 pub trait CursorStorePort: Send + Sync {
-    async fn realm_join_download(
-        &self,
-        key: &str,
-    ) -> ServiceResult<Option<RealmJoinBootstrapAssembly>>;
+    async fn realm_join_download(&self, key: &str) -> ServiceResult<Option<RealmJoinDownload>>;
     async fn save_realm_join_download(
         &self,
         key: &str,
-        assembly: &RealmJoinBootstrapAssembly,
+        assembly: &RealmJoinDownload,
     ) -> ServiceResult<()>;
     async fn current_detail_page(
         &self,
@@ -264,17 +260,14 @@ impl SyncService {
         self.cursors.get(handle).await
     }
 
-    pub async fn realm_join_download(
-        &self,
-        key: &str,
-    ) -> ServiceResult<Option<RealmJoinBootstrapAssembly>> {
+    pub async fn realm_join_download(&self, key: &str) -> ServiceResult<Option<RealmJoinDownload>> {
         self.cursors.realm_join_download(key).await
     }
 
     pub async fn save_realm_join_download(
         &self,
         key: &str,
-        assembly: &RealmJoinBootstrapAssembly,
+        assembly: &RealmJoinDownload,
     ) -> ServiceResult<()> {
         self.cursors.save_realm_join_download(key, assembly).await
     }
@@ -317,16 +310,13 @@ mod tests {
 
     #[async_trait]
     impl CursorStorePort for RecordingCursors {
-        async fn realm_join_download(
-            &self,
-            _: &str,
-        ) -> ServiceResult<Option<RealmJoinBootstrapAssembly>> {
+        async fn realm_join_download(&self, _: &str) -> ServiceResult<Option<RealmJoinDownload>> {
             unreachable!("cursor-only fixture cannot serve bootstrap downloads")
         }
         async fn save_realm_join_download(
             &self,
             _: &str,
-            _: &RealmJoinBootstrapAssembly,
+            _: &RealmJoinDownload,
         ) -> ServiceResult<()> {
             unreachable!("cursor-only fixture cannot store bootstrap downloads")
         }

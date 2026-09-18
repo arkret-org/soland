@@ -383,7 +383,7 @@ impl crate::identity::ConsentCellPort for PersistenceConsentCells {
             crate::identity::ConsentGrantRecord,
         )>,
     > {
-        Ok(self.0.consent_cells().snapshot_all().await?)
+        Ok(self.0.consent_grants().snapshot_all().await?)
     }
 }
 
@@ -776,8 +776,10 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             signer_resolution_evidence_ref: command.signer_resolution_evidence_ref.clone(),
             current_signer_evidence: command.current_signer_evidence.clone(),
             frozen_authorize_event: command.frozen_authorize_event.clone(),
-            expected_accepted_basis: command.expected_accepted_basis.clone(),
-            outcome: command.outcome,
+            outcome: arkret_models_collaboration::agent_operations::AgentKeyPairOutcome {
+                authorize_ref: command.authorize_ref.clone(),
+                status: command.status,
+            },
             authorized_key_event: command.authorized_key_event.clone(),
             authorized_at: command.authorized_at,
         };

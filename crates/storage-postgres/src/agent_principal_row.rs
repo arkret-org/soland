@@ -86,13 +86,17 @@ struct AuthorizedKeyMaterial {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    current_signer_evidence: Option<Value>,
+    current_signer_evidence: Option<
+        arkret_models_identity::authenticated_signer_resolution_evidence::AuthenticatedSignerResolutionEvidence,
+    >,
 }
 
 pub(crate) fn pack_authorized_key_material(
     event: Option<arkret_wire::Event>,
     signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
-    current_signer_evidence: Option<Value>,
+    current_signer_evidence: Option<
+        arkret_models_identity::authenticated_signer_resolution_evidence::AuthenticatedSignerResolutionEvidence,
+    >,
 ) -> Result<Option<Value>, PersistenceError> {
     let presence = [
         event.is_some(),

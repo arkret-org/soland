@@ -1,15 +1,9 @@
 use std::sync::Arc;
 
+use crate::ServiceResult;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::DidCoreId;
 use async_trait::async_trait;
-pub use soland_storage::{
-    FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationForkNormalizationScope,
-    FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
-    FederationFrontierReductionCheckpoint, FederationFrontierResolutionRecord,
-};
-
-use crate::ServiceResult;
 
 /// Identity and payload of one outbound delivery intent. This is the shape the
 /// admission path builds *before* the Event transaction commits; the durable
@@ -176,67 +170,6 @@ pub trait FederationStatePort: Send + Sync {
     async fn has_operation(&self, operation_id: &str) -> ServiceResult<bool>;
     async fn operations_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<Operation>>;
     async fn operations(&self) -> ServiceResult<Vec<Operation>>;
-    async fn frontier_exchange(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<Option<FederationFrontierExchangeRecord>>;
-    async fn record_frontier_success(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-        frontier_root: &str,
-        observed_at: i64,
-    ) -> ServiceResult<FederationFrontierExchangeRecord>;
-    async fn record_frontier_failure(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-        reason: &str,
-        observed_at: i64,
-    ) -> ServiceResult<FederationFrontierExchangeRecord>;
-    async fn frontier_reduction_checkpoint(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<Option<FederationFrontierReductionCheckpoint>>;
-    async fn put_frontier_reduction_checkpoint(
-        &self,
-        checkpoint: &FederationFrontierReductionCheckpoint,
-    ) -> ServiceResult<()>;
-    async fn clear_frontier_reduction_checkpoint(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<()>;
-    async fn record_frontier_confirmed_evidence(
-        &self,
-        evidence: &FederationFrontierConfirmedEvidenceRecord,
-    ) -> ServiceResult<()>;
-    async fn unresolved_frontier_confirmed_evidence(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>>;
-    async fn record_frontier_local_normalization(
-        &self,
-        resolution: &FederationFrontierResolutionRecord,
-        scope: &FederationForkNormalizationScope,
-    ) -> ServiceResult<()>;
-    async fn frontier_local_normalization(
-        &self,
-        realm_id: &str,
-        cell_subject_key: &str,
-    ) -> ServiceResult<Option<FederationFrontierResolutionRecord>>;
-    async fn resolve_frontier_confirmed_evidence_for_peer(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-        evidence_scope_key: &str,
-        resolution_kind: &str,
-        resolution_digest: &str,
-        resolved_at: i64,
-    ) -> ServiceResult<bool>;
 }
 
 #[derive(Clone)]
@@ -370,121 +303,6 @@ impl FederationService {
     pub async fn operations(&self) -> ServiceResult<Vec<Operation>> {
         self.state.operations().await
     }
-    pub async fn frontier_exchange(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<Option<FederationFrontierExchangeRecord>> {
-        self.state.frontier_exchange(realm_id, peer_id).await
-    }
-    pub async fn record_frontier_success(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-        frontier_root: &str,
-        observed_at: i64,
-    ) -> ServiceResult<FederationFrontierExchangeRecord> {
-        self.state
-            .record_frontier_success(realm_id, peer_id, frontier_root, observed_at)
-            .await
-    }
-    pub async fn record_frontier_failure(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-        reason: &str,
-        observed_at: i64,
-    ) -> ServiceResult<FederationFrontierExchangeRecord> {
-        self.state
-            .record_frontier_failure(realm_id, peer_id, reason, observed_at)
-            .await
-    }
-    pub async fn frontier_reduction_checkpoint(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<Option<FederationFrontierReductionCheckpoint>> {
-        self.state
-            .frontier_reduction_checkpoint(realm_id, peer_id)
-            .await
-    }
-    pub async fn put_frontier_reduction_checkpoint(
-        &self,
-        checkpoint: &FederationFrontierReductionCheckpoint,
-    ) -> ServiceResult<()> {
-        self.state
-            .put_frontier_reduction_checkpoint(checkpoint)
-            .await
-    }
-    pub async fn clear_frontier_reduction_checkpoint(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<()> {
-        self.state
-            .clear_frontier_reduction_checkpoint(realm_id, peer_id)
-            .await
-    }
-    pub async fn record_frontier_confirmed_evidence(
-        &self,
-        evidence: &FederationFrontierConfirmedEvidenceRecord,
-    ) -> ServiceResult<()> {
-        self.state
-            .record_frontier_confirmed_evidence(evidence)
-            .await
-    }
-    pub async fn unresolved_frontier_confirmed_evidence(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-    ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>> {
-        self.state
-            .unresolved_frontier_confirmed_evidence(realm_id, peer_id)
-            .await
-    }
-    /// First phase: record what an accepted `ak.fork.resolution` normalized
-    /// locally, and subtract the siblings it adjudicated out from the accepted
-    /// read surface in the same transaction. This clears nothing on any peer.
-    pub async fn record_frontier_local_normalization(
-        &self,
-        resolution: &FederationFrontierResolutionRecord,
-        scope: &FederationForkNormalizationScope,
-    ) -> ServiceResult<()> {
-        self.state
-            .record_frontier_local_normalization(resolution, scope)
-            .await
-    }
-    pub async fn frontier_local_normalization(
-        &self,
-        realm_id: &str,
-        cell_subject_key: &str,
-    ) -> ServiceResult<Option<FederationFrontierResolutionRecord>> {
-        self.state
-            .frontier_local_normalization(realm_id, cell_subject_key)
-            .await
-    }
-    /// Second phase: clear one peer once its own exact-scope challenge matched
-    /// the verdict. Another peer having aligned is not evidence about this one.
-    pub async fn resolve_frontier_confirmed_evidence_for_peer(
-        &self,
-        realm_id: &str,
-        peer_id: &DidCoreId,
-        evidence_scope_key: &str,
-        resolution_kind: &str,
-        resolution_digest: &str,
-        resolved_at: i64,
-    ) -> ServiceResult<bool> {
-        self.state
-            .resolve_frontier_confirmed_evidence_for_peer(
-                realm_id,
-                peer_id,
-                evidence_scope_key,
-                resolution_kind,
-                resolution_digest,
-                resolved_at,
-            )
-            .await
-    }
 }
 
 #[cfg(test)]
@@ -513,89 +331,6 @@ mod tests {
         }
         async fn operations(&self) -> ServiceResult<Vec<Operation>> {
             Ok(Vec::new())
-        }
-        async fn frontier_exchange(
-            &self,
-            _realm_id: &str,
-            _peer_id: &DidCoreId,
-        ) -> ServiceResult<Option<FederationFrontierExchangeRecord>> {
-            Ok(None)
-        }
-        async fn record_frontier_success(
-            &self,
-            _realm_id: &str,
-            _peer_id: &DidCoreId,
-            _frontier_root: &str,
-            _observed_at: i64,
-        ) -> ServiceResult<FederationFrontierExchangeRecord> {
-            panic!("unused test port")
-        }
-        async fn record_frontier_failure(
-            &self,
-            _realm_id: &str,
-            _peer_id: &DidCoreId,
-            _reason: &str,
-            _observed_at: i64,
-        ) -> ServiceResult<FederationFrontierExchangeRecord> {
-            panic!("unused test port")
-        }
-        async fn frontier_reduction_checkpoint(
-            &self,
-            _realm_id: &str,
-            _peer_id: &DidCoreId,
-        ) -> ServiceResult<Option<FederationFrontierReductionCheckpoint>> {
-            Ok(None)
-        }
-        async fn put_frontier_reduction_checkpoint(
-            &self,
-            _checkpoint: &FederationFrontierReductionCheckpoint,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn clear_frontier_reduction_checkpoint(
-            &self,
-            _realm_id: &str,
-            _peer_id: &DidCoreId,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn record_frontier_confirmed_evidence(
-            &self,
-            _evidence: &FederationFrontierConfirmedEvidenceRecord,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn unresolved_frontier_confirmed_evidence(
-            &self,
-            _realm_id: &str,
-            _peer_id: &DidCoreId,
-        ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>> {
-            Ok(Vec::new())
-        }
-        async fn record_frontier_local_normalization(
-            &self,
-            _resolution: &FederationFrontierResolutionRecord,
-            _scope: &FederationForkNormalizationScope,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn frontier_local_normalization(
-            &self,
-            _realm_id: &str,
-            _cell_subject_key: &str,
-        ) -> ServiceResult<Option<FederationFrontierResolutionRecord>> {
-            Ok(None)
-        }
-        async fn resolve_frontier_confirmed_evidence_for_peer(
-            &self,
-            _realm_id: &str,
-            _peer_id: &DidCoreId,
-            _evidence_scope_key: &str,
-            _resolution_kind: &str,
-            _resolution_digest: &str,
-            _resolved_at: i64,
-        ) -> ServiceResult<bool> {
-            Ok(false)
         }
     }
 

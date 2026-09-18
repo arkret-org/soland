@@ -12,16 +12,6 @@ use soland_storage::{CanonicalEventRecord, RealmMetaRecord};
 
 use crate::events::{DirectoryProvenance, RealmDirectoryEntry, RealmDirectoryIndex};
 
-/// The Realm's effective digest suite as the already-hydrated projection sees
-/// it. `digest_of` members in the registry projection are derived under it, so
-/// replay has to read it from the same state the live path would.
-fn realm_digest_suite(state: &ProjectionState, realm_id: &str) -> arkret_canonical::DigestSuite {
-    state
-        .realm_digest_algorithm(realm_id)
-        .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
-        .unwrap_or_default()
-}
-
 pub trait HydrationProjectionAdapter: Send + Sync {
     fn operation_from_canonical_record(
         &self,
@@ -30,19 +20,7 @@ pub trait HydrationProjectionAdapter: Send + Sync {
 }
 
 fn application_canonical_event(record: &CanonicalEventRecord) -> crate::events::AcceptedEvent {
-    crate::events::AcceptedEvent {
-        event_id: record.event_id.clone(),
-        actor_id: record.actor_id.clone(),
-        actor_seq: record.actor_seq,
-        realm_id: record.realm_id.clone(),
-        kind: record.kind.clone(),
-        schema_id: record.schema_id.clone(),
-        digest_suite: record.digest_suite,
-        canonical_digest: record.canonical_digest.clone(),
-        canonical_bytes: record.canonical_bytes.clone(),
-        envelope: record.envelope.clone(),
-        received_at: record.received_at,
-    }
+    record.clone()
 }
 
 fn plaintext_service_classes_from_value(
@@ -176,11 +154,27 @@ fn replay_hydration_record(
     Ok(())
 }
 
+/// Project the durable Sidecar lifecycle column back onto the SDK enum.
+///
+/// The durable column is deliberately service-local: a Sidecar's lifecycle is
+/// settled on its own commit stream and is not a producer Event field, so the
+/// two enums are converted at this boundary rather than aliased.
+fn sidecar_projection_state(
+    state: soland_storage::SidecarLifecycleState,
+) -> arkret_models_collaboration::agent_sidecar::AgentSidecarState {
+    use arkret_models_collaboration::agent_sidecar::AgentSidecarState;
+
+    match state {
+        soland_storage::SidecarLifecycleState::Active => AgentSidecarState::Active,
+        soland_storage::SidecarLifecycleState::Suspended => AgentSidecarState::Suspended,
+        soland_storage::SidecarLifecycleState::Tombstoned => AgentSidecarState::Tombstoned,
+    }
+}
+
 pub async fn hydrate_sidecar_projections(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     _hydration_hlc: &soland_domain::hlc::ServerHlc,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::SidecarProjection;
 
@@ -192,7 +186,7 @@ pub async fn hydrate_sidecar_projections(
                 sidecar_id: record.sidecar_id,
                 realm_id: record.realm_id,
                 controller_account_id: record.controller_account_id,
-                state: record.state,
+                state: sidecar_projection_state(record.state),
                 state_changed_at: record.state_changed_at,
                 created_at: record.created_at,
                 updated_at: record.updated_at,
@@ -200,7 +194,7 @@ pub async fn hydrate_sidecar_projections(
         );
     }
 
-    let events = hydration_replay_records(persistence, projection).await?;
+    let events = hydration_replay_records(persistence).await?;
     for event in events {
         if event.kind == arkret_wire::EventKind::SidecarCreate.as_str() {
             let Ok(event_id) = arkret_wire::EventId::new(event.event_id.clone()) else {
@@ -220,9 +214,8 @@ pub async fn hydrate_sidecar_context_projections(
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
-    let events = hydration_replay_records(persistence, projection).await?;
+    let events = hydration_replay_records(persistence).await?;
     for event in events {
         if event.kind == arkret_wire::EventKind::SidecarContextAttach.as_str() {
             replay_hydration_record(
@@ -237,98 +230,17 @@ pub async fn hydrate_sidecar_context_projections(
     Ok(())
 }
 
-/// Select security effects in confirmed command order and independent
-/// ordinary sources. A member of a pending/rejected unit is never ordinary
-/// merely because that member has no security write of its own.
-async fn confirmed_hydration_records(
-    persistence: &dyn soland_storage::PersistenceStore,
-    projection: &crate::projection::ProjectionService,
-) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
-    select_hydration_records(persistence, projection, None).await
-}
-
-async fn select_hydration_records(
-    persistence: &dyn soland_storage::PersistenceStore,
-    projection: &crate::projection::ProjectionService,
-    published_ordinary: Option<&BTreeSet<String>>,
-) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
-    let records = persistence.events().snapshot_all().await?;
-    let realms = records
-        .iter()
-        .filter_map(|record| record.realm_id.as_ref())
-        .map(|realm| {
-            RealmId::new(realm.clone())
-                .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
-        })
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    let by_id = records
-        .iter()
-        .map(|record| (record.event_id.as_str(), record))
-        .collect::<BTreeMap<_, _>>();
-    let mut result = Vec::new();
-    let mut seen = BTreeSet::new();
-    for realm in realms {
-        for event in projection
-            .confirmed_command_events(&realm)
-            .await
-            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
-        {
-            let record = by_id.get(event.event_id.as_str()).ok_or_else(|| {
-                soland_storage::PersistenceError::Internal(
-                    "confirmed Event canonical source unavailable".into(),
-                )
-            })?;
-            if record.realm_id.as_deref() != Some(realm.as_str())
-                || serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                    soland_storage::PersistenceError::Internal(error.to_string())
-                })? != event
-            {
-                return Err(soland_storage::PersistenceError::Internal(
-                    "confirmed Event source mismatch".into(),
-                ));
-            }
-            if seen.insert(record.event_id.clone()) {
-                result.push((*record).clone());
-            }
-        }
-    }
-    for record in records {
-        if seen.contains(&record.event_id) {
-            continue;
-        }
-        if published_ordinary.is_some_and(|published| !published.contains(&record.event_id)) {
-            continue;
-        }
-        let event = serde_json::from_value::<Event>(record.envelope.clone())
-            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
-        // Every accepted Event reached the reducer through the same authority
-        // commit stream: there is no second effect plane to filter out and no
-        // proposal to wait on, so an unseen published record always replays.
-        let _ = &event;
-        result.push(record);
-    }
-    Ok(result)
-}
-
-/// A committed command is recoverable from its canonical Event even when the
-/// process stopped before appending any derived timeline row. Independent
-/// ordinary inputs retain their existing published-source boundary here; this
-/// helper does not claim to implement historical eligibility reclassification.
+/// Every committed canonical Event replays, in commit-stream order.
+///
+/// The retired dual plane split this selection into a confirmed command
+/// prefix and an independently published ordinary tail. A canonical Event is
+/// committed only because a `RealmCommit` named it on its Realm, Circle or
+/// Sidecar stream, so there is no second plane to reconcile and no timeline
+/// publication check left to apply.
 async fn hydration_replay_records(
     persistence: &dyn soland_storage::PersistenceStore,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
-    let published = persistence
-        .projection_events()
-        .snapshot_all()
-        .await?
-        .into_iter()
-        .map(|event| event.event_id)
-        .collect::<BTreeSet<_>>();
-    // Apply the timeline boundary only in the independent ordinary branch.
-    // The command branch retains its exact confirmed-prefix provenance and
-    // never infers confirmation from timeline presence or a later snapshot.
-    select_hydration_records(persistence, projection, Some(&published)).await
+    persistence.events().snapshot_all().await
 }
 
 /// Rebuild ordinary Realm genesis from its exact confirmed command unit.
@@ -338,11 +250,10 @@ async fn hydrate_canonical_realm_bootstraps(
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::ProjectionEffect;
 
-    let records = confirmed_hydration_records(persistence, projection).await?;
+    let records = hydration_replay_records(persistence).await?;
     for create in records
         .iter()
         .filter(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
@@ -377,36 +288,12 @@ async fn hydrate_canonical_realm_bootstraps(
             continue;
         }
 
-        let realm_id = RealmId::new(create.realm_id.clone().ok_or_else(|| {
-            soland_storage::PersistenceError::Internal("confirmed Realm create has no Realm".into())
-        })?)
-        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
-        let Some(typed_events) = projection
-            .confirmed_genesis_unit(&realm_id)
-            .await
-            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?
-        else {
-            continue;
-        };
-        let direct_conversation = create_payload.object.purpose == RealmPurpose::DirectConversation;
-        let unit = typed_events
-            .iter()
-            .map(|event| {
-                records
-                    .iter()
-                    .find(|record| record.event_id == event.event_id.as_str())
-                    .ok_or_else(|| {
-                        soland_storage::PersistenceError::Internal(
-                            "confirmed bootstrap source unavailable".into(),
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        // Realm creation is one producer-signed `ak.realm.create` Event; the
-        // multi-Event bootstrap unit it used to validate no longer exists.
-        // Ordering and predecessor binding are properties of the commit
-        // stream, so hydration validates the genesis Event itself and leaves
-        // the rest of the unit to the reducer replay below.
+        // Realm creation is one producer-signed `ak.realm.create` Event. The
+        // multi-Event bootstrap unit and the confirmed-order selector that
+        // rebuilt it no longer exist: ordering and predecessor binding are
+        // properties of the Realm commit stream, so hydration validates the
+        // genesis Event itself and leaves every later genesis facet to the
+        // ordinary replay paths that already own those Event kinds.
         arkret_policy::realm_bootstrap::validate_realm_genesis_event(&create_event).map_err(
             |error| {
                 soland_storage::PersistenceError::Internal(format!(
@@ -415,65 +302,29 @@ async fn hydrate_canonical_realm_bootstraps(
             },
         )?;
 
+        let Some(operation) = projection_adapter
+            .operation_from_canonical_record(&application_canonical_event(create))
+        else {
+            return Err(soland_storage::PersistenceError::Internal(format!(
+                "Realm genesis Event {} cannot rebuild its projection operation",
+                create.event_id
+            )));
+        };
         let mut staged = proj.clone();
-        for (index, record) in unit.iter().enumerate() {
-            let Some(operation) = projection_adapter
-                .operation_from_canonical_record(&application_canonical_event(record))
-            else {
+        match staged.apply_projected(&operation, hydration_hlc) {
+            ProjectionEffect::Rejected { reason } => {
                 return Err(soland_storage::PersistenceError::Internal(format!(
-                    "Realm bootstrap Event {} cannot rebuild its projection operation",
-                    record.event_id
+                    "Realm genesis Event {} failed deterministic hydration: {reason}",
+                    create.event_id
                 )));
-            };
-            // The v1 Event wire carries no producer `effects[]`, so hydration
-            // has to re-derive the receiver's own writes from the registered
-            // reducer contract exactly as admission did.
-            let cell_writes = staged
-                .project_registered_cell_writes(
-                    &typed_events[index],
-                    realm_digest_suite(&staged, typed_events[index].realm_id.as_str()),
-                )
-                .map_err(|error| {
-                    soland_storage::PersistenceError::Internal(format!(
-                        "Realm bootstrap Event {} has no derivable cell contract: {error}",
-                        record.event_id
-                    ))
-                })?;
-            let effect = if index > 0 {
-                if crate::projection::uses_validated_realm_bootstrap_facet_reducer(
-                    operation.event_kind.as_str(),
-                ) {
-                    staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
-                } else if operation.event_kind == arkret_wire::EventKind::MemberState {
-                    if direct_conversation {
-                        staged.apply_validated_direct_conversation_bootstrap_membership(
-                            &operation,
-                            &cell_writes,
-                        )
-                    } else {
-                        staged.apply_validated_realm_bootstrap_membership(&operation, &cell_writes)
-                    }
-                } else {
-                    staged.apply_projected(&operation, &cell_writes, hydration_hlc)
-                }
-            } else {
-                staged.apply_projected(&operation, &cell_writes, hydration_hlc)
-            };
-            match effect {
-                ProjectionEffect::Rejected { reason } => {
-                    return Err(soland_storage::PersistenceError::Internal(format!(
-                        "Realm bootstrap Event {} ({}) failed deterministic hydration: {reason}",
-                        record.event_id, record.kind
-                    )));
-                }
-                ProjectionEffect::Ignored => {
-                    return Err(soland_storage::PersistenceError::Internal(format!(
-                        "Realm bootstrap Event {} was ignored during deterministic hydration",
-                        record.event_id
-                    )));
-                }
-                _ => {}
             }
+            ProjectionEffect::Ignored => {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Realm genesis Event {} was ignored during deterministic hydration",
+                    create.event_id
+                )));
+            }
+            _ => {}
         }
         *proj = staged;
     }
@@ -494,11 +345,10 @@ async fn hydrate_managed_pcr_identity(
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::ProjectionEffect;
 
-    let records = confirmed_hydration_records(persistence, projection).await?;
+    let records = hydration_replay_records(persistence).await?;
     let mut managed_pcr_realms = BTreeSet::new();
     for record in records
         .iter()
@@ -556,18 +406,7 @@ async fn hydrate_managed_pcr_identity(
                     record.event_id
                 ))
             })?;
-        let cell_writes = proj
-            .project_registered_cell_writes(
-                &typed,
-                realm_digest_suite(proj, typed.realm_id.as_str()),
-            )
-            .map_err(|error| {
-                soland_storage::PersistenceError::Internal(format!(
-                    "Managed PCR Event {} has no derivable cell contract: {error}",
-                    record.event_id
-                ))
-            })?;
-        match proj.apply_projected(&operation, &cell_writes, hydration_hlc) {
+        match proj.apply_projected(&operation, hydration_hlc) {
             ProjectionEffect::Rejected { reason } => {
                 return Err(soland_storage::PersistenceError::Internal(format!(
                     "Managed PCR Event {} failed deterministic hydration: {reason}",
@@ -684,11 +523,10 @@ pub async fn hydrate_canonical_realm_memberships(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     projection_adapter: &dyn HydrationProjectionAdapter,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::ProjectionEffect;
 
-    let all_records = confirmed_hydration_records(persistence, projection).await?;
+    let all_records = hydration_replay_records(persistence).await?;
     let invite_times = all_records
         .iter()
         .filter(|record| record.kind == arkret_wire::EventKind::InviteCreate.as_str())
@@ -786,7 +624,6 @@ pub async fn hydrate_projections_from_persistence(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     projection_adapter: &dyn HydrationProjectionAdapter,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
         CircleLifecycleState, CircleMembershipState, CircleProjection,
@@ -798,24 +635,11 @@ pub async fn hydrate_projections_from_persistence(
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
 
-    hydrate_managed_pcr_identity(
-        persistence,
-        proj,
-        &hydration_hlc,
-        projection_adapter,
-        projection,
-    )
-    .await?;
-    hydrate_canonical_realm_bootstraps(
-        persistence,
-        proj,
-        &hydration_hlc,
-        projection_adapter,
-        projection,
-    )
-    .await?;
-    hydrate_canonical_realm_memberships(persistence, proj, projection_adapter, projection).await?;
-    hydrate_sidecar_projections(persistence, proj, &hydration_hlc, projection).await?;
+    hydrate_managed_pcr_identity(persistence, proj, &hydration_hlc, projection_adapter).await?;
+    hydrate_canonical_realm_bootstraps(persistence, proj, &hydration_hlc, projection_adapter)
+        .await?;
+    hydrate_canonical_realm_memberships(persistence, proj, projection_adapter).await?;
+    hydrate_sidecar_projections(persistence, proj, &hydration_hlc).await?;
 
     // Agent key authorization is consulted by sidecar eligibility, while
     // `ak.key_backup.active_series` is the canonical selector for every
@@ -823,7 +647,7 @@ pub async fn hydrate_projections_from_persistence(
     // so restore them from the durable event stream. Agent authorize/revoke
     // transitions must retain confirmed command order; querying each
     // kind independently would lose their relative ordering.
-    let events = hydration_replay_records(persistence, projection).await?;
+    let events = hydration_replay_records(persistence).await?;
     for event in events.iter().cloned() {
         let projection_name = match arkret_wire::EventKind::from_wire(&event.kind) {
             arkret_wire::EventKind::AgentKeyAuthorize | arkret_wire::EventKind::AgentKeyRevoke => {
@@ -1061,12 +885,7 @@ pub async fn hydrate_projections_from_persistence(
                     directory_visibility: record.directory_visibility,
                     join_rule: record.join_rule,
                     history_access: record.history_access,
-                    content_encryption_floor: record.content_encryption_floor,
-                    metadata_encryption_floor: record.metadata_encryption_floor,
-                    encryption_profile: record.encryption_profile,
-                    content_scheme: record.content_scheme,
                     mls_group_ref: record.mls_group_ref,
-                    durability_policy: record.durability_policy,
                     state,
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,
@@ -1295,23 +1114,16 @@ pub async fn hydrate_projections_from_persistence(
     }
     // Run after object mirrors because a native Sidecar attachment validates
     // that its referenced source Relation or Strand already exists.
-    hydrate_sidecar_context_projections(
-        persistence,
-        proj,
-        &hydration_hlc,
-        projection_adapter,
-        projection,
-    )
-    .await?;
+    hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc, projection_adapter)
+        .await?;
     Ok(())
 }
 
 pub async fn hydrate_realms_from_canonical_events(
     persistence: &dyn soland_storage::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
-    projection: &crate::projection::ProjectionService,
 ) -> soland_storage::PersistenceResult<()> {
-    let events = confirmed_hydration_records(persistence, projection).await?;
+    let events = hydration_replay_records(persistence).await?;
 
     // Directory entries are the replay roots for every subsequent Realm
     // facet. Hydrate all confirmed genesis Events first so bootstrap Events

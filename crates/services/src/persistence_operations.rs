@@ -345,142 +345,6 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     ) -> crate::ServiceResult<Vec<arkret_event_draft::ProjectedEventOperation>> {
         Ok(self.0.federation_operations().snapshot_all().await?)
     }
-    async fn frontier_exchange(
-        &self,
-        realm_id: &str,
-        peer_id: &arkret_identifiers::DidCoreId,
-    ) -> crate::ServiceResult<Option<crate::federation::FederationFrontierExchangeRecord>> {
-        Ok(self
-            .0
-            .federation_frontier_exchange()
-            .get(realm_id, peer_id)
-            .await?)
-    }
-    async fn record_frontier_success(
-        &self,
-        realm_id: &str,
-        peer_id: &arkret_identifiers::DidCoreId,
-        frontier_root: &str,
-        observed_at: i64,
-    ) -> crate::ServiceResult<crate::federation::FederationFrontierExchangeRecord> {
-        Ok(self
-            .0
-            .federation_frontier_exchange()
-            .record_success(realm_id, peer_id, frontier_root, observed_at)
-            .await?)
-    }
-    async fn record_frontier_failure(
-        &self,
-        realm_id: &str,
-        peer_id: &arkret_identifiers::DidCoreId,
-        reason: &str,
-        observed_at: i64,
-    ) -> crate::ServiceResult<crate::federation::FederationFrontierExchangeRecord> {
-        Ok(self
-            .0
-            .federation_frontier_exchange()
-            .record_failure(realm_id, peer_id, reason, observed_at)
-            .await?)
-    }
-    async fn frontier_reduction_checkpoint(
-        &self,
-        realm_id: &str,
-        peer_id: &arkret_identifiers::DidCoreId,
-    ) -> crate::ServiceResult<Option<crate::federation::FederationFrontierReductionCheckpoint>>
-    {
-        Ok(self
-            .0
-            .federation_frontier_exchange()
-            .reduction_checkpoint(realm_id, peer_id)
-            .await?)
-    }
-    async fn put_frontier_reduction_checkpoint(
-        &self,
-        checkpoint: &crate::federation::FederationFrontierReductionCheckpoint,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .federation_frontier_exchange()
-            .put_reduction_checkpoint(checkpoint)
-            .await?;
-        Ok(())
-    }
-    async fn clear_frontier_reduction_checkpoint(
-        &self,
-        realm_id: &str,
-        peer_id: &arkret_identifiers::DidCoreId,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .federation_frontier_exchange()
-            .clear_reduction_checkpoint(realm_id, peer_id)
-            .await?;
-        Ok(())
-    }
-    async fn record_frontier_confirmed_evidence(
-        &self,
-        evidence: &crate::federation::FederationFrontierConfirmedEvidenceRecord,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .federation_frontier_exchange()
-            .record_confirmed_evidence(evidence)
-            .await?;
-        Ok(())
-    }
-    async fn unresolved_frontier_confirmed_evidence(
-        &self,
-        realm_id: &str,
-        peer_id: &arkret_identifiers::DidCoreId,
-    ) -> crate::ServiceResult<Vec<crate::federation::FederationFrontierConfirmedEvidenceRecord>>
-    {
-        Ok(self
-            .0
-            .federation_frontier_exchange()
-            .unresolved_confirmed_evidence(realm_id, peer_id)
-            .await?)
-    }
-    async fn record_frontier_local_normalization(
-        &self,
-        resolution: &crate::federation::FederationFrontierResolutionRecord,
-        scope: &soland_storage::FederationForkNormalizationScope,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .federation_frontier_exchange()
-            .record_local_normalization(resolution, scope)
-            .await?;
-        Ok(())
-    }
-    async fn frontier_local_normalization(
-        &self,
-        realm_id: &str,
-        cell_subject_key: &str,
-    ) -> crate::ServiceResult<Option<crate::federation::FederationFrontierResolutionRecord>> {
-        Ok(self
-            .0
-            .federation_frontier_exchange()
-            .local_normalization(realm_id, cell_subject_key)
-            .await?)
-    }
-    async fn resolve_frontier_confirmed_evidence_for_peer(
-        &self,
-        realm_id: &str,
-        peer_id: &arkret_identifiers::DidCoreId,
-        evidence_scope_key: &str,
-        resolution_kind: &str,
-        resolution_digest: &str,
-        resolved_at: i64,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .federation_frontier_exchange()
-            .resolve_confirmed_evidence_for_peer(
-                realm_id,
-                peer_id,
-                evidence_scope_key,
-                resolution_kind,
-                resolution_digest,
-                resolved_at,
-            )
-            .await?)
-    }
 }
 
 #[async_trait::async_trait]
@@ -690,13 +554,16 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
 
 #[async_trait::async_trait]
 impl crate::sync::CursorStorePort for PersistenceCursorStore {
-    async fn realm_join_download(&self, key: &str) -> crate::ServiceResult<Option<arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly>>{
+    async fn realm_join_download(
+        &self,
+        key: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::RealmJoinDownload>> {
         Ok(self.0.sync_cursors().realm_join_download(key).await?)
     }
     async fn save_realm_join_download(
         &self,
         key: &str,
-        assembly: &arkret_models_collaboration::governance::realm_join_bootstrap::RealmJoinBootstrapAssembly,
+        assembly: &soland_storage::RealmJoinDownload,
     ) -> crate::ServiceResult<()> {
         Ok(self
             .0

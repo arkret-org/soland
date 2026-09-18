@@ -959,18 +959,10 @@ struct CircleProjectionRow {
     join_rule: String,
     #[diesel(sql_type = Text)]
     history_access: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    content_encryption_floor: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    metadata_encryption_floor: Option<String>,
     #[diesel(sql_type = Text)]
     encryption_profile: String,
     #[diesel(sql_type = Nullable<Text>)]
-    content_scheme: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
     mls_group_ref: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    durability_policy: Option<String>,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -997,12 +989,8 @@ impl From<CircleProjectionRow> for CircleProjectionRecord {
             directory_visibility: row.directory_visibility,
             join_rule: row.join_rule,
             history_access: row.history_access,
-            content_encryption_floor: row.content_encryption_floor,
-            metadata_encryption_floor: row.metadata_encryption_floor,
             encryption_profile: row.encryption_profile,
-            content_scheme: row.content_scheme,
             mls_group_ref: row.mls_group_ref,
-            durability_policy: row.durability_policy,
             state: row.state,
             state_changed_at: row.state_changed_at,
             created_by: row.created_by.to_string(),
@@ -1014,9 +1002,8 @@ impl From<CircleProjectionRow> for CircleProjectionRecord {
 }
 
 const CIRCLE_PROJECTION_COLUMNS: &str = "id AS circle_id, realm_id, profile_ref, title, summary, display, \
-     directory_visibility, join_rule, history_access, content_encryption_floor, \
-     metadata_encryption_floor, encryption_profile, content_scheme, mls_group_ref, \
-     durability_policy, state, state_changed_at, \
+     directory_visibility, join_rule, history_access, \
+     encryption_profile, mls_group_ref, state, state_changed_at, \
      created_by AS created_by, updated_by AS updated_by, created_at, updated_at";
 
 #[derive(QueryableByName)]
@@ -1073,11 +1060,10 @@ impl CircleProjectionStore for PgCircleProjectionStore {
         sql_query(
             "INSERT INTO projection_circles \
              (id, realm_id, profile_ref, title, summary, display, directory_visibility, join_rule, \
-              history_access, content_encryption_floor, metadata_encryption_floor, \
-              encryption_profile, content_scheme, mls_group_ref, durability_policy, state, \
+              history_access, encryption_profile, mls_group_ref, state, \
               state_changed_at, created_by, \
               updated_by, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 profile_ref = EXCLUDED.profile_ref, \
@@ -1087,12 +1073,8 @@ impl CircleProjectionStore for PgCircleProjectionStore {
                 directory_visibility = EXCLUDED.directory_visibility, \
                 join_rule = EXCLUDED.join_rule, \
                 history_access = EXCLUDED.history_access, \
-                content_encryption_floor = EXCLUDED.content_encryption_floor, \
-                metadata_encryption_floor = EXCLUDED.metadata_encryption_floor, \
                 encryption_profile = EXCLUDED.encryption_profile, \
-                content_scheme = EXCLUDED.content_scheme, \
                 mls_group_ref = EXCLUDED.mls_group_ref, \
-                durability_policy = EXCLUDED.durability_policy, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 updated_by = EXCLUDED.updated_by, \
@@ -1107,12 +1089,8 @@ impl CircleProjectionStore for PgCircleProjectionStore {
         .bind::<Text, _>(&record.directory_visibility)
         .bind::<Text, _>(&record.join_rule)
         .bind::<Text, _>(&record.history_access)
-        .bind::<Nullable<Text>, _>(&record.content_encryption_floor)
-        .bind::<Nullable<Text>, _>(&record.metadata_encryption_floor)
         .bind::<Text, _>(&record.encryption_profile)
-        .bind::<Nullable<Text>, _>(&record.content_scheme)
         .bind::<Nullable<Text>, _>(&record.mls_group_ref)
-        .bind::<Nullable<Text>, _>(&record.durability_policy)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Jsonb, _>(stored_actor(&record.created_by)?)

@@ -316,8 +316,7 @@ impl ProjectionService {
         _realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
         let mut state = ProjectionState::new();
-        hydrate_projections_from_persistence(persistence, &mut state, projection_adapter, self)
-            .await?;
+        hydrate_projections_from_persistence(persistence, &mut state, projection_adapter).await?;
         state.replay_resolved_pending(self.clock());
         for record in persistence
             .realm_organization_statements()
@@ -710,16 +709,12 @@ impl ProjectionService {
                         directory_visibility: row.directory_visibility.clone(),
                         join_rule: row.join_rule.clone(),
                         history_access: row.history_access.clone(),
-                        content_encryption_floor: row.content_encryption_floor.clone(),
-                        metadata_encryption_floor: row.metadata_encryption_floor.clone(),
                         encryption_profile: if row.mls_group_ref.is_some() {
                             "mls_rfc9420".to_owned()
                         } else {
                             "none".to_owned()
                         },
-                        content_scheme: row.content_scheme.clone(),
                         mls_group_ref: row.mls_group_ref.clone(),
-                        durability_policy: row.durability_policy.clone(),
                         state: row.state.as_str().to_owned(),
                         state_changed_at: row.state_changed_at,
                         created_by: row.created_by.clone(),

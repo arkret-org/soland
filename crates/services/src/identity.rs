@@ -85,11 +85,10 @@ impl arkret_wire::PayloadSigner for Ed25519PayloadSigner {
             jws,
         })
     }
-
 }
 
 pub use soland_domain::identity::{
-    ConsentGrantKey, ConsentGrantRecord, ConsentGrantDot, ContactRecord, ContactRequestSlotState,
+    ConsentGrantDot, ConsentGrantKey, ConsentGrantRecord, ContactRecord, ContactRequestSlotState,
 };
 pub use soland_storage::MimiConsentCorrelationRecord as MimiConsentCorrelation;
 
@@ -633,7 +632,7 @@ impl ConsentService {
     }
 
     pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
-        // Serialize the fetch as well as installation: a slow older fetch must
+        // Order the fetch as well as the installation: a slow older fetch must
         // never overwrite a newer confirmed revocation after it is installed.
         let _reload = self.runtime_reload.lock().await;
         self.replace_runtime_cells(self.consent_cells.cells().await?);
@@ -3019,10 +3018,16 @@ impl DidService {
 mod tests {
     use super::*;
 
-    fn recovery_policy_basis() -> arkret_wire::LeaseBasisRef {
-        arkret_wire::LeaseBasisRef::Seal(
-            arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
-        )
+    fn recovery_policy_basis() -> arkret_wire::CommittedEventRef {
+        let event_id =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [10; 32]);
+        let realm_id = arkret_identifiers::RealmId::from_event_id(&event_id);
+        arkret_wire::CommittedEventRef {
+            event_id,
+            commit_id: arkret_wire::RealmCommitId::from_digest([11; 32]),
+            stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id },
+            stream_position: 0,
+        }
     }
 
     struct StaticAccount;
@@ -3485,7 +3490,7 @@ mod tests {
                 policy_id: "ak:policy:current".to_owned(),
                 account_id: account_id.clone(),
                 version: 2,
-                acceptance_basis: recovery_policy_basis(),
+                acceptance_ref: recovery_policy_basis(),
                 trust_domain: "ak:trust_domain:personal".to_owned(),
 
                 supersedes: Some("ak:policy:genesis".to_owned()),
@@ -3560,7 +3565,7 @@ mod tests {
                             .unwrap(),
                     ),
                     version: 2,
-                    acceptance_basis: recovery_policy_basis(),
+                    acceptance_ref: recovery_policy_basis(),
                     trust_domain: "ak:trust_domain:personal".to_owned(),
 
                     supersedes: Some("ak:policy:current".to_owned()),
@@ -3607,7 +3612,7 @@ mod consent_reload_tests {
                 cell.revoke_grants(cell.active_grants.keys().cloned().collect::<Vec<_>>());
             }
             Ok(vec![(
-                consent_cell_key(&cell.holder_account_id, &cell.cell_id),
+                consent_cell_key(&cell.holder_account_id, &cell.consent_id),
                 cell,
             )])
         }
@@ -3632,14 +3637,29 @@ mod consent_reload_tests {
         let now = Utc::now();
         let rows = Arc::new(DelayedConsentRows {
             cell: ConsentGrantRecord {
-                cell_id: "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-000000000041".parse().unwrap(),
+                consent_id: "ak:consent:01964137-0000-7000-8000-000000000041"
+                    .parse()
+                    .unwrap(),
                 holder_account_id: holder.clone(),
-                peer: arkret_models_collaboration::events_payloads::consent::ConsentPeer::Actor { actor_id: arkret_wire::ActorId::account(holder.clone()) },
+                peer: arkret_models_collaboration::events_payloads::consent::ConsentPeer::Actor {
+                    actor_id: arkret_wire::ActorId::account(holder.clone()),
+                },
                 consent_scope: "messages".into(),
-                active_grants: BTreeMap::from([("grant".into(), ConsentGrantDot { dot:"grant".into(), not_before:None, expires_at:None, granted_at:now })]),
-                revoked_grants: Default::default(), updated_at:now,
+                active_grants: BTreeMap::from([(
+                    "grant".into(),
+                    ConsentGrantDot {
+                        dot: "grant".into(),
+                        not_before: None,
+                        expires_at: None,
+                        granted_at: now,
+                    },
+                )]),
+                revoked_grants: Default::default(),
+                updated_at: now,
             },
-            reads:AtomicUsize::new(0), started:tokio::sync::Notify::new(), release:tokio::sync::Semaphore::new(0),
+            reads: AtomicUsize::new(0),
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
         });
         let service = ConsentService::new(rows.clone(), Arc::new(NoCorrelations));
         let first_service = service.clone();
@@ -3666,7 +3686,7 @@ mod consent_reload_tests {
         second.await.unwrap();
         assert!(
             !service
-                .holder_cell(&holder, rows.cell.cell_id.as_str())
+                .holder_cell(&holder, rows.cell.consent_id.as_str())
                 .unwrap()
                 .has_active_grant_at(now)
         );

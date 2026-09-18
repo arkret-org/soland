@@ -183,12 +183,8 @@ pub struct CircleProjectionRecord {
     pub directory_visibility: String,
     pub join_rule: String,
     pub history_access: String,
-    pub content_encryption_floor: Option<String>,
-    pub metadata_encryption_floor: Option<String>,
     pub encryption_profile: String,
-    pub content_scheme: Option<String>,
     pub mls_group_ref: Option<String>,
-    pub durability_policy: Option<String>,
     /// One of `active` / `archived` / `tombstoned` per spec.
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,

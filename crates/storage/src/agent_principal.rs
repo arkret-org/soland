@@ -55,7 +55,9 @@ pub struct AgentPrincipalRecord {
     pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
     /// Station-local signer-resolution snapshot retained for audit/debugging.
     /// Protocol authorization is bound by `signer_resolution_evidence_ref`.
-    pub current_signer_evidence: Option<Value>,
+    pub current_signer_evidence: Option<
+        arkret_models_identity::authenticated_signer_resolution_evidence::AuthenticatedSignerResolutionEvidence,
+    >,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

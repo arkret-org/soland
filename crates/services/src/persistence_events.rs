@@ -87,17 +87,13 @@ fn persistence_event_commit_request(
     command: crate::events::CommitAcceptedEventCommand,
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
-        publication_event: command.publication_event,
-        mls_frontier_leaves: command.mls_frontier_leaves,
-        replicated: command.replicated,
+        authority_commit: command.authority_commit,
         event: command.event,
-        membership_compensation_evidence: command.membership_compensation_evidence,
-        governance_dependencies: command.governance_dependencies,
         device_pairing_authorization: command.device_pairing_authorization,
         contact_projection: command.contact_projection,
         consent_projection: command.consent_projection.map(|commit| {
             soland_storage::ConsentProjectionCommit {
-                cell: commit.cell,
+                grant: commit.grant,
                 holder_quarantine: commit.holder_quarantine.map(|cas| {
                     soland_storage::AccountDataCasCommit {
                         record: soland_storage::AccountDataRecord {
@@ -116,7 +112,6 @@ fn persistence_event_commit_request(
         }),
         device_revocation_transition: command.device_revocation_transition,
         device_revocation_gate: command.device_revocation_gate,
-        historical_producer: command.historical_producer,
         projections: command
             .projections
             .into_iter()
@@ -144,64 +139,6 @@ fn persistence_event_commit_request(
 
 #[async_trait::async_trait]
 impl crate::events::EventReadPort for PersistenceEventReader {
-    async fn store_canonical_event(
-        &self,
-        record: crate::events::AcceptedEvent,
-    ) -> crate::ServiceResult<()> {
-        self.0.events().put(record).await?;
-        Ok(())
-    }
-    async fn mls_frontier_leaves(
-        &self,
-        event_id: &str,
-    ) -> crate::ServiceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>>
-    {
-        Ok(self.0.events().mls_frontier_leaves(event_id).await?)
-    }
-    async fn membership_compensation_evidence(
-        &self,
-        event_id: &str,
-    ) -> crate::ServiceResult<Option<soland_storage::MembershipCompensationEvidenceRecord>> {
-        Ok(self
-            .0
-            .events()
-            .membership_compensation_evidence(event_id)
-            .await?)
-    }
-    async fn store_realm_bootstrap_batch(
-        &self,
-        records: Vec<crate::events::AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        deliveries: Vec<crate::federation::FederationDeliveryRecord>,
-    ) -> crate::ServiceResult<soland_storage::RealmBootstrapCommitOutcome> {
-        Ok(self
-            .0
-            .events()
-            .put_realm_bootstrap_batch_atomic(
-                records,
-                governance_dependencies,
-                deliveries.into_iter().map(persistence_outbox_row).collect(),
-            )
-            .await?)
-    }
-    async fn store_direct_conversation_founding_batch(
-        &self,
-        records: Vec<crate::events::AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        slot: soland_storage::DirectConversationFoundingSlotRecord,
-        deliveries: Vec<crate::federation::FederationDeliveryRecord>,
-    ) -> crate::ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
-        Ok(self
-            .0
-            .events()
-            .put_direct_conversation_founding_batch_atomic(
-                records,
-                governance_dependencies,
-                slot,
-                deliveries.into_iter().map(persistence_outbox_row).collect(),
-            )
-            .await?)
-    }
     async fn direct_conversation_founding_slot(
         &self,
         founder_id: &str,
@@ -213,37 +150,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .events()
             .direct_conversation_founding_slot(founder_id, trust_domain_id, pair_key)
             .await?)
-    }
-    async fn store_identity_anchor_batch(
-        &self,
-        records: Vec<crate::events::AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        receipt: Option<arkret_wire::EventBatchReceipt>,
-        device: Option<crate::events::IdentityAnchorDeviceState>,
-        account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
-        frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
-        reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
-        publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
-        deliveries: Vec<crate::federation::FederationDeliveryRecord>,
-        recovery_terminal: Option<soland_storage::RecoveryTerminalCommitWrite>,
-    ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
-        let outcome = self
-            .0
-            .events()
-            .put_identity_anchor_batch_atomic(
-                records,
-                governance_dependencies,
-                receipt,
-                device,
-                account_slot,
-                frontier_cas,
-                reanchor_slot,
-                publication_evidence,
-                deliveries.into_iter().map(persistence_outbox_row).collect(),
-                recovery_terminal,
-            )
-            .await?;
-        Ok(outcome)
     }
     async fn canonical_event(
         &self,
@@ -262,41 +168,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         actor_id: &str,
     ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self.0.events().list_for_actor(actor_id).await?)
-    }
-    async fn canonical_events_for_realm_actor(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
-        Ok(self
-            .0
-            .events()
-            .list_for_realm_actor(realm_id, actor_id)
-            .await?)
-    }
-    async fn realm_actor_position_occupied(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .events()
-            .realm_actor_position_occupied(realm_id, actor_id)
-            .await?)
-    }
-    async fn canonical_events_at_realm_actor_position(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-        actor_seq: u64,
-        limit: usize,
-    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
-        Ok(self
-            .0
-            .events()
-            .list_at_realm_actor_position(realm_id, actor_id, actor_seq, limit)
-            .await?)
     }
     async fn franking_proofs_for_target(
         &self,
@@ -331,17 +202,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         realm_id: &str,
     ) -> crate::ServiceResult<soland_storage::RealmEventStats> {
         Ok(self.0.events().realm_event_stats(realm_id).await?)
-    }
-    async fn peer_authz_state_records(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
-        Ok(self.0.events().peer_authz_state_records().await?)
-    }
-    async fn peer_events_query_page(
-        &self,
-        query: &crate::events::PeerEventsPageQuery,
-    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
-        Ok(self.0.events().peer_events_query_page(query).await?)
     }
     async fn realm_events_newest_first(
         &self,
@@ -443,10 +303,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         actor_id: &str,
     ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self.0.events().list_for_actor(actor_id).await?)
-    }
-
-    async fn max_actor_sequence(&self, actor_id: &str) -> crate::ServiceResult<Option<u64>> {
-        Ok(self.0.events().max_actor_seq(actor_id).await?)
     }
 
     async fn batch_receipts_for_event(
@@ -686,16 +542,6 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
 
 #[async_trait::async_trait]
 impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
-    async fn public_leaf_authorizations(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> crate::ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>> {
-        Ok(self
-            .0
-            .mls_commits()
-            .public_leaf_authorizations(event_id)
-            .await?)
-    }
     async fn commits(&self) -> crate::ServiceResult<Vec<crate::events::MlsCommitState>> {
         self.0
             .mls_commits()
@@ -1245,20 +1091,16 @@ impl crate::events::PublicationEvidencePort for PersistencePublicationEvidence {
 
     async fn publication_evidence(
         &self,
-        event_digest: &str,
+        event_id: &arkret_wire::EventId,
     ) -> crate::ServiceResult<Option<soland_storage::PublicationEvidenceRecord>> {
-        Ok(self.0.publication_evidence().get(event_digest).await?)
+        Ok(self.0.publication_evidence().get(event_id).await?)
     }
 
-    async fn publication_evidence_for_digests(
+    async fn publication_evidence_for_events(
         &self,
-        event_digests: &[String],
+        event_ids: &[arkret_wire::EventId],
     ) -> crate::ServiceResult<Vec<soland_storage::PublicationEvidenceRecord>> {
-        Ok(self
-            .0
-            .publication_evidence()
-            .get_many(event_digests)
-            .await?)
+        Ok(self.0.publication_evidence().get_many(event_ids).await?)
     }
 }
 

@@ -40,13 +40,16 @@ pub struct AgentRuntimeActivation {
     pub authorized_public_key_digest: String,
     /// Exact controller Event retained with its producer proof.
     pub frozen_authorize_event: arkret_wire::Event,
-    /// Realm stream head observed while the authorization command was
-    /// validated. The authority commit must extend this exact head.
-    pub expected_stream_head: arkret_wire::CommitStreamHead,
+    /// Authority-signed commit that admitted `frozen_authorize_event`,
+    /// together with the terminal lifecycle it settled. One `RealmCommit`
+    /// carries exactly one `event_ref`, so this names both the Event and the
+    /// commit that made it the activation precondition.
     pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairOutcome,
     pub authorized_key_event: arkret_wire::Event,
     pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
-    pub current_signer_evidence: Option<serde_json::Value>,
+    pub current_signer_evidence: Option<
+        arkret_models_identity::authenticated_signer_resolution_evidence::AuthenticatedSignerResolutionEvidence,
+    >,
     pub authorized_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]

@@ -28,8 +28,6 @@ pub struct RealmDirectoryQuery {
     pub limit: Option<usize>,
 }
 
-pub use soland_storage::PeerEventsPageQuery;
-
 #[derive(Clone, Debug)]
 pub struct ActiveAgentAccountabilityQuery {
     pub accountability_event_id: String,
@@ -760,36 +758,31 @@ use crate::federation::FederationDeliveryRecord;
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
-    pub publication_event: Option<arkret_wire::Event>,
-    pub mls_frontier_leaves: Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>,
-    /// Origin admission was verified; historical sibling union is permitted.
-    pub replicated: bool,
+    /// Current-authority transaction that orders this Event on its Realm,
+    /// Circle or Sidecar stream. One `RealmCommit` accepts exactly one Event,
+    /// so the signed commit travels with the Event it admits.
+    pub authority_commit: soland_storage::AuthorityCommitTransaction,
     pub event: AcceptedEvent,
-    pub membership_compensation_evidence:
-        Option<soland_storage::MembershipCompensationEvidenceRecord>,
-    pub governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
-    /// Holder-private consent cell mutation plus its eager cache
+    /// Holder-private consent grant mutation plus its eager cache
     /// invalidation, staged by admission and committed with the Event.
     pub consent_projection: Option<CommitConsentProjection>,
     pub device_revocation_transition: Option<soland_storage::DeviceRevocationTransition>,
     pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
-    /// Complete SDK-verified original producer; only receiver-known revocations apply.
-    pub historical_producer: Option<arkret::historical_producer::VerifiedHistoricalEventProducer>,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDeliveryRecord>,
 }
 
-/// The holder-private consent effects of one accepted consent Control Move.
+/// The holder-private consent effects of one accepted consent command unit.
 ///
 /// `consent-model.md` section 4.1.2 puts the downstream invalidation inside
-/// the same transaction boundary as the accepted revoke, so the or_set cell
+/// the same transaction boundary as the accepted revoke, so the holder grant
 /// mutation and the holder-quarantine CAS commit with the canonical Event.
 #[derive(Clone, Debug)]
 pub struct CommitConsentProjection {
-    pub cell: crate::identity::ConsentCellRecord,
+    pub grant: crate::identity::ConsentGrantRecord,
     pub holder_quarantine: Option<CommitAccountDataCas>,
 }
 
@@ -828,88 +821,19 @@ pub struct AcceptedBatchReceipt {
     pub value: Value,
 }
 
-pub use soland_storage::{
-    DeviceInventoryRecord as IdentityAnchorDeviceState,
-    IdentityAnchorCommitOutcome as IdentityAnchorCommitResult,
-    IdentityAnchorFrontierCas as IdentityAnchorFrontierState,
-    IdentityAnchorReanchorSlot as IdentityAnchorReanchorState,
-};
-
 #[async_trait::async_trait]
 pub trait EventReadPort: Send + Sync {
-    async fn store_canonical_event(&self, record: AcceptedEvent) -> ServiceResult<()>;
-    /// Commit one Realm genesis unit. `deliveries` are the federation outbox
-    /// rows for that unit; they land in the same transaction as the Events, so
-    /// a crash can never leave an accepted Event without its delivery intent.
-    async fn store_realm_bootstrap_batch(
-        &self,
-        records: Vec<AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        deliveries: Vec<FederationDeliveryRecord>,
-    ) -> ServiceResult<soland_storage::RealmBootstrapCommitOutcome>;
-    async fn store_direct_conversation_founding_batch(
-        &self,
-        records: Vec<AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        slot: soland_storage::DirectConversationFoundingSlotRecord,
-        deliveries: Vec<FederationDeliveryRecord>,
-    ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome>;
     async fn direct_conversation_founding_slot(
         &self,
         founder_id: &str,
         trust_domain_id: &str,
         pair_key: &str,
     ) -> ServiceResult<Option<soland_storage::DirectConversationFoundingSlotRecord>>;
-    /// Commit the closed identity-anchor unit together with its federation
-    /// outbox rows — same atomicity requirement as the Realm genesis unit.
-    #[allow(clippy::too_many_arguments)]
-    async fn store_identity_anchor_batch(
-        &self,
-        records: Vec<AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        receipt: Option<EventBatchReceipt>,
-        device: Option<IdentityAnchorDeviceState>,
-        account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
-        frontier_cas: Option<IdentityAnchorFrontierState>,
-        reanchor_slot: Option<IdentityAnchorReanchorState>,
-        publication_evidence: Vec<PublicationEvidenceRecord>,
-        deliveries: Vec<FederationDeliveryRecord>,
-        recovery_terminal: Option<soland_storage::RecoveryTerminalCommitWrite>,
-    ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
-    async fn mls_frontier_leaves(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>>;
-    async fn membership_compensation_evidence(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Option<soland_storage::MembershipCompensationEvidenceRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
     async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn canonical_events_for_actor(&self, actor_id: &str)
     -> ServiceResult<Vec<AcceptedEvent>>;
-    async fn canonical_events_for_realm_actor(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<AcceptedEvent>>;
-    /// `sync/federation.md` section 5.3.4 condition 3: complete position
-    /// occupancy for one `(realm_id, actor_id)` across every state, so an empty
-    /// actor frontier is decided by an exhaustive enumeration rather than by an
-    /// accepted-only read returning no rows.
-    async fn realm_actor_position_occupied(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> ServiceResult<bool>;
-    async fn canonical_events_at_realm_actor_position(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-        actor_seq: u64,
-        limit: usize,
-    ) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
@@ -925,11 +849,6 @@ pub trait EventReadPort: Send + Sync {
         account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>>;
     async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats>;
-    async fn peer_authz_state_records(&self) -> ServiceResult<Vec<AcceptedEvent>>;
-    async fn peer_events_query_page(
-        &self,
-        query: &PeerEventsPageQuery,
-    ) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn realm_events_newest_first(&self, realm_id: &str) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
@@ -955,7 +874,6 @@ pub trait EventReadPort: Send + Sync {
         event: ProjectedEvent,
     ) -> ServiceResult<ProjectedEventAppendResult>;
     async fn accepted_events_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AcceptedEvent>>;
-    async fn max_actor_sequence(&self, actor_id: &str) -> ServiceResult<Option<u64>>;
     async fn batch_receipts_for_event(
         &self,
         event_id: &str,
@@ -990,20 +908,20 @@ pub trait ProjectionWritePort: Send + Sync {
 /// (`authz/offline-publication.md` §2.1).
 #[async_trait::async_trait]
 pub trait PublicationEvidencePort: Send + Sync {
-    /// Store the evidence for a digest not seen before and return whatever is
-    /// stored afterwards. A digest that is already present wins, so the
-    /// original `received_at` survives an idempotent retry verbatim.
+    /// Store the evidence for an Event not seen before and return whatever is
+    /// stored afterwards. An Event that is already present wins, so the
+    /// original `accepted_at` survives an idempotent retry verbatim.
     async fn store_publication_evidence(
         &self,
         record: PublicationEvidenceRecord,
     ) -> ServiceResult<PublicationEvidenceRecord>;
     async fn publication_evidence(
         &self,
-        event_digest: &str,
+        event_id: &arkret_wire::EventId,
     ) -> ServiceResult<Option<PublicationEvidenceRecord>>;
-    async fn publication_evidence_for_digests(
+    async fn publication_evidence_for_events(
         &self,
-        event_digests: &[String],
+        event_ids: &[arkret_wire::EventId],
     ) -> ServiceResult<Vec<PublicationEvidenceRecord>>;
 }
 
@@ -1056,7 +974,7 @@ fn active_agent_accountability(
     else {
         return false;
     };
-    let Ok(original_cell_subject) = original_grant.cell_subject() else {
+    let Ok(original_scope_key) = accountability_scope_key(&original_grant) else {
         return false;
     };
     let current_grant = events
@@ -1077,10 +995,11 @@ fn active_agent_accountability(
                 serde_json::from_value::<AccountabilityGrantPayload>(payload.clone()).ok()?;
             (grant.issuer_id.as_str() == controller_principal_id
                 && grant.subject_id.as_str() == agent_id
-                && grant.cell_subject().ok().as_deref() == Some(original_cell_subject.as_str()))
-            .then_some((candidate.actor_seq, grant))
+                && accountability_scope_key(&grant).ok().as_deref()
+                    == Some(original_scope_key.as_str()))
+            .then_some((accepted_event_order_key(candidate), grant))
         })
-        .max_by_key(|(actor_seq, _)| *actor_seq)
+        .max_by(|left, right| left.0.cmp(&right.0))
         .map(|(_, grant)| grant);
     let signed_by_controller =
         accepted_event_executor(original_event).as_ref() == Some(&controller_actor);
@@ -1113,6 +1032,34 @@ pub fn accepted_event_executor(record: &AcceptedEvent) -> Option<arkret_wire::Ac
     }
 }
 
+/// The register one accountability grant replaces.
+///
+/// The retired composite cell subject was
+/// `(issuer_id, subject_id, scope_set_component)`; the same three coordinates
+/// still identify the register, so the key is rebuilt from the payload instead
+/// of from a cell identifier.
+fn accountability_scope_key(grant: &AccountabilityGrantPayload) -> arkret_wire::Result<String> {
+    let scopes = grant.accountability_scope.canonical_set()?;
+    let mut key = String::new();
+    key.push_str(grant.issuer_id.as_str());
+    key.push('\u{1f}');
+    key.push_str(grant.subject_id.as_str());
+    for scope in scopes {
+        key.push('\u{1f}');
+        key.push_str(scope.as_str());
+    }
+    Ok(key)
+}
+
+/// Last-writer-wins ordering between two accepted Events on one register.
+///
+/// The per-actor sequence number was retired together with the producer event
+/// chain, so the Station-assigned receipt time orders the two grants and the
+/// Event id keeps the comparison total.
+fn accepted_event_order_key(record: &AcceptedEvent) -> (DateTime<Utc>, String) {
+    (record.received_at, record.event_id.clone())
+}
+
 fn active_accountability_scopes(
     events: &[AcceptedEvent],
     realm_id: Option<&str>,
@@ -1122,7 +1069,8 @@ fn active_accountability_scopes(
 ) -> BTreeSet<AccountabilityScopeKind> {
     let issuer = issuer_account.principal_id.as_str();
     let issuer_actor = arkret_wire::ActorId::account(issuer_account.clone());
-    let mut latest_by_cell = BTreeMap::<String, (u64, AccountabilityGrantPayload)>::new();
+    let mut latest_by_scope =
+        BTreeMap::<String, ((DateTime<Utc>, String), AccountabilityGrantPayload)>::new();
     for candidate in events.iter().filter(|candidate| {
         candidate.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
             && candidate.received_at <= at
@@ -1141,17 +1089,18 @@ fn active_accountability_scopes(
         if grant.issuer_id.as_str() != issuer || grant.subject_id.as_str() != subject {
             continue;
         }
-        let Ok(cell_subject) = grant.cell_subject() else {
+        let Ok(scope_key) = accountability_scope_key(&grant) else {
             continue;
         };
-        let entry = latest_by_cell
-            .entry(cell_subject)
-            .or_insert_with(|| (candidate.actor_seq, grant.clone()));
-        if candidate.actor_seq > entry.0 {
-            *entry = (candidate.actor_seq, grant);
+        let order = accepted_event_order_key(candidate);
+        let entry = latest_by_scope
+            .entry(scope_key)
+            .or_insert_with(|| (order.clone(), grant.clone()));
+        if order > entry.0 {
+            *entry = (order, grant);
         }
     }
-    latest_by_cell
+    latest_by_scope
         .into_values()
         .filter_map(|(_, grant)| {
             grant
@@ -1180,35 +1129,6 @@ impl EventQueryService {
         Ok(active_agent_accountability(&original_event, &events, query))
     }
 
-    pub async fn store_canonical_event(&self, record: AcceptedEvent) -> ServiceResult<()> {
-        self.events.store_canonical_event(record).await
-    }
-    pub async fn store_realm_bootstrap_batch(
-        &self,
-        records: Vec<AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        deliveries: Vec<FederationDeliveryRecord>,
-    ) -> ServiceResult<soland_storage::RealmBootstrapCommitOutcome> {
-        self.events
-            .store_realm_bootstrap_batch(records, governance_dependencies, deliveries)
-            .await
-    }
-    pub async fn store_direct_conversation_founding_batch(
-        &self,
-        records: Vec<AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        slot: soland_storage::DirectConversationFoundingSlotRecord,
-        deliveries: Vec<FederationDeliveryRecord>,
-    ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
-        self.events
-            .store_direct_conversation_founding_batch(
-                records,
-                governance_dependencies,
-                slot,
-                deliveries,
-            )
-            .await
-    }
     pub async fn direct_conversation_founding_slot(
         &self,
         founder_id: &str,
@@ -1219,49 +1139,8 @@ impl EventQueryService {
             .direct_conversation_founding_slot(founder_id, trust_domain_id, pair_key)
             .await
     }
-    #[allow(clippy::too_many_arguments)]
-    pub async fn store_identity_anchor_batch(
-        &self,
-        records: Vec<AcceptedEvent>,
-        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        receipt: Option<EventBatchReceipt>,
-        device: Option<IdentityAnchorDeviceState>,
-        account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
-        frontier_cas: Option<IdentityAnchorFrontierState>,
-        reanchor_slot: Option<IdentityAnchorReanchorState>,
-        publication_evidence: Vec<PublicationEvidenceRecord>,
-        deliveries: Vec<FederationDeliveryRecord>,
-        recovery_terminal: Option<soland_storage::RecoveryTerminalCommitWrite>,
-    ) -> ServiceResult<IdentityAnchorCommitResult> {
-        self.events
-            .store_identity_anchor_batch(
-                records,
-                governance_dependencies,
-                receipt,
-                device,
-                account_slot,
-                frontier_cas,
-                reanchor_slot,
-                publication_evidence,
-                deliveries,
-                recovery_terminal,
-            )
-            .await
-    }
     pub async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {
         self.events.canonical_event(event_id).await
-    }
-    pub async fn mls_frontier_leaves(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>> {
-        self.events.mls_frontier_leaves(event_id).await
-    }
-    pub async fn membership_compensation_evidence(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Option<soland_storage::MembershipCompensationEvidenceRecord>> {
-        self.events.membership_compensation_evidence(event_id).await
     }
     pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
         self.events.has_canonical_event(event_id).await
@@ -1274,35 +1153,6 @@ impl EventQueryService {
         actor_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.canonical_events_for_actor(actor_id).await
-    }
-    pub async fn canonical_events_for_realm_actor(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<AcceptedEvent>> {
-        self.events
-            .canonical_events_for_realm_actor(realm_id, actor_id)
-            .await
-    }
-    pub async fn realm_actor_position_occupied(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> ServiceResult<bool> {
-        self.events
-            .realm_actor_position_occupied(realm_id, actor_id)
-            .await
-    }
-    pub async fn canonical_events_at_realm_actor_position(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-        actor_seq: u64,
-        limit: usize,
-    ) -> ServiceResult<Vec<AcceptedEvent>> {
-        self.events
-            .canonical_events_at_realm_actor_position(realm_id, actor_id, actor_seq, limit)
-            .await
     }
     pub async fn franking_proofs_for_target(
         &self,
@@ -1331,15 +1181,6 @@ impl EventQueryService {
     pub async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats> {
         self.events.realm_event_stats(realm_id).await
     }
-    pub async fn peer_authz_state_records(&self) -> ServiceResult<Vec<AcceptedEvent>> {
-        self.events.peer_authz_state_records().await
-    }
-    pub async fn peer_events_query_page(
-        &self,
-        query: &PeerEventsPageQuery,
-    ) -> ServiceResult<Vec<AcceptedEvent>> {
-        self.events.peer_events_query_page(query).await
-    }
     pub async fn realm_events_newest_first(
         &self,
         realm_id: &str,
@@ -1363,8 +1204,8 @@ impl EventQueryService {
         }
     }
 
-    /// Persist the lease + freshly minted receipt for `event_digest`, or return
-    /// the evidence already stored for it.
+    /// Persist the authority acceptance evidence for one Event, or return the
+    /// evidence already stored for it.
     pub async fn store_publication_evidence(
         &self,
         record: PublicationEvidenceRecord,
@@ -1376,19 +1217,19 @@ impl EventQueryService {
 
     pub async fn publication_evidence(
         &self,
-        event_digest: &str,
+        event_id: &arkret_wire::EventId,
     ) -> ServiceResult<Option<PublicationEvidenceRecord>> {
         self.publication_evidence
-            .publication_evidence(event_digest)
+            .publication_evidence(event_id)
             .await
     }
 
-    pub async fn publication_evidence_for_digests(
+    pub async fn publication_evidence_for_events(
         &self,
-        event_digests: &[String],
+        event_ids: &[arkret_wire::EventId],
     ) -> ServiceResult<Vec<PublicationEvidenceRecord>> {
         self.publication_evidence
-            .publication_evidence_for_digests(event_digests)
+            .publication_evidence_for_events(event_ids)
             .await
     }
 
@@ -1640,11 +1481,6 @@ pub struct AdvanceMlsEpochCommand {
 
 #[async_trait::async_trait]
 pub trait MlsCommitReadPort: Send + Sync {
-    async fn public_leaf_authorizations(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>>;
-
     async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>>;
     async fn commit(
         &self,
@@ -1667,12 +1503,6 @@ pub struct MlsCommitQueryService {
 }
 
 impl MlsCommitQueryService {
-    pub async fn public_leaf_authorizations(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>> {
-        self.commits.public_leaf_authorizations(event_id).await
-    }
     pub fn new(commits: Arc<dyn MlsCommitReadPort>) -> Self {
         Self { commits }
     }
@@ -2237,7 +2067,6 @@ mod tests {
         AcceptedEvent {
             event_id: event_id(suffix),
             actor_id: "ak:did_core:webvh:z6mkalice".to_owned(),
-            actor_seq: u64::from(suffix),
             realm_id: Some("ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6".to_owned()),
             kind: arkret_wire::EventKind::MessageCreate.as_str().to_owned(),
             schema_id: "ak.schema.message.v1".to_owned(),
@@ -2399,6 +2228,75 @@ mod tests {
         }
     }
 
+    /// One accepted Event plus the signed commit that ordered it.
+    ///
+    /// A commit accepts exactly one Event, so the fixture builds the pair
+    /// together and keeps the same Realm, stream and Event id on both sides.
+    fn authority_commit_fixture(
+        event_id: &arkret_identifiers::EventId,
+        realm_id: &arkret_identifiers::RealmId,
+        now: DateTime<Utc>,
+    ) -> soland_storage::AuthorityCommitTransaction {
+        let stream_ref = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let authority_ref =
+            arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(event_id.clone());
+        soland_storage::AuthorityCommitTransaction {
+            expected_authority: soland_storage::CurrentRealmAuthority {
+                realm_id: realm_id.clone(),
+                generation: 0,
+                service_id: DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+                authority_ref: authority_ref.clone(),
+                last_handoff_ref: None,
+            },
+            event: arkret_wire::Event {
+                event_id: event_id.clone(),
+                kind: arkret_wire::EventKind::MessageCreate,
+                realm_id: realm_id.clone(),
+                scope_ref: arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                actor_id: arkret_wire::ActorId::account(accountability_account(
+                    "ak:did_core:web:alice.example",
+                )),
+                executed_by: None,
+                authorization_ref: None,
+                applet_id: None,
+                external_ref: None,
+                created_at: now,
+                refs: Vec::new(),
+                payload: BTreeMap::new(),
+                proofs: Vec::new(),
+            },
+            commit: arkret_wire::RealmCommit {
+                commit_id: arkret_wire::RealmCommitId::from_digest([0x32; 32]),
+                realm_id: realm_id.clone(),
+                stream_ref,
+                stream_position: 0,
+                previous_commit_ref: None,
+                event_ref: event_id.clone(),
+                governance_generation: 0,
+                authority_ref,
+                committed_at: now,
+                signature: arkret_wire::DetachedObjectSignature {
+                    context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                    signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:web:station.example#authority",
+                    )
+                    .unwrap(),
+                    signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                        .unwrap(),
+                    created_at: now,
+                    sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+                },
+            },
+            mls_state: None,
+            welcomes: Vec::new(),
+        }
+    }
+
     #[tokio::test]
     async fn accepted_event_command_is_committed_through_one_port() {
         let now = Utc::now();
@@ -2407,23 +2305,19 @@ mod tests {
             [0x31; 32],
         );
         let realm_id = arkret_identifiers::RealmId::from_event_id(&event_id);
+        let authority_commit = authority_commit_fixture(&event_id, &realm_id, now);
         let event_id = event_id.to_string();
         let realm_id = realm_id.to_string();
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
-                publication_event: None,
-                mls_frontier_leaves: None,
-                replicated: false,
-                membership_compensation_evidence: None,
-                governance_dependencies: Vec::new(),
+                authority_commit,
                 device_pairing_authorization: None,
                 contact_projection: None,
                 consent_projection: None,
                 event: AcceptedEvent {
                     event_id: event_id.clone(),
                     actor_id: "ak:did_core:web:alice.example".to_owned(),
-                    actor_seq: 1,
                     realm_id: Some(realm_id.clone()),
                     kind: "ak.message.create".to_owned(),
                     schema_id: "arkret://events/message/create/v1".to_owned(),
@@ -2435,7 +2329,6 @@ mod tests {
                 },
                 device_revocation_transition: None,
                 device_revocation_gate: None,
-                historical_producer: None,
                 projections: vec![ProjectedEvent {
                     event_id,
                     realm_id,
@@ -2477,13 +2370,11 @@ mod tests {
 
     fn accountability_event(
         event_id: &str,
-        actor_seq: u64,
         grant_status: &str,
         received_at: DateTime<Utc>,
     ) -> AcceptedEvent {
         accountability_event_with_scope(
             event_id,
-            actor_seq,
             grant_status,
             serde_json::json!("agent_operator"),
             received_at,
@@ -2492,7 +2383,6 @@ mod tests {
 
     fn accountability_event_with_scope(
         event_id: &str,
-        actor_seq: u64,
         grant_status: &str,
         accountability_scope: Value,
         received_at: DateTime<Utc>,
@@ -2531,12 +2421,11 @@ mod tests {
                 "ak:did_core:web:controller.example",
             ))
             .to_string(),
-            actor_seq,
             realm_id: Some("ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest: format!("sha256:{actor_seq}"),
+            canonical_digest: format!("sha256:{}", event_id),
             canonical_bytes: Vec::new(),
             envelope: serde_json::json!({
                 "actor_id": arkret_wire::ActorId::account(accountability_account(
@@ -2558,7 +2447,6 @@ mod tests {
             .with_timezone(&Utc);
         let original = accountability_event(
             "ak:event:AR-4MwpAcHt7pmjO-Cab9s-33ymPZefvcpl666_jGxiY",
-            1,
             "active",
             accepted_at - chrono::Duration::minutes(2),
         );
@@ -2576,7 +2464,6 @@ mod tests {
 
         let revoked = accountability_event(
             "ak:event:AUqzNZlfuL-7z087TbZhKOdYyKUNPAa2o_neyoFRh3o2",
-            2,
             "revoked",
             accepted_at - chrono::Duration::minutes(1),
         );
@@ -2646,21 +2533,18 @@ mod tests {
             .with_timezone(&Utc);
         let superset = accountability_event_with_scope(
             "ak:event:AWuZMGvx81gljFzdfo91GdpWgxDdUqYNw9iNo8O1vNA1",
-            1,
             "active",
             serde_json::json!(["employment", "agent_operator"]),
             accepted_at - chrono::Duration::minutes(5),
         );
         let singleton = accountability_event_with_scope(
             "ak:event:AU9DZnJIDT2wyYXkcOaxGWwgzqUNfXVjwSMWvYrUjaHp",
-            2,
             "active",
             serde_json::json!("contracted_service"),
             accepted_at - chrono::Duration::minutes(4),
         );
         let reordered_revoke = accountability_event_with_scope(
             "ak:event:AXknLJ0H-GIpZ65_VZ9tb638gg0xRIXmCgbGov3x_ApA",
-            3,
             "revoked",
             serde_json::json!(["agent_operator", "employment"]),
             accepted_at - chrono::Duration::minutes(3),
@@ -2692,14 +2576,12 @@ mod tests {
             .with_timezone(&Utc);
         let superset = accountability_event_with_scope(
             "ak:event:Acapa6RU80HiheFa2k-I6_Kninlrm7FBWLC_EvO82g56",
-            1,
             "active",
             serde_json::json!(["employment", "agent_operator"]),
             accepted_at - chrono::Duration::minutes(3),
         );
         let subset_revoke = accountability_event_with_scope(
             "ak:event:AVq1LpKIoEWFf3axTV6jqi4qRyX5y0PRTrCVtTE9L_V4",
-            2,
             "revoked",
             serde_json::json!("employment"),
             accepted_at - chrono::Duration::minutes(2),

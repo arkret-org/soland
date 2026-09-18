@@ -31,17 +31,6 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
-    /// Load immutable pending publication material without granting finality.
-    pub async fn publication_event_for_approval(
-        &self,
-        approval_event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<Option<arkret_wire::Event>> {
-        self.persistence
-            .events()
-            .publication_event_for_approval(approval_event_id)
-            .await
-    }
-
     /// Read the bounded Welcome discovery index without exposing its store.
     pub async fn discover_mls_welcome_refs(
         &self,
@@ -68,9 +57,8 @@ impl PersistenceHandle {
         account_id: &arkret_wire::AccountId,
         from_status_seq: u64,
         limit: u16,
-    ) -> crate::ServiceResult<
-        Vec<arkret_models_collaboration::account_status::AccountStatusRecord>,
-    > {
+    ) -> crate::ServiceResult<Vec<arkret_models_collaboration::account_status::AccountStatusRecord>>
+    {
         Ok(self
             .persistence
             .account_status_replicas()
@@ -95,9 +83,8 @@ impl PersistenceHandle {
     pub async fn erasure_pending_account_status_records(
         &self,
         limit: u16,
-    ) -> crate::ServiceResult<
-        Vec<arkret_models_collaboration::account_status::AccountStatusRecord>,
-    > {
+    ) -> crate::ServiceResult<Vec<arkret_models_collaboration::account_status::AccountStatusRecord>>
+    {
         Ok(self
             .persistence
             .account_status_replicas()
@@ -182,11 +169,7 @@ impl PersistenceHandle {
     pub async fn agent_cleanup_intent(
         &self,
         cleanup_intent_digest: &arkret_wire::Hash,
-    ) -> crate::ServiceResult<
-        Option<
-            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord,
-        >,
-    > {
+    ) -> crate::ServiceResult<Option<soland_storage::AgentCleanupRecord>> {
         Ok(self
             .persistence
             .agent_membership_cascades()
@@ -197,11 +180,7 @@ impl PersistenceHandle {
     pub async fn agent_cleanup_intent_for_terminal_event(
         &self,
         controller_terminal_event_id: &arkret_wire::EventId,
-    ) -> crate::ServiceResult<
-        Option<
-            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord,
-        >,
-    > {
+    ) -> crate::ServiceResult<Option<soland_storage::AgentCleanupRecord>> {
         Ok(self
             .persistence
             .agent_membership_cascades()
@@ -213,9 +192,7 @@ impl PersistenceHandle {
         &self,
         now: chrono::DateTime<chrono::Utc>,
         limit: usize,
-    ) -> crate::ServiceResult<
-        Vec<arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord>,
-    > {
+    ) -> crate::ServiceResult<Vec<soland_storage::AgentCleanupRecord>> {
         Ok(self
             .persistence
             .agent_membership_cascades()
@@ -269,25 +246,25 @@ impl PersistenceHandle {
 
     pub async fn complete_device_revocation_material_cleanup(
         &self,
-        proposal_digest: &str,
+        proposal_event_id: &arkret_wire::EventId,
         completed_at: chrono::DateTime<chrono::Utc>,
     ) -> crate::ServiceResult<bool> {
         Ok(self
             .persistence
             .device_revocations()
-            .complete_material_cleanup(proposal_digest, completed_at)
+            .complete_material_cleanup(proposal_event_id, completed_at)
             .await?)
     }
 
-    pub async fn complete_device_revocation_mls_obligation_by_event_id(
+    pub async fn complete_device_revocation_mls_obligation(
         &self,
-        proposal_event_id: &str,
+        proposal_event_id: &arkret_wire::EventId,
         completed_at: chrono::DateTime<chrono::Utc>,
     ) -> crate::ServiceResult<bool> {
         Ok(self
             .persistence
             .device_revocations()
-            .complete_mls_obligation_by_event_id(proposal_event_id, completed_at)
+            .complete_mls_obligation(proposal_event_id, completed_at)
             .await?)
     }
 
@@ -724,13 +701,9 @@ impl PersistenceHandle {
         )
     }
 
-    pub async fn hydrate_realm_directory(
-        &self,
-        projection: &ProjectionService,
-    ) -> PersistenceResult<RealmDirectoryIndex> {
+    pub async fn hydrate_realm_directory(&self) -> PersistenceResult<RealmDirectoryIndex> {
         let mut realms = RealmDirectoryIndex::new();
-        hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realms, projection)
-            .await?;
+        hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realms).await?;
         Ok(realms)
     }
 
