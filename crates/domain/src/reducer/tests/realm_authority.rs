@@ -179,6 +179,57 @@ fn reset_changes_only_generation() {
     assert_eq!(authority_generation(&state), 1);
 }
 
+fn governance_station(state: &ProjectionState) -> String {
+    state
+        .realm_authority_root(REALM)
+        .unwrap()
+        .get("governance_station_id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned()
+}
+
+/// A custodian handoff must not revoke the Realm's delegation tree.
+///
+/// `authz/capabilities.md` section 10 and `sync/authority-commit-log.md:62`
+/// hold `authority_generation` and `governance_generation` disjoint: the
+/// former is the delegation generation advanced only by
+/// `ak.realm.authority.reset`, the latter the governance Station's term
+/// advanced only by `ak.realm.governance_station.change`. `capabilities.md:674`
+/// keeps a `realm_root` ref valid only while the Realm's current
+/// `authority_generation` still equals the one the ref pinned, so advancing it
+/// here would invalidate every root-derived grant on a planned handoff --
+/// the exact failure the spec spells out.
+#[test]
+fn governance_station_change_leaves_the_delegation_generation_alone() {
+    let mut state = state_with_successor();
+    let before_controller = controller(&state);
+    let before_epoch = controller_epoch(&state);
+    let effect = state.apply_realm_authority_transition(
+        &operation(
+            arkret_wire::EventKind::RealmGovernanceStationChange,
+            serde_json::json!({
+                "expected_governance_generation": 0,
+                "expected_realm_stream_commit_id": arkret_wire::RealmCommitId::from_digest([0x11; 32]).to_string(),
+                "new_governance_station_id": "ak:did_core:web:successor-station.example",
+                "sender": OWNER
+            }),
+        ),
+        arkret_wire::EventKind::RealmGovernanceStationChange,
+    );
+    assert!(
+        matches!(effect, ProjectionEffect::RealmLifecycle { .. }),
+        "governance station change must project a Realm lifecycle effect: {effect:?}"
+    );
+    assert_eq!(
+        governance_station(&state),
+        "ak:did_core:web:successor-station.example"
+    );
+    assert_eq!(authority_generation(&state), 0);
+    assert_eq!(controller(&state), before_controller);
+    assert_eq!(controller_epoch(&state), before_epoch);
+}
+
 #[test]
 fn successor_counter_overflow_fails_closed_without_mutation() {
     let mut state = state_with_successor();

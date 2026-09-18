@@ -303,30 +303,31 @@ impl ProjectionState {
                         };
                     }
                 };
-                // The expected generation and Realm-stream head keep a stale
-                // administrator decision from re-routing the authority.
-                if payload.expected_governance_generation != authority_generation {
-                    return ProjectionEffect::Rejected {
-                        reason: "realm_authority_root_conflict".to_owned(),
-                    };
-                }
-                // `expected_realm_stream_commit_id` names the Realm-stream
-                // head this decision was taken against. The head belongs to
-                // `CommitStreamProjection`, which the governance Station checks
-                // at admission; the reducer holds the authority generation and
-                // enforces that half of the compare-and-swap.
-                let Some(successor_generation) = authority_generation.checked_add(1) else {
-                    return ProjectionEffect::Rejected {
-                        reason: "reducer_projection_failed".to_owned(),
-                    };
-                };
+                // `authority_generation` is NOT touched here.
+                // `authz/capabilities.md` section 10 and
+                // `sync/authority-commit-log.md:62` make the two counters
+                // disjoint: `authority_generation` is the delegation
+                // generation and only `ak.realm.authority.reset` advances it,
+                // while `governance_generation` is the governance Station's
+                // term and only this kind advances it. The spec names the
+                // failure mode of conflating them in as many words -- reading
+                // a custodian handoff as an authority reset revokes the whole
+                // Realm's grant tree, because a `realm_root` ref is valid only
+                // while the Realm's current `authority_generation` equals the
+                // one the ref pinned (`capabilities.md:674`).
+                //
+                // `payload.expected_governance_generation` CASes the
+                // governance counter, which this reducer cannot read: it lives
+                // on the RealmCommit and the Realm snapshot
+                // (`storage/authority_commit.rs:70`,
+                // `storage-postgres/authority_commit.rs:700`), not on the
+                // authority-root typed current result. Comparing it against
+                // `authority_generation` only ever appeared to work because
+                // this branch also advanced that counter in lockstep. The CAS
+                // belongs at admission, next to the counter it names.
                 root.insert(
                     "governance_station_id".to_owned(),
                     Value::String(payload.new_governance_station_id.to_string()),
-                );
-                root.insert(
-                    "authority_generation".to_owned(),
-                    successor_generation.into(),
                 );
             }
             _ => {
