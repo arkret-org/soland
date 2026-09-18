@@ -1,36 +1,26 @@
 use super::*;
 
-/// Registry write index of `ak.call.state`'s `ak.component.call.moderation.v1`
-/// target, i.e. the `write_index` half of its canonical OR-Set dot.
-const CALL_STATE_MODERATION_WRITE_INDEX: usize = 6;
-/// Registry write index of `ak.call.state`'s `ak.component.call.roster.v1`
-/// target.
-const CALL_STATE_ROSTER_WRITE_INDEX: usize = 7;
-
-/// One reducer input: the projection Operation plus the cell writes the v1
-/// registry derives from the same `kind + payload`.
+/// One reducer input: the projection Operation plus the content-bound Event id
+/// the Station accepted it under.
 ///
-/// There is no producer `effects[]` on the wire any more, so a reducer test
-/// cannot hand-author the writes it wants applied. Deriving them here means
-/// each assertion below also asserts that Soland's projection agrees with
-/// `event-kind-registry.json`.
+/// The reducer derives every facet write from `kind + payload` itself, so a
+/// test hands it the Operation and reads the settled facets back.
 struct CallInput {
-    /// The Event id these writes are bound to. It is derived from the Event's
-    /// own content, so tests read it here instead of pinning a literal.
+    /// The Event id this Operation was accepted under. It is derived from the
+    /// Event's own content, so tests read it here instead of pinning a literal.
     event_id: arkret_identifiers::EventId,
     operation: Operation,
-    cell_writes: Vec<arkret_wire::cbs::ProjectedCellWrite>,
 }
 
 fn call_input(kind: &str, realm: &str, payload: Value) -> CallInput {
     call_input_at_seq(kind, realm, 0, payload)
 }
 
-/// Same, with an explicit `actor_seq`. Two Events with identical kind, Realm
-/// and payload *are* the same Event and share one id; a test that needs
-/// concurrent siblings with equal payloads separates them by seq.
-fn call_input_at_seq(kind: &str, realm: &str, actor_seq: u64, payload: Value) -> CallInput {
-    let (event_id, cell_writes) = projected_cell_writes_at_seq(kind, realm, actor_seq, &payload);
+/// Same, with an explicit distinguishing sequence. Two Events with identical
+/// kind, Realm, payload and timestamp *are* the same Event and share one id; a
+/// test that needs two distinct Events separates them here.
+fn call_input_at_seq(kind: &str, realm: &str, distinct_seq: u64, payload: Value) -> CallInput {
+    let event_id = derived_event_id_at_seq(kind, realm, distinct_seq, &payload);
     let mut operation_payload = payload;
     operation_payload
         .as_object_mut()
@@ -39,23 +29,29 @@ fn call_input_at_seq(kind: &str, realm: &str, actor_seq: u64, payload: Value) ->
     CallInput {
         event_id,
         operation: make_operation(kind, realm, operation_payload),
-        cell_writes,
     }
 }
 
 fn apply_call(state: &mut ProjectionState, input: &CallInput, hlc: &ServerHlc) -> ProjectionEffect {
-    state.apply_projected(&input.operation, &input.cell_writes, hlc)
+    state.apply_projected(&input.operation, hlc)
 }
 
-fn call_cell(family: &str, subject: &str) -> arkret_identifiers::CellRef {
-    arkret_identifiers::CellRef::new(format!("ak:cell:{family}:{subject}")).unwrap()
+const TEST_REALM: &str = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+
+fn call_facet_value<'a>(
+    state: &'a ProjectionState,
+    realm: &str,
+    facet_name: &str,
+    subject: &str,
+) -> Option<&'a Value> {
+    state.facet_value(realm, &FacetRef::new(facet_name, subject))
 }
 
 #[test]
 fn call_create_derives_call_id_and_establishes_initial_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let input = call_input(
         arkret_wire::EventKind::CallCreate.as_str(),
         realm,
@@ -74,12 +70,7 @@ fn call_create_derives_call_id_and_establishes_initial_state() {
         ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
     ));
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_STATE_V1,
-                call_id
-            ))
-            .unwrap(),
+        call_facet_value(&state, realm, facet::CALL_STATE, call_id).unwrap(),
         &serde_json::json!("ringing")
     );
 }
@@ -88,7 +79,7 @@ fn call_create_derives_call_id_and_establishes_initial_state() {
 fn call_create_without_optional_focus_establishes_initial_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let input = call_input(
         arkret_wire::EventKind::CallCreate.as_str(),
         realm,
@@ -101,30 +92,26 @@ fn call_create_without_optional_focus_establishes_initial_state() {
         ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
     ));
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_STATE_V1,
-                &call_id
-            ))
-            .unwrap(),
+        call_facet_value(&state, realm, facet::CALL_STATE, &call_id).unwrap(),
         &serde_json::json!("connecting")
     );
 }
 
 #[test]
-fn call_create_is_idempotent_after_registered_cell_projection() {
+fn call_create_is_idempotent_against_an_identical_settled_facet() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let input = call_input(
         arkret_wire::EventKind::CallCreate.as_str(),
         realm,
         serde_json::json!({"initial_state": "ringing"}),
     );
     let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
-    state.cells.insert(
-        call_cell(arkret_wire::CellFamilyId::CALL_STATE_V1, &call_id),
-        ResolvedCellState::Value(serde_json::json!("ringing")),
+    state.set_facet(
+        realm,
+        FacetRef::new(facet::CALL_STATE, &call_id),
+        serde_json::json!("ringing"),
     );
 
     assert!(matches!(
@@ -134,34 +121,10 @@ fn call_create_is_idempotent_after_registered_cell_projection() {
 }
 
 #[test]
-fn call_create_registry_dispatch_preserves_projected_writes() {
+fn call_state_projects_independent_state_focus_and_roster_facets() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let input = call_input(
-        arkret_wire::EventKind::CallCreate.as_str(),
-        realm,
-        serde_json::json!({"initial_state": "connecting"}),
-    );
-    let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
-    let registry = super::super::state_model_kinds::default_cell_family_registry();
-
-    assert!(matches!(
-        state.apply_via_state_model_registry(
-            &input.operation,
-            &input.cell_writes,
-            &hlc,
-            &registry,
-        ),
-        ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
-    ));
-}
-
-#[test]
-fn call_state_projects_independent_state_focus_and_roster_cells() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let call_id = "ak:call:AU9VDQu1sjP8qOSxIJQFAs4NIBcuMF-hCYYGzgzCvD28";
     let participant = serde_json::json!({
         "actor_id": "ak:did_core:web:bob.example",
@@ -183,34 +146,18 @@ fn call_state_projects_independent_state_focus_and_roster_cells() {
         ProjectionEffect::CallStateProjected { .. }
     ));
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_STATE_V1,
-                call_id
-            ))
-            .unwrap(),
+        call_facet_value(&state, realm, facet::CALL_STATE, call_id).unwrap(),
         &serde_json::json!("ringing")
     );
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_FOCUS_V1,
-                call_id
-            ))
-            .unwrap()["session_focus"],
+        call_facet_value(&state, realm, facet::CALL_FOCUS, call_id).unwrap()["session_focus"],
         "fra-1"
     );
+    // A list-valued call facet tags each entry with the accepted Event id that
+    // produced it, which is the coordinate a later delta names.
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_ROSTER_V1,
-                call_id
-            ))
-            .unwrap()[0]["tag"],
-        Value::String(arkret_schema::or_set_dot(
-            input.event_id.as_str(),
-            CALL_STATE_ROSTER_WRITE_INDEX
-        ))
+        call_facet_value(&state, realm, facet::CALL_ROSTER, call_id).unwrap()[0]["tag_id"],
+        Value::String(input.event_id.to_string())
     );
 }
 
@@ -218,7 +165,7 @@ fn call_state_projects_independent_state_focus_and_roster_cells() {
 fn focus_update_cannot_omit_or_replace_committed_session_focus() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let call_id = "ak:call:ASJvJjNHSrLihxsjbs4YgLqii-k87Bnh6wB_Ut9gIlOJ";
     let first = call_input(
         arkret_wire::EventKind::CallState.as_str(),
@@ -252,10 +199,10 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
 }
 
 #[test]
-fn moderation_restore_only_removes_observed_matching_ban() {
+fn moderation_removal_is_tagged_with_the_accepted_event_id() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let call_id = "ak:call:AXN8h1ovgRUvcxrjsoB4ffwwej16MPpikhZbvZ6pt_Hj";
     let removal = serde_json::json!({
         "actor_id": "ak:did_core:web:bob.example",
@@ -272,66 +219,52 @@ fn moderation_restore_only_removes_observed_matching_ban() {
             "moderation_delta": {"op": "remove_participant", "removal": removal}
         }),
     );
-    let dot = arkret_schema::or_set_dot(add.event_id.as_str(), CALL_STATE_MODERATION_WRITE_INDEX);
-    apply_call(&mut state, &add, &hlc);
-
-    // `call-state.md` §5 — restore removes the *observed* dot, not a
-    // producer-chosen tag.
-    let restore = call_input(
-        arkret_wire::EventKind::CallState.as_str(),
-        realm,
-        serde_json::json!({
-            "call_id": call_id,
-            "moderation_delta": {
-                "op": "restore_participant",
-                "observed_dot": dot,
-                "actor_id": "ak:did_core:web:bob.example",
-                "restored_by": "ak:did_core:web:mod.example",
-                "restored_at": "2026-07-26T00:01:00.000Z"
-            }
-        }),
-    );
     assert!(matches!(
-        apply_call(&mut state, &restore, &hlc),
+        apply_call(&mut state, &add, &hlc),
         ProjectionEffect::CallStateProjected { .. }
     ));
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_MODERATION_V1,
-                call_id
-            ))
-            .unwrap(),
+        call_facet_value(&state, realm, facet::CALL_MODERATION, call_id).unwrap(),
         &serde_json::json!([{
-            "tag": dot,
-            "value": removal,
-            "removed": true
+            "tag_id": add.event_id.to_string(),
+            "value": removal
         }])
     );
-    apply_call(&mut state, &add, &hlc);
+
+    // A second removal naming the same `(actor_id, action)` replaces the entry
+    // rather than accumulating a duplicate, and carries the newer Event id.
+    let replay = call_input_at_seq(
+        arkret_wire::EventKind::CallState.as_str(),
+        realm,
+        1,
+        serde_json::json!({
+            "call_id": call_id,
+            "moderation_delta": {"op": "remove_participant", "removal": removal}
+        }),
+    );
+    assert!(matches!(
+        apply_call(&mut state, &replay, &hlc),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    let entries = call_facet_value(&state, realm, facet::CALL_MODERATION, call_id).unwrap();
+    assert_eq!(entries.as_array().unwrap().len(), 1);
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_MODERATION_V1,
-                call_id
-            ))
-            .unwrap()[0]["removed"],
-        true
+        entries[0]["tag_id"],
+        Value::String(replay.event_id.to_string())
     );
 }
 
 #[test]
-fn recording_start_requires_consent_before_both_cells_are_written() {
+fn recording_start_requires_consent_before_both_facets_are_written() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let call_id = "ak:call:AVVUw63Ofuk60rwuYS80ycxwQ3N-ktzns8CmQDMZq1xJ";
     let recording_id = "capture-1";
-    let subject = arkret_wire::composite_subject(&[call_id, recording_id]).unwrap();
     // `call-state.md` §6 — `payload.result` MUST NOT carry
     // `recording_start_event_id`: this Event's id depends on its own payload
     // digest, so writing that id into the payload has no fixed point. The
-    // reducer stamps the accepted identity into the projected result cell
+    // reducer stamps the accepted identity into the projected result facet
     // afterwards, which is what `accepted_event_id` stands in for here.
     let result = serde_json::json!({"retention": {"consent_confirmed": false}});
     let mut input = call_input(
@@ -356,29 +289,18 @@ fn recording_start_requires_consent_before_both_cells_are_written() {
         ProjectionEffect::Rejected { reason }
             if reason == arkret_wire::ReasonCode::RECORDING_CONSENT_REQUIRED
     ));
-    assert!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_RECORDING_V1,
-                &subject
-            ))
-            .is_none()
-    );
-    assert!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1,
-                &subject
-            ))
-            .is_none()
-    );
+    let capture = FacetRef::composite(facet::CALL_RECORDING, &[call_id, recording_id]);
+    let capture_result =
+        FacetRef::composite(facet::CALL_RECORDING_RESULT, &[call_id, recording_id]);
+    assert!(state.facet_value(realm, &capture).is_none());
+    assert!(state.facet_value(realm, &capture_result).is_none());
 }
 
 #[test]
 fn call_transition_rejects_wrong_predecessor_and_terminal_exit() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let call_id = "ak:call:ASEgVa_u0qFhi6iIFn9EfzHXcIPR5apmezSCOewcB9Vv";
     let initial = call_input(
         arkret_wire::EventKind::CallState.as_str(),
@@ -429,89 +351,10 @@ fn call_transition_rejects_wrong_predecessor_and_terminal_exit() {
 }
 
 #[test]
-fn state_sibling_conflict_does_not_freeze_roster_cell() {
+fn unrecognized_payload_labels_do_not_bypass_the_lifecycle_edge() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:AUpx7jJEjRU7iQXaC0uYvYWiJBQSgQFPt1aXgWqBx5mg";
-    let initial = call_input(
-        arkret_wire::EventKind::CallState.as_str(),
-        realm,
-        serde_json::json!({
-            "call_id": call_id,
-            "state_transition": {"from": null, "to": "ringing"}
-        }),
-    );
-    apply_call(&mut state, &initial, &hlc);
-
-    let sibling = |to: &str| {
-        let mut input = call_input(
-            arkret_wire::EventKind::CallState.as_str(),
-            realm,
-            serde_json::json!({
-                "call_id": call_id,
-                "state_transition": {"from": "ringing", "to": to}
-            }),
-        );
-        // Two siblings resolved against the same accepted CBS basis are
-        // concurrent by construction.
-        input.operation.context.seal_basis = Some(arkret_wire::SealBasis {
-            leaves: vec![
-                arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap(),
-            ],
-        });
-        input
-    };
-    let active = sibling("active");
-    apply_call(&mut state, &active, &hlc);
-    let missed = sibling("missed");
-    assert!(matches!(
-        apply_call(&mut state, &missed, &hlc),
-        ProjectionEffect::CallStateProjected { .. }
-    ));
-    assert!(matches!(
-        state.cells.get(&call_cell(
-            arkret_wire::CellFamilyId::CALL_STATE_V1,
-            call_id
-        )),
-        Some(ResolvedCellState::Bottom(_))
-    ));
-
-    let participant = serde_json::json!({
-        "actor_id": "ak:did_core:web:bob.example",
-        "device_id": "ak:device:01904100-0000-7000-8000-d00000000010"
-    });
-    let join = call_input(
-        arkret_wire::EventKind::CallState.as_str(),
-        realm,
-        serde_json::json!({
-            "call_id": call_id,
-            "roster_delta": {"op": "join", "participant": participant}
-        }),
-    );
-    assert!(matches!(
-        apply_call(&mut state, &join, &hlc),
-        ProjectionEffect::CallStateProjected { .. }
-    ));
-    assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_ROSTER_V1,
-                call_id
-            ))
-            .unwrap()[0]["tag"],
-        Value::String(arkret_schema::or_set_dot(
-            join.event_id.as_str(),
-            CALL_STATE_ROSTER_WRITE_INDEX
-        ))
-    );
-}
-
-#[test]
-fn payload_conflict_labels_do_not_create_a_cbs_sibling_relation() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let call_id = "ak:call:AUpx7jJEjRU7iQXaC0uYvYWiJBQSgQFPt1aXgWqBx5mg";
     let initial = call_input(
         arkret_wire::EventKind::CallState.as_str(),
@@ -539,27 +382,25 @@ fn payload_conflict_labels_do_not_create_a_cbs_sibling_relation() {
         input
     };
     apply_call(&mut state, &transition("active"), &hlc);
+    // The stream is totally ordered, so the second Event is simply a later
+    // transition off a head that has already moved: no label in the payload
+    // buys it a concurrent lane.
     assert!(matches!(
         apply_call(&mut state, &transition("missed"), &hlc),
         ProjectionEffect::Rejected { reason }
             if reason == arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
     ));
     assert_eq!(
-        state
-            .cell_value(&call_cell(
-                arkret_wire::CellFamilyId::CALL_STATE_V1,
-                call_id
-            ))
-            .unwrap(),
+        call_facet_value(&state, realm, facet::CALL_STATE, call_id).unwrap(),
         &Value::String("active".to_owned())
     );
 }
 
 #[test]
-fn terminal_summary_reads_the_split_state_cell() {
+fn terminal_summary_reads_the_split_state_facet() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let realm = TEST_REALM;
     let call_id = "ak:call:ARs50SawRVVzZtkqDNcij3Lr46cEjrFQAKyyhn2-9T_R";
     for (from, to) in [
         (Value::Null, "connecting"),

@@ -26,10 +26,6 @@ fn at() -> DateTime<Utc> {
 fn hlc(sequence: usize) -> Hlc {
     Hlc::new(format!("0198d35d9800-{sequence:04x}-a13f9c2e")).unwrap()
 }
-fn project(event: &Event) -> std::result::Result<Vec<ProjectedCellWrite>, String> {
-    arkret_schema::project_registered_cell_writes(event, DigestSuite::Sha256)
-        .map_err(|error| error.to_string())
-}
 pub fn possession(
     account: &AccountId,
     index: u8,
@@ -259,9 +255,8 @@ impl DeviceHistoryFixture {
         let create = arkret_bootstrap::build_self_principal_pcr_create(
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: account.principal_id.clone(),
-                station_id: account.station_id.clone(),
+                governance_station_id: account.station_id.clone(),
                 principal_did: did.clone(),
-                notary: configuration.clone(),
                 genesis_salt: GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
                     .unwrap(),
                 trust_domain: TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
@@ -286,10 +281,11 @@ impl DeviceHistoryFixture {
                     )
                     .unwrap(),
                 },
+                initial_join_rule: JoinRule::Invite,
+                initial_history_access: HistoryAccess::SinceJoin,
+                initial_discoverability: Discoverability::InviteOnly,
                 created_at: options.created_at,
-                hlc: hlc(0),
             },
-            &project,
         )
         .unwrap()
         .into_event();
@@ -349,9 +345,6 @@ impl DeviceHistoryFixture {
             self.created_at,
         )
         .unwrap();
-        event.seal_basis = self.seals.last().map(|seal| SealBasis {
-            leaves: vec![seal.id.clone()],
-        });
         event.auth_context = None;
         event.unsigned.clear();
         event

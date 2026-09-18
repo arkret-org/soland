@@ -16,7 +16,6 @@ mod poll;
 mod read_cursor;
 mod realm_authority;
 mod redaction_message;
-mod security_genesis;
 mod space_container;
 mod stage_axis;
 mod strand_morph;
@@ -116,82 +115,64 @@ pub(super) fn make_operation(
     )
 }
 
-/// The registry-derived cell writes a v1 receiver projects for this
-/// `kind + payload`, plus the Event id they are bound to.
-///
-/// The Event wire carries no producer `effects[]`, so a reducer test may not
-/// hand-write the writes it wants applied: it has to go through the same
-/// `arkret_schema::project_registered_cell_writes` contract evaluator the
-/// server uses, over a real signed-shape Event.
+/// The content-bound Event id a receiver derives for this `kind + payload`,
+/// built through the SDK's own authoring path.
 ///
 /// The id is an output, not an input. An Event id is the digest of the Event's
 /// own content, so no caller can choose one; a test that pinned an id would be
-/// asserting against an identity the content never produced. It is returned
-/// because it is observable in the writes — or_set add tags are the canonical
-/// dot `ak:event:<event_id>:<write_index>` — and because Event-derived object
-/// ids retype this exact token.
+/// asserting against an identity the content never produced. Tests read it here
+/// because the Event to Operation adapter injects it into the projection
+/// payload, because Event-derived object ids retype this exact token, and
+/// because list-valued facet entries carry it as their `tag_id`.
 ///
-/// `actor_seq` is the honest way to make two otherwise identical Events
-/// distinct. Same kind, Realm, payload and seq is the *same* Event and
-/// therefore the same id; a test that needs siblings varies the seq.
-pub(super) fn projected_cell_writes_at_seq(
+/// `distinct_seq` is the honest way to make two otherwise identical Events
+/// distinct. The envelope carries no producer sequence any more, so the only
+/// remaining lever is `created_at`: same kind, Realm, payload and timestamp is
+/// the *same* Event and therefore the same id.
+pub(super) fn derived_event_id_at_seq(
     object_kind: impl AsRef<str>,
     realm_id: &str,
-    actor_seq: u64,
+    distinct_seq: u64,
     payload: &Value,
-) -> (
-    arkret_identifiers::EventId,
-    Vec<arkret_wire::cbs::ProjectedCellWrite>,
-) {
+) -> arkret_identifiers::EventId {
     let actor_id = arkret_wire::project_did_to_core_id(
         &arkret_identifiers::Did::new("did:web:reducer-test.example").unwrap(),
     )
     .unwrap();
-    projected_cell_writes_for_actor(object_kind, realm_id, actor_seq, payload, actor_id)
+    derived_event_id_for_actor(object_kind, realm_id, distinct_seq, payload, actor_id)
 }
 
-pub(super) fn projected_cell_writes_for_actor(
+pub(super) fn derived_event_id_for_actor(
     object_kind: impl AsRef<str>,
     realm_id: &str,
-    actor_seq: u64,
+    distinct_seq: u64,
     payload: &Value,
     actor_id: arkret_identifiers::DidCoreId,
-) -> (
-    arkret_identifiers::EventId,
-    Vec<arkret_wire::cbs::ProjectedCellWrite>,
-) {
+) -> arkret_identifiers::EventId {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
-        .with_timezone(&chrono::Utc);
-    let event = arkret_wire::test_support::raw_event_at(
+        .with_timezone(&chrono::Utc)
+        + chrono::Duration::milliseconds(
+            i64::try_from(distinct_seq).expect("fixture distinguishing sequence fits in i64"),
+        );
+    arkret_wire::test_support::raw_event_at(
         object_kind.as_ref(),
         arkret_wire::event_envelope::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id).unwrap(),
         },
         actor_id.clone(),
         actor_id,
-        actor_seq,
-        arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
         payload.clone(),
         created_at,
     )
-    .expect("event envelope");
-    let event_id = event.event_id.clone();
-    let writes = arkret_schema::project_registered_cell_writes(
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .expect("registered cell contract must be evaluable");
-    (event_id, writes)
+    .expect("event envelope")
+    .event_id
 }
 
-pub(super) fn projected_cell_writes(
+pub(super) fn derived_event_id(
     object_kind: impl AsRef<str>,
     realm_id: &str,
     payload: &Value,
-) -> (
-    arkret_identifiers::EventId,
-    Vec<arkret_wire::cbs::ProjectedCellWrite>,
-) {
-    projected_cell_writes_at_seq(object_kind, realm_id, 0, payload)
+) -> arkret_identifiers::EventId {
+    derived_event_id_at_seq(object_kind, realm_id, 0, payload)
 }

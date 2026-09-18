@@ -1,5 +1,6 @@
-//! Real adapter regressions. Policy/Seal/proof rows are seeded as already
-//! admitted inputs; these tests exercise consumption, not cryptographic admission.
+//! Real adapter regressions. Policy, commit and proof rows are seeded as
+//! already admitted inputs; these tests exercise consumption, not
+//! cryptographic admission.
 use arkret_models_crypto as crypto;
 use arkret_wire as wire;
 use serde_json::json;
@@ -28,7 +29,7 @@ async fn insert_policy(pool: &crate::PgPool, policy: &Value) {
     // history gate itself must reject rather than relying on publication cleanup.
     let typed: arkret_models_crypto::RecoveryPolicy =
         serde_json::from_value(policy.clone()).unwrap();
-    typed.validate().unwrap();
+    typed.validate_shape().unwrap();
     let mut conn = pg_conn(pool).await.unwrap();
     sql_query("INSERT INTO recovery_policies(id,principal_id,station_id,version,acceptance_basis,trust_domain,expires_at,issued_at,verification_method,raw_payload,accepted_at) VALUES($1,$2,$3,$4,'{}','ak:trust_domain:station.example',$5,$6,'did:web:unlock-test.example#root',$7,$6)")
         .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(typed.policy_id.as_str()))
@@ -56,29 +57,22 @@ impl Fixture {
         });
         let typed_policy: arkret_models_crypto::RecoveryPolicy =
             serde_json::from_value(policy.clone()).unwrap();
-        let proof = arkret_models_crypto::RecoverySessionProofSubmitRequestBody {
-            proof: arkret_models_crypto::RecoverySessionProof::DidRoot(
-                arkret_models_crypto::RecoveryDidRootProof {
-                    kind: arkret_models_crypto::RecoveryDidRootProofKind::DidRoot,
-                    challenge: arkret_models_crypto::Challenge::new(
-                        arkret_canonical::base64url_encode([42u8; 32]),
-                    )
-                    .unwrap(),
-                    verification_method: arkret_wire::DidUrl::new(
-                        "did:web:unlock-test.example#root",
-                    )
-                    .unwrap(),
-                    signature_algorithm: arkret_wire::NonEmptyString::new("Ed25519").unwrap(),
-                    signature: arkret_wire::Base64UrlString::new(signature.clone()).unwrap(),
-                },
-            ),
+        typed_policy.validate_shape().unwrap();
+        let challenge =
+            wire::Base64UrlString::new(arkret_canonical::base64url_encode([42u8; 32])).unwrap();
+        let proof = crypto::RecoverySessionProofSubmitRequestBody {
+            proof: crypto::RecoverySessionProof::DidRoot(crypto::DidRootProofBody {
+                kind: crypto::DidRootProofKind::DidRoot,
+                challenge: challenge.clone(),
+                verification_method: wire::DidUrl::new("did:web:unlock-test.example#root").unwrap(),
+                signature_algorithm: crypto::RecoverySignatureAlgorithm::Ed25519,
+                signature: wire::Base64UrlString::new(signature.clone()).unwrap(),
+            }),
         };
+        proof.proof.validate_shape().unwrap();
         let proof_payload = serde_json::to_value(&proof).unwrap();
-        let proof: arkret_models_crypto::RecoverySessionProofSubmitRequestBody =
+        let proof: crypto::RecoverySessionProofSubmitRequestBody =
             serde_json::from_value(proof_payload.clone()).unwrap();
-        typed_policy
-            .validate_inflight_authority(&[typed_policy.clone()], Some(&proof.proof), now)
-            .unwrap();
         let device = wire::DeviceId::new("ak:device:01904100-0000-7000-8000-000000000023").unwrap();
         let backup = crypto::KeyBackup {
             backup_id: wire::BackupId::new(BACKUP).unwrap(),
@@ -93,6 +87,7 @@ impl Fixture {
             encryption: crypto::KeyBackupEncryption {
                 recipient_method: crypto::KeyBackupRecipientMethod::SecretStorageKey,
                 recipient_key_ref: Some("backup-key".into()),
+                hpke_suite: None,
                 kdf: None,
                 aead: crypto::KeyBackupAead {
                     name: crypto::KeyBackupAeadName::Xchacha20Poly1305,
@@ -106,28 +101,22 @@ impl Fixture {
                     extra: Default::default(),
                 },
                 key_commitment: None,
-                hpke_suite: None,
                 extra: Default::default(),
             },
             domain_separation: crypto::KeyBackupDomainSeparation {
-                subdomain: "arkret.secret_storage.v1".into(),
+                subdomain: "arkret_secret_storage_v1".into(),
                 aead_aad_extensions: Default::default(),
             },
-            contents: vec![crypto::KeyBackupContentIndex::SecretStorage(
-                crypto::SecretStorageContentIndex {
-                    item_kind: crypto::SecretStorageItemKind::RecoveryKeyShare,
-                    realm_id: None,
-                    from_epoch: None,
-                    to_epoch: None,
-                    secret_id: Some("share".into()),
-                    secret_version: None,
-                    extra: Default::default(),
-                },
-            )],
-            ciphertext: arkret_canonical::base64url_encode([0u8; 24]),
-            ciphertext_digest: arkret_canonical::sha256_digest(&[0u8; 24]),
+            contents: vec![crypto::SecretStorageContentIndex {
+                item_kind: crypto::SecretStorageItemKind::RecoveryKeyShare,
+                secret_id: Some("share".into()),
+                secret_version: None,
+            }],
+            ciphertext: wire::Base64UrlString::new(arkret_canonical::base64url_encode([0u8; 24]))
+                .unwrap(),
+            ciphertext_digest: wire::Hash::new(arkret_canonical::sha256_digest([0u8; 24])).unwrap(),
             plaintext_commitment: None,
-            auth_data: Some(crypto::KeyBackupAuthData {
+            auth_data: crypto::KeyBackupAuthData {
                 device_id: device.clone(),
                 verification_method: wire::DidUrl::new("did:web:unlock-test.example#root").unwrap(),
                 signature_algorithm: crypto::KeyBackupSignatureAlgorithm::Ed25519,
@@ -136,8 +125,7 @@ impl Fixture {
                     arkret_canonical::DigestSuite::Sha256,
                     [80u8; 32],
                 ),
-                extra: Default::default(),
-            }),
+            },
             retention: None,
             series_id: wire::BackupSeriesId::new(
                 "ak:backup_series:01904100-0000-7000-8000-000000000024",
@@ -146,8 +134,7 @@ impl Fixture {
             series_seq: 0,
             supersedes_id: None,
             supersedes_digest: None,
-            frontier_ref: None,
-            recovery_policy_ref: None,
+            source_ref: None,
             extra: Default::default(),
         };
         backup.validate().unwrap();
@@ -156,73 +143,87 @@ impl Fixture {
             arkret_canonical::DigestSuite::Sha256,
             [81; 32],
         ));
-        let seal = format!("ak:seal:sha256:{}", "52".repeat(32));
-        let basis = json!({"realm_id":realm,"seal_basis":{"leaves":[seal]}});
-        let seal_basis: arkret_wire::SealBasis =
-            serde_json::from_value(basis["seal_basis"].clone()).unwrap();
-        let authority_set_id = arkret_wire::RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned();
-        let authority_policy = arkret_wire::AuthoritySetPolicy {
-            schema: arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
-            authority_set_id: authority_set_id.clone(),
-            policy_kind: arkret_wire::AuthoritySetPolicyKind::PrincipalControl,
-            scope_ref: arkret_wire::ScopeRef::Realm {
+        // The unlock authority is anchored on one committed Event of the PCR
+        // Realm stream, addressed by its `CommittedEventRef`. A total commit
+        // order replaced the accepted-Seal basis: there is no lattice to join,
+        // so "still current" is the single question of whether this exact
+        // commit still sits at this exact stream position.
+        let stream_ref = wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let basis_event_id =
+            wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [82u8; 32]);
+        let basis_commit_id = wire::RealmCommitId::from_digest([83u8; 32]);
+        let committed_ref = wire::CommittedEventRef {
+            event_id: basis_event_id.clone(),
+            commit_id: basis_commit_id.clone(),
+            stream_ref: stream_ref.clone(),
+            stream_position: 0,
+        };
+        let basis = json!({ "committed_ref": committed_ref });
+        let basis_commit = wire::RealmCommit {
+            commit_id: basis_commit_id.clone(),
+            realm_id: realm.clone(),
+            stream_ref: stream_ref.clone(),
+            stream_position: 0,
+            previous_commit_ref: None,
+            event_ref: basis_event_id.clone(),
+            governance_generation: 0,
+            authority_ref: wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                basis_event_id.clone(),
+            ),
+            committed_at: now,
+            signature: wire::DetachedObjectSignature {
+                context: wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: wire::DidUrl::new("did:web:station.example#authority").unwrap(),
+                signed_digest: wire::Hash::new(REQUEST).unwrap(),
+                created_at: now,
+                sig: wire::Base64UrlString::new(signature.clone()).unwrap(),
+            },
+        };
+        basis_commit.validate_shape().unwrap();
+        let authority_policy = crypto::AuthoritySetPolicy {
+            schema: wire::SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
+            authority_set_id: wire::AuthoritySetId::RECOVERY_IDENTITY_REANCHOR_V1.to_owned(),
+            policy_kind: wire::AuthoritySetPolicyKind::PrincipalControl,
+            scope_ref: wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            source: arkret_wire::AuthoritySetPolicySource {
-                source_kind: arkret_wire::AuthoritySetSourceKind::RecoveryPolicy,
-                source_ref: typed_policy.policy_id.to_string(),
-                source_digest: arkret_wire::Hash::new(
-                    arkret_canonical::canonical_sha256(&typed_policy).unwrap(),
-                )
-                .unwrap(),
-                generation_ref: "1".into(),
-            },
-            authorization_rules: typed_policy
-                .publication_authorization_rules(
-                    now,
-                    &[arkret_wire::DidUrl::new("did:web:unlock-test.example#root").unwrap()],
-                    &std::collections::BTreeMap::new(),
-                )
-                .unwrap()
-                .into_iter()
-                .map(|rule| arkret_wire::AuthoritySetAuthorizationRule {
-                    rule_id: rule.rule_id,
-                    issuer_role: rule.issuer_role,
-                    allowed_actions: rule.allowed_actions,
-                    issuers: rule.issuers,
-                    threshold: rule.threshold,
-                })
-                .collect(),
+            // The materialized policy now names the commit that produced it
+            // instead of an offline source descriptor and its digest.
+            source_commit_id: basis_commit_id.clone(),
+            authorization_rules: vec![crypto::AuthoritySetAuthorizationRule {
+                rule_id: "identity_recovery".to_owned(),
+                issuer_role: crypto::AuthoritySetIssuerRole::IdentityRecovery,
+                allowed_actions: vec![crypto::RECOVERY_PUBLICATION_ALLOWED_ACTION.to_owned()],
+                issuers: vec![crypto::AuthoritySetAuthorizationIssuer {
+                    verification_method: wire::DidUrl::new("did:web:unlock-test.example#root")
+                        .unwrap(),
+                }],
+                threshold: 1,
+            }],
         };
-        let publication_context = arkret_models_crypto::RecoveryPublicationAuthorityContext {
-            identity_model: arkret_models_crypto::RecoveryIdentityModel::PcrPolicy,
-            basis_ref: arkret_wire::LeaseBasisRef::Joined(seal_basis.clone()),
+        let publication_context = crypto::PublicationAuthorityContext {
+            authority_commit_id: basis_commit_id.clone(),
             scope_ref: authority_policy.scope_ref.clone(),
-            authority_set_ref: arkret_wire::AuthoritySetRef {
-                authority_set_id,
-                authority_set_digest: authority_policy.digest().unwrap(),
-            },
             authority_set_policy: authority_policy,
-            allowed_actions: vec![arkret_models_crypto::RecoveryPublicationAction::DeviceReanchor],
+            allowed_actions: vec![crypto::RECOVERY_PUBLICATION_ALLOWED_ACTION.to_owned()],
         };
-        publication_context
-            .validate_for(arkret_models_crypto::RecoveryIdentityModel::PcrPolicy)
-            .unwrap();
-        let frontier = arkret_wire::DeviceReanchorPreFenceSealFrontier {
-            leaves: seal_basis.leaves,
-            control_event_set_root: arkret_wire::Hash::new(REQUEST).unwrap(),
-            state_root: arkret_wire::Hash::new(REQUEST).unwrap(),
-        };
+        publication_context.validate_shape().unwrap();
+        let publication_context_digest =
+            wire::Hash::new(arkret_canonical::canonical_sha256(&publication_context).unwrap())
+                .unwrap();
         let cnf = arkret_canonical::base64url_encode([3u8; 32]);
         let grant = arkret_wire::SessionGrantId::from_issuance_digest([4u8; 32]);
         let holder = format!("{grant}:{cnf}");
-        let public_session = crypto::RecoverySessionState {
+        let public_session = crypto::RecoverySession {
             schema: wire::SchemaId::RECOVERY_SESSION_V1.to_owned(),
             request_id: wire::RequestId::new("ak:request:01904100-0000-7000-8000-000000000025")
                 .unwrap(),
             recovery_session_id: wire::RecoverySessionId::new(SESSION).unwrap(),
             session_grant_id: grant,
-            session_grant_cnf_jkt: cnf,
+            session_grant_cnf_jkt: wire::Base64UrlString::new(cnf.clone()).unwrap(),
             account_id: typed_policy.account_id.clone(),
             requesting_device_id: device,
             requesting_device_public_key_did: wire::DidKey::new(
@@ -234,16 +235,17 @@ impl Fixture {
             policy_version: typed_policy.version,
             identity_model: crypto::RecoveryIdentityModel::PcrPolicy,
             current_device_generation_ref: 1,
-            device_generation_status: crypto::DeviceGenerationStatus::Active,
-            accepted_seal_frontier: frontier,
-            publication_authority_context_digest: publication_context.digest().unwrap(),
+            device_generation_status: crypto::RecoveryDeviceGenerationStatus::Active,
+            realm_stream_head: wire::CommitStreamHead {
+                stream_ref: stream_ref.clone(),
+                stream_position: 0,
+                commit_id: basis_commit_id.clone(),
+            },
             publication_authority_context: publication_context,
-            challenge: crypto::Challenge::new(
-                proof_payload["proof"]["challenge"].as_str().unwrap(),
-            )
-            .unwrap(),
-            state: crypto::SessionState::Verified,
-            proof_summary: Some(crypto::ProofSummary {
+            publication_authority_context_digest: publication_context_digest,
+            challenge,
+            state: crypto::RecoverySessionState::Verified,
+            proof_summary: Some(crypto::RecoverySessionProofSummary {
                 kind: crypto::RecoveryProofKind::DidRoot,
                 proof_digest: wire::Hash::new(
                     arkret_canonical::canonical_sha256(&proof.proof).unwrap(),
@@ -259,9 +261,9 @@ impl Fixture {
             created_at: now,
             updated_at: now,
         };
-        public_session.validate().unwrap();
+        public_session.validate_shape().unwrap();
         let mut session = serde_json::to_value(&public_session).unwrap();
-        serde_json::from_value::<crypto::RecoverySessionState>(session.clone()).unwrap();
+        serde_json::from_value::<crypto::RecoverySession>(session.clone()).unwrap();
         // Map the complete validated public DTO to the SQL record columns.
         for field in [
             "schema",
@@ -271,6 +273,13 @@ impl Fixture {
             "rejection_reason_code",
         ] {
             session.as_object_mut().unwrap().remove(field);
+        }
+        for (dto, column) in [
+            ("realm_stream_head", "accepted_stream_head"),
+            ("publication_authority_context", "authority_context"),
+        ] {
+            let value = session.as_object_mut().unwrap().remove(dto).unwrap();
+            session[column] = value;
         }
         session["id"] = json!(ids::typed_uuid_part_expect_internal(SESSION));
         session["create_intent_digest"] = json!(REQUEST);
@@ -291,8 +300,23 @@ impl Fixture {
         let mut conn = pg_conn(&pool).await.unwrap();
         sql_query("INSERT INTO recovery_sessions SELECT * FROM jsonb_populate_record(NULL::recovery_sessions,$1)")
             .bind::<Jsonb,_>(session).execute(&mut *conn).await.unwrap();
-        sql_query("INSERT INTO state_seals(id,digest_suite,realm_id,seal_id_preimage_bytes,accepted_seal_bytes,seal_json) VALUES($1,'sha256',$2,$3,$3,'{}')")
-            .bind::<Text,_>(&seal).bind::<Text,_>(realm.as_str()).bind::<crate::Binary,_>(vec![82u8]).execute(&mut *conn).await.unwrap();
+        let basis_token = ids::event_token_part_expect_internal(basis_event_id.as_str(), "event");
+        sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,received_at,committed_at) VALUES($1,1,$2,$3,$4,$5,'ak.realm.genesis','\\x00'::bytea,'{}','committed',$6,$6)")
+            .bind::<crate::Binary,_>(basis_token.to_vec())
+            .bind::<crate::Binary,_>(basis_token[1..].to_vec())
+            .bind::<Text,_>(STATION)
+            .bind::<Text,_>(realm.as_str())
+            .bind::<Jsonb,_>(serde_json::to_value(&wire::ScopeRef::Realm{realm_id:realm.clone()}).unwrap())
+            .bind::<Timestamptz,_>(now).execute(&mut *conn).await.unwrap();
+        sql_query("INSERT INTO realm_commits(commit_id,realm_id,stream_key,stream_ref,stream_position,previous_commit_ref,event_pk,governance_generation,commit_json,committed_at) SELECT $1,$2,$3,$4,0,NULL,pk,0,$5,$6 FROM canonical_events WHERE id=$7")
+            .bind::<Text,_>(basis_commit_id.as_str())
+            .bind::<Text,_>(realm.as_str())
+            .bind::<Text,_>(arkret_canonical::canonical_json_string(&stream_ref).unwrap())
+            .bind::<Jsonb,_>(serde_json::to_value(&stream_ref).unwrap())
+            .bind::<Jsonb,_>(serde_json::to_value(&basis_commit).unwrap())
+            .bind::<Timestamptz,_>(now)
+            .bind::<crate::Binary,_>(basis_token.to_vec())
+            .execute(&mut *conn).await.unwrap();
         sql_query("INSERT INTO key_backups(id,payload,metadata,actor_id) VALUES($1,$2,'{}',$3)")
             .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(BACKUP))
             .bind::<Jsonb, _>(&backup)

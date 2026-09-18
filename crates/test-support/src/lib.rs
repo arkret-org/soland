@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-pub mod confirmed_device_history_commit;
 pub mod device_authorization_history;
 pub mod fault_injection;
 pub mod signed_event;
@@ -26,7 +25,7 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationReceipt,
 };
 use arkret_state::state::{
-    CellStateRegistry, CellStore, ControlEventStore, ControlProposalIngress, MemoryCellStore,
+    CellStateRegistry, CellStore, ControlEventStore, MemoryCellStore,
     MemoryControlEventStore, MemorySealStore, SealStore, StoreError, StoreResult,
     compute_state_root,
 };
@@ -527,21 +526,6 @@ pub trait AppStateTestExt {
     ) -> StoreResult<()>;
     async fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>>;
     async fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>>;
-    async fn test_put_pending_control_event_with_ack(
-        &self,
-        event: &arkret_wire::Event,
-        ack: &arkret_wire::ControlProposalAck,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()>;
-    /// Register one exact fixture Control command unit with the immutable Ack
-    /// carried by each member. Multi-member units must use this method rather
-    /// than registering each member as an unrelated singleton.
-    async fn test_put_pending_control_unit_with_acks(
-        &self,
-        members: &[(arkret_wire::Event, arkret_wire::ControlProposalAck)],
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()>;
-
     /// Append sealed cell effects the way `apply_seal` commits them.
     ///
     /// `arkret_state::effective_state_at` resolves a Seal's governance view
@@ -765,53 +749,6 @@ impl AppStateTestExt for AppState {
             .and_then(|resources| resources.seal_store.clone())
             .expect("test Seal store is unavailable for this AppState");
         Ok(store.confirmed_head(realm_id).await?.into_iter().collect())
-    }
-
-    async fn test_put_pending_control_event_with_ack(
-        &self,
-        event: &arkret_wire::Event,
-        ack: &arkret_wire::ControlProposalAck,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        let store = state_test_registry()
-            .lock()
-            .get(&app_state_key(self))
-            .and_then(|resources| resources.control_event_store.clone())
-            .expect("test Control Event store is unavailable for this AppState");
-        store
-            .put_pending_unit_with_ingress(&[arkret_state::state::ControlUnitIngressMember {
-                event: event.clone(),
-                digest_suite,
-                ingress: ControlProposalIngress::AckRequired(ack.clone()),
-            }])
-            .await
-            .map(|_| ())
-    }
-
-    async fn test_put_pending_control_unit_with_acks(
-        &self,
-        members: &[(arkret_wire::Event, arkret_wire::ControlProposalAck)],
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        let store = state_test_registry()
-            .lock()
-            .get(&app_state_key(self))
-            .and_then(|resources| resources.control_event_store.clone())
-            .expect("test Control Event store is unavailable for this AppState");
-        let members = members
-            .iter()
-            .map(
-                |(event, ack)| arkret_state::state::ControlUnitIngressMember {
-                    event: event.clone(),
-                    digest_suite,
-                    ingress: ControlProposalIngress::AckRequired(ack.clone()),
-                },
-            )
-            .collect::<Vec<_>>();
-        store
-            .put_pending_unit_with_ingress(&members)
-            .await
-            .map(|_| ())
     }
 
     async fn test_append_confirmed_effects(

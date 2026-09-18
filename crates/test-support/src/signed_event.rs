@@ -3,20 +3,16 @@
 //! Every `durable_effect = event_log` operation now takes the Event from its
 //! caller: `capabilities.md` sections 118/361 and `key-management.md` section
 //! 411 forbid the service producing that signature. A fixture that exercises one
-//! of those surfaces therefore has to author and sign the Move itself, which is
-//! more than a request-body change — the envelope owes a CBS basis
-//! (`event-auth-state-resolution.md` section 5) and, on a settled registered state model,
-//! its own `head_eq` guard.
+//! of those surfaces therefore has to author and sign the Move itself.
 //!
 //! This is the one place that knows how to build that envelope, so the HTTP
 //! fixtures and the standalone integration binaries stop each carrying a partial
 //! copy of it.
 
-use arkret_identifiers::{Hlc, RealmId, SealId};
+use arkret_identifiers::{Hlc, RealmId};
 use arkret_wire::{DidUrl, Event, EventId, EventInitialSubmission, Precondition, ScopeRef};
 use serde_json::Value;
 
-use crate::cbs_basis::{FixtureBasis, apply_registered_cbs_plane, apply_registered_cbs_plane_seal};
 
 /// The Ed25519 seed a fixture actor's device key is derived from.
 ///
@@ -115,8 +111,7 @@ pub fn complete_realm_bootstrap_unit(
         let mut builder =
             CallerSignedEvent::new(kind.as_str(), actor_id, device_id, &realm_id, payload)
                 .with_actor_seq(u64::try_from(offset + 1).expect("bootstrap actor sequence"))
-                .with_prev_refs(vec![previous_event_id.as_str()])
-                .with_basis(CallerSignedBasis::AnchorUnit);
+                .with_prev_refs(vec![previous_event_id.as_str()]);
         if kind == arkret_wire::EventKind::MemberState {
             builder = builder.with_preconditions(vec![head_eq_precondition(
                 &format!("ak:cell:ak.component.member.state.v1:{actor_subject}"),
@@ -131,20 +126,6 @@ pub fn complete_realm_bootstrap_unit(
     events
 }
 
-/// Where a fixture Event's CBS basis comes from.
-#[derive(Clone, Debug)]
-pub enum CallerSignedBasis<'a> {
-    /// The synthetic genesis unit [`crate::cbs_basis`] seals for a Realm that
-    /// was stood up straight in `AppState`.
-    Fixture(FixtureBasis<'a>),
-    /// A Seal this deployment actually accepted, which is what a Realm
-    /// bootstrapped through the real `ak.realm.create` batch has to cite.
-    AcceptedSeal(SealId),
-    /// No CBS field at all: a member of an `event-auth-state-resolution.md`
-    /// section 5 anchor unit.
-    AnchorUnit,
-}
-
 /// A caller-signed Event of any registered kind.
 #[derive(Clone, Debug)]
 pub struct CallerSignedEvent<'a> {
@@ -156,14 +137,13 @@ pub struct CallerSignedEvent<'a> {
     prev_refs: Vec<&'a str>,
     payload: Value,
     preconditions: Vec<Precondition>,
-    basis: CallerSignedBasis<'a>,
     signing_seed: [u8; 32],
     genesis_scope: bool,
 }
 
 impl<'a> CallerSignedEvent<'a> {
     /// An Event of `kind` in `realm_id`, signed by `actor_id`'s `device_id` key
-    /// and citing this crate's shared fixture basis.
+    /// under this crate's fixture signing seed.
     #[must_use]
     pub fn new(
         kind: &'a str,
@@ -181,7 +161,6 @@ impl<'a> CallerSignedEvent<'a> {
             prev_refs: Vec::new(),
             payload,
             preconditions: Vec::new(),
-            basis: CallerSignedBasis::Fixture(FixtureBasis::shared(&[])),
             signing_seed: FIXTURE_EVENT_SIGNING_SEED,
             genesis_scope: false,
         }
@@ -193,9 +172,8 @@ impl<'a> CallerSignedEvent<'a> {
     /// `realm_genesis` scope and derives the Realm id from the Event itself, so
     /// this names no Realm at all — the caller reads the id back with
     /// `RealmId::from_event_id(&event.event_id)` once the Event is built. The
-    /// genesis anchor unit also carries no CBS basis field
-    /// (`event-auth-state-resolution.md` section 5), and it always opens the
-    /// Realm-scoped actor chain at `actor_seq = 0`.
+    /// genesis anchor unit always opens the Realm-scoped actor chain at
+    /// `actor_seq = 0`.
     #[must_use]
     pub fn realm_genesis(actor_id: &'a str, device_id: &'a str, payload: Value) -> Self {
         let mut event = Self::new(
@@ -206,7 +184,6 @@ impl<'a> CallerSignedEvent<'a> {
             payload,
         );
         event.genesis_scope = true;
-        event.basis = CallerSignedBasis::AnchorUnit;
         event
     }
 
@@ -231,22 +208,6 @@ impl<'a> CallerSignedEvent<'a> {
     pub fn with_preconditions(mut self, preconditions: Vec<Precondition>) -> Self {
         self.preconditions = preconditions;
         self
-    }
-
-    #[must_use]
-    pub fn with_basis(mut self, basis: CallerSignedBasis<'a>) -> Self {
-        self.basis = basis;
-        self
-    }
-
-    #[must_use]
-    pub fn with_fixture_basis(self, basis: FixtureBasis<'a>) -> Self {
-        self.with_basis(CallerSignedBasis::Fixture(basis))
-    }
-
-    #[must_use]
-    pub fn with_accepted_seal_basis(self, seal_id: SealId) -> Self {
-        self.with_basis(CallerSignedBasis::AcceptedSeal(seal_id))
     }
 
     /// The verification method this envelope's proof names.
@@ -293,17 +254,9 @@ impl<'a> CallerSignedEvent<'a> {
         event.preconditions = self.preconditions;
         // v1 carries no producer `effects[]`: the receiver derives every write
         // from `kind + payload` through the registered contract
-        // (`event-and-patch.md` section 2.4.2). What a fixture still owes is the
-        // CBS envelope shape, which follows from the kind's registered plane.
-        match self.basis {
-            CallerSignedBasis::Fixture(basis) => {
-                apply_registered_cbs_plane(&mut event, basis);
-            }
-            CallerSignedBasis::AcceptedSeal(seal_id) => {
-                apply_registered_cbs_plane_seal(&mut event, seal_id);
-            }
-            CallerSignedBasis::AnchorUnit => {}
-        }
+        // (`event-and-patch.md` section 2.4.2). It carries no basis field
+        // either — a total per-stream commit order settles what the Event was
+        // authored against, so the envelope has nothing left to cite.
         let signer = arkret_test_kit::seeded_signer_for_seed(
             self.signing_seed,
             actor,

@@ -654,19 +654,15 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             .map_err(PersistenceError::database)?;
         conn.transaction::<_,crate::PgTransactionError,_>(async move |conn| {
             #[derive(QueryableByName)]
-            struct SnapshotText { #[diesel(sql_type=Text)] value:String }
-            #[derive(QueryableByName)]
             struct SnapshotRevision { #[diesel(sql_type=sql_types::BigInt)] revision:i64 }
             crate::key_backup_unlock::validate_active_basis(conn,&snapshot).await?;
             crate::key_backup_unlock::validate_recovery_unlock_policy(conn,&recovery_policy_session_value(&record),chrono::Utc::now()).await?;
             let realm=snapshot["realm_id"].as_str().ok_or_else(||PersistenceError::Conflict("manifest Realm missing".to_owned()))?;
-            // The same Realm advisory lock is held by Seal acceptance; the table lock also
-            // excludes backup insert/delete phantoms while the frozen manifest commits.
+            // The same Realm advisory lock is held by authority-commit append; the table
+            // lock also excludes backup insert/delete phantoms while the frozen manifest commits.
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(realm).execute(&mut *conn).await.map_err(PersistenceError::database)?;
             sql_query("LOCK TABLE key_backups IN SHARE MODE").execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            let leaves=sql_query("SELECT parent.id AS value FROM state_seals parent WHERE parent.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=parent.id) AND NOT EXISTS (SELECT 1 FROM state_seals child WHERE child.realm_id=$1 AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id=child.id) AND child.predecessor_ref = parent.id) ORDER BY parent.id ASC")
-                .bind::<Text,_>(realm).load::<SnapshotText>(&mut *conn).await.map_err(PersistenceError::database)?.into_iter().map(|row|Value::String(row.value)).collect::<Vec<_>>();
-            if Value::Array(leaves)!=snapshot["seal_basis"]["leaves"] {return Err(PersistenceError::Conflict("backup_frontier_stale".to_owned()).into());}
+            crate::key_backup_unlock::validate_basis_is_stream_head(conn,&snapshot).await?;
             let revision=sql_query("SELECT COALESCE((SELECT revision FROM key_backup_list_revisions WHERE actor_id=$1),0)::bigint AS revision")
                 .bind::<Text,_>(snapshot["actor_id"].as_str().ok_or_else(||PersistenceError::Conflict("manifest actor missing".to_owned()))?).get_result::<SnapshotRevision>(&mut *conn).await.map_err(PersistenceError::database)?.revision;
             if Some(revision)!=snapshot["revision"].as_i64(){return Err(PersistenceError::Conflict("backup manifest changed before verification".to_owned()).into());}

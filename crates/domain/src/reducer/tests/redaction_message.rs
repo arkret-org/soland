@@ -266,25 +266,18 @@ fn membership_join_leave() {
         "member_id": account_actor("ak:did_core:web:bob"),
         "membership": "join"
     });
-    let (_, join_writes) =
-        projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &join_payload);
     let mut join = make_operation(arkret_wire::EventKind::MemberState, realm_id, join_payload);
     join.context.sender = account_actor("ak:did_core:web:bob");
-    state.apply_projected(&join, &join_writes, &hlc);
+    state.apply_projected(&join, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 1);
 
     let leave_payload = serde_json::json!({
         "member_id": account_actor("ak:did_core:web:bob"),
         "membership": "leave"
     });
-    let (_, leave_writes) = projected_cell_writes(
-        arkret_wire::EventKind::MemberState,
-        realm_id,
-        &leave_payload,
-    );
     let mut leave = make_operation(arkret_wire::EventKind::MemberState, realm_id, leave_payload);
     leave.context.sender = account_actor("ak:did_core:web:bob");
-    state.apply_projected(&leave, &leave_writes, &hlc);
+    state.apply_projected(&leave, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 0);
 }
 

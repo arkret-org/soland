@@ -581,89 +581,150 @@ mod account_summary_query_tests {
 
     use super::*;
 
+    /// The bootstrap answer is one authority snapshot plus the independent
+    /// stream tails after it: nothing is paged by the authority
+    /// (`realm_join_bootstrap`). What the Station still owes a restarting
+    /// joiner is that the download it persisted is the one it recovers, that
+    /// the snapshot the progress was measured against cannot be swapped under
+    /// it, and that progress never regresses. Immutable wire cursors are a
+    /// separate table and stay frozen throughout.
     #[tokio::test]
     async fn bootstrap_download_resumes_durably_without_mutating_wire_cursors() {
-        use arkret_models_collaboration::governance::realm_join_intake::{
-            RealmJoinBootstrapOutcome, RealmJoinBootstrapRequestBody, RealmJoinGovernanceFacts,
-            RealmJoinIntent,
-        };
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let store = PgSyncCursorStore { pool: pool.clone() };
-        let request = RealmJoinBootstrapRequestBody {
-            request_id: "ak:request:01970000-0000-7000-8000-000000000031"
+        let realm_id: arkret_wire::RealmId =
+            "ak:realm:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
                 .parse()
-                .unwrap(),
-            realm_id: "ak:realm:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
-                .parse()
-                .unwrap(),
-            applicant_account_id: arkret_wire::AccountId::new(
-                "ak:did_core:web:applicant.example".parse().unwrap(),
-                "ak:did_core:web:origin.example".parse().unwrap(),
-            ),
-            intent: RealmJoinIntent::Knock {},
-        };
+                .unwrap();
+        let station_id: arkret_identifiers::DidCoreId =
+            "ak:did_core:web:origin.example".parse().unwrap();
+        let applicant: arkret_identifiers::DidCoreId =
+            "ak:did_core:web:applicant.example".parse().unwrap();
         let observed_at =
             chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
-        let mut page = RealmJoinBootstrapOutcome {
-            request_id: request.request_id.clone(),
-            realm_id: request.realm_id.clone(),
-            applicant_account_id: request.applicant_account_id.clone(),
-            request_digest: request.request_digest().unwrap(),
-            governance_facts: RealmJoinGovernanceFacts {
-                join_rule: arkret_wire::JoinRule::Knock,
-                seal_basis: arkret_wire::SealBasis {
-                    leaves: vec![
-                        format!("ak:seal:sha256:{}", "1".repeat(64))
-                            .parse()
-                            .unwrap(),
-                    ],
-                },
-                digest_algorithm: arkret_canonical::DigestSuite::Sha256,
-                encryption_profile: arkret_wire::EncryptionProfile::MlsRfc9420,
+
+        let stream_ref = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let commit_id = |seed: u8| arkret_wire::RealmCommitId::from_digest([seed; 32]);
+        let signature = |context| arkret_wire::DetachedObjectSignature {
+            context,
+            signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+            verification_method: arkret_wire::DidUrl::new("did:web:origin.example#authority")
+                .unwrap(),
+            signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "aa".repeat(32))).unwrap(),
+            created_at: observed_at,
+            sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl").unwrap(),
+        };
+        let snapshot = arkret_wire::RealmStateSnapshot {
+            snapshot_id: arkret_wire::RealmSnapshotId::from_digest([7; 32]),
+            realm_id: realm_id.clone(),
+            governance_generation: 1,
+            visible_stream_heads: vec![arkret_wire::CommitStreamHead {
+                stream_ref: stream_ref.clone(),
+                stream_position: 0,
+                commit_id: commit_id(1),
+            }],
+            current_state_entries: vec![],
+            retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor {
+                history_access: arkret_wire::HistoryAccess::SinceJoin,
+                stream_floors: vec![arkret_wire::StreamHistoryFloor {
+                    stream_ref: stream_ref.clone(),
+                    oldest_position: 0,
+                }],
             },
-            page_index: 0,
-            records: vec![],
-            next_cursor: Some("next-page".into()),
-            observed_at,
+            created_at: observed_at,
+            signature: signature(arkret_wire::DetachedSignatureContext::RealmSnapshot),
+        };
+        let stream_row = |position: u64, previous: Option<arkret_wire::RealmCommitId>| {
+            let event = arkret_wire::test_support::raw_event(
+                arkret_wire::EventKind::MemberState.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                applicant.clone(),
+                station_id.clone(),
+                serde_json::json!({
+                    "member_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        applicant.clone(),
+                        station_id.clone(),
+                    )),
+                    "membership": "join",
+                    "stream_position": position
+                }),
+            )
+            .unwrap();
+            arkret_wire::StreamRow {
+                commit: arkret_wire::RealmCommit {
+                    commit_id: commit_id(u8::try_from(position).unwrap() + 2),
+                    realm_id: realm_id.clone(),
+                    stream_ref: stream_ref.clone(),
+                    stream_position: position,
+                    previous_commit_ref: previous,
+                    event_ref: event.event_id.clone(),
+                    governance_generation: 1,
+                    authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                        event.event_id.clone(),
+                    ),
+                    committed_at: observed_at,
+                    signature: signature(arkret_wire::DetachedSignatureContext::RealmCommit),
+                },
+                event,
+            }
+        };
+        let first_row = stream_row(1, Some(commit_id(1)));
+        let second_row = stream_row(2, Some(first_row.commit.commit_id.clone()));
+
+        let partial = RealmJoinDownload {
+            snapshot: snapshot.clone(),
+            stream_heads: vec![arkret_wire::CommitStreamHead {
+                stream_ref: stream_ref.clone(),
+                stream_position: 2,
+                commit_id: second_row.commit.commit_id.clone(),
+            }],
+            items: vec![first_row.clone()],
+            next_cursor: Some("scan".into()),
             expires_at: observed_at + chrono::Duration::seconds(300),
         };
-        let first = RealmJoinBootstrapAssembly::new(page.clone(), &request).unwrap();
         store
-            .save_realm_join_download("download-test", &first)
+            .save_realm_join_download("download-test", &partial)
             .await
             .unwrap();
-        page.page_index = 1;
-        page.next_cursor = None;
-        let mut complete = first.clone();
-        complete.append(page, &request).unwrap();
+
+        let mut complete = partial.clone();
+        complete.items.push(second_row);
+        complete.next_cursor = None;
         store
             .save_realm_join_download("download-test", &complete)
             .await
             .unwrap();
+        // Re-saving the identical terminal state is an idempotent no-op.
         store
             .save_realm_join_download("download-test", &complete)
             .await
             .unwrap();
 
-        // A fresh adapter must recover the terminal page, not the initial one.
+        // A fresh adapter must recover the terminal scan, not the initial one.
         let restarted = PgSyncCursorStore { pool };
         let restored = restarted
             .realm_join_download("download-test")
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(restored.next_page, 2);
-        restored.finish(Utc::now()).unwrap();
+        assert_eq!(restored.items.len(), 2);
+        assert!(restored.next_cursor.is_none());
+
+        // Progress may not regress back to the shorter scan.
         assert!(
             restarted
-                .save_realm_join_download("download-test", &first)
+                .save_realm_join_download("download-test", &partial)
                 .await
                 .is_err()
         );
+        // Nor may the snapshot the scan was measured against be swapped.
         let mut changed_context = complete.clone();
-        changed_context.first.request_digest =
-            format!("sha256:{}", "2".repeat(64)).parse().unwrap();
+        changed_context.snapshot.governance_generation = 2;
         assert!(
             restarted
                 .save_realm_join_download("download-test", &changed_context)
@@ -675,13 +736,13 @@ mod account_summary_query_tests {
             handle: "immutable-cursor-test".into(),
             binding_subject: None,
             device_id: None,
-            service_id: request.applicant_account_id.station_id,
+            service_id: station_id,
             filter_digest: None,
             purpose: "stream".into(),
             positions: Some(serde_json::json!({"page": 0})),
             target: None,
             issued_at_ms: observed_at.timestamp_millis(),
-            expires_at_ms: complete.first.expires_at.timestamp_millis(),
+            expires_at_ms: complete.expires_at.timestamp_millis(),
         };
         restarted.upsert(&cursor).await.unwrap();
         cursor.positions = Some(serde_json::json!({"page": 1}));

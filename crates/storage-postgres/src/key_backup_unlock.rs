@@ -321,6 +321,17 @@ pub(crate) async fn lock_recovery_policy_for_session(
     validate_recovery_unlock_policy(conn, &session.payload, now).await
 }
 
+/// The commit a frozen backup manifest was measured against.
+fn basis_committed_ref(basis: &Value) -> PersistenceResult<arkret_wire::CommittedEventRef> {
+    serde_json::from_value(
+        basis
+            .get("committed_ref")
+            .cloned()
+            .ok_or_else(|| rejected("backup authority committed_ref missing"))?,
+    )
+    .map_err(PersistenceError::database)
+}
+
 pub(crate) async fn validate_active_basis(
     conn: &mut crate::AsyncPgConnection,
     basis: &Value,
@@ -330,13 +341,7 @@ pub(crate) async fn validate_active_basis(
         #[diesel(sql_type = diesel::sql_types::Bool)]
         present: bool,
     }
-    let reference: arkret_wire::CommittedEventRef = serde_json::from_value(
-        basis
-            .get("committed_ref")
-            .cloned()
-            .ok_or_else(|| rejected("backup authority committed_ref missing"))?,
-    )
-    .map_err(PersistenceError::database)?;
+    let reference = basis_committed_ref(basis)?;
     let present = sql_query(
         "SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
          WHERE c.commit_id=$1 AND e.id=$2 AND c.stream_ref=$3 AND c.stream_position=$4 \
@@ -358,6 +363,42 @@ pub(crate) async fn validate_active_basis(
     .present;
     if !present {
         return Err(rejected("backup authority commit is not current").into());
+    }
+    Ok(())
+}
+
+/// Reject a frozen manifest whose stream has moved past the commit it was
+/// measured at.
+///
+/// There is no Seal frontier to recompute under a total per-stream commit
+/// order: staleness is exactly one position comparison on the stream the
+/// manifest cites.
+pub(crate) async fn validate_basis_is_stream_head(
+    conn: &mut crate::AsyncPgConnection,
+    basis: &Value,
+) -> Result<(), PgTransactionError> {
+    #[derive(QueryableByName)]
+    struct AdvancedRow {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        advanced: bool,
+    }
+    let reference = basis_committed_ref(basis)?;
+    let advanced = sql_query(
+        "SELECT EXISTS(SELECT 1 FROM realm_commits c \
+         WHERE c.stream_ref=$1 AND c.stream_position>$2) AS advanced",
+    )
+    .bind::<Jsonb, _>(
+        serde_json::to_value(&reference.stream_ref).map_err(PersistenceError::database)?,
+    )
+    .bind::<BigInt, _>(
+        i64::try_from(reference.stream_position).map_err(PersistenceError::database)?,
+    )
+    .get_result::<AdvancedRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .advanced;
+    if advanced {
+        return Err(rejected("backup_frontier_stale").into());
     }
     Ok(())
 }
