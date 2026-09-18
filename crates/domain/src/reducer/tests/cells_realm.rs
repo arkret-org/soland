@@ -1499,6 +1499,99 @@ fn every_bootstrap_facet_kind_is_reachable_through_the_dispatch_registry() {
     }
 }
 
+/// `ak.realm.read_receipt_policy` must reach its reducer through the dispatch
+/// registry, not only through a direct call.
+///
+/// `discovery/read-receipts.md` section 2.5 names this kind the sole carrier of
+/// the `realm_read_receipt_policy` current result, and the registry projects
+/// the whole payload as the settled value. Before this registration the kind
+/// fell through to the registry's no-op fill, so every policy an author wrote
+/// was accepted on the wire and then silently dropped, leaving the parent
+/// policy every child write is compared against pinned at the SDK default.
+#[test]
+fn read_receipt_policy_reaches_the_reducer_and_replaces_the_previous_value() {
+    let realm_id = "ak:realm:AZ5nQ0y2uZ3d1tVvJ7mK8sXbR4fPcHlWgEoNiTaUdY6B";
+    let mut state = ProjectionState::new();
+    let strict = serde_json::json!({
+        "disclosure": "required",
+        "visibility": "private",
+        "scope_overrides_allowed": false
+    });
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::RealmReadReceiptPolicy,
+            realm_id,
+            strict.clone(),
+        ),
+        &ServerHlc::new("test"),
+    );
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::RealmReadReceiptPolicyProjected { .. }
+        ),
+        "read receipt policy must project its own effect, got {effect:?}"
+    );
+    assert_eq!(state.read_receipt_policy_value(realm_id), Some(&strict));
+
+    // The registry projection is `set`, not write-once: a later accepted Event
+    // replaces the settled value outright. A partial payload is projected
+    // verbatim, so the omitted fields fall back to the section 2.5 defaults on
+    // the read side rather than keeping the superseded value.
+    let partial = serde_json::json!({ "disclosure": "disabled" });
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::RealmReadReceiptPolicy,
+            realm_id,
+            partial.clone(),
+        ),
+        &ServerHlc::new("test"),
+    );
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::RealmReadReceiptPolicyProjected { .. }
+        ),
+        "a second policy Event must be accepted, got {effect:?}"
+    );
+    assert_eq!(state.read_receipt_policy_value(realm_id), Some(&partial));
+}
+
+/// `read_receipt_policy_payload` is a closed object with `minProperties: 1`.
+///
+/// Section 2.5 makes the empty object equivalent to never writing the Event,
+/// and 2.5.1 requires an unrecognized field to fail as `schema_violation`
+/// rather than be silently ignored -- the retired public-history bypass field
+/// is the case it names.
+#[test]
+fn read_receipt_policy_rejects_the_empty_object_and_unknown_fields() {
+    let realm_id = "ak:realm:AZ5nQ0y2uZ3d1tVvJ7mK8sXbR4fPcHlWgEoNiTaUdY6B";
+    for payload in [
+        serde_json::json!({}),
+        serde_json::json!({ "disclosure": "optional", "public_history_bypass": true }),
+        serde_json::json!({ "disclosure": "sometimes" }),
+    ] {
+        let mut state = ProjectionState::new();
+        let effect = state.apply(
+            &make_operation(
+                arkret_wire::EventKind::RealmReadReceiptPolicy,
+                realm_id,
+                payload.clone(),
+            ),
+            &ServerHlc::new("test"),
+        );
+        assert!(
+            matches!(
+                effect,
+                ProjectionEffect::Rejected { ref reason }
+                    if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
+            ),
+            "{payload} must fail closed, got {effect:?}"
+        );
+        assert_eq!(state.read_receipt_policy_value(realm_id), None);
+    }
+}
+
 // history_access is a two-state, narrowing-only transition.
 
 #[test]

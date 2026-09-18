@@ -667,6 +667,17 @@ fn apply_realm_search_policy_dispatch(
     s.apply_realm_search_policy(op)
 }
 
+/// Dispatch for `ak.realm.read_receipt_policy`; writes the
+/// `realm_read_receipt_policy` current result named by
+/// `discovery/read-receipts.md` section 2.5.
+fn apply_realm_read_receipt_policy_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_read_receipt_policy(op)
+}
+
 /// Dispatch for `ak.realm.media_service`; cell family is
 /// `ak.component.realm.media_service.v1`.
 fn apply_realm_media_service_dispatch(
@@ -1151,6 +1162,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmSearchPolicy,
         apply_realm_search_policy_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::RealmReadReceiptPolicy,
+        apply_realm_read_receipt_policy_dispatch,
     );
     // media_service is Realm-scoped with cell_family
     // `ak.component.realm.media_service.v1`; consumed by the AKP-0010
