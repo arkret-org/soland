@@ -289,6 +289,45 @@ pub(crate) fn peer_router() -> Router {
         .push(Router::with_path("claims/query").post(peer_query_keypackage_claim))
 }
 
+/// Read one public MLS blob (`group_info_ref` / `ratchet_tree_ref`) under a hard
+/// byte bound, refusing redacted rows and any object whose delivered length
+/// disagrees with the durable `size_bytes` the caller budgeted against.
+///
+/// The bound is checked twice on purpose: once against the declared size before
+/// the object store is touched, so an oversized blob never streams, and once
+/// against the delivered bytes, so a store that returns more than it declared
+/// cannot slip past the budget the caller already spent.
+pub(crate) async fn load_mls_public_blob(
+    state: &AppState,
+    blob_ref: &str,
+    limit: usize,
+) -> Result<Vec<u8>, AppError> {
+    let blob = state
+        .deliveries()
+        .blob(blob_ref)
+        .await
+        .map_err(|error| AppError::internal(format!("MLS blob metadata lookup: {error}")))?
+        .filter(|blob| !blob.redacted && blob.size_bytes >= 0)
+        .ok_or_else(|| AppError::not_found("MLS group-state material not found"))?;
+    let declared_size = usize::try_from(blob.size_bytes)
+        .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
+    if declared_size > limit {
+        return Err(crate::app_error!(
+            LimitExceeded,
+            "MLS group-state material exceeds requested bound",
+        ));
+    }
+    let bytes = state
+        .deliveries()
+        .get_object(&blob.storage_key)
+        .await
+        .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
+    if bytes.len() != declared_size || bytes.len() > limit {
+        return Err(AppError::not_found("MLS group-state material not found"));
+    }
+    Ok(bytes)
+}
+
 // ── publish ───────────────────────────────────────────────────────────
 
 pub(crate) fn enqueue_device_revoke_mls_removals(

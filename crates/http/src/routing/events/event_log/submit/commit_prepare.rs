@@ -134,7 +134,7 @@ pub(super) async fn prepare_accepted_event_command(
                     )
                 })?;
         let limit = arkret_models_collaboration::mls_group_state_material::MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES as usize;
-        let group_info_bytes = crate::routing::governance_history::load_mls_public_blob(
+        let group_info_bytes = crate::routing::mls::load_mls_public_blob(
             state,
             payload.group_info_ref.as_str(),
             limit,
@@ -144,7 +144,7 @@ pub(super) async fn prepare_accepted_event_command(
             error: Box::new(error),
             details: None,
         })?;
-        let ratchet_tree_bytes = crate::routing::governance_history::load_mls_public_blob(
+        let ratchet_tree_bytes = crate::routing::mls::load_mls_public_blob(
             state,
             payload.ratchet_tree_ref.as_str(),
             limit - group_info_bytes.len(),
