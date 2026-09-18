@@ -88,8 +88,6 @@ fn persistence_event_commit_request(
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
         publication_event: command.publication_event,
-        mls_public_producer: command.mls_public_producer,
-        mls_public_genesis: command.mls_public_genesis,
         mls_frontier_leaves: command.mls_frontier_leaves,
         replicated: command.replicated,
         event: command.event,
@@ -116,7 +114,6 @@ fn persistence_event_commit_request(
                 }),
             }
         }),
-        control_proposal_ingress: command.control_proposal_ingress,
         device_revocation_transition: command.device_revocation_transition,
         device_revocation_gate: command.device_revocation_gate,
         historical_producer: command.historical_producer,
@@ -174,7 +171,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<crate::events::AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<crate::federation::FederationDeliveryRecord>,
     ) -> crate::ServiceResult<soland_storage::RealmBootstrapCommitOutcome> {
@@ -183,7 +179,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .events()
             .put_realm_bootstrap_batch_atomic(
                 records,
-                control_proposal_acks,
                 governance_dependencies,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
             )
@@ -192,7 +187,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_direct_conversation_founding_batch(
         &self,
         records: Vec<crate::events::AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
         deliveries: Vec<crate::federation::FederationDeliveryRecord>,
@@ -202,7 +196,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .events()
             .put_direct_conversation_founding_batch_atomic(
                 records,
-                control_proposal_acks,
                 governance_dependencies,
                 slot,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
@@ -224,7 +217,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<crate::events::AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<arkret_wire::EventBatchReceipt>,
         device: Option<crate::events::IdentityAnchorDeviceState>,
@@ -240,7 +232,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .events()
             .put_identity_anchor_batch_atomic(
                 records,
-                control_proposal_acks,
                 governance_dependencies,
                 receipt,
                 device,
@@ -334,16 +325,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         event_id: &str,
     ) -> crate::ServiceResult<Vec<arkret_wire::EventBatchReceipt>> {
         Ok(self.0.events().batch_receipts_for_event(event_id).await?)
-    }
-    async fn control_proposal_ack_for_digest(
-        &self,
-        proposal_digest: &str,
-    ) -> crate::ServiceResult<Option<arkret_wire::ControlProposalAck>> {
-        Ok(self
-            .0
-            .events()
-            .control_proposal_ack_for_digest(proposal_digest)
-            .await?)
     }
     async fn realm_event_stats(
         &self,
@@ -715,17 +696,6 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
             .public_leaf_authorizations(event_id)
             .await?)
     }
-    async fn public_genesis_candidate(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> crate::ServiceResult<Option<soland_storage::MlsPublicGenesisRecord>> {
-        Ok(self
-            .0
-            .mls_commits()
-            .public_genesis_candidate(event_id)
-            .await?)
-    }
-
     async fn commits(&self) -> crate::ServiceResult<Vec<crate::events::MlsCommitState>> {
         self.0
             .mls_commits()

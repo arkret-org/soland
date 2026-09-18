@@ -11,7 +11,6 @@ use arkret_models_identity::{
     OrganizationRegistrationOutcome, OrganizationRegistrationReceipt,
     OrganizationRegistrationScope, OrganizationRegistrationStatus,
 };
-use arkret_state::state::store::ControlProposalIngress;
 use arkret_wire::{
     AccountStatusRecordId, Did, DidCoreId, DidUrl, Hash, PayloadProof, ProofContextId, RealmId,
     ReceiptId, SchemaId, project_did_to_core_id,
@@ -27,11 +26,10 @@ use super::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
     DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
     DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
-    DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
-    DeviceRevocationTargetStatus, DeviceRevocationTransition, EventBatchCommitRequest,
-    EventCommitRequest, EventCommitUnitOfWork, EventStore, FederationOutboxClaim,
-    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
-    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    DeviceRevocationGateSelector, EventBatchCommitRequest, EventCommitRequest,
+    EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
+    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
     FederationOutboxTransition, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
     InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
     MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
@@ -42,9 +40,8 @@ use super::{
     OrganizationRegistrationTerminalReason, PeerClaimTerminalTransition,
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
-    ProjectionEventStore, RealmBootstrapCommitOutcome, RealmFanoutAuthorityWitness,
-    RealmFanoutBinding, RealmFanoutOutboxInput, RealmMetaRecord, RealmMetaStore,
-    applet_effective_scope_key,
+    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
+    RealmMetaRecord, RealmMetaStore, applet_effective_scope_key,
 };
 
 /// Shared account-localpart removal semantics for every persistence adapter.
@@ -1454,11 +1451,8 @@ fn contract_ghost(
 }
 
 fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequest {
-    let control_proposal_ack = contract_control_proposal_ack(&event, event.received_at);
     EventCommitRequest {
         publication_event: None,
-        mls_public_producer: None,
-        mls_public_genesis: None,
         mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
@@ -1467,7 +1461,6 @@ fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequ
         contact_projection: None,
         consent_projection: None,
         event,
-        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(control_proposal_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
         historical_producer: None,
@@ -2211,39 +2204,6 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     );
 }
 
-fn contract_control_proposal_ack(
-    record: &CanonicalEventRecord,
-    now: chrono::DateTime<Utc>,
-) -> arkret_wire::ControlProposalAck {
-    let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let mut authority_ack = arkret_wire::ControlProposalAck {
-        kind: arkret_wire::ControlProposalAckKind::SignedAck,
-        defer_count: 0,
-        realm_id: arkret_wire::RealmId::new(record.realm_id.clone().expect("accepted Event Realm"))
-            .expect("typed realm id"),
-        proposal_digest: Hash::new(record.canonical_digest.clone()).expect("typed digest"),
-        received_at: now,
-        decision_due_at: now + policy.decision_window,
-        absolute_due_at: now + policy.absolute_horizon,
-        authority_set_ref: Hash::new(format!("sha256:{}", "a".repeat(64)))
-            .expect("typed authority set ref"),
-        signature: arkret_wire::PayloadSignature {
-            verification_method: arkret_wire::DidUrl::new(
-                "did:web:storage-contract.example#authority-1",
-            )
-            .expect("authority verification method"),
-            payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
-                .expect("placeholder digest"),
-            created_at: now,
-            jws: "e30..c2ln".to_owned(),
-        },
-    };
-    authority_ack.signature.payload_digest = authority_ack
-        .ack_body_digest()
-        .expect("authority Ack digest");
-    authority_ack
-}
-
 pub async fn assert_event_commit_unit_of_work_contract(
     stores: EventCommitContractStores<'_>,
     namespace: &str,
@@ -2260,8 +2220,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let event_id = event.event_id.clone();
     let request = EventCommitRequest {
         publication_event: None,
-        mls_public_producer: None,
-        mls_public_genesis: None,
         mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
@@ -2270,7 +2228,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         contact_projection: None,
         consent_projection: None,
         event,
-        control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
         historical_producer: None,
@@ -2419,11 +2376,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         now,
     );
     let pairing_event_id = pairing_event.event_id.clone();
-    let pairing_ack = contract_control_proposal_ack(&pairing_event, now);
     let pairing_commit = EventCommitRequest {
         publication_event: None,
-        mls_public_producer: None,
-        mls_public_genesis: None,
         mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
@@ -2441,7 +2395,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         contact_projection: None,
         consent_projection: None,
         event: pairing_event,
-        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(pairing_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
         historical_producer: None,
@@ -2594,8 +2547,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
     };
     let contact_commit = EventCommitRequest {
         publication_event: None,
-        mls_public_producer: None,
-        mls_public_genesis: None,
         mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
@@ -2610,9 +2561,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
             invite_policy: None,
         }),
         consent_projection: None,
-        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
-            contract_control_proposal_ack(&contact_event, now),
-        )),
         event: contact_event,
         device_revocation_transition: None,
         device_revocation_gate: None,
@@ -2695,8 +2643,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .unit_of_work
         .commit_event(EventCommitRequest {
             publication_event: None,
-            mls_public_producer: None,
-            mls_public_genesis: None,
             mls_frontier_leaves: None,
             replicated: false,
             governance_dependencies: Vec::new(),
@@ -2711,9 +2657,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
                 invite_policy: None,
             }),
             consent_projection: None,
-            control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
-                contract_control_proposal_ack(&failed_contact_event, now),
-            )),
             event: failed_contact_event,
             device_revocation_transition: None,
             device_revocation_gate: None,
@@ -2766,8 +2709,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_event_id = rollback_event.event_id.clone();
     let failed = EventCommitRequest {
         publication_event: None,
-        mls_public_producer: None,
-        mls_public_genesis: None,
         mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
@@ -2776,7 +2717,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         contact_projection: None,
         consent_projection: None,
         event: rollback_event,
-        control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
         historical_producer: None,
@@ -3484,191 +3424,6 @@ pub async fn assert_federation_outbox_store_contract(
             .any(|bucket| bucket.state == FederationOutboxState::DeadLettered
                 && bucket.peer_id == peer_id
                 && bucket.depth >= 1)
-    );
-}
-
-/// §6.3 — the atomic Event batches must roll the **outbox** back too.
-///
-/// The ordinary single-Event path has committed its outbox rows transactionally
-/// for a while; the Realm genesis and identity-anchor units did not, and an
-/// Event accepted without its delivery intent is unroutable forever after a
-/// crash. This asserts the joint rollback on both adapters by injecting a
-/// failure in the outbox insert itself (a colliding primary key), so the Events
-/// are known-good and only the delivery intent can be what aborts the batch.
-pub async fn assert_atomic_batch_outbox_rollback_contract(
-    events: &dyn EventStore,
-    outbox: &dyn FederationOutboxStore,
-    namespace: &str,
-) {
-    let now = database_timestamp_now();
-    let principal_id = format!("ak:did_core:web:{namespace}.example");
-    let realm_id = contract_realm_id(&format!("atomic-batch:{namespace}"));
-    // The Realm genesis unit requires one Control Proposal Ack per Event. Supplying
-    // them is what makes this test actually about the outbox: without them the
-    // batch would abort on receipt cardinality and never reach the outbox
-    // insert, so the rollback assertion below would pass for the wrong reason.
-    let control_proposal_ack =
-        |record: &CanonicalEventRecord| contract_control_proposal_ack(record, now);
-    let colliding_id = format!("outbox:{namespace}:collision");
-    // Two intents sharing one primary key: the first inserts, the second must
-    // abort the batch.
-    let colliding_outbox = |suffix: &str| {
-        vec![
-            FederationOutboxRecord::pending(
-                colliding_id.clone(),
-                DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
-                    .expect("peer service id"),
-                "https://peer.example".to_owned(),
-                "/_arkret/peer/events".to_owned(),
-                format!("ak:outbox:{namespace}:{suffix}:a"),
-                "{}".to_owned(),
-                now.timestamp(),
-            ),
-            FederationOutboxRecord::pending(
-                colliding_id.clone(),
-                DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
-                    .expect("peer service id"),
-                "https://peer.example".to_owned(),
-                "/_arkret/peer/events".to_owned(),
-                format!("ak:outbox:{namespace}:{suffix}:b"),
-                "{}".to_owned(),
-                now.timestamp(),
-            ),
-        ]
-    };
-
-    let bootstrap_record = canonical_wire_event_record(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        &principal_id,
-        &realm_id,
-        0,
-        now,
-    );
-    let bootstrap_event_id = bootstrap_record.event_id.clone();
-    assert!(
-        events
-            .put_realm_bootstrap_batch_atomic(
-                vec![bootstrap_record.clone()],
-                vec![control_proposal_ack(&bootstrap_record)],
-                Vec::new(),
-                colliding_outbox("bootstrap"),
-            )
-            .await
-            .is_err(),
-        "a failing outbox insert must abort the Realm genesis unit"
-    );
-    assert!(
-        !events
-            .contains(&bootstrap_event_id)
-            .await
-            .expect("bootstrap event rollback"),
-        "the Realm genesis Events roll back with their delivery intents"
-    );
-    assert!(
-        outbox
-            .get(&colliding_id)
-            .await
-            .expect("bootstrap outbox rollback")
-            .is_none(),
-        "the partially-inserted delivery intent rolls back too"
-    );
-
-    let anchor_record = canonical_wire_event_record(
-        arkret_wire::EventKind::IdentityResolutionUpdate.as_str(),
-        &principal_id,
-        &realm_id,
-        0,
-        now,
-    );
-    let anchor_event_id = anchor_record.event_id.clone();
-    assert!(
-        events
-            .put_identity_anchor_batch_atomic(
-                vec![anchor_record.clone()],
-                vec![control_proposal_ack(&anchor_record)],
-                Vec::new(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                Vec::new(),
-                colliding_outbox("anchor"),
-                None,
-            )
-            .await
-            .is_err(),
-        "a failing outbox insert must abort the identity anchor unit"
-    );
-    assert!(
-        !events
-            .contains(&anchor_event_id)
-            .await
-            .expect("anchor event rollback"),
-        "the identity anchor Events roll back with their delivery intents"
-    );
-    assert!(
-        outbox
-            .get(&colliding_id)
-            .await
-            .expect("anchor outbox rollback")
-            .is_none()
-    );
-
-    // The happy path still commits both halves together.
-    let committed_outbox_id = format!("outbox:{namespace}:committed");
-    let committed_record = canonical_wire_event_record(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        &principal_id,
-        &realm_id,
-        0,
-        now,
-    );
-    let committed_event_id = committed_record.event_id.clone();
-    let committed_outbox = FederationOutboxRecord::pending(
-        committed_outbox_id.clone(),
-        DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
-            .expect("peer service id"),
-        "https://peer.example".to_owned(),
-        "/_arkret/peer/events".to_owned(),
-        format!("ak:outbox:{namespace}:committed"),
-        "{}".to_owned(),
-        now.timestamp(),
-    );
-    let first_commit = events
-        .put_realm_bootstrap_batch_atomic(
-            vec![committed_record.clone()],
-            vec![control_proposal_ack(&committed_record)],
-            Vec::new(),
-            vec![committed_outbox.clone()],
-        )
-        .await
-        .expect("Realm genesis unit commits with its delivery intent");
-    assert_eq!(first_commit, RealmBootstrapCommitOutcome::Committed);
-    let exact_retry = events
-        .put_realm_bootstrap_batch_atomic(
-            vec![committed_record.clone()],
-            vec![control_proposal_ack(&committed_record)],
-            Vec::new(),
-            vec![committed_outbox],
-        )
-        .await
-        .expect("byte-identical Realm genesis retry is durable idempotency");
-    assert_eq!(
-        exact_retry,
-        RealmBootstrapCommitOutcome::ExactRetry {
-            event_ids: vec![committed_event_id.clone()],
-        },
-        "the durable boundary must distinguish exact replay from a new commit",
-    );
-    assert!(events.contains(&committed_event_id).await.expect("event"));
-    assert!(
-        outbox
-            .get(&committed_outbox_id)
-            .await
-            .expect("outbox")
-            .is_some(),
-        "an accepted genesis unit always has its delivery intent"
     );
 }
 
@@ -5003,314 +4758,6 @@ pub async fn assert_member_identity_store_contract(
     );
 }
 
-pub struct DeviceRevocationSealSettlementStores<'a> {
-    pub unit_of_work: &'a dyn EventCommitUnitOfWork,
-    pub revocations: &'a dyn DeviceRevocationStore,
-    pub control_events: &'a dyn arkret_state::state::ControlEventStore,
-    pub seals: &'a dyn arkret_state::state::SealStore,
-}
-
-fn contract_device_revoke_fixture(
-    namespace: &str,
-) -> (
-    EventCommitRequest,
-    DeviceRevocationGateSelector,
-    arkret_wire::Event,
-    ControlProposalIngress,
-) {
-    let realm_id = contract_realm_id(&format!("device-revocation-seal:{namespace}"));
-    let actor_id = arkret_wire::DidCoreId::new(format!("ak:did_core:web:{namespace}.example"))
-        .expect("contract actor core id");
-    let station_id = arkret_wire::DidCoreId::new("ak:did_core:web:soland.example")
-        .expect("contract Station core id");
-    let created_at = database_timestamp_now();
-    let event = arkret_wire::test_support::raw_event_at(
-        arkret_wire::EventKind::DeviceRevoke.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: arkret_wire::RealmId::new(realm_id.clone()).expect("contract realm id"),
-        },
-        actor_id.clone(),
-        station_id.clone(),
-        0,
-        arkret_wire::Hlc::new("019f00000000-0000-00000002").expect("contract HLC"),
-        serde_json::json!({
-            "principal_id": actor_id,
-            "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-            "revoked_by": actor_id,
-            "revoked_at": created_at,
-            "reason": "seal settlement contract"
-        }),
-        created_at,
-    )
-    .expect("contract device revoke event");
-    let digest_suite = arkret_canonical::DigestSuite::Sha256;
-    let canonical_digest = event
-        .event_digest_with_digest_suite(digest_suite)
-        .expect("contract event digest");
-    let canonical_bytes = arkret_canonical::canonical_json_bytes(
-        &event.digest_payload().expect("contract digest payload"),
-    )
-    .expect("contract canonical bytes");
-    let record = CanonicalEventRecord {
-        event_id: event.event_id.as_str().to_owned(),
-        actor_id: actor_id.to_string(),
-        actor_seq: event.actor_seq,
-        realm_id: Some(realm_id.clone()),
-        kind: event.kind.to_string(),
-        schema_id: "arkret://events/device/revoke/v1".to_owned(),
-        digest_suite,
-        canonical_digest: canonical_digest.clone(),
-        canonical_bytes,
-        envelope: serde_json::to_value(&event).expect("contract wire event encodes"),
-        received_at: created_at,
-    };
-    let control_proposal_ack = contract_control_proposal_ack(&record, created_at);
-    let selector = DeviceRevocationGateSelector {
-        principal_id: actor_id,
-        station_id,
-        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
-        target_device_authorize_event_id: "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"
-            .to_owned(),
-        target_device_generation_ref: 7,
-    };
-    let transition = DeviceRevocationTransition {
-        selector: selector.clone(),
-        proposal_event_id: record.event_id.clone(),
-        proposal_digest: canonical_digest,
-        control_proposal_ack: control_proposal_ack.clone(),
-    };
-    let ingress = ControlProposalIngress::AckRequired(control_proposal_ack);
-    (
-        EventCommitRequest {
-            publication_event: None,
-            mls_public_producer: None,
-            mls_public_genesis: None,
-            mls_frontier_leaves: None,
-            replicated: false,
-            governance_dependencies: Vec::new(),
-            membership_compensation_evidence: None,
-            device_pairing_authorization: None,
-            contact_projection: None,
-            consent_projection: None,
-            event: record,
-            control_proposal_ingress: Some(ingress.clone()),
-            device_revocation_transition: Some(transition),
-            device_revocation_gate: None,
-            historical_producer: None,
-            projections: Vec::new(),
-            idempotency: None,
-            outbox: Vec::new(),
-        },
-        selector,
-        event,
-        ingress,
-    )
-}
-
-fn contract_covering_seal(
-    realm_id: &str,
-    delta: Hash,
-    sealed_at: chrono::DateTime<Utc>,
-) -> arkret_wire::Seal {
-    let placeholder = Hash::new(format!("sha256:{}", "0".repeat(64))).expect("placeholder hash");
-    let command_result = arkret_wire::SealCommandOutcome::committed(
-        delta.clone(),
-        vec![delta.clone()],
-        Vec::new(),
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .expect("fixture command result");
-    let mut seal = arkret_wire::Seal {
-        id: arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64)))
-            .expect("placeholder Seal id"),
-        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).expect("contract realm id"),
-        predecessor_ref: None,
-        delta: vec![delta],
-        data_delta: Vec::new(),
-        data_event_set_root: arkret_wire::empty_data_event_set_root(
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap(),
-        control_event_set_root: placeholder.clone(),
-        state_root: placeholder.clone(),
-        notary_seq: 0,
-        availability_receipt_digests: Vec::new(),
-        covered_event_digests: Vec::new(),
-        previous_state_root: None,
-        previous_digest_algorithm: None,
-        notary_signature: arkret_wire::SealSignature {
-            verification_method: DidUrl::new("did:key:z6MkFixture#z6MkFixture")
-                .expect("fixture verification method"),
-            payload_digest: placeholder,
-            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-        },
-        sealed_at,
-        hlc: arkret_wire::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).expect("fixture HLC"),
-        configuration_ref: arkret_wire::EventId::from_event_digest(
-            &arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
-        )
-        .unwrap(),
-        command_results: vec![command_result],
-        authorization_closures: Vec::new(),
-        data_closure_announcements: Vec::new(),
-        data_closures: Vec::new(),
-        existence_anchors: Vec::new(),
-    };
-    seal.id = seal
-        .derive_id(arkret_canonical::DigestSuite::Sha256)
-        .expect("derive fixture Seal id");
-    seal
-}
-
-/// Accepting a Seal over a pending device revocation must settle the gate to
-/// `revoked` and stage the erase / MLS cleanup obligations — on both backends
-/// through the same observable surface: the Postgres adapter derives this via
-/// its `state_control_events` JOIN, and the memory adapter must derive the
-/// identical view from its bound generic Control Event store.
-pub async fn assert_device_revocation_seal_settlement_contract(
-    stores: DeviceRevocationSealSettlementStores<'_>,
-    namespace: &str,
-) {
-    let (request, selector, event, ingress) = contract_device_revoke_fixture(namespace);
-    let proposal_digest = request.event.canonical_digest.clone();
-    let proposal_event_id = request.event.event_id.clone();
-    let realm_id = request.event.realm_id.clone().expect("revoke has a Realm");
-
-    stores
-        .control_events
-        .put_pending_unit_with_ingress(&[arkret_state::state::ControlUnitIngressMember {
-            event: event.clone(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            ingress,
-        }])
-        .await
-        .expect("admit pending Control Move");
-    let outcome = stores
-        .unit_of_work
-        .commit_event(request)
-        .await
-        .expect("commit accepted device revoke");
-    assert!(outcome.event_inserted);
-    assert!(matches!(
-        stores
-            .revocations
-            .gate_status(&selector)
-            .await
-            .expect("gate status while pending"),
-        DeviceRevocationGateStatus::Pending { ref blocking_proposal_digest }
-            if blocking_proposal_digest == &proposal_digest
-    ));
-
-    let target = stores
-        .revocations
-        .target_for_proposal(&proposal_digest)
-        .await
-        .expect("exact pending revoke target lookup")
-        .expect("accepted target");
-    assert_eq!(target.selector, selector);
-    assert_eq!(target.proposal_event_id, proposal_event_id);
-    assert!(matches!(
-        target.status,
-        DeviceRevocationTargetStatus::Pending { .. }
-    ));
-
-    let digest = Hash::new(proposal_digest.clone()).expect("typed proposal digest");
-    let seal = contract_covering_seal(&realm_id, digest.clone(), database_timestamp_now());
-    assert!(
-        stores
-            .seals
-            .put_if_head(&seal, None, arkret_canonical::DigestSuite::Sha256)
-            .await
-            .expect("persist the covering Seal"),
-        "fixture Realm must not already have a confirmed head"
-    );
-    stores
-        .control_events
-        .record_seal_command_results(&seal)
-        .await
-        .expect("seal the accepted revoke");
-
-    match stores
-        .revocations
-        .gate_status(&selector)
-        .await
-        .expect("gate status after seal")
-    {
-        DeviceRevocationGateStatus::Revoked { covering_seal_id } => {
-            assert_eq!(covering_seal_id, seal.id.as_str());
-        }
-        other => panic!("sealed revocation gate must derive Revoked, got {other:?}"),
-    }
-    let targets = stores
-        .revocations
-        .list_targets(&selector)
-        .await
-        .expect("list targets after seal");
-    assert_eq!(targets.len(), 1);
-    assert_eq!(
-        stores
-            .revocations
-            .target_for_proposal(&proposal_digest)
-            .await
-            .unwrap(),
-        Some(targets[0].clone())
-    );
-    match &targets[0].status {
-        DeviceRevocationTargetStatus::Revoked {
-            covering_seal_id, ..
-        } => assert_eq!(covering_seal_id, seal.id.as_str()),
-        other => panic!("sealed target must be Revoked, got {other:?}"),
-    }
-
-    let intent = stores
-        .revocations
-        .pending_cleanup_intents(usize::MAX)
-        .await
-        .expect("pending cleanup intents after seal")
-        .into_iter()
-        .find(|intent| intent.proposal_digest == proposal_digest)
-        .expect("sealed revocation must stage a cleanup intent");
-    assert_eq!(intent.proposal_event_id, proposal_event_id);
-    assert_eq!(intent.covering_seal_id, seal.id.as_str());
-    assert_eq!(intent.selector, selector);
-    assert!(intent.material_cleanup_completed_at.is_none());
-    assert!(intent.mls_obligation_completed_at.is_none());
-
-    assert!(
-        stores
-            .revocations
-            .complete_material_cleanup(&proposal_digest, database_timestamp_now())
-            .await
-            .expect("complete material cleanup")
-    );
-    assert!(
-        stores
-            .revocations
-            .pending_cleanup_intents(usize::MAX)
-            .await
-            .expect("pending cleanup intents after material cleanup")
-            .iter()
-            .any(|intent| intent.proposal_digest == proposal_digest),
-        "the durable task remains until the MLS step is acknowledged"
-    );
-    assert!(
-        stores
-            .revocations
-            .complete_mls_obligation_by_event_id(&proposal_event_id, database_timestamp_now())
-            .await
-            .expect("complete MLS obligation by revoke Event id")
-    );
-    assert!(
-        stores
-            .revocations
-            .pending_cleanup_intents(usize::MAX)
-            .await
-            .expect("pending cleanup intents after both completions")
-            .iter()
-            .all(|intent| intent.proposal_digest != proposal_digest)
-    );
-}
-
 /// Stores one consent-projection commit contract needs.
 pub struct ConsentCommitContractStores<'a> {
     pub unit_of_work: &'a dyn EventCommitUnitOfWork,
@@ -5356,7 +4803,6 @@ pub async fn assert_consent_projection_commit_contract(
         .as_account_id()
         .expect("contract consent account actor")
         .clone();
-    let grant_ack = contract_control_proposal_ack(&grant_event, now);
     let dot = format!("{grant_event_id}:0");
     let granted = ConsentCellRecord {
         cell_id: cell_id.clone(),
@@ -5383,7 +4829,6 @@ pub async fn assert_consent_projection_commit_contract(
         .unit_of_work
         .commit_event(consent_commit_request(
             grant_event,
-            grant_ack,
             ConsentProjectionCommit {
                 cell: granted.clone(),
                 holder_quarantine: None,
@@ -5405,13 +4850,10 @@ pub async fn assert_consent_projection_commit_contract(
 
 fn consent_commit_request(
     event: CanonicalEventRecord,
-    ack: arkret_wire::ControlProposalAck,
     consent_projection: ConsentProjectionCommit,
 ) -> EventCommitRequest {
     EventCommitRequest {
         publication_event: None,
-        mls_public_producer: None,
-        mls_public_genesis: None,
         mls_frontier_leaves: None,
         replicated: false,
         governance_dependencies: Vec::new(),
@@ -5420,7 +4862,6 @@ fn consent_commit_request(
         contact_projection: None,
         consent_projection: Some(consent_projection),
         event,
-        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
         historical_producer: None,

@@ -28,26 +28,6 @@ pub trait CursorStorePort: Send + Sync {
         progress: Option<&soland_storage::CurrentDetailProgress>,
         byte_budget: usize,
     ) -> ServiceResult<soland_storage::CurrentDetailOutcome>;
-    async fn timeline_window_scan(
-        &self,
-        realm_id: &str,
-        head: &soland_storage::TimelineOrderPosition,
-        bound: Option<&soland_storage::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> ServiceResult<soland_storage::TimelineWindowScan>;
-    async fn timeline_ascending_scan(
-        &self,
-        realm_id: &str,
-        from: &soland_storage::TimelineOrderPosition,
-        inclusive: bool,
-        upper: Option<&soland_storage::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> ServiceResult<soland_storage::TimelineWindowScan>;
-    /// Newest projection-order position of a Realm, used to freeze a window.
-    async fn timeline_window_head(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Option<soland_storage::TimelineOrderPosition>>;
     async fn account_summary_has_join(
         &self,
         actor_key: &str,
@@ -188,38 +168,6 @@ impl SyncService {
     ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
         self.cursors
             .current_detail_page(request, progress, byte_budget)
-            .await
-    }
-
-    pub async fn timeline_window_scan(
-        &self,
-        realm_id: &str,
-        head: &soland_storage::TimelineOrderPosition,
-        bound: Option<&soland_storage::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> ServiceResult<soland_storage::TimelineWindowScan> {
-        self.cursors
-            .timeline_window_scan(realm_id, head, bound, row_limit)
-            .await
-    }
-
-    pub async fn timeline_window_head(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Option<soland_storage::TimelineOrderPosition>> {
-        self.cursors.timeline_window_head(realm_id).await
-    }
-
-    pub async fn timeline_ascending_scan(
-        &self,
-        realm_id: &str,
-        from: &soland_storage::TimelineOrderPosition,
-        inclusive: bool,
-        upper: Option<&soland_storage::TimelineOrderPosition>,
-        row_limit: usize,
-    ) -> ServiceResult<soland_storage::TimelineWindowScan> {
-        self.cursors
-            .timeline_ascending_scan(realm_id, from, inclusive, upper, row_limit)
             .await
     }
 
@@ -389,31 +337,6 @@ mod tests {
             _: usize,
         ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
             Ok(soland_storage::CurrentDetailOutcome::Unavailable)
-        }
-        async fn timeline_window_scan(
-            &self,
-            _: &str,
-            _: &soland_storage::TimelineOrderPosition,
-            _: Option<&soland_storage::TimelineOrderPosition>,
-            _: usize,
-        ) -> ServiceResult<soland_storage::TimelineWindowScan> {
-            Ok(soland_storage::TimelineWindowScan::default())
-        }
-        async fn timeline_ascending_scan(
-            &self,
-            _: &str,
-            _: &soland_storage::TimelineOrderPosition,
-            _: bool,
-            _: Option<&soland_storage::TimelineOrderPosition>,
-            _: usize,
-        ) -> ServiceResult<soland_storage::TimelineWindowScan> {
-            Ok(soland_storage::TimelineWindowScan::default())
-        }
-        async fn timeline_window_head(
-            &self,
-            _: &str,
-        ) -> ServiceResult<Option<soland_storage::TimelineOrderPosition>> {
-            Ok(None)
         }
         async fn account_summary_has_join(&self, _: &str, _: &str) -> ServiceResult<bool> {
             Ok(false)

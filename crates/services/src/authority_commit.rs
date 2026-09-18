@@ -80,6 +80,29 @@ impl AuthorityCommitApplication {
         Ok(self.store.stream_head(stream_ref).await?)
     }
 
+    /// Keyset page over one independent commit stream.
+    ///
+    /// Paging is a `stream_position` keyset inside a single
+    /// [`CommitStreamRef`]: the caller passes the last position it already
+    /// holds as `after_position` (`None` starts at genesis position 0) and the
+    /// store returns at most `limit` consecutive rows. There is no opaque
+    /// page token, no reverse direction and no `has_more` flag; `truncated`
+    /// alone says whether the stream continued past the returned page, and the
+    /// next request resumes from the last returned `commit.stream_position`.
+    pub async fn scan_stream(
+        &self,
+        request: &StreamScanRequest,
+    ) -> ServiceResult<StreamScanOutcome> {
+        request.validate().map_err(|error| {
+            crate::ServiceError::SchemaViolation(format!("invalid stream scan request: {error}"))
+        })?;
+        let outcome = self.store.scan_stream(request).await?;
+        outcome.validate_for_request(request).map_err(|error| {
+            crate::ServiceError::SchemaViolation(format!("invalid stream scan outcome: {error}"))
+        })?;
+        Ok(outcome)
+    }
+
     pub async fn install_handoff(&self, request: &AuthorityHandoffRequest) -> ServiceResult<()> {
         request.validate_shape().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid authority handoff: {error}"))

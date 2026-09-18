@@ -761,8 +761,6 @@ use crate::federation::FederationDeliveryRecord;
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
     pub publication_event: Option<arkret_wire::Event>,
-    pub mls_public_producer: Option<soland_storage::MlsPublicHandshakeProducer>,
-    pub mls_public_genesis: Option<soland_storage::MlsPublicGenesisInput>,
     pub mls_frontier_leaves: Option<Vec<arkret_wire::mls_transition::MlsSecurityFrontierLeaf>>,
     /// Origin admission was verified; historical sibling union is permitted.
     pub replicated: bool,
@@ -775,11 +773,6 @@ pub struct CommitAcceptedEventCommand {
     /// Holder-private consent cell mutation plus its eager cache
     /// invalidation, staged by admission and committed with the Event.
     pub consent_projection: Option<CommitConsentProjection>,
-    /// Durable ingress classification of an accepted Control Move
-    /// (`event-auth-state-resolution.md` §7.2): `Some` iff the Event enters the
-    /// pending-control log. Class and payload are inseparable at the store
-    /// boundary.
-    pub control_proposal_ingress: Option<arkret_state::state::store::ControlProposalIngress>,
     pub device_revocation_transition: Option<soland_storage::DeviceRevocationTransition>,
     pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
     /// Complete SDK-verified original producer; only receiver-known revocations apply.
@@ -851,14 +844,12 @@ pub trait EventReadPort: Send + Sync {
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<soland_storage::RealmBootstrapCommitOutcome>;
     async fn store_direct_conversation_founding_batch(
         &self,
         records: Vec<AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
         deliveries: Vec<FederationDeliveryRecord>,
@@ -875,7 +866,6 @@ pub trait EventReadPort: Send + Sync {
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
@@ -934,10 +924,6 @@ pub trait EventReadPort: Send + Sync {
         &self,
         account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>>;
-    async fn control_proposal_ack_for_digest(
-        &self,
-        proposal_digest: &str,
-    ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>>;
     async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats>;
     async fn peer_authz_state_records(&self) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn peer_events_query_page(
@@ -1200,23 +1186,16 @@ impl EventQueryService {
     pub async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<soland_storage::RealmBootstrapCommitOutcome> {
         self.events
-            .store_realm_bootstrap_batch(
-                records,
-                control_proposal_acks,
-                governance_dependencies,
-                deliveries,
-            )
+            .store_realm_bootstrap_batch(records, governance_dependencies, deliveries)
             .await
     }
     pub async fn store_direct_conversation_founding_batch(
         &self,
         records: Vec<AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
         deliveries: Vec<FederationDeliveryRecord>,
@@ -1224,7 +1203,6 @@ impl EventQueryService {
         self.events
             .store_direct_conversation_founding_batch(
                 records,
-                control_proposal_acks,
                 governance_dependencies,
                 slot,
                 deliveries,
@@ -1245,7 +1223,6 @@ impl EventQueryService {
     pub async fn store_identity_anchor_batch(
         &self,
         records: Vec<AcceptedEvent>,
-        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
@@ -1259,7 +1236,6 @@ impl EventQueryService {
         self.events
             .store_identity_anchor_batch(
                 records,
-                control_proposal_acks,
                 governance_dependencies,
                 receipt,
                 device,
@@ -1289,14 +1265,6 @@ impl EventQueryService {
     }
     pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
         self.events.has_canonical_event(event_id).await
-    }
-    pub async fn control_proposal_ack_for_digest(
-        &self,
-        proposal_digest: &str,
-    ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>> {
-        self.events
-            .control_proposal_ack_for_digest(proposal_digest)
-            .await
     }
     pub async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.canonical_events().await
@@ -1677,11 +1645,6 @@ pub trait MlsCommitReadPort: Send + Sync {
         event_id: &arkret_wire::EventId,
     ) -> ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>>;
 
-    async fn public_genesis_candidate(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> ServiceResult<Option<soland_storage::MlsPublicGenesisRecord>>;
-
     async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>>;
     async fn commit(
         &self,
@@ -1710,13 +1673,6 @@ impl MlsCommitQueryService {
     ) -> ServiceResult<Option<Vec<arkret_models_crypto::MlsAcceptedLeafAuthorization>>> {
         self.commits.public_leaf_authorizations(event_id).await
     }
-    pub async fn public_genesis_candidate(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> ServiceResult<Option<soland_storage::MlsPublicGenesisRecord>> {
-        self.commits.public_genesis_candidate(event_id).await
-    }
-
     pub fn new(commits: Arc<dyn MlsCommitReadPort>) -> Self {
         Self { commits }
     }
@@ -2457,8 +2413,6 @@ mod tests {
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
                 publication_event: None,
-                mls_public_producer: None,
-                mls_public_genesis: None,
                 mls_frontier_leaves: None,
                 replicated: false,
                 membership_compensation_evidence: None,
@@ -2479,7 +2433,6 @@ mod tests {
                     envelope: serde_json::json!({}),
                     received_at: now,
                 },
-                control_proposal_ingress: None,
                 device_revocation_transition: None,
                 device_revocation_gate: None,
                 historical_producer: None,

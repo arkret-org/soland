@@ -149,6 +149,14 @@ pub trait AuthorityCommitStore: Send + Sync {
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Vec<CommitStreamHead>>;
 
+    /// Keyset page over one independent commit stream.
+    ///
+    /// The only paging key is `realm_commits.stream_position` inside the
+    /// single `CommitStreamRef` named by the request: rows start at genesis
+    /// position 0 when `after_position` is `None` and otherwise at
+    /// `after_position + 1`, run consecutively, and stop after `limit` rows.
+    /// No opaque page token, no reverse direction, and no separate
+    /// `has_more`: `StreamScanOutcome::truncated` carries that alone.
     async fn scan_stream(
         &self,
         request: &arkret_wire::StreamScanRequest,

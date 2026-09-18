@@ -52,8 +52,6 @@ mod invite_new_source_ledger;
 mod key_backup;
 mod member_identity;
 mod mls;
-mod mls_public_state;
-pub use mls_public_state::*;
 mod moderation;
 mod notifications;
 mod organization_registration;
