@@ -354,7 +354,7 @@ peer-merge graph.
 
   | missing module | http files / refs | verdict |
   |---|---|---|
-  | `arkret_models_collaboration::governance_dependencies` | 19 / 36 | **port.** Nearly all of it is `GovernanceDependency{,Selector}::AuthenticatedSignerResolutionEvidence`, and the target is `arkret_models_identity::AuthenticatedSignerResolutionEvidence` (`models-identity/src/authenticated_signer_resolution_evidence.rs:58`, exported at `lib.rs:19,50`). The SDK gap ledger listed this as open because it looked under `models-collaboration`; corrected there in `acdc61a5`. |
+  | `arkret_models_collaboration::governance_dependencies` | 19 / 36 | **port, but not the one it looks like.** See the note below: the evidence type survives, the lookup-by-digest store does not. |
   | `arkret_wire::cbs` | 12 / 40 | **port.** Successors are `arkret_wire::patch::Patch` and `TypedCurrentResult`, different shape. |
   | `arkret_wire::cbs_proof_bundle` | 10 / 31 | **delete.** The SDK ledger adjudicates `EventFederationSubmission` and `CbsProofBundle` as removed: "CBS is a removed unit". |
   | `arkret_models_collaboration::direct_conversation_ops` | 8 / 19 | **mixed.** `DirectConversationFoundingAuthorityEvidence` (11 refs) is a port onto `models-collaboration/src/objects/direct_conversation.rs:330` -- another stale SDK gap line, corrected in `bbca85ef`. `DirectConversationFoundingFederationSubmission` (2) goes with CBS. `DirectConversationFoundingPlan` (2) has zero hits in the SDK and zero `founding_plan` hits in `direct-conversation-operations.schema.json`; it is a local name with no protocol object. |
@@ -365,6 +365,38 @@ peer-merge graph.
   SDK" only because the SDK's own gap ledger had gone stale, in both cases
   because the type had landed under a path the gap line did not name. Check the
   SDK tree, not the SDK ledger.
+
+  **`governance_dependencies` in detail, because it has two halves and only one
+  of them is an import problem.**
+  The payload type survives: `arkret_models_identity::AuthenticatedSignerResolutionEvidence`
+  (`models-identity/src/authenticated_signer_resolution_evidence.rs:58`, exported
+  at `lib.rs:19,50`), and `submit/device_gate.rs:44-47` already matches on it
+  directly. The SDK gap ledger listed it as open only because it looked under
+  `models-collaboration`; corrected upstream in `acdc61a5`.
+  What does **not** survive is the *lookup*. `GovernanceDependencySelector` plus
+  `state.persistence().governance_dependency_store().get_unscoped_signer_evidence(&selector)`
+  is a side table keyed by content digest. Its soland half was deleted
+  deliberately, not by accident: `c30ce6384` removed
+  `crates/storage/src/governance_history.rs`, which defined
+  `GovernanceDependencyWrite`, and `soland_storage::GovernanceDependencyWrite`
+  now has no definition anywhere while `services/src/{events,persistence_events,projection}.rs`
+  still name it in eleven signatures.
+  The successor is stated by the SDK itself, at
+  `authenticated_signer_resolution_evidence.rs:105-115`: every input to
+  `build_signer_resolution_evidence` is supplied by the caller, the helper
+  "reads no clock, holds no key and consults no service, so the same inputs
+  always produce the same bytes and therefore the same `SignerEvidenceRef`", and
+  "a resolving Station calls it after it has already resolved the key against
+  `authority_commit_id`; the evidence records that resolution, it does not
+  perform one." So a receiver no longer looks evidence up by digest: it resolves
+  the key against the proof's `authority_commit_id`, rebuilds the evidence and
+  compares with `matches_ref` (`:99`). The digest-keyed store is the old
+  mechanism, and the eleven `GovernanceDependencyWrite` signatures in services
+  are residue of it.
+  Signer evidence that legitimately remains *stored* is the Agent-scoped kind
+  (`storage/src/agents.rs:48-49`, `agent_principal.rs:55-58`), which is a
+  different thing: current evidence for a live Agent, not a historical lookup
+  table.
 - [x] Audited-E2EE compliance profiles: `ak.profile.attested_audit_e2ee.v1` and
   `ak.profile.disclosed_audit_e2ee.v1` are gone from the specification and the
   SDK, so `AUDIT_COMPLIANCE_PROFILES` is removed from
