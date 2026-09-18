@@ -56,7 +56,7 @@ Each line names the successor that already carries the capability.
 |---|---|---|
 | `current_data` (5 files) | 1,813 | `RealmStateSnapshot.current_state_entries: Vec<TypedCurrentResult>` (SDK `wire/src/authority_commit.rs:479`). The orphan imports `arkret_wire::cbs::{ProjectedCellWrite, ProjectedOp}`, which the SDK no longer defines, and resolves conflicts by "greater causal depth wins". |
 | `current_results` (2) | 345 | `sync_cursor.rs:168-256`, where `current_detail_page` is already rewired. `CurrentResultEntry` is gone from the SDK. |
-| `mls_public_state` (4) | 1,560 | `MlsStateInstallation` (`authority_commit.rs:355-390`). `EventCommitRequest` no longer carries `mls_public_genesis` / `mls_public_producer`. |
+| `mls_public_state` (4) | 1,560 | `MlsStateInstallation`, which is **soland's own** type at `crates/storage/src/authority_commit.rs:53`, carried by `AuthorityCommitTransaction.mls_state` (`:48`). It has zero hits in the SDK; an earlier draft of this table cited `wire/src/authority_commit.rs:355-390` for it, which is `RealmAuthorityBundle`. `EventCommitRequest` no longer carries `mls_public_genesis` / `mls_public_producer`. |
 | `devices/confirmed_history` (2) | 707 | `devices.rs`, which writes `devices.verification_state` directly. The orphan's input type `ConfirmedDeviceControlProjection` was deleted from the trait crate in `c30ce6384`. |
 | `device_revocations/historical` (2) | 406 | nothing needed: it read `EventCommitRequest.historical_producer`, a field the protocol removed. |
 | `device_revocations/material_cleanup` (1) | 66 | `device_revocations.rs:256-300`, where both methods were rewritten from `covering_seal_id` to `committed_ref`. |
@@ -64,6 +64,44 @@ Each line names the successor that already carries the capability.
 | `events/approval_publications` (1) | 458 | `publication_evidence.rs:55`. |
 | `events/recovery_terminal_tests` (1) | 1,116 | `validate_recovery_commit_pair` — see the pair rule below. |
 | `events/transaction_locks` (1) | 75 | the three `FOR UPDATE` sites in `authority_commit.rs:149,199/273,305`. |
+
+### Two capabilities with a declared surface and no implementation (2026-09-19)
+
+Both were found while unwinding the timeline and ack residue in
+`soland-storage` / `soland-services`, and neither is residue: each is a
+current-protocol surface that is declared and never implemented.
+
+1. **`AuthorityProtocolPort` has no production implementation.** The trait is
+   declared at `services/src/authority_commit.rs:135`, and its only `impl` in
+   the entire workspace is the test stub `NeverCalled` at
+   `http/src/routing/authority_commit.rs:245`. The eleven routes in that file
+   pull the port out of the Depot, so `POST /_arkret/self/streams/scan` has no
+   backend at all. The storage-side half now exists --
+   `AuthorityCommitApplication::scan_stream`, validating `StreamScanRequest` in
+   and `StreamScanOutcome` out -- but the signing Station half does not.
+2. **The three batch-commit units are cut in the middle.** `EventStore` no
+   longer declares `put_realm_bootstrap_batch_atomic`,
+   `put_direct_conversation_founding_batch_atomic` or
+   `put_identity_anchor_batch_atomic` (0 hits in `crates/storage`), while
+   `services` still calls each of them once. These are Realm genesis, Direct
+   Conversation founding and the identity anchor unit: three product paths, not
+   protocol plumbing. Their successor has to be
+   `AuthorityCommitStore::commit_transaction`, which needs someone to sign the
+   `RealmCommit` -- the same missing Station as above.
+
+Two contract tests are in a related state and were deliberately **not** deleted,
+because deleting them would be trading coverage for a green build:
+
+- `assert_consent_projection_commit_contract` rests on the removed cell model
+  (`ConsentCellStore` / `ConsentCellRecord` / `arkret_identifiers::CellRef`).
+  The capability does have a successor -- `ConsentGrantStore`
+  (`storage/src/contacts.rs:353`), `ConsentGrantRecord` and
+  `ConsentProjectionCommit.grant` -- so the test needs rewriting onto the grant
+  model, not removing.
+- Device-revocation settlement now travels as
+  `DeviceRevocationTransition.revoke_ref: CommittedEventRef`
+  (`storage/src/device_revocations.rs:41`) instead of a covering Seal plus a
+  `ControlProposalAck`. That path currently has no contract test at all.
 
 ### Two things that must not vanish with the files
 
@@ -78,9 +116,12 @@ Each line names the successor that already carries the capability.
    provenance, not in a server-side projection (`zh/identity/key-management.md`
    L288: verify the historical producer proof with the `producer_signing_key_did`
    frozen in it, never by re-resolving current controller device state). Neither
-   column name occurs anywhere in `spec/v1/schemas` or `spec/v1/registries`.
+   column name occurs anywhere under `spec/v1` at all, machine-readable artifacts
+   included -- note the artifacts live at `spec/v1/artifacts/{schemas,registry}/`,
+   not at `spec/v1/schemas`.
    Deleting the postgres half was therefore correct, and the successor is
-   `MlsStateInstallation`.
+   `MlsStateInstallation` (`crates/storage/src/authority_commit.rs:53`, a
+   soland type, not an SDK one).
    What is *not* done is the rest of the lane, which still names input fields
    that `EventCommitRequest` (`crates/storage/src/unit_of_work.rs:84-103`) no
    longer has:
