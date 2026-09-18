@@ -1218,36 +1218,6 @@ impl FederationDispatcher {
                         None,
                         now,
                     )
-                } else if (200..300).contains(&status)
-                    && let Err(error) = self
-                        .capture_history_response_relay_outcome(&row, &body_text)
-                        .await
-                {
-                    self.transport_retry(
-                        &row,
-                        &lease_token,
-                        attempts,
-                        Some(status),
-                        error_code::TRANSPORT_ERROR,
-                        excerpt(&format!("history_relay_receipt_validation: {error}")),
-                        None,
-                        now,
-                    )
-                } else if (200..300).contains(&status)
-                    && let Err(error) = self
-                        .capture_history_request_replica_outcome(&row, &body_text)
-                        .await
-                {
-                    self.transport_retry(
-                        &row,
-                        &lease_token,
-                        attempts,
-                        Some(status),
-                        error_code::TRANSPORT_ERROR,
-                        excerpt(&format!("history_replica_outcome_validation: {error}")),
-                        None,
-                        now,
-                    )
                 } else if let Err(error) = &account_status_resubmission {
                     self.transport_retry(
                         &row,
@@ -1288,60 +1258,6 @@ impl FederationDispatcher {
             }
         };
         self.commit(command).await;
-    }
-
-    async fn capture_history_response_relay_outcome(
-        &self,
-        row: &PendingFederationDelivery,
-        response_body: &str,
-    ) -> Result<(), String> {
-        if row.delivery.endpoint != "/_arkret/peer/history-key-responses/relay" {
-            return Ok(());
-        }
-        if response_body.len() > 64 * 1024 {
-            return Err("history response relay receipt exceeds 64 KiB".to_owned());
-        }
-        let relay: arkret_models_collaboration::history_key::HistoryKeySourceRelay =
-            serde_json::from_str(&row.delivery.payload_json)
-                .map_err(|error| format!("history source relay decode failed: {error}"))?;
-        let receipt: arkret_models_collaboration::history_key::HistoryKeyResponseSendReceipt =
-            serde_json::from_str(response_body)
-                .map_err(|error| format!("history relay receipt decode failed: {error}"))?;
-        crate::routing::governance_history::validate_remote_history_response_receipt(
-            &self.state,
-            &relay.response,
-            &relay.source_relay_attestation.destination_release_id,
-            &receipt,
-        )
-        .await
-        .map_err(|error| error.to_string())
-    }
-
-    async fn capture_history_request_replica_outcome(
-        &self,
-        row: &PendingFederationDelivery,
-        response_body: &str,
-    ) -> Result<(), String> {
-        if row.delivery.endpoint != "/_arkret/peer/history-key-requests/replicate" {
-            return Ok(());
-        }
-        if response_body.len() > 64 * 1024 {
-            return Err("history request replica outcome exceeds 64 KiB".to_owned());
-        }
-        let replica: arkret_models_collaboration::history_key::HistoryKeyRequestReplica =
-            serde_json::from_str(&row.delivery.payload_json)
-                .map_err(|error| format!("history request replica decode failed: {error}"))?;
-        let outcome: arkret_models_collaboration::history_key::HistoryKeyRequestReplicaOutcome =
-            serde_json::from_str(response_body).map_err(|error| {
-                format!("history request replica outcome decode failed: {error}")
-            })?;
-        crate::routing::governance_history::validate_remote_history_request_replica_outcome(
-            &self.state,
-            &replica,
-            &outcome,
-        )
-        .await
-        .map_err(|error| error.to_string())
     }
 
     async fn capture_contact_outcome(
@@ -1674,14 +1590,7 @@ impl FederationDispatcher {
         now: i64,
         account_status_resubmission: Option<SemanticResubmission>,
     ) -> RecordFederationAttemptCommand {
-        let response_excerpt = if row.delivery.endpoint
-            == "/_arkret/peer/history-key-responses/relay"
-            && (200..300).contains(&status)
-        {
-            body_text.to_owned()
-        } else {
-            excerpt(body_text)
-        };
+        let response_excerpt = excerpt(body_text);
         let transport_succeeded = (200..300).contains(&status);
         // The typed outcome only classifies a *successful* transport. On a
         // non-2xx the status is the verdict: an error envelope that happens not

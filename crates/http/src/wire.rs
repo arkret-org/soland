@@ -584,7 +584,6 @@ pub fn describe(
             "ak.operation_bundle.station.current_signer_evidence.v1".to_owned(),
             "ak.operation_bundle.station.describe.v1".to_owned(),
             "ak.operation_bundle.station.device_pairing_handoff.v1".to_owned(),
-            "ak.operation_bundle.station.history_key_recovery.v1".to_owned(),
             "ak.operation_bundle.station.http_core.v1".to_owned(),
             "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
             "ak.operation_bundle.station.push.v1".to_owned(),
@@ -645,7 +644,6 @@ pub fn describe(
             "ak.feature.agent_runtime_approval_notifications.v1".to_owned(),
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
             arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
-            "ak.feature.history_key_recovery.v1".to_owned(),
             "ak.feature.mls_exporter_aead.v1".to_owned(),
             "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
         ],
@@ -932,7 +930,7 @@ mod tests {
         assert!(bundles.contains(&json!(
             "ak.operation_bundle.station.device_pairing_handoff.v1"
         )));
-        assert!(bundles.contains(&json!(
+        assert!(!bundles.contains(&json!(
             "ak.operation_bundle.station.history_key_recovery.v1"
         )));
         assert!(bundles.contains(&json!("ak.operation_bundle.station.http_core.v1")));
@@ -957,7 +955,7 @@ mod tests {
                 .contains(&json!("ak.feature.blob.resumable_upload.tus.v1"))
         );
         assert!(
-            value["supported_features"]
+            !value["supported_features"]
                 .as_array()
                 .expect("features array")
                 .contains(&json!("ak.feature.history_key_recovery.v1"))
@@ -970,10 +968,6 @@ mod tests {
         );
         let description: arkret_models_discovery::ServiceDescribe =
             serde_json::from_value(value.clone()).expect("description round-trips");
-        assert!(description.supports_operation_binding(
-            arkret_wire::ServiceOperationId::SelfHistoryKeyRequestsReadListV1,
-            arkret_wire::BindingKind::HttpJson,
-        ));
         for operation in [
             arkret_wire::ServiceOperationId::OpenDevicePairingCommandStageV1,
             arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
@@ -989,7 +983,7 @@ mod tests {
         }
         description
             .validate()
-            .expect("history-key recovery advertisement must remain transport-closed");
+            .expect("service description advertisement must remain transport-closed");
         assert_eq!(
             value["privacy_derivation"]["push_target_id_derivation"]["derivation_profile"],
             json!("ak.push_target_id.hmac_sha256.v1")

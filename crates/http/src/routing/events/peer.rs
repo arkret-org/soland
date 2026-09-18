@@ -13,7 +13,6 @@ use arkret_models_collaboration::event_sync::{
     EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, PeerSealFrontierState,
     RealmSealFrontierView,
 };
-use arkret_models_collaboration::history_key::DirectorySourceRefAccess;
 use arkret_models_collaboration::http_bodies::{
     PeerEventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
     PeerEventsSiblingPosition, PeerEventsSiblingPositionDisclosure,
@@ -23,7 +22,7 @@ use arkret_models_collaboration::principal_operations::{
     PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
 };
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
-use arkret_wire::{SignalRelayOutcome, SignalRelayRequest};
+use arkret_wire::{DirectorySourceRefAccess, SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;

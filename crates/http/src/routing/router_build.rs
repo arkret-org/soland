@@ -616,17 +616,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn history_key_request_read_is_reachable_through_advertised_bundle() {
-        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
-
-        assert!(locally_advertises(
-            &state,
-            arkret_wire::ServiceOperationId::SelfHistoryKeyRequestsReadListV1,
-            arkret_wire::BindingKind::HttpJson,
-        ));
-    }
-
-    #[test]
     fn device_pairing_selectors_are_reachable_through_the_registered_bundle() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
         let operations = [
