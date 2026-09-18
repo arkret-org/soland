@@ -172,7 +172,17 @@ impl ProjectionState {
                 };
             }
         };
-        if kind == arkret_wire::EventKind::RealmOwnerTransfer
+        // `authz/capabilities.md` section 3.2 — `ak.realm.owner.transfer` and
+        // `ak.realm.authority.reset` both compare-and-swap the authority root
+        // against the `expected_state_digest` inside their own signature.
+        // `ak.realm.governance_station.change` is the exception: it CASes on
+        // the authority generation plus the Realm-stream head instead.
+        let digest_compare_and_swap = matches!(
+            kind,
+            arkret_wire::EventKind::RealmOwnerTransfer
+                | arkret_wire::EventKind::RealmAuthorityReset
+        );
+        if digest_compare_and_swap
             && operation.payload.get("realm_id").and_then(Value::as_str) != Some(realm_id.as_str())
         {
             return ProjectionEffect::Rejected {
@@ -187,7 +197,7 @@ impl ProjectionState {
                 };
             }
         };
-        if kind == arkret_wire::EventKind::RealmOwnerTransfer
+        if digest_compare_and_swap
             && operation
                 .payload
                 .get("expected_state_digest")
@@ -208,13 +218,18 @@ impl ProjectionState {
                         reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                     };
                 };
+                // `authz/capabilities.md` section 3.2: the successor counter is
+                // bounded by the `encoding.md` section 1 JSON safe-integer
+                // ceiling and an overflow MUST fail closed with
+                // `realm_authority_root_conflict` rather than wrap, saturate
+                // or keep the old value.
                 let Ok(successor_epoch) =
                     arkret_models_collaboration::events_payloads::realm::RealmOwnerTransferPayload::successor_controller_epoch(
                         controller_epoch,
                     )
                 else {
                     return ProjectionEffect::Rejected {
-                        reason: "reducer_projection_failed".to_owned(),
+                        reason: "realm_authority_root_conflict".to_owned(),
                     };
                 };
                 if self
@@ -240,6 +255,41 @@ impl ProjectionState {
                 };
                 root.insert("controller_actor_id".to_owned(), controller);
                 root.insert("controller_epoch".to_owned(), successor_epoch.into());
+            }
+            arkret_wire::EventKind::RealmAuthorityReset => {
+                // `event-kind-registry.json` registers exactly one write for
+                // `ak.realm.authority.reset`: `allowed_paths` is empty, the
+                // payload carries no patch, and the only change is the derived
+                // `authority_generation` successor. `controller_actor_id` and
+                // `controller_epoch` are preserved verbatim from the pre-state
+                // the digest above froze. Advancing this generation is what
+                // invalidates every `realm_root`-rooted delegation at once
+                // (`authz/capabilities.md` section 10).
+                if serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::realm::RealmAuthorityResetPayload,
+                >(operation.payload.clone())
+                .is_err()
+                {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+                // Same JSON safe-integer ceiling as the transfer epoch; the
+                // registry note on this kind names `realm_authority_root_conflict`
+                // as the fail-closed verdict.
+                let Ok(successor_generation) =
+                    arkret_models_collaboration::events_payloads::realm::RealmAuthorityResetPayload::successor_authority_generation(
+                        authority_generation,
+                    )
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "realm_authority_root_conflict".to_owned(),
+                    };
+                };
+                root.insert(
+                    "authority_generation".to_owned(),
+                    successor_generation.into(),
+                );
             }
             arkret_wire::EventKind::RealmGovernanceStationChange => {
                 let payload = match serde_json::from_value::<
@@ -916,18 +966,28 @@ impl ProjectionState {
                     reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             };
-            let Some(digest_algorithm) = payload_object
-                .and_then(|object| object.get("digest_algorithm"))
-                .and_then(Value::as_str)
-            else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            };
-            if arkret_canonical::digest_suite(digest_algorithm).is_err() {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
-                };
+            // `realm-genesis.schema.json` is a closed object
+            // (`additionalProperties: false`) whose required set is `[schema,
+            // purpose, genesis_salt, trust_domain, security_class,
+            // governance_station_id, initial_join_rule,
+            // initial_history_access, initial_discoverability]`;
+            // `digest_algorithm` is not even a declared property there.
+            // `models/realm-and-space.md` line 123 places it on the Realm
+            // object as optional, create-locked and defaulting to `sha256`,
+            // and `realm.schema.json` carries the same `"default": "sha256"`.
+            // A genesis that declares nothing therefore runs the baseline
+            // suite; only a declared value that names no active digest-suite
+            // row is refused.
+            if let Some(declared) = payload_object.and_then(|object| object.get("digest_algorithm"))
+            {
+                let supported = declared
+                    .as_str()
+                    .is_some_and(|algorithm| arkret_canonical::digest_suite(algorithm).is_ok());
+                if !supported {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
+                    };
+                }
             }
             Some(trust_domain.to_owned())
         } else {

@@ -463,6 +463,13 @@ fn grant_authority_grant_refs_in(body: &Value) -> Vec<String> {
 /// refs. Both are reducer-owned: an author cannot misreport how far its
 /// authority spread or which root it came from. `None` means a `grant` ref is
 /// not projected yet — the caller MUST go pending rather than guess a depth.
+///
+/// `authz/capabilities.md` section 10 fixes the arithmetic: a `realm_root` ref
+/// sits at depth 0 and the grant itself is `max(refs.depth) + 1`, so a root
+/// controller's direct grant is 1 and a member's re-grant is 2.
+/// `capability-grant.schema.json` carries the same rule as `minimum: 1` on
+/// `authority_depth`, which a root-only grant cannot satisfy without the final
+/// increment.
 pub fn derive_authority_audit(
     body: &Value,
     resolve: &dyn Fn(&str) -> Option<(u64, Vec<Value>)>,
@@ -471,12 +478,11 @@ pub fn derive_authority_audit(
     if refs.is_empty() {
         return None;
     }
-    let mut depth = 0_u64;
+    let mut deepest_ref = 0_u64;
     let mut roots: Vec<Value> = Vec::new();
     for entry in refs {
         match entry.get("kind").and_then(Value::as_str) {
             Some("realm_authority") => {
-                depth = depth.max(0);
                 if !roots.contains(entry) {
                     roots.push(entry.clone());
                 }
@@ -484,7 +490,7 @@ pub fn derive_authority_audit(
             Some("grant") => {
                 let grant_id = entry.get("grant_id").and_then(Value::as_str)?;
                 let (parent_depth, parent_roots) = resolve(grant_id)?;
-                depth = depth.max(parent_depth.checked_add(1)?);
+                deepest_ref = deepest_ref.max(parent_depth);
                 for root in parent_roots {
                     if !roots.contains(&root) {
                         roots.push(root);
@@ -498,7 +504,7 @@ pub fn derive_authority_audit(
         return None;
     }
     roots.sort_by_key(|root| root.to_string());
-    Some((depth, roots))
+    Some((deepest_ref.checked_add(1)?, roots))
 }
 
 fn grant_realm_id<'a>(body: &'a Value, operation: &'a Operation) -> &'a str {

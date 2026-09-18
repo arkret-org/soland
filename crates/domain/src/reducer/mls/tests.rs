@@ -56,6 +56,40 @@ fn circle_scope(circle_id: &str) -> Value {
     })
 }
 
+/// Seed the Circle aggregate a circle-scoped `ak.mls.genesis` is admitted
+/// against. The cross-field constraint in `realm-and-space.md` only lets the
+/// governance Station accept a scope's first genesis while that scope's current
+/// `history_access` is `since_join`, so a Circle scope with no projected Circle
+/// has no current value and is rejected as `circle_not_found`.
+fn seed_circle(state: &mut ProjectionState, circle_id: &str) {
+    state.circles.insert(
+        circle_id.to_owned(),
+        crate::reducer::CircleProjection {
+            circle_id: circle_id.to_owned(),
+            realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
+            profile_ref: None,
+            title: "Scope".to_owned(),
+            summary: None,
+            display: json!({
+                "short_name": "Scope",
+                "color_token": "slate",
+                "symbol": { "glyph": "ring" }
+            }),
+            directory_visibility: "members".to_owned(),
+            join_rule: "invite".to_owned(),
+            history_access: "since_join".to_owned(),
+            mls_group_ref: None,
+            state: crate::reducer::CircleLifecycleState::Active,
+            state_changed_at: None,
+            created_by: fixture_actor("ak:did_core:web:alice.example").to_string(),
+            created_at: Utc.timestamp_opt(0, 0).single().expect("ts in range"),
+            updated_by: None,
+            updated_at: None,
+            members: std::collections::BTreeSet::new(),
+        },
+    );
+}
+
 fn scope_group(scope: &Value) -> String {
     serde_json::from_value::<arkret_wire::ScopeRef>(scope.clone())
         .unwrap()
@@ -69,26 +103,77 @@ fn realm_group() -> &'static str {
     GROUP.get_or_init(|| scope_group(&realm_scope())).as_str()
 }
 
-fn governance_binding_for_scope(previous_epoch: u64, effective_scope: Value) -> Value {
-    // The binding is the closed SDK shape: no content scheme, no encoding or
-    // reducer profile, and no security frontier digest. The accepted
-    // `RealmCommit` is the ordering and governance authority.
+/// A stand-in accepted `ak.mls.commit` Event id, used where a test only needs
+/// *some* base group state and never reads it back.
+const FIXTURE_BASE_GROUP_STATE_REF: &str = "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo";
+
+fn governance_binding_for_scope(
+    previous_epoch: u64,
+    base_group_state_ref: &str,
+    effective_scope: Value,
+) -> Value {
+    // The binding is the closed SDK shape
+    // (`event-payload.schema.json#/$defs/mls_governance_binding`): no content
+    // scheme, no encoding or reducer profile, and no security frontier digest.
+    // The accepted `RealmCommit` is the ordering and governance authority, and
+    // `base_group_state_ref` names the immediate predecessor group state.
     json!({
         "effective_scope": effective_scope,
+        "base_group_state_ref": base_group_state_ref,
         "previous_epoch": previous_epoch,
         "next_epoch": previous_epoch + 1,
         "key_access_revision": 0
     })
 }
 
-fn governance_binding(previous_epoch: u64) -> Value {
-    governance_binding_for_scope(previous_epoch, realm_scope())
+fn governance_binding(previous_epoch: u64, base_group_state_ref: &str) -> Value {
+    governance_binding_for_scope(previous_epoch, base_group_state_ref, realm_scope())
 }
 
 fn genesis_binding(effective_scope: Value) -> Value {
-    let mut binding = governance_binding_for_scope(0, effective_scope);
-    binding["next_epoch"] = json!(0);
-    binding
+    // Genesis is the one binding with no predecessor: `mls_genesis_payload`
+    // pins `base_group_state_ref` to null and both epochs to 0.
+    json!({
+        "effective_scope": effective_scope,
+        "base_group_state_ref": Value::Null,
+        "previous_epoch": 0,
+        "next_epoch": 0,
+        "key_access_revision": 0
+    })
+}
+
+/// The closed `ak.mls.commit` payload
+/// (`event-payload.schema.json#/$defs/mls_commit_payload`). Proposals travel
+/// inline in the opaque Commit body, so the payload has no `proposal_refs`
+/// slot, and the coordinates are restated at the top level so a receiver can
+/// order the Commit without opening the binding.
+fn commit_payload_for_scope(
+    previous_epoch: u64,
+    base_group_state_ref: &str,
+    commit_bytes: &[u8],
+    effective_scope: Value,
+) -> Value {
+    json!({
+        "base_group_state_ref": base_group_state_ref,
+        "previous_epoch": previous_epoch,
+        "next_epoch": previous_epoch + 1,
+        "covers_key_access_revision": 0,
+        "commit_bytes_b64": b64(commit_bytes),
+        "governance_binding": governance_binding_for_scope(
+            previous_epoch,
+            base_group_state_ref,
+            effective_scope,
+        ),
+    })
+}
+
+fn commit_payload(previous_epoch: u64, base_group_state_ref: &str, commit_bytes: &[u8]) -> Value {
+    commit_payload_for_scope(
+        previous_epoch,
+        base_group_state_ref,
+        commit_bytes,
+        realm_scope(),
+    )
 }
 
 fn genesis_payload(effective_scope: Value) -> Value {
@@ -400,12 +485,7 @@ fn commit_epoch_in_order_succeeds() {
     let c1 = op_at(
         500,
         "ak.mls.commit",
-        json!({
-            "proposal_refs": [],
-            "base_epoch_ref": genesis_event_ref,
-            "commit_bytes_b64": b64(b"opaque-commit-1"),
-            "governance_binding": governance_binding(0),
-        }),
+        commit_payload(0, &genesis_event_ref, b"opaque-commit-1"),
     );
     let e1 = apply_commit_epoch(&mut state, &c1);
     match e1 {
@@ -421,15 +501,11 @@ fn commit_epoch_in_order_succeeds() {
     }
 
     // Second commit — expected_prev_epoch=1 → epoch=2.
+    let c1_ref = c1.context.event_id.to_string();
     let c2 = op_at(
         501,
         "ak.mls.commit",
-        json!({
-            "proposal_refs": [],
-            "base_epoch_ref": c1.context.event_id,
-            "commit_bytes_b64": b64(b"opaque-commit-2"),
-            "governance_binding": governance_binding(1),
-        }),
+        commit_payload(1, &c1_ref, b"opaque-commit-2"),
     );
     let e2 = apply_commit_epoch(&mut state, &c2);
     assert!(matches!(
@@ -449,7 +525,7 @@ fn commit_epoch_in_order_succeeds() {
             creator_device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
             genesis_event_ref,
             committed_at: 501,
-            governance_binding: governance_binding(1),
+            governance_binding: governance_binding(1, &c1_ref),
             accepted_commit_digest: Some(arkret_canonical::sha256_digest(b"opaque-commit-2")),
             accepted_commit_ref: Some(c2.context.event_id.to_string()),
         }
@@ -491,7 +567,6 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
     let revoke_event = "ak:event:AafCYpmebjO4g4U44BB6290CiEHtsdaspFppDQcaFrjv";
-    let proposal_ref = "ak:event:AQ_AVnBjhDRbcSwwa5FDgoABRUHUthd1DA4Y2aDKTfvV";
     state.pending_mls_removals.push(MlsRemoveObligation {
         realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
         circle_id: None,
@@ -503,19 +578,15 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
         triggered_at: Utc.timestamp_opt(500, 0).single().unwrap(),
     });
     // The remove Proposal travels inline in the opaque Commit body, so the
-    // Station never sees it as its own Event: the accepted Commit alone has to
-    // discharge the obligation.
+    // Station never sees it as its own Event — the closed Commit payload has no
+    // `proposal_refs` slot at all: the accepted Commit alone has to discharge
+    // the obligation.
     let effect = apply_commit_epoch(
         &mut state,
         &op_at(
             501,
             "ak.mls.commit",
-            json!({
-            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-                "commit_bytes_b64": b64(b"remove-commit"),
-                "proposal_refs": [proposal_ref],
-                "governance_binding": governance_binding(0),
-            }),
+            commit_payload(0, FIXTURE_BASE_GROUP_STATE_REF, b"remove-commit"),
         ),
     );
     assert!(matches!(
@@ -536,16 +607,10 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
     initialize_genesis(&mut state);
     let frontier = "ak:event:Aenxxuj1jGJoLHv5bnuHV1awQ_gKwK2elnGlpIES2Nu4";
     let targets = [
-        (
-            "ak:did_core:web:bob.example",
-            "ak:event:AQnbGFYH6ZHKM4sQnK_8kg0bmuqX4U5wGRs8Vbxp3u9h",
-        ),
-        (
-            "ak:did_core:web:charlie.example",
-            "ak:event:ARbbiTuRZqECoqMK9qlbv1t2-8v9s_6fOm2bY2rAJt6n",
-        ),
+        "ak:did_core:web:bob.example",
+        "ak:did_core:web:charlie.example",
     ];
-    for (target, proposal_ref) in targets {
+    for target in targets {
         state.pending_mls_removals.push(MlsRemoveObligation {
             realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
             circle_id: None,
@@ -562,12 +627,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
         &op_at(
             501,
             "ak.mls.commit",
-            json!({
-            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-                "commit_bytes_b64": b64(b"remove-all-commit"),
-                "proposal_refs": targets.map(|(_, proposal_ref)| proposal_ref),
-                "governance_binding": governance_binding(0),
-            }),
+            commit_payload(0, FIXTURE_BASE_GROUP_STATE_REF, b"remove-all-commit"),
         ),
     );
 
@@ -590,12 +650,7 @@ fn schema_exact_commit_without_a_payload_committer_is_accepted() {
     let commit = op_at(
         500,
         "ak.mls.commit",
-        json!({
-            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-            "proposal_refs": [],
-            "commit_bytes_b64": b64(b"schema-exact-commit"),
-            "governance_binding": governance_binding(0),
-        }),
+        commit_payload(0, FIXTURE_BASE_GROUP_STATE_REF, b"schema-exact-commit"),
     );
     let committer = commit.context.sender.to_string();
     assert!(matches!(
@@ -618,54 +673,55 @@ fn commit_epoch_requires_effective_genesis() {
         &op_at(
             500,
             "ak.mls.commit",
-            json!({
-            "proposal_refs": [],
-            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-                "commit_bytes_b64": b64(b"opaque-commit-1"),
-                "governance_binding": governance_binding(0),
-            }),
+            commit_payload(0, FIXTURE_BASE_GROUP_STATE_REF, b"opaque-commit-1"),
         ),
     );
-    assert!(
-        matches!(effect, ProjectionEffect::Rejected { reason } if reason == "mls_genesis_missing")
-    );
+    match effect {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "mls_genesis_missing"),
+        other => panic!("expected mls_genesis_missing, got {other:?}"),
+    }
     assert!(state.mls_commit_epochs.is_empty());
 }
 
 #[test]
 fn scope_derived_groups_advance_independently() {
     let mut state = ProjectionState::default();
+    const CIRCLE: &str = "ak:circle:AYeXMA_Q84Rr4i1LlwOPbkhybNKeukU9ehFA-XsuidnF";
+    seed_circle(&mut state, CIRCLE);
     let realm_scope = realm_scope();
-    let circle_scope = circle_scope("ak:circle:AYeXMA_Q84Rr4i1LlwOPbkhybNKeukU9ehFA-XsuidnF");
+    let circle_scope = circle_scope(CIRCLE);
     let realm_genesis = op_at(500, "ak.mls.genesis", genesis_payload(realm_scope.clone()));
     let circle_genesis = op_at(501, "ak.mls.genesis", genesis_payload(circle_scope.clone()));
     assert_ne!(scope_group(&realm_scope), scope_group(&circle_scope));
-    assert!(matches!(
-        apply_group_genesis(&mut state, &realm_genesis),
-        ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
-    ));
-    assert!(matches!(
-        apply_group_genesis(&mut state, &circle_genesis),
-        ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
-    ));
+    match apply_group_genesis(&mut state, &realm_genesis) {
+        ProjectionEffect::Mls(MlsEffect::GroupGenesis { group_id, .. }) => {
+            assert_eq!(group_id, scope_group(&realm_scope));
+        }
+        other => panic!("expected the Realm genesis to be accepted, got {other:?}"),
+    }
+    match apply_group_genesis(&mut state, &circle_genesis) {
+        ProjectionEffect::Mls(MlsEffect::GroupGenesis { group_id, .. }) => {
+            assert_eq!(group_id, scope_group(&circle_scope));
+        }
+        other => panic!("expected the Circle genesis to be accepted, got {other:?}"),
+    }
 
     let realm_commit = op_at(
         502,
         "ak.mls.commit",
-        json!({
-            "proposal_refs": [],
-            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-            "commit_bytes_b64": b64(b"realm-commit"),
-            "governance_binding": governance_binding_for_scope(
-                0,
-                realm_scope.clone()
-            ),
-        }),
+        commit_payload_for_scope(
+            0,
+            &realm_genesis.context.event_id.to_string(),
+            b"realm-commit",
+            realm_scope.clone(),
+        ),
     );
-    assert!(matches!(
-        apply_commit_epoch(&mut state, &realm_commit),
-        ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
-    ));
+    match apply_commit_epoch(&mut state, &realm_commit) {
+        ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch, .. }) => {
+            assert_eq!(new_epoch, 1);
+        }
+        other => panic!("expected the Realm group to advance, got {other:?}"),
+    }
 
     assert_eq!(
         state
@@ -696,17 +752,13 @@ fn commit_future_epoch_rejected() {
         &op_at(
             602,
             "ak.mls.commit",
-            json!({
-            "proposal_refs": [],
-            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-                "commit_bytes_b64": b64(b"leap"),
-                "governance_binding": governance_binding(5),
-            }),
+            commit_payload(5, FIXTURE_BASE_GROUP_STATE_REF, b"leap"),
         ),
     );
-    assert!(
-        matches!(leap, ProjectionEffect::Rejected { reason } if reason == REASON_COMMIT_EPOCH_SKEW)
-    );
+    match leap {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, REASON_COMMIT_EPOCH_SKEW),
+        other => panic!("expected {REASON_COMMIT_EPOCH_SKEW}, got {other:?}"),
+    }
     assert_eq!(
         state
             .mls_commit_epochs
@@ -717,36 +769,27 @@ fn commit_future_epoch_rejected() {
     );
 }
 
-fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
-    let mut payload = json!({
-            "proposal_refs": [],
-            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-        "commit_bytes_b64": b64(label),
-        "governance_binding": governance_binding(0),
-    });
-    if let (Some(object), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
-        for (key, value) in extra {
-            object.insert(key.clone(), value.clone());
-        }
-    }
-    op_at(secs, "ak.mls.commit", payload)
+fn commit_op(
+    secs: i64,
+    previous_epoch: u64,
+    base_group_state_ref: &str,
+    label: &[u8],
+) -> Operation {
+    op_at(
+        secs,
+        "ak.mls.commit",
+        commit_payload(previous_epoch, base_group_state_ref, label),
+    )
 }
 
 #[test]
 fn commit_rejects_retired_binding_fields() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    let mut binding = governance_binding(0);
-    binding["policy_root"] =
+    let mut payload = commit_payload(0, FIXTURE_BASE_GROUP_STATE_REF, b"forged-binding");
+    payload["governance_binding"]["policy_root"] =
         json!("sha256:9999999999999999999999999999999999999999999999999999999999999999");
-    let effect = apply_commit_epoch(
-        &mut state,
-        &commit_op(
-            500,
-            b"forged-binding",
-            json!({ "governance_binding": binding }),
-        ),
-    );
+    let effect = apply_commit_epoch(&mut state, &op_at(500, "ak.mls.commit", payload));
     match effect {
         ProjectionEffect::Rejected { reason } => {
             assert_eq!(reason, "mls_commit_payload_invalid");
@@ -768,7 +811,7 @@ fn stale_base_competitors_never_change_the_accepted_epoch() {
     let mut state = ProjectionState::default();
     let genesis_ref = initialize_genesis(&mut state);
     let epoch_key = mls_epoch_key(&realm_scope(), realm_group()).unwrap();
-    let first = commit_op(500, b"commit-a", json!({"base_epoch_ref": genesis_ref}));
+    let first = commit_op(500, 0, &genesis_ref, b"commit-a");
     assert!(matches!(
         apply_commit_epoch(&mut state, &first),
         ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
@@ -776,20 +819,17 @@ fn stale_base_competitors_never_change_the_accepted_epoch() {
     let accepted = state.mls_commit_epochs[&epoch_key].clone();
     let accepted_refs = state.accepted_mls_commit_refs.clone();
     for (time, bytes) in [(501, b"commit-b".as_slice()), (502, b"commit-c".as_slice())] {
-        let competing = commit_op(time, bytes, json!({"base_epoch_ref": genesis_ref}));
-        assert!(matches!(apply_commit_epoch(&mut state, &competing),
-            ProjectionEffect::Rejected { reason } if reason == REASON_COMMIT_EPOCH_SKEW));
+        let competing = commit_op(time, 0, &genesis_ref, bytes);
+        match apply_commit_epoch(&mut state, &competing) {
+            ProjectionEffect::Rejected { reason } => {
+                assert_eq!(reason, REASON_COMMIT_EPOCH_SKEW);
+            }
+            other => panic!("expected a stale-base competitor to lose, got {other:?}"),
+        }
         assert_eq!(state.mls_commit_epochs[&epoch_key], accepted);
         assert_eq!(state.accepted_mls_commit_refs, accepted_refs);
     }
-    let successor = commit_op(
-        503,
-        b"commit-next",
-        json!({
-            "base_epoch_ref": first.context.event_id,
-            "governance_binding": governance_binding(1),
-        }),
-    );
+    let successor = commit_op(503, 1, &first.context.event_id.to_string(), b"commit-next");
     assert!(matches!(
         apply_commit_epoch(&mut state, &successor),
         ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 2, .. })

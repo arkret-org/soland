@@ -70,13 +70,11 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
             }
         }),
     );
-    // The schedule revision the RSVP entry names as its basis has to be a real
-    // Event digest, so the fixture carries the canonical digest a real Event
-    // would.
-    create.context.canonical_event_digest = arkret_identifiers::Hash::new(
-        "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-    )
-    .unwrap();
+    // The schedule revision the RSVP entry names as its basis is a committed
+    // Event of this Realm's stream, so the fixture stamps the Strand create
+    // with the exact canonical digest `schedule_basis_ref` names.
+    create.context.canonical_event_digest =
+        arkret_identifiers::Hash::new(SCHEDULE_BASIS_DIGEST).unwrap();
     let strand = state.apply(&create, hlc);
     assert!(
         !matches!(strand, ProjectionEffect::Rejected { .. }),
@@ -94,9 +92,32 @@ fn pin_payload(note: Value) -> Value {
     })
 }
 
-const BASIS_A: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SCHEDULE_BASIS_DIGEST: &str =
+    "sha256:6666666666666666666666666666666666666666666666666666666666666666";
 const RSVP_EVENT_DIGEST: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+/// The committed Realm-stream position of the calendar revision the responder
+/// observed.
+///
+/// `RsvpEntry::schedule_basis_refs` is a list of closed `CommittedEventRef`s --
+/// `(event_id, commit_id, stream_ref, stream_position)` -- not bare digests, so
+/// the fixture is built through the SDK type and names the same Event identity
+/// `seed_pin_target` stamps onto the calendar Strand create.
+fn schedule_basis_ref() -> Value {
+    let digest = arkret_identifiers::Hash::new(SCHEDULE_BASIS_DIGEST).expect("basis digest parses");
+    let event_id = arkret_identifiers::EventId::from_event_digest(&digest)
+        .expect("basis digest is an EventId");
+    serde_json::to_value(arkret_wire::CommittedEventRef {
+        event_id,
+        commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(REALM_ID).expect("fixture realm id"),
+        },
+        stream_position: 0,
+    })
+    .expect("committed event ref serializes")
+}
 
 fn rsvp_payload(encrypted_response: Value) -> Value {
     rsvp_payload_for("accepted", Value::Null, encrypted_response)
@@ -110,7 +131,7 @@ fn rsvp_payload_for(status: &str, occurrence: Value, _unused: Value) -> Value {
         "occurrence": occurrence,
         "sender": "ak:did_core:web:alice.example",
         "entry": {
-            "schedule_basis_refs": [BASIS_A],
+            "schedule_basis_refs": [schedule_basis_ref()],
             "response": {"status": status}
         }
     })
@@ -241,10 +262,14 @@ fn rsvp_target_must_be_an_active_calendar_in_the_same_realm() {
         .expect("strand")
         .schema_refs
         .clear();
-    assert!(matches!(
-        state.apply(&operation, &hlc),
-        ProjectionEffect::Rejected { ref reason } if reason == "rsvp_event_not_calendar"
-    ));
+    let effect = state.apply(&operation, &hlc);
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::Rejected { ref reason } if reason == "rsvp_event_not_calendar"
+        ),
+        "a Strand without the calendar schema ref cannot take an RSVP: {effect:?}"
+    );
 
     state
         .strands
@@ -254,10 +279,14 @@ fn rsvp_target_must_be_an_active_calendar_in_the_same_realm() {
         .push("ak.schema.calendar_event.v1".to_owned());
     state.strands.get_mut(STRAND_ID).expect("strand").realm_id =
         "ak:realm:Ab-zkG-9qydcyuk0bIAwMd1Op6VQjpOjQ1PbK_fCMMmz".to_owned();
-    assert!(matches!(
-        state.apply(&operation, &hlc),
-        ProjectionEffect::Rejected { ref reason } if reason == "rsvp_event_cross_realm"
-    ));
+    let effect = state.apply(&operation, &hlc);
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::Rejected { ref reason } if reason == "rsvp_event_cross_realm"
+        ),
+        "an RSVP must not cross into another Realm's calendar: {effect:?}"
+    );
 }
 
 #[test]
@@ -267,7 +296,10 @@ fn rsvp_projects_the_complete_entry_as_the_settled_value() {
     seed_pin_target(&mut state, &hlc);
 
     let effect = state.apply(&rsvp_operation(rsvp_payload(Value::Null)), &hlc);
-    assert!(matches!(effect, ProjectionEffect::RsvpProjected { .. }));
+    assert!(
+        matches!(effect, ProjectionEffect::RsvpProjected { .. }),
+        "series rsvp should project: {effect:?}"
+    );
     assert_eq!(state.rsvps.len(), 1);
     let rsvp = state.rsvps.values().next().expect("rsvp should project");
     // The whole signed entry is the state model value: the response and the
@@ -294,10 +326,13 @@ fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
         )),
         &hlc,
     );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { ref reason } if reason == "rsvp_occurrence_not_canonical"
-    ));
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::Rejected { ref reason } if reason == "rsvp_occurrence_not_canonical"
+        ),
+        "a UTC instant is not a canonical instance key: {effect:?}"
+    );
 
     let effect = state.apply(
         &rsvp_operation(rsvp_payload_for(
@@ -307,7 +342,10 @@ fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
         )),
         &hlc,
     );
-    assert!(matches!(effect, ProjectionEffect::RsvpProjected { .. }));
+    assert!(
+        matches!(effect, ProjectionEffect::RsvpProjected { .. }),
+        "a canonical instance key should project: {effect:?}"
+    );
     let rsvp = state
         .rsvps
         .values()
@@ -326,7 +364,11 @@ fn replaying_the_same_rsvp_event_changes_nothing() {
     seed_pin_target(&mut state, &hlc);
 
     let operation = rsvp_operation(rsvp_payload(Value::Null));
-    state.apply(&operation, &hlc);
+    let first = state.apply(&operation, &hlc);
+    assert!(
+        matches!(first, ProjectionEffect::RsvpProjected { .. }),
+        "the first rsvp should project: {first:?}"
+    );
     let before = state
         .rsvps
         .values()

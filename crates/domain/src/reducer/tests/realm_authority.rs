@@ -165,13 +165,15 @@ fn reset_changes_only_generation() {
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
-                "destructive_confirmation": "ak.realm.authority.reset",
                 "sender": OWNER
             }),
         ),
         arkret_wire::EventKind::RealmAuthorityReset,
     );
-    assert!(matches!(reset, ProjectionEffect::RealmLifecycle { .. }));
+    assert!(
+        matches!(reset, ProjectionEffect::RealmLifecycle { .. }),
+        "authority reset must project a Realm lifecycle effect: {reset:?}"
+    );
     assert_eq!(controller(&state), before_controller);
     assert_eq!(controller_epoch(&state), before_epoch);
     assert_eq!(authority_generation(&state), 1);
@@ -189,15 +191,21 @@ fn successor_counter_overflow_fails_closed_without_mutation() {
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
-                "destructive_confirmation": "ak.realm.authority.reset",
                 "sender": OWNER
             }),
         ),
         arkret_wire::EventKind::RealmAuthorityReset,
     );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason } if reason == "reducer_projection_failed"
-    ));
+    // `authz/capabilities.md` section 3.2 and the `ak.realm.authority.reset`
+    // row of `event-kind-registry.json` both name `realm_authority_root_conflict`
+    // as the fail-closed verdict when the successor counter would cross the
+    // JSON safe-integer ceiling: no wrap, no saturation, no silent old value.
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::Rejected { ref reason } if reason == "realm_authority_root_conflict"
+        ),
+        "exhausted authority generation must fail closed: {effect:?}"
+    );
     assert_eq!(state.realm_authority_root(REALM), Some(&root));
 }

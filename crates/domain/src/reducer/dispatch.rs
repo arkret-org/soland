@@ -19,8 +19,8 @@ use arkret_wire::EventKind;
 use serde_json::Value;
 
 use super::{
-    CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect, ProjectionState,
-    RealmLinkState, SpaceContainerLifecycleTransition, mls,
+    AgentActionRequestStatus, CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect,
+    ProjectionState, RealmLinkState, SpaceContainerLifecycleTransition, mls,
 };
 use crate::hlc::ServerHlc;
 
@@ -271,6 +271,13 @@ fn apply_realm_governance_station_change_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmGovernanceStationChange)
+}
+fn apply_realm_authority_reset_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmAuthorityReset)
 }
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
@@ -557,6 +564,20 @@ fn apply_agent_key_authorize_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_agent_key_authorize(op)
+}
+
+/// Dispatch for `ak.agent.action_approve`. Unlike `ak.agent.action_request`
+/// and `ak.agent.action_reject` — both `actor_private_event` — the approval is
+/// a `durable_event` with `reducer_input: true` in the event-kind registry,
+/// because the nonce is allocated to the complete `approved_event_id` inside
+/// the target Realm's security confirmation. It therefore has to resolve here
+/// rather than on the private-event path.
+fn apply_agent_action_approve_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_agent_action_resolution(op, AgentActionRequestStatus::Approved)
 }
 
 /// AKP-0008 §4.11 — dispatch for `ak.agent.key.revoke`.
@@ -930,6 +951,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::RealmGovernanceStationChange,
         apply_realm_governance_station_change_dispatch,
     );
+    m.insert(
+        arkret_wire::EventKind::RealmAuthorityReset,
+        apply_realm_authority_reset_dispatch,
+    );
     // COT-06-004 — Realm default-Strand pointer.
     m.insert(
         arkret_wire::EventKind::RealmSetDefaultStrand,
@@ -1162,6 +1187,13 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::AgentKeyRevoke,
         apply_agent_key_revoke_dispatch,
+    );
+    // Draft approval state machine `proposed → approved → published`: only the
+    // approve leg is a durable reducer input, so it is registered here while
+    // request/reject stay on the private-event path.
+    m.insert(
+        arkret_wire::EventKind::AgentActionApprove,
+        apply_agent_action_approve_dispatch,
     );
     // P2 — moderation control-plane projection. Decision + lift share the
     // `ak.component.moderation_state.v1` or_set cell; acceptance fail-closed

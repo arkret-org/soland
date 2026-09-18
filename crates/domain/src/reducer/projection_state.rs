@@ -700,9 +700,9 @@ impl ProjectionState {
             arkret_wire::EventKind::AgentActionRequest => {
                 self.apply_agent_action_request(operation)
             }
-            arkret_wire::EventKind::AgentActionApprove => {
-                self.apply_agent_action_resolution(operation, AgentActionRequestStatus::Approved)
-            }
+            // `ak.agent.action_approve` is deliberately absent: the registry
+            // marks it `durable_event` / `reducer_input: true`, so it is
+            // dispatched through `APPLY_REGISTRY` and can never reach here.
             arkret_wire::EventKind::AgentActionReject => {
                 self.apply_agent_action_resolution(operation, AgentActionRequestStatus::Rejected)
             }

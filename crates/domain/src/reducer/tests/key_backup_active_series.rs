@@ -7,6 +7,29 @@ const ACTOR: &str = "ak:did_core:web:alice.example";
 const ACTIVE_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-000000000000";
 const PREVIOUS_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-000000000001";
 
+/// The committed Realm-stream position the active-series selection was taken
+/// against.
+///
+/// `KeyBackupActiveSeriesSourceRef` is a closed `(commit_ref,
+/// device_generation_ref)` pair and `CommittedEventRef` is a closed
+/// `(event_id, commit_id, stream_ref, stream_position)` tuple, so the fixture
+/// is built through the SDK types rather than hand-written JSON that only the
+/// test believes in.
+fn source_ref() -> Value {
+    let commit_ref = arkret_wire::CommittedEventRef {
+        event_id: arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [3; 32]),
+        commit_id: arkret_wire::RealmCommitId::from_digest([4; 32]),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(REALM).unwrap(),
+        },
+        stream_position: 0,
+    };
+    json!({
+        "commit_ref": commit_ref,
+        "device_generation_ref": 2
+    })
+}
+
 fn active_series_payload() -> Value {
     json!({
         "schema": "ak.schema.key_backup_active_series.v1",
@@ -15,11 +38,7 @@ fn active_series_payload() -> Value {
         "active_series_id": ACTIVE_SERIES,
         "series_pointer_version": 1,
         "previous_series_ids": [PREVIOUS_SERIES],
-        "frontier_ref": {
-            "frontier_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "seal_ref": "ak:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
-            "device_generation_ref": 2
-        },
+        "source_ref": source_ref(),
         "issued_at": "2026-04-27T00:00:00.000Z",
         "auth_data": {
             "verification_method": "did:web:alice.example#ak_device_01964137",
@@ -45,16 +64,19 @@ fn key_backup_active_series_projects_pointer_and_facet() {
     );
 
     let actor = account_actor_string(ACTOR);
-    assert!(matches!(
-        effect,
-        ProjectionEffect::KeyBackupActiveSeriesProjected {
-            ref actor_id,
-            ref backup_kind,
-            ref active_series_id,
-        } if actor_id == &actor
-            && backup_kind == "secret_storage"
-            && active_series_id == ACTIVE_SERIES
-    ));
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::KeyBackupActiveSeriesProjected {
+                ref actor_id,
+                ref backup_kind,
+                ref active_series_id,
+            } if actor_id == &actor
+                && backup_kind == "secret_storage"
+                && active_series_id == ACTIVE_SERIES
+        ),
+        "active-series pointer should project: {effect:?}"
+    );
     let projected = state
         .key_backup_active_series(&actor, "secret_storage")
         .expect("active series projection");
@@ -94,11 +116,14 @@ fn key_backup_active_series_rejects_active_series_in_previous_set() {
         &hlc,
     );
 
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { ref reason }
-            if reason == "key_backup_active_series_active_in_previous"
-    ));
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::Rejected { ref reason }
+                if reason == "key_backup_active_series_active_in_previous"
+        ),
+        "active series listed in previous_series_ids must fail closed: {effect:?}"
+    );
 }
 
 #[test]
@@ -112,11 +137,14 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
         &make_operation(arkret_wire::EventKind::KeyBackupActiveSeries, REALM, gap),
         &hlc,
     );
-    assert!(matches!(
-        initial_gap,
-        ProjectionEffect::Rejected { ref reason }
-            if reason == "key_backup_active_series_pointer_version_gap"
-    ));
+    assert!(
+        matches!(
+            initial_gap,
+            ProjectionEffect::Rejected { ref reason }
+                if reason == "key_backup_active_series_pointer_version_gap"
+        ),
+        "a first pointer version other than 1 is a gap: {initial_gap:?}"
+    );
 
     let accepted = state.apply(
         &make_operation(
@@ -126,10 +154,13 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
         ),
         &hlc,
     );
-    assert!(matches!(
-        accepted,
-        ProjectionEffect::KeyBackupActiveSeriesProjected { .. }
-    ));
+    assert!(
+        matches!(
+            accepted,
+            ProjectionEffect::KeyBackupActiveSeriesProjected { .. }
+        ),
+        "pointer version 1 should project: {accepted:?}"
+    );
 
     let duplicate = state.apply(
         &make_operation(
@@ -139,7 +170,10 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
         ),
         &hlc,
     );
-    assert!(matches!(duplicate, ProjectionEffect::Ignored));
+    assert!(
+        matches!(duplicate, ProjectionEffect::Ignored),
+        "an identical replay is a no-op: {duplicate:?}"
+    );
 
     let mut fork = active_series_payload();
     fork["issued_at"] = json!("2026-07-18T00:00:01.000Z");
@@ -147,9 +181,12 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
         &make_operation(arkret_wire::EventKind::KeyBackupActiveSeries, REALM, fork),
         &hlc,
     );
-    assert!(matches!(
-        fork,
-        ProjectionEffect::Rejected { ref reason }
-            if reason == "key_backup_active_series_pointer_version_fork"
-    ));
+    assert!(
+        matches!(
+            fork,
+            ProjectionEffect::Rejected { ref reason }
+                if reason == "key_backup_active_series_pointer_version_fork"
+        ),
+        "a second distinct record at the same pointer version forks: {fork:?}"
+    );
 }

@@ -4,6 +4,26 @@ const AGENT: &str = "ak:did_core:web:agent.example";
 const CONTROLLER: &str = "ak:did_core:web:controller.example";
 const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892037";
 
+/// Assert an Operation was rejected for exactly `expected`, printing the real
+/// effect when it was not. A bare `matches!` here hides the reason that makes
+/// the failure diagnosable.
+#[track_caller]
+fn expect_rejected(effect: ProjectionEffect, expected: &str) {
+    match effect {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, expected),
+        other => panic!("expected Rejected({expected}), got {other:?}"),
+    }
+}
+
+/// Assert a private Agent Event was accepted under `expected` kind.
+#[track_caller]
+fn expect_agent_event_accepted(effect: ProjectionEffect, expected: arkret_wire::EventKind) {
+    match effect {
+        ProjectionEffect::AgentPrivateEventAccepted { kind, .. } => assert_eq!(kind, expected),
+        other => panic!("expected {expected} to be accepted, got {other:?}"),
+    }
+}
+
 fn agent_operation(kind: arkret_wire::EventKind, payload: serde_json::Value) -> Operation {
     let mut operation = make_operation(kind, REALM, payload);
     operation.context.sender = account_actor(AGENT);
@@ -114,19 +134,13 @@ fn lifecycle_state_blocks_new_action_requests() {
 
     state.apply(&pause_agent(), &hlc);
     let paused_effect = state.apply(&action_request(REQUEST), &hlc);
-    assert!(matches!(
-        paused_effect,
-        ProjectionEffect::Rejected { reason } if reason == "agent_paused"
-    ));
+    expect_rejected(paused_effect, "agent_paused");
     assert!(!state.agent_action_requests.contains_key(REQUEST));
 
     state.apply(&resume_agent(), &hlc);
     state.apply(&deactivate_agent(), &hlc);
     let deactivated_effect = state.apply(&action_request(REQUEST), &hlc);
-    assert!(matches!(
-        deactivated_effect,
-        ProjectionEffect::Rejected { reason } if reason == "agent_deactivated"
-    ));
+    expect_rejected(deactivated_effect, "agent_deactivated");
     assert!(!state.agent_action_requests.contains_key(REQUEST));
 }
 
@@ -135,8 +149,14 @@ fn approved_action_request_is_not_cancelled_by_lifecycle() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
 
-    state.apply(&action_request(REQUEST), &hlc);
-    state.apply(&action_approve(REQUEST), &hlc);
+    expect_agent_event_accepted(
+        state.apply(&action_request(REQUEST), &hlc),
+        arkret_wire::EventKind::AgentActionRequest,
+    );
+    expect_agent_event_accepted(
+        state.apply(&action_approve(REQUEST), &hlc),
+        arkret_wire::EventKind::AgentActionApprove,
+    );
     assert_eq!(
         state.agent_action_requests[REQUEST].status,
         AgentActionRequestStatus::Approved
@@ -164,11 +184,7 @@ fn action_resolution_requires_the_complete_controller_account() {
     ));
     let effect = state.apply(&approval, &hlc);
 
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason }
-            if reason == "agent_action_resolution_controller_mismatch"
-    ));
+    expect_rejected(effect, "agent_action_resolution_controller_mismatch");
     assert_eq!(
         state.agent_action_requests[REQUEST].status,
         AgentActionRequestStatus::Pending

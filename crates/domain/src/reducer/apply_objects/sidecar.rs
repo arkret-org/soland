@@ -240,8 +240,12 @@ mod tests {
             )
             .unwrap(),
             arkret_wire::EventKind::SidecarCreate.as_str(),
+            // `sidecar_create_payload` is the empty closed object; `event_id`
+            // and `sender` are fixture envelope keys the raw-projection helper
+            // consumes, not payload fields. Nothing else may ride along — the
+            // scope activates RFC 9420 through its own `ak.mls.genesis`, so
+            // there is no `encryption_profile` to declare here.
             serde_json::json!({
-                "encryption_profile": "mls_rfc9420",
                 "event_id": format!("ak:event:{event_suffix}"),
                 "sender": "ak:did_core:web:example.com:users:alice"
             }),
@@ -252,10 +256,10 @@ mod tests {
     fn sidecar_create_retypes_event_and_never_creates_circle_membership() {
         let mut state = ProjectionState::default();
         let first = create("AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw");
-        assert!(matches!(
-            state.apply(&first, &ServerHlc::new("sidecar-test")),
-            ProjectionEffect::Ignored
-        ));
+        match state.apply(&first, &ServerHlc::new("sidecar-test")) {
+            ProjectionEffect::Ignored => {}
+            other => panic!("expected the create to be accepted, got {other:?}"),
+        }
         assert!(
             state
                 .sidecars
@@ -272,9 +276,11 @@ mod tests {
         );
 
         let second = create("AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b");
-        assert!(matches!(
-            state.apply(&second, &ServerHlc::new("sidecar-test")),
-            ProjectionEffect::Rejected { reason } if reason == "sidecar_singleton_conflict"
-        ));
+        match state.apply(&second, &ServerHlc::new("sidecar-test")) {
+            ProjectionEffect::Rejected { reason } => {
+                assert_eq!(reason, "sidecar_singleton_conflict");
+            }
+            other => panic!("expected sidecar_singleton_conflict, got {other:?}"),
+        }
     }
 }

@@ -38,6 +38,56 @@ fn apply_call(state: &mut ProjectionState, input: &CallInput, hlc: &ServerHlc) -
 
 const TEST_REALM: &str = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
 
+/// Assert the Event was rejected for exactly `expected`, printing the real
+/// effect otherwise. A bare `matches!` hides the reason that makes a reducer
+/// failure diagnosable.
+#[track_caller]
+fn expect_rejected(effect: ProjectionEffect, expected: &str) {
+    match effect {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, expected),
+        other => panic!("expected Rejected({expected}), got {other:?}"),
+    }
+}
+
+/// Assert the Event projected call state, returning the CallId it projected.
+#[track_caller]
+fn expect_call_state_projected(effect: ProjectionEffect) -> String {
+    match effect {
+        ProjectionEffect::CallStateProjected { call_id } => call_id,
+        other => panic!("expected CallStateProjected, got {other:?}"),
+    }
+}
+
+/// Open a call through its own `ak.call.create` and return the Event-derived
+/// CallId.
+///
+/// `call_state_payload.state_transition.from` is a required non-null lifecycle
+/// state, so there is no "null predecessor" edge: the head a first
+/// `ak.call.state` transitions off is the one the accepted create established.
+#[track_caller]
+fn create_call(
+    state: &mut ProjectionState,
+    hlc: &ServerHlc,
+    realm: &str,
+    initial_state: &str,
+) -> String {
+    let input = call_input(
+        arkret_wire::EventKind::CallCreate.as_str(),
+        realm,
+        serde_json::json!({ "initial_state": initial_state }),
+    );
+    let expected = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
+    let call_id = expect_call_state_projected(apply_call(state, &input, hlc));
+    assert_eq!(call_id, expected);
+    call_id
+}
+
+/// The tagged wire form of a participant identity. `common-ids.schema.json`
+/// `actor_id` is a closed discriminated union, never a bare principal id.
+fn call_actor(principal_id: &str) -> Value {
+    serde_json::to_value(account_actor(principal_id)).expect("actor id serializes")
+}
+
 fn call_facet_value<'a>(
     state: &'a ProjectionState,
     realm: &str,
@@ -55,23 +105,34 @@ fn call_create_derives_call_id_and_establishes_initial_state() {
     let input = call_input(
         arkret_wire::EventKind::CallCreate.as_str(),
         realm,
+        serde_json::json!({"initial_state": "ringing"}),
+    );
+    // `call` is Event-derived: the id is the create Event token retyped, which
+    // is exactly what this test is named for.
+    let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
+
+    assert_eq!(
+        expect_call_state_projected(apply_call(&mut state, &input, &hlc)),
+        call_id
+    );
+    assert_eq!(
+        call_facet_value(&state, realm, facet::CALL_STATE, &call_id).unwrap(),
+        &serde_json::json!("ringing")
+    );
+
+    // `call_create_payload` is closed on `initial_state` alone: focus is an
+    // `ak.call.state` axis and a create Event has no slot to carry it in.
+    let with_focus = call_input(
+        arkret_wire::EventKind::CallCreate.as_str(),
+        realm,
         serde_json::json!({
             "initial_state": "ringing",
             "focus": {"mode": "sfu", "session_focus": "fra-1"}
         }),
     );
-    // `call` is Event-derived: the id is the create Event token retyped, which
-    // is exactly what this test is named for.
-    let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
-    let call_id = call_id.as_str();
-
-    assert!(matches!(
-        apply_call(&mut state, &input, &hlc),
-        ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
-    ));
-    assert_eq!(
-        call_facet_value(&state, realm, facet::CALL_STATE, call_id).unwrap(),
-        &serde_json::json!("ringing")
+    expect_rejected(
+        apply_call(&mut state, &with_focus, &hlc),
+        arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID,
     );
 }
 
@@ -125,9 +186,9 @@ fn call_state_projects_independent_state_focus_and_roster_facets() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = TEST_REALM;
-    let call_id = "ak:call:AU9VDQu1sjP8qOSxIJQFAs4NIBcuMF-hCYYGzgzCvD28";
+    let call_id = create_call(&mut state, &hlc, realm, "scheduled");
     let participant = serde_json::json!({
-        "actor_id": "ak:did_core:web:bob.example",
+        "actor_id": call_actor("ak:did_core:web:bob.example"),
         "device_id": "ak:device:01904100-0000-7000-8000-d00000000001"
     });
     let input = call_input(
@@ -135,28 +196,28 @@ fn call_state_projects_independent_state_focus_and_roster_facets() {
         realm,
         serde_json::json!({
             "call_id": call_id,
-            "state_transition": {"from": null, "to": "ringing"},
+            "state_transition": {"from": "scheduled", "to": "ringing"},
             "focus": {"mode": "sfu", "session_focus": "fra-1"},
             "roster_delta": {"op": "join", "participant": participant}
         }),
     );
 
-    assert!(matches!(
-        apply_call(&mut state, &input, &hlc),
-        ProjectionEffect::CallStateProjected { .. }
-    ));
     assert_eq!(
-        call_facet_value(&state, realm, facet::CALL_STATE, call_id).unwrap(),
+        expect_call_state_projected(apply_call(&mut state, &input, &hlc)),
+        call_id
+    );
+    assert_eq!(
+        call_facet_value(&state, realm, facet::CALL_STATE, &call_id).unwrap(),
         &serde_json::json!("ringing")
     );
     assert_eq!(
-        call_facet_value(&state, realm, facet::CALL_FOCUS, call_id).unwrap()["session_focus"],
+        call_facet_value(&state, realm, facet::CALL_FOCUS, &call_id).unwrap()["session_focus"],
         "fra-1"
     );
     // A list-valued call facet tags each entry with the accepted Event id that
     // produced it, which is the coordinate a later delta names.
     assert_eq!(
-        call_facet_value(&state, realm, facet::CALL_ROSTER, call_id).unwrap()[0]["tag_id"],
+        call_facet_value(&state, realm, facet::CALL_ROSTER, &call_id).unwrap()[0]["tag_id"],
         Value::String(input.event_id.to_string())
     );
 }
@@ -166,20 +227,19 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = TEST_REALM;
-    let call_id = "ak:call:ASJvJjNHSrLihxsjbs4YgLqii-k87Bnh6wB_Ut9gIlOJ";
+    let call_id = create_call(&mut state, &hlc, realm, "ringing");
     let first = call_input(
         arkret_wire::EventKind::CallState.as_str(),
         realm,
         serde_json::json!({
             "call_id": call_id,
-            "state_transition": {"from": null, "to": "ringing"},
             "focus": {"mode": "sfu", "session_focus": "fra-1"}
         }),
     );
-    assert!(matches!(
-        apply_call(&mut state, &first, &hlc),
-        ProjectionEffect::CallStateProjected { .. }
-    ));
+    assert_eq!(
+        expect_call_state_projected(apply_call(&mut state, &first, &hlc)),
+        call_id
+    );
 
     for value in [
         serde_json::json!({"mode": "mcu"}),
@@ -190,12 +250,15 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
             realm,
             serde_json::json!({"call_id": call_id, "focus": value}),
         );
-        assert!(matches!(
+        expect_rejected(
             apply_call(&mut state, &update, &hlc),
-            ProjectionEffect::Rejected { reason }
-                if reason == arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED
-        ));
+            arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED,
+        );
     }
+    assert_eq!(
+        call_facet_value(&state, realm, facet::CALL_FOCUS, &call_id).unwrap()["session_focus"],
+        "fra-1"
+    );
 }
 
 #[test]
@@ -203,9 +266,11 @@ fn moderation_removal_is_tagged_with_the_accepted_event_id() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = TEST_REALM;
-    let call_id = "ak:call:AXN8h1ovgRUvcxrjsoB4ffwwej16MPpikhZbvZ6pt_Hj";
+    let call_id = create_call(&mut state, &hlc, realm, "ringing");
+    // `action: "ban"` is the whole-actor branch and therefore MUST NOT name a
+    // device; only `kick` does.
     let removal = serde_json::json!({
-        "actor_id": "ak:did_core:web:bob.example",
+        "actor_id": call_actor("ak:did_core:web:bob.example"),
         "action": "ban",
         "removed_by": "ak:did_core:web:mod.example",
         "removed_at": "2026-07-26T00:00:00.000Z"
@@ -215,16 +280,15 @@ fn moderation_removal_is_tagged_with_the_accepted_event_id() {
         realm,
         serde_json::json!({
             "call_id": call_id,
-            "state_transition": {"from": null, "to": "ringing"},
             "moderation_delta": {"op": "remove_participant", "removal": removal}
         }),
     );
-    assert!(matches!(
-        apply_call(&mut state, &add, &hlc),
-        ProjectionEffect::CallStateProjected { .. }
-    ));
     assert_eq!(
-        call_facet_value(&state, realm, facet::CALL_MODERATION, call_id).unwrap(),
+        expect_call_state_projected(apply_call(&mut state, &add, &hlc)),
+        call_id
+    );
+    assert_eq!(
+        call_facet_value(&state, realm, facet::CALL_MODERATION, &call_id).unwrap(),
         &serde_json::json!([{
             "tag_id": add.event_id.to_string(),
             "value": removal
@@ -242,11 +306,11 @@ fn moderation_removal_is_tagged_with_the_accepted_event_id() {
             "moderation_delta": {"op": "remove_participant", "removal": removal}
         }),
     );
-    assert!(matches!(
-        apply_call(&mut state, &replay, &hlc),
-        ProjectionEffect::CallStateProjected { .. }
-    ));
-    let entries = call_facet_value(&state, realm, facet::CALL_MODERATION, call_id).unwrap();
+    assert_eq!(
+        expect_call_state_projected(apply_call(&mut state, &replay, &hlc)),
+        call_id
+    );
+    let entries = call_facet_value(&state, realm, facet::CALL_MODERATION, &call_id).unwrap();
     assert_eq!(entries.as_array().unwrap().len(), 1);
     assert_eq!(
         entries[0]["tag_id"],
@@ -259,41 +323,61 @@ fn recording_start_requires_consent_before_both_facets_are_written() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = TEST_REALM;
-    let call_id = "ak:call:AVVUw63Ofuk60rwuYS80ycxwQ3N-ktzns8CmQDMZq1xJ";
+    let call_id = create_call(&mut state, &hlc, realm, "ringing");
     let recording_id = "capture-1";
-    // `call-state.md` §6 — `payload.result` MUST NOT carry
-    // `recording_start_event_id`: this Event's id depends on its own payload
-    // digest, so writing that id into the payload has no fixed point. The
-    // reducer stamps the accepted identity into the projected result facet
-    // afterwards, which is what `accepted_event_id` stands in for here.
-    let result = serde_json::json!({"retention": {"consent_confirmed": false}});
-    let mut input = call_input(
-        arkret_wire::EventKind::CallRecordingStart.as_str(),
-        realm,
+    let capture = FacetRef::composite(facet::CALL_RECORDING, &[call_id.as_str(), recording_id]);
+    let capture_result = FacetRef::composite(
+        facet::CALL_RECORDING_RESULT,
+        &[call_id.as_str(), recording_id],
+    );
+
+    // `call-state.md` §5 / `call_recording_start_payload` close the consent gate
+    // at the payload boundary: `result.retention.consent_confirmed` is pinned to
+    // `true`, so a start Event that never collected consent is not a well-formed
+    // payload at all and cannot reach the capture facets.
+    let start_payload = |consent_confirmed: bool| {
         serde_json::json!({
             "call_id": call_id,
             "recording_id": recording_id,
+            "recording_agent_id": "ak:did_core:web:capture.example",
             "capture_kind": "recording",
+            "mode": "audio_video",
             "visible_notice": true,
-            "result": result
-        }),
+            "result": {"retention": {"consent_confirmed": consent_confirmed}}
+        })
+    };
+    let unconsented = call_input(
+        arkret_wire::EventKind::CallRecordingStart.as_str(),
+        realm,
+        start_payload(false),
     );
-    let accepted_event_id = input.event_id.to_string();
-    input.operation.payload.as_object_mut().unwrap().insert(
-        "accepted_event_id".to_owned(),
-        serde_json::json!(accepted_event_id),
+    expect_rejected(
+        apply_call(&mut state, &unconsented, &hlc),
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
     );
-
-    assert!(matches!(
-        apply_call(&mut state, &input, &hlc),
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ReasonCode::RECORDING_CONSENT_REQUIRED
-    ));
-    let capture = FacetRef::composite(facet::CALL_RECORDING, &[call_id, recording_id]);
-    let capture_result =
-        FacetRef::composite(facet::CALL_RECORDING_RESULT, &[call_id, recording_id]);
     assert!(state.facet_value(realm, &capture).is_none());
     assert!(state.facet_value(realm, &capture_result).is_none());
+
+    // With consent confirmed the same start writes both capture facets. The
+    // wire payload MUST NOT carry `recording_start_event_id`: this Event's id
+    // depends on its own payload digest, so there is no fixed point for it.
+    let consented = call_input(
+        arkret_wire::EventKind::CallRecordingStart.as_str(),
+        realm,
+        start_payload(true),
+    );
+    assert_eq!(
+        expect_call_state_projected(apply_call(&mut state, &consented, &hlc)),
+        call_id
+    );
+    assert_eq!(
+        state.facet_value(realm, &capture).unwrap(),
+        &serde_json::json!("recording")
+    );
+    assert_eq!(
+        state.facet_value(realm, &capture_result).unwrap()["retention"]["consent_confirmed"],
+        Value::Bool(true)
+    );
 }
 
 #[test]
@@ -301,16 +385,7 @@ fn call_transition_rejects_wrong_predecessor_and_terminal_exit() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = TEST_REALM;
-    let call_id = "ak:call:ASEgVa_u0qFhi6iIFn9EfzHXcIPR5apmezSCOewcB9Vv";
-    let initial = call_input(
-        arkret_wire::EventKind::CallState.as_str(),
-        realm,
-        serde_json::json!({
-            "call_id": call_id,
-            "state_transition": {"from": null, "to": "ringing"}
-        }),
-    );
-    apply_call(&mut state, &initial, &hlc);
+    let call_id = create_call(&mut state, &hlc, realm, "ringing");
 
     let wrong_predecessor = call_input(
         arkret_wire::EventKind::CallState.as_str(),
@@ -320,11 +395,10 @@ fn call_transition_rejects_wrong_predecessor_and_terminal_exit() {
             "state_transition": {"from": "scheduled", "to": "connecting"}
         }),
     );
-    assert!(matches!(
+    expect_rejected(
         apply_call(&mut state, &wrong_predecessor, &hlc),
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
-    ));
+        arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID,
+    );
 
     let missed = call_input(
         arkret_wire::EventKind::CallState.as_str(),
@@ -334,7 +408,10 @@ fn call_transition_rejects_wrong_predecessor_and_terminal_exit() {
             "state_transition": {"from": "ringing", "to": "missed"}
         }),
     );
-    apply_call(&mut state, &missed, &hlc);
+    assert_eq!(
+        expect_call_state_projected(apply_call(&mut state, &missed, &hlc)),
+        call_id
+    );
     let revive = call_input(
         arkret_wire::EventKind::CallState.as_str(),
         realm,
@@ -343,11 +420,10 @@ fn call_transition_rejects_wrong_predecessor_and_terminal_exit() {
             "state_transition": {"from": "missed", "to": "active"}
         }),
     );
-    assert!(matches!(
+    expect_rejected(
         apply_call(&mut state, &revive, &hlc),
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ReasonCode::CALL_STATE_TERMINAL
-    ));
+        arkret_wire::ReasonCode::CALL_STATE_TERMINAL,
+    );
 }
 
 #[test]
@@ -355,43 +431,56 @@ fn unrecognized_payload_labels_do_not_bypass_the_lifecycle_edge() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = TEST_REALM;
-    let call_id = "ak:call:AUpx7jJEjRU7iQXaC0uYvYWiJBQSgQFPt1aXgWqBx5mg";
-    let initial = call_input(
-        arkret_wire::EventKind::CallState.as_str(),
-        realm,
-        serde_json::json!({
-            "call_id": call_id,
-            "state_transition": {"from": null, "to": "ringing"}
-        }),
-    );
-    apply_call(&mut state, &initial, &hlc);
+    let call_id = create_call(&mut state, &hlc, realm, "ringing");
 
     let transition = |to: &str| {
-        let mut input = call_input(
+        call_input(
             arkret_wire::EventKind::CallState.as_str(),
             realm,
             serde_json::json!({
                 "call_id": call_id,
                 "state_transition": {"from": "ringing", "to": to}
             }),
-        );
+        )
+    };
+    let labelled = |to: &str| {
+        let mut input = transition(to);
         input.operation.payload.as_object_mut().unwrap().insert(
             "conflict_basis".to_owned(),
             Value::String("unstructured-label".to_owned()),
         );
         input
     };
-    apply_call(&mut state, &transition("active"), &hlc);
+
+    // `call_state_payload` is a closed object and carries no concurrency label:
+    // `conflict_basis` is not a registered field, so an Event that smuggles one
+    // is not admissible in the first place.
+    expect_rejected(
+        apply_call(&mut state, &labelled("active"), &hlc),
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+    );
+    assert_eq!(
+        call_facet_value(&state, realm, facet::CALL_STATE, &call_id).unwrap(),
+        &Value::String("ringing".to_owned())
+    );
+
+    assert_eq!(
+        expect_call_state_projected(apply_call(&mut state, &transition("active"), &hlc)),
+        call_id
+    );
     // The stream is totally ordered, so the second Event is simply a later
     // transition off a head that has already moved: no label in the payload
-    // buys it a concurrent lane.
-    assert!(matches!(
+    // buys it a concurrent lane, with or without one.
+    expect_rejected(
         apply_call(&mut state, &transition("missed"), &hlc),
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
-    ));
+        arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID,
+    );
+    expect_rejected(
+        apply_call(&mut state, &labelled("missed"), &hlc),
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+    );
     assert_eq!(
-        call_facet_value(&state, realm, facet::CALL_STATE, call_id).unwrap(),
+        call_facet_value(&state, realm, facet::CALL_STATE, &call_id).unwrap(),
         &Value::String("active".to_owned())
     );
 }
@@ -401,12 +490,8 @@ fn terminal_summary_reads_the_split_state_facet() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = TEST_REALM;
-    let call_id = "ak:call:ARs50SawRVVzZtkqDNcij3Lr46cEjrFQAKyyhn2-9T_R";
-    for (from, to) in [
-        (Value::Null, "connecting"),
-        (Value::String("connecting".to_owned()), "active"),
-        (Value::String("active".to_owned()), "ended"),
-    ] {
+    let call_id = create_call(&mut state, &hlc, realm, "connecting");
+    for (from, to) in [("connecting", "active"), ("active", "ended")] {
         let input = call_input(
             arkret_wire::EventKind::CallState.as_str(),
             realm,
@@ -415,17 +500,26 @@ fn terminal_summary_reads_the_split_state_facet() {
                 "state_transition": {"from": from, "to": to}
             }),
         );
-        apply_call(&mut state, &input, &hlc);
+        assert_eq!(
+            expect_call_state_projected(apply_call(&mut state, &input, &hlc)),
+            call_id
+        );
     }
-    assert!(matches!(
-        state.apply(
-            &make_operation(
-                arkret_wire::EventKind::CallSummary,
-                realm,
-                serde_json::json!({"call_id": call_id, "final_state": "ended"})
-            ),
-            &hlc
+    match state.apply(
+        &make_operation(
+            arkret_wire::EventKind::CallSummary,
+            realm,
+            serde_json::json!({
+                "call_id": call_id,
+                "final_state": "ended",
+                "mode": "sfu"
+            }),
         ),
-        ProjectionEffect::CallSummaryProjected { .. }
-    ));
+        &hlc,
+    ) {
+        ProjectionEffect::CallSummaryProjected { call_id: projected } => {
+            assert_eq!(projected, call_id);
+        }
+        other => panic!("expected CallSummaryProjected, got {other:?}"),
+    }
 }

@@ -259,6 +259,14 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_facet() {
         &mut state,
         realm_id,
         serde_json::json!({
+            // The genesis author is the initial authority-root controller and
+            // therefore the projected Realm owner. `raw_projected_operation`
+            // lifts this top-level `sender` out of the fixture and stamps it as
+            // the Event actor, leaving the projected payload the closed
+            // `{object}` `realm_create_payload` declares; without it the fixture
+            // would fall back to its own default principal and the owner under
+            // assertion would be an identity this test never named.
+            "sender": "ak:did_core:web:reducer-test.example",
             "object": {
                 "schema": "ak.schema.realm_genesis.v1",
                 "purpose": "collaboration",
@@ -758,17 +766,21 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
     )
     .unwrap();
 
-    apply_projected_create(
+    let created = apply_projected_create(
         &mut state,
         realm_id.as_str(),
         serde_json::to_value(payload).unwrap(),
         &hlc,
     );
+    assert!(
+        matches!(created, ProjectionEffect::RealmLifecycle { ref action, .. } if action == "create"),
+        "direct-conversation genesis should create the Realm: {created:?}"
+    );
 
     let projected = state
         .realm_genesis_value(realm_id.as_str())
         .cloned()
-        .unwrap();
+        .expect("create writes the realm genesis facet");
     let projected = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::RealmGenesis,
     >(projected)

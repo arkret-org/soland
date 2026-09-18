@@ -801,13 +801,23 @@ impl ProjectionState {
             .unwrap_or_default()
     }
 
-    /// Create-locked digest suite of the Realm. There is no transition Event
-    /// for it, so genesis is the only source.
+    /// Create-locked digest suite of the Realm.
+    ///
+    /// `models/realm-and-space.md` line 123 marks `digest_algorithm` optional
+    /// on the Realm object, locked at create and defaulting to `sha256`, and
+    /// `realm-genesis.schema.json` is closed without the property, so a
+    /// conformant genesis declares nothing and the Realm runs the baseline
+    /// suite. `None` therefore means "this Realm has no genesis facet yet",
+    /// never "the genesis left the suite unknown".
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
-        self.realm_genesis_value(realm_id)
-            .and_then(|genesis| genesis.get("digest_algorithm"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
+        let genesis = self.realm_genesis_value(realm_id)?;
+        Some(
+            genesis
+                .get("digest_algorithm")
+                .and_then(Value::as_str)
+                .unwrap_or("sha256")
+                .to_owned(),
+        )
     }
 
     /// The canonical MLS group id an accepted `ak.mls.genesis` installed for the Realm-default
