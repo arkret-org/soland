@@ -606,7 +606,7 @@ impl AccountDataStore for PgAccountDataStore {
                     updated_at = EXCLUDED.updated_at \
                  RETURNING actor_id \
              ) \
-             SELECT COALESCE(SUM(deleted_count), 0) AS position FROM floors \
+             SELECT COALESCE(SUM(deleted_count), 0)::bigint AS position FROM floors \
              CROSS JOIN (SELECT COUNT(*) FROM retention) AS retention_count",
         )
         .bind::<Timestamptz, _>(cutoff)

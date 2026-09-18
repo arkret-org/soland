@@ -67,8 +67,20 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
             .await
             .unwrap();
     drop(conn);
-    let mut source =
-        device_history_fixture::DeviceHistoryFixture::new(station.station_id.parse().unwrap());
+    let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
+    // A device queue is keyed by (actor, device_id), and the contract leaves one
+    // durable message in that queue on purpose. The fixture's default identity is
+    // deterministic, so the run would read the previous run's queue as its own
+    // and see a non-empty queue where the snapshot guard must show none. The
+    // WebVH local id therefore carries this run's namespace, which reaches the
+    // SCID and so gives this run its own principal id.
+    let mut source = device_history_fixture::DeviceHistoryFixture::new_with(
+        station.station_id.parse().unwrap(),
+        device_history_fixture::DeviceHistoryFixtureOptions {
+            local_id: namespace.replace('-', ""),
+            ..Default::default()
+        },
+    );
     let second = source.event(arkret_wire::EventKind::DeviceAuthorize,
         serde_json::to_value(device_history_fixture::possession(&source.account, 2,
             arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice)).unwrap());
@@ -80,7 +92,6 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
     }
     let selectors = source.gate_selectors();
     let messages = PgDeviceMessageStore { pool };
-    let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
     assert_device_message_snapshot_guard_contract(
         &inventory,
         &messages,
@@ -628,7 +639,7 @@ async fn postgres_key_backup_identity_and_series_round_trip() {
     let mut records = Vec::new();
     for actor_id in [&actor_a, &actor_b] {
         let backup_id = format!("ak:backup:{}", uuid::Uuid::now_v7());
-        let payload = backup_page_envelope(&backup_id, actor_id, &series_id, 0);
+        let payload = backup_page_envelope(&backup_id, actor_id, &series_id, 0, None);
         PgKeyBackupStore { pool: pool.clone() }
             .put(backup_id.clone(), payload.clone())
             .await
@@ -666,20 +677,43 @@ async fn postgres_key_backup_identity_and_series_round_trip() {
     );
 }
 
+/// One stored backup page.
+///
+/// `supersedes` names the page this one replaces. A series genesis has none;
+/// every successor must name one, because the model refuses a successor that
+/// cannot be chained back to the page it replaces.
 fn backup_page_envelope(
     id: &str,
     actor: &arkret_wire::ActorId,
     series: &str,
     seq: u64,
+    supersedes: Option<&str>,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut page = serde_json::json!({
         "backup_id":id, "actor_id":actor, "backup_kind":"secret_storage", "backup_version":"kb_1",
         "created_at":"2026-09-09T00:00:00.000Z", "series_id":series, "series_seq":seq,
         "encryption":{"recipient_method":"secret_storage_key", "recipient_key_ref":"backup-key", "aead":{"name":"xchacha20_poly1305", "nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
-        "domain_separation":{"subdomain":"arkret.secret_storage.v1"},
+        "domain_separation":{"subdomain":"secret_storage"},
         "contents":[{"item_kind":"recovery_key_share", "secret_id":"share"}],
-        "ciphertext":"AAAA", "ciphertext_digest":"sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c"
-    })
+        "ciphertext":"AAAA", "ciphertext_digest":"sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+        // A stored page names the device that signed it and the committed
+        // authorization that device held, so the page is attributable after
+        // the fact rather than anonymous bytes.
+        "auth_data":{
+            "device_id":"ak:device:01904100-0000-7000-8000-000000000001",
+            "verification_method":"did:web:backup.example#device-signer",
+            "signature_algorithm":"Ed25519",
+            "signature":"AAAA",
+            "device_authorize_event_id":"ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"
+        }
+    });
+    if let Some(previous) = supersedes {
+        page["supersedes_id"] = serde_json::json!(previous);
+        page["supersedes_digest"] = serde_json::json!(
+            "sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c"
+        );
+    }
+    page
 }
 
 #[tokio::test]
@@ -698,10 +732,11 @@ async fn postgres_key_backup_pages_are_ordered_bounded_and_revisioned() {
     ));
     let series = format!("ak:backup_series:{}", uuid::Uuid::now_v7());
     let store = PgKeyBackupStore { pool: pool.clone() };
-    let mut ids = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
     for seq in 0..5 {
         let id = format!("ak:backup:{}", uuid::Uuid::now_v7());
-        let mut body = backup_page_envelope(&id, &actor, &series, seq);
+        let mut body =
+            backup_page_envelope(&id, &actor, &series, seq, ids.last().map(String::as_str));
         body["ciphertext"] = "A".repeat(100_000).into();
         store.put(id.clone(), body).await.unwrap();
         ids.push(id);
@@ -1364,6 +1399,90 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
 }
 
 #[tokio::test]
+async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
+    use soland_storage::{
+        EventBatchCommitRequest, EventCommitUnitOfWork, EventStore, PersistenceError,
+    };
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("event-id-collision:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let station_id =
+        arkret_wire::DidCoreId::new("ak:did_core:web:collision-station.example".to_owned())
+            .unwrap();
+    let actor_id =
+        arkret_wire::DidCoreId::new("ak:did_core:web:collision-producer.example".to_owned())
+            .unwrap();
+    let mut stream = FixtureCommitStream::new(&realm_id, &station_id);
+    stream.install(&pool).await;
+    let created_at =
+        chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+    let payload = serde_json::json!({"encrypted_content": {"ciphertext": "collision-fixture"}});
+    let build = |stream: &mut FixtureCommitStream, settlement: FixtureCommitSettlement| {
+        franking_event_request(
+            stream,
+            settlement,
+            &realm_id,
+            actor_id.clone(),
+            &station_id,
+            arkret_wire::EventKind::MessageCreate.as_str(),
+            payload.clone(),
+            created_at,
+        )
+    };
+    let batch = |event| EventBatchCommitRequest {
+        events: vec![event],
+        franking_replay_nonce: None,
+        applet_record: None,
+        applet_authoring_preview: None,
+        agent_membership_cascade: None,
+    };
+
+    let admitted = build(&mut stream, FixtureCommitSettlement::Accepted);
+    let event_id = admitted.event.event_id.clone();
+    let admitted_envelope = serde_json::to_value(&admitted.authority_commit.event).unwrap();
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(batch(admitted))
+        .await
+        .unwrap();
+
+    // An Event id commits to the digest payload, which excludes proofs, so a
+    // second element can carry the same id under a different envelope. The
+    // queued row is the one durable body for that id: the adapter must refuse
+    // the second envelope as a hash collision instead of replacing it.
+    let mut rebound = build(&mut stream, FixtureCommitSettlement::RolledBack);
+    assert_eq!(
+        rebound.event.event_id, event_id,
+        "a different proof set must not change the content-bound Event id"
+    );
+    rebound.authority_commit.event.proofs[0].verification_method =
+        arkret_wire::DidUrl::new(format!("{}#rebound-device", fixture_did(&actor_id))).unwrap();
+    rebound.event.envelope = serde_json::to_value(&rebound.authority_commit.event).unwrap();
+    assert_ne!(rebound.event.envelope, admitted_envelope);
+    let collision = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(batch(rebound))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(collision, PersistenceError::Conflict(ref reason) if reason == "event_hash_collision"),
+        "unexpected error for a reused Event id: {collision:?}"
+    );
+
+    let stored = PgEventStore { pool: pool.clone() }
+        .get(&event_id)
+        .await
+        .unwrap()
+        .expect("the admitted Event stays readable after the refusal");
+    assert_eq!(
+        stored.envelope, admitted_envelope,
+        "the refused envelope must not overwrite the admitted one"
+    );
+}
+
+#[tokio::test]
 async fn postgres_agent_store_accepts_spec_agent_binding() {
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
@@ -1484,7 +1603,13 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:controller-{run_id}.example"))
             .unwrap();
     let artifact_id = format!("agent_runtime_approval:{run_id}");
-    let approval_request_id = arkret_wire::OpaqueLocalId::new(artifact_id.clone()).unwrap();
+    // The approval correlation id is its own newtype: the frame schema forbids
+    // the `ak:` namespace on it, so it is not an opaque local id.
+    let approval_request_id =
+        arkret_models_collaboration::account_subscribe_projections::AgentRuntimeApprovalRequestId::new(
+            artifact_id.clone(),
+        )
+        .unwrap();
     let agent_id =
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:agent-{run_id}.example")).unwrap();
     let timestamp = |value: &str| {

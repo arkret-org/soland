@@ -21,14 +21,13 @@ use super::{
     AccountDataStore, AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
     AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
     AppletIdentityCommit, AppletRecordCommit, AppletStore, AuthorityCommitStore,
-    AuthorityCommitTransaction, CanonicalEventRecord, ConsentGrantDot,
-    ConsentGrantRecord, ConsentGrantStore, ConsentProjectionCommit, ContactProjectionCommit,
-    ContactRecord, ContactStore, DeviceInventoryStore, DeviceKeyStore,
+    AuthorityCommitTransaction, CanonicalEventRecord, ConsentGrantDot, ConsentGrantRecord,
+    ConsentGrantStore, ConsentProjectionCommit, ContactProjectionCommit, ContactRecord,
+    ContactStore, CurrentRealmAuthority, DeviceInventoryStore, DeviceKeyStore,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
     DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
     DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
-    CurrentRealmAuthority, DeviceRevocationGateSelector, EventBatchCommitRequest,
-    EventCommitRequest,
+    DeviceRevocationGateSelector, EventBatchCommitRequest, EventCommitRequest,
     EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
@@ -1349,8 +1348,8 @@ struct ContractCommitStream {
 
 impl ContractCommitStream {
     fn new(realm_id: &str) -> Self {
-        let realm_id =
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("contract stream Realm id");
+        let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned())
+            .expect("contract stream Realm id");
         Self {
             authority: contract_genesis_authority(&realm_id),
             next_position: 0,
@@ -1373,9 +1372,11 @@ impl ContractCommitStream {
     fn order(&self, record: &CanonicalEventRecord) -> AuthorityCommitTransaction {
         let event: arkret_wire::Event = serde_json::from_value(record.envelope.clone())
             .expect("contract canonical record carries its wire Event");
-        let stream_ref =
-            arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
-                .expect("contract Event scope names one commit stream");
+        let stream_ref = arkret_wire::CommitStreamRef::from_scope(
+            &event.scope_ref,
+            Some(event.realm_id.clone()),
+        )
+        .expect("contract Event scope names one commit stream");
         let commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
             format!("{}:{}", event.event_id, self.next_position).as_bytes(),
         ));
@@ -1624,7 +1625,8 @@ async fn contract_applet_event_group(
 ) -> Vec<EventCommitRequest> {
     let actor_id = format!("ak:did_core:web:{namespace}-{group}.example");
     let now = database_timestamp_now();
-    let mut stream = ContractCommitStream::new(&contract_realm_id(&format!("{realm_seed}:{group}")));
+    let mut stream =
+        ContractCommitStream::new(&contract_realm_id(&format!("{realm_seed}:{group}")));
     stream.install(authority).await;
     let realm_id = stream.authority.realm_id.to_string();
     let mut requests = Vec::new();
@@ -1792,8 +1794,14 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         .unit_of_work
         .commit_event_batch(contract_applet_batch(
             &stale_applet_id,
-            contract_applet_event_group(stores.authority, namespace, &stale_realm_id, "stale-winner", 4)
-                .await,
+            contract_applet_event_group(
+                stores.authority,
+                namespace,
+                &stale_realm_id,
+                "stale-winner",
+                4,
+            )
+            .await,
             Some(stale_base.clone()),
             committed_record.clone(),
         ))
@@ -1804,8 +1812,14 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let stale_record = contract_applet_record(&stale_applet_id, "1", vec![stale_ghost.clone()]);
     let stale_batch = contract_applet_batch(
         &stale_applet_id,
-        contract_applet_event_group(stores.authority, namespace, &stale_realm_id, "stale-loser", 4)
-            .await,
+        contract_applet_event_group(
+            stores.authority,
+            namespace,
+            &stale_realm_id,
+            "stale-loser",
+            4,
+        )
+        .await,
         Some(stale_base),
         stale_record,
     );
@@ -4944,12 +4958,14 @@ pub struct ConsentCommitContractStores<'a> {
     pub account_data: &'a dyn AccountDataStore,
 }
 
-/// Admission stages a consent command without publishing its security mirror.
-/// Adapter-specific Seal transaction tests cover committed and rejected effects.
+/// One authority commit publishes the consent grant's security mirror.
 ///
-/// Spec `consent-model.md` sections 3.1 and 4.1.2: the cell subject is the
-/// `consent_id`, and the downstream invalidation belongs inside the accepted
-/// revoke's transaction boundary.
+/// Spec `identity/consent-model.md` section 3.1: only a `RealmCommit` issued by
+/// the current governance Station makes the update effective. Ordering and
+/// projection therefore share one transaction boundary, so a committed grant is
+/// readable and a commit that fails leaves no mirror behind. Section 4.1.2 keeps
+/// the downstream invalidation inside the accepted revoke's own boundary, and
+/// the subject stays the `consent_id`.
 pub async fn assert_consent_projection_commit_contract(
     stores: ConsentCommitContractStores<'_>,
     namespace: &str,
@@ -5016,16 +5032,17 @@ pub async fn assert_consent_projection_commit_contract(
             },
         ))
         .await
-        .expect("consent grant is durably pending");
+        .expect("committed consent grant is durable");
     assert!(stores.events.get(&grant_event_id).await.unwrap().is_some());
-    assert!(
+    assert_eq!(
         stores
             .consent_grants
             .get(&holder_account_id, &consent_id)
             .await
             .unwrap()
-            .is_none(),
-        "pending consent has no visible authority mirror"
+            .as_ref(),
+        Some(&granted),
+        "the committed grant is the visible authority mirror"
     );
 }
 

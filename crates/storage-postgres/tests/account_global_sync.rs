@@ -93,11 +93,19 @@ async fn insert_source(
     token[0] = 1;
     token[1..].copy_from_slice(&digest);
     let id = arkret_wire::EventId::new(soland_storage::ids::format_event_id(&token)).unwrap();
-    let envelope = serde_json::json!({"event_id":id,"actor_id":serde_json::from_str::<serde_json::Value>(actor).unwrap(),"payload":payload});
+    // Every Event declares its producer-signed security scope, and the column
+    // is NOT NULL, so the fixture carries the scope that matches the Realm it
+    // claims instead of leaving the scope unstated.
+    let scope_ref = match realm {
+        Some(realm_id) => serde_json::json!({"kind": "realm", "realm_id": realm_id}),
+        None => serde_json::json!({"kind": "realm_genesis"}),
+    };
+    let envelope = serde_json::json!({"event_id":id,"actor_id":serde_json::from_str::<serde_json::Value>(actor).unwrap(),"scope_ref":scope_ref,"payload":payload});
     let mut conn = pool.get().await.unwrap();
-    diesel::sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,actor_seq,realm_id,kind,schema_id,canonical_bytes,envelope) VALUES($1,1,$2,$3,1,$4,$5,'test', $6,$7)")
+    diesel::sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope) VALUES($1,1,$2,$3,$4,$5,$6,$7,$8)")
         .bind::<Binary,_>(token.to_vec()).bind::<Binary,_>(digest.to_vec()).bind::<Text,_>(actor)
-        .bind::<Nullable<Text>,_>(realm).bind::<Text,_>(kind).bind::<Binary,_>(b"fixture".to_vec())
+        .bind::<Nullable<Text>,_>(realm).bind::<Jsonb,_>(scope_ref)
+        .bind::<Text,_>(kind).bind::<Binary,_>(b"fixture".to_vec())
         .bind::<Jsonb,_>(envelope).execute(&mut *conn).await.unwrap();
     id
 }
@@ -392,8 +400,11 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
         generation: 0,
         service_id: station.clone(),
         authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
-            arkret_identifiers::EventIdentityKey::new(realm.digest_suite_code(), realm.digest_bytes())
-                .event_id(),
+            arkret_identifiers::EventIdentityKey::new(
+                realm.digest_suite_code(),
+                realm.digest_bytes(),
+            )
+            .event_id(),
         ),
         last_handoff_ref: None,
     };
