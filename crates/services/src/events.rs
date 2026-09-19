@@ -765,6 +765,11 @@ pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
+    /// Holder-private account-data register mutation owned by this Event.
+    ///
+    /// This is committed in the same transaction as the canonical Event and
+    /// never enters the shared Realm reducer.
+    pub actor_private_account_data: Option<CommitAccountDataCas>,
     /// Holder-private consent grant mutation plus its eager cache
     /// invalidation, staged by admission and committed with the Event.
     pub consent_projection: Option<CommitConsentProjection>,
@@ -2314,6 +2319,7 @@ mod tests {
                 authority_commit,
                 device_pairing_authorization: None,
                 contact_projection: None,
+                actor_private_account_data: None,
                 consent_projection: None,
                 event: AcceptedEvent {
                     event_id: event_id.clone(),

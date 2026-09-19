@@ -201,3 +201,12 @@ fn recovery_policy_uses_the_protocol_acceptance_basis_name_at_creation() {
     assert!(INITIAL_UP.contains("acceptance_basis jsonb NOT NULL"));
     assert!(!INITIAL_UP.contains("acceptance_ref jsonb"));
 }
+
+#[test]
+fn actor_private_blocklist_shares_the_account_data_source_guard() {
+    assert!(INITIAL_UP.contains("OLD.kind IN ('ak.account_data.set','ak.account.blocklist')"));
+    assert!(
+        INITIAL_UP.contains("COALESCE(OLD.envelope->'payload'->>'key','ak.account.blocklist')")
+    );
+    assert!(INITIAL_UP.contains("e.kind IN ('ak.account_data.set','ak.account.blocklist')"));
+}

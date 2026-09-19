@@ -2108,16 +2108,18 @@ pub(super) async fn submit_event_value_with_context(
     let actor_key = parsed.actor.to_string();
     let actor_lock = actor_submit_lock(parsed.realm_id.as_str(), &actor_key);
     let _actor_submit_guard = actor_lock.lock().await;
-    let _account_data_submit_guard =
-        if parsed.kind == arkret_wire::EventKind::AccountDataSet.as_str() {
-            envelope
-                .get("payload")
-                .and_then(Value::as_object)
-                .and_then(|payload| payload.get("key")?.as_str())
-                .map(|key| account_data_submit_lock(&actor_key, key))
-        } else {
-            None
-        };
+    let _account_data_submit_guard = match parsed.kind.as_str() {
+        arkret_wire::event_kind_str::ACCOUNT_DATA_SET => envelope
+            .get("payload")
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("key")?.as_str())
+            .map(|key| account_data_submit_lock(&actor_key, key)),
+        arkret_wire::event_kind_str::ACCOUNT_BLOCKLIST => Some(account_data_submit_lock(
+            &actor_key,
+            arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST,
+        )),
+        _ => None,
+    };
     let _account_data_submit_guard = match _account_data_submit_guard {
         Some(lock) => Some(lock.lock_owned().await),
         None => None,
@@ -2315,7 +2317,10 @@ pub(super) async fn submit_event_value_with_context(
         has_projection = projection_operation.is_some(),
         "submit_event"
     );
-    let ProjectionPreflightOutcome { consent_admission } = apply_projection_preflight(
+    let ProjectionPreflightOutcome {
+        consent_admission,
+        actor_private_account_data,
+    } = apply_projection_preflight(
         state,
         ProjectionPreflightContext {
             session,
@@ -2510,6 +2515,7 @@ pub(super) async fn submit_event_value_with_context(
             membership_compensation_evidence: context.membership_compensation_evidence,
             internal_admission: context.internal_admission,
             consent_admission: consent_admission.as_ref(),
+            actor_private_account_data,
             ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
             commit_options: commit_options.as_ref(),
             received_at,
@@ -2708,25 +2714,101 @@ pub(super) async fn resolve_moderation_dismiss_queue_item(
 pub(super) async fn preflight_account_data_cas(
     state: &AppState,
     operation: &arkret_event_draft::ProjectedEventOperation,
-) -> Result<(), SubmitOneError> {
-    if operation.event_kind != arkret_wire::EventKind::AccountDataSet {
-        return Ok(());
-    }
-    let payload = operation
-        .typed_payload::<arkret_wire::event_spec::AccountDataSet>()
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("account_data payload violates its typed SDK contract: {error}"),
+) -> Result<Option<soland_services::events::CommitAccountDataCas>, SubmitOneError> {
+    let (key, expected_revision, revision, payload, tombstone, updated_at) = match operation
+        .event_kind
+    {
+        arkret_wire::EventKind::AccountDataSet => {
+            let typed = operation
+                .typed_payload::<arkret_wire::event_spec::AccountDataSet>()
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        format!("account_data payload violates its typed SDK contract: {error}"),
+                    )
+                })?;
+            let expected_revision = typed.expected_server_revision;
+            let revision = expected_revision.checked_add(1).ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "cas_conflict",
+                    "account data revision high-water mark is exhausted",
+                )
+            })?;
+            let value = if typed.tombstone {
+                Value::Null
+            } else {
+                operation
+                    .payload
+                    .get("body")
+                    .or_else(|| operation.payload.get("encrypted_payload"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        SubmitOneError::new(
+                            StatusCode::BAD_REQUEST,
+                            "schema_violation",
+                            "account_data payload has no value",
+                        )
+                    })?
+            };
+            (
+                typed.key.as_str().to_owned(),
+                expected_revision,
+                revision,
+                value,
+                typed.tombstone,
+                typed.updated_at.unwrap_or(operation.created_at),
             )
-        })?;
+        }
+        arkret_wire::EventKind::AccountBlocklist => {
+            let typed = operation
+                .typed_payload::<arkret_wire::event_spec::AccountBlocklist>()
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        format!(
+                            "account blocklist payload violates its typed SDK contract: {error}"
+                        ),
+                    )
+                })?;
+            let expected_revision = typed.version.checked_sub(1).ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "account blocklist version must be at least 1",
+                )
+            })?;
+            (
+                arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST.to_owned(),
+                expected_revision,
+                typed.version,
+                operation.payload.clone(),
+                typed.entries.is_empty(),
+                typed.updated_at.unwrap_or(operation.created_at),
+            )
+        }
+        _ => return Ok(None),
+    };
+    let Some(account_id) = operation.context.sender.as_account_id() else {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "policy_violation",
+            "actor-private account data requires an account actor",
+        ));
+    };
+    if account_id.station_id != state.service_core_id() {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "policy_violation",
+            "actor-private account data belongs to the actor's selected Account Station",
+        ));
+    }
     let owner = operation.context.sender.to_string();
-    let key = payload.key.as_str();
-    let expected_revision = payload.expected_revision;
     let current = state
         .account_data()
-        .entry(&owner, key)
+        .entry(&owner, &key)
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -2737,7 +2819,18 @@ pub(super) async fn preflight_account_data_cas(
         })?;
     let current_revision = current.as_ref().map_or(0, |record| record.revision);
     if current_revision == expected_revision {
-        return Ok(());
+        return Ok(Some(soland_services::events::CommitAccountDataCas {
+            record: soland_services::identity::AccountDataState {
+                actor_id: owner,
+                account_data_key: key,
+                revision,
+                payload,
+                tombstone,
+                updated_at,
+            },
+            expected_revision,
+            conflict_code: "cas_conflict".to_owned(),
+        }));
     }
 
     let mut details = json!({
@@ -3086,7 +3179,7 @@ mod account_data_cas_tests {
     use super::*;
 
     #[tokio::test]
-    async fn account_data_cas_preflight_keeps_same_principal_stations_separate() {
+    async fn account_data_cas_preflight_rejects_a_same_principal_foreign_station() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -3121,13 +3214,28 @@ mod account_data_cas_tests {
             arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                 .unwrap(),
             arkret_wire::EventKind::AccountDataSet.as_str(),
-            json!({"key": "ak.dnd_schedule", "expected_revision": 1, "tombstone": true}),
+            json!({"key": "ak.dnd_schedule", "expected_server_revision": 1, "tombstone": true}),
         );
         operation.context.sender = local;
-        preflight_account_data_cas(&state, &operation)
+        let staged = preflight_account_data_cas(&state, &operation)
             .await
+            .unwrap()
             .unwrap();
+        assert_eq!(staged.expected_revision, 1);
+        assert_eq!(staged.record.revision, 2);
         operation.context.sender = foreign;
+        assert_eq!(
+            preflight_account_data_cas(&state, &operation)
+                .await
+                .unwrap_err()
+                .code(),
+            "policy_violation"
+        );
+        operation.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            state.service_core_id(),
+        ));
+        operation.payload["expected_server_revision"] = json!(0);
         assert_eq!(
             preflight_account_data_cas(&state, &operation)
                 .await
@@ -3135,10 +3243,6 @@ mod account_data_cas_tests {
                 .code(),
             "cas_conflict"
         );
-        operation.payload["expected_revision"] = json!(0);
-        preflight_account_data_cas(&state, &operation)
-            .await
-            .unwrap();
         operation.payload["unknown_holder_field"] = json!("ak:did_core:web:other-holder.example");
         assert_eq!(
             preflight_account_data_cas(&state, &operation)
@@ -3146,6 +3250,63 @@ mod account_data_cas_tests {
                 .unwrap_err()
                 .code(),
             "schema_violation"
+        );
+    }
+
+    #[tokio::test]
+    async fn account_blocklist_stages_the_shared_high_water_as_a_whole_value() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap(),
+            state.service_core_id(),
+        ));
+        state
+            .account_data()
+            .compare_and_set(
+                soland_services::identity::AccountDataState {
+                    actor_id: actor.to_string(),
+                    account_data_key: arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST.into(),
+                    revision: 1,
+                    payload: json!({"version": 1, "entries": [{"legacy": true}]}),
+                    tombstone: false,
+                    updated_at: chrono::Utc::now(),
+                },
+                0,
+            )
+            .await
+            .unwrap();
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000004")
+                .unwrap(),
+            arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
+                .unwrap(),
+            arkret_wire::EventKind::AccountBlocklist.as_str(),
+            json!({"version": 2, "entries": []}),
+        );
+        operation.context.sender = actor;
+        let staged = preflight_account_data_cas(&state, &operation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            staged.record.account_data_key,
+            arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST
+        );
+        assert_eq!(staged.expected_revision, 1);
+        assert_eq!(staged.record.revision, 2);
+        assert_eq!(staged.record.payload, operation.payload);
+        assert!(staged.record.tombstone);
+
+        operation.payload["version"] = json!(3);
+        assert_eq!(
+            preflight_account_data_cas(&state, &operation)
+                .await
+                .unwrap_err()
+                .code(),
+            "cas_conflict"
         );
     }
 }

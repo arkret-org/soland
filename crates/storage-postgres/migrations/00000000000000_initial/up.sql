@@ -3685,7 +3685,8 @@ $$;
 -- is not a successful holder CAS and must never select the current value.
 CREATE FUNCTION invalidate_account_global_event() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.kind='ak.account_data.set' AND OLD.state='committed' AND NEW.state<>'committed' THEN
+    IF OLD.kind IN ('ak.account_data.set','ak.account.blocklist')
+       AND OLD.state='committed' AND NEW.state<>'committed' THEN
         -- Serialize the current-source comparison with all CAS publications.
         -- A withdrawal must not invalidate a newer source installed while waiting.
         PERFORM 1 FROM account_global_clock WHERE singleton FOR UPDATE;
@@ -3693,7 +3694,8 @@ BEGIN
             AND channel='account_data_events' AND valid_until IS NULL
             AND payload->'value'->>'event_id'=OLD.envelope->>'event_id') THEN
             PERFORM project_account_global_value(OLD.actor_id,'account_data_events',
-                'event:'||(OLD.envelope->'payload'->>'key'),jsonb_build_object('source','invalidated'),TRUE);
+                'event:'||COALESCE(OLD.envelope->'payload'->>'key','ak.account.blocklist'),
+                jsonb_build_object('source','invalidated'),TRUE);
         END IF;
     END IF;
     RETURN NEW;
@@ -3924,7 +3926,8 @@ BEGIN
 END; $$;
 CREATE TRIGGER welcome_discovery_claim AFTER UPDATE OF state ON peer_keypackage_claims FOR EACH ROW EXECUTE FUNCTION invalidate_mls_welcome_claim();
 
-CREATE INDEX canonical_account_data_source_id ON canonical_events ((envelope->>'event_id')) WHERE kind='ak.account_data.set';
+CREATE INDEX canonical_account_data_source_id ON canonical_events ((envelope->>'event_id'))
+    WHERE kind IN ('ak.account_data.set','ak.account.blocklist');
 
 -- A withdrawn holder source is unavailable, not an invented tombstone/revision.
 -- Invoked inside the value read statement so guard and content share its MVCC cut.
@@ -3932,7 +3935,8 @@ CREATE FUNCTION account_data_source_current(a TEXT,k TEXT) RETURNS BOOLEAN LANGU
 BEGIN
     IF EXISTS (SELECT 1 FROM account_global_versions v WHERE actor_key=a AND channel='account_data_events'
         AND item_key='event:'||k AND valid_until IS NULL AND (payload->>'source'='invalidated'
-        OR NOT EXISTS(SELECT 1 FROM committed_events e WHERE e.kind='ak.account_data.set'
+        OR NOT EXISTS(SELECT 1 FROM committed_events e
+            WHERE e.kind IN ('ak.account_data.set','ak.account.blocklist')
             AND e.envelope->>'event_id'=v.payload->'value'->>'event_id'))) THEN
         RAISE EXCEPTION 'account data current source is unavailable';
     END IF;

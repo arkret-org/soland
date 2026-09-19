@@ -482,6 +482,9 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::AccountDataSet {
             project_account_data_set(state, origin, source_device_id, operation).await;
         }
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::AccountBlocklist {
+            project_account_blocklist(state, origin, source_device_id, operation).await;
+        }
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::SelfModerationReport {
             materialize_moderation_report(state, operation).await;
         }
@@ -509,6 +512,13 @@ async fn project_accepted_operations_inner(
         let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
         let reducer_effect = if let Some(effect) = applied_effect {
             Some(effect.clone())
+        } else if matches!(
+            kinds::canonical_kind_for_operation(operation),
+            Some(arkret_wire::EventKind::AccountDataSet | arkret_wire::EventKind::AccountBlocklist)
+        ) {
+            // These actor-private effects were installed by the Event UOW and
+            // deliberately have no shared Realm reducer effect.
+            None
         } else if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
             let cell_writes = canonical_cell_writes
                 .map(ToOwned::to_owned)

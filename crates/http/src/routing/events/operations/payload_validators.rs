@@ -510,7 +510,7 @@ mod tests {
             arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                 .unwrap(),
             arkret_wire::EventKind::AccountDataSet.as_str(),
-            json!({"key": "ak.dnd_schedule", "expected_revision": 0, "tombstone": true}),
+            json!({"key": "ak.dnd_schedule", "expected_server_revision": 0, "tombstone": true}),
         );
         assert_eq!(super::validate_account_data_set_payload(&operation), Ok(()));
         operation.payload["unknown_holder_field"] = json!("ak:did_core:web:other-holder.example");

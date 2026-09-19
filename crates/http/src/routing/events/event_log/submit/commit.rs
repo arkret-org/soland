@@ -98,13 +98,24 @@ pub(super) async fn commit_accepted_event_stage(
         // unavailable".
         let conflict = error.conflict_code();
         if conflict == Some(ConflictCode::CasConflict)
-            && parsed.kind == arkret_wire::EventKind::AccountDataSet.as_str()
+            && matches!(
+                parsed.kind.as_str(),
+                arkret_wire::event_kind_str::ACCOUNT_DATA_SET
+                    | arkret_wire::event_kind_str::ACCOUNT_BLOCKLIST
+            )
         {
             let payload = &envelope_for_bootstrap["payload"];
-            if let (Some(key), Some(expected)) = (
-                payload["key"].as_str(),
-                payload["expected_revision"].as_u64(),
-            ) {
+            let key = payload["key"].as_str().or((parsed.kind
+                == arkret_wire::EventKind::AccountBlocklist.as_str())
+            .then_some(arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST));
+            let expected = if parsed.kind == arkret_wire::EventKind::AccountBlocklist.as_str() {
+                payload["version"]
+                    .as_u64()
+                    .and_then(|version| version.checked_sub(1))
+            } else {
+                payload["expected_server_revision"].as_u64()
+            };
+            if let (Some(key), Some(expected)) = (key, expected) {
                 let current = state
                     .account_data()
                     .entry(&parsed.actor.to_string(), key)

@@ -91,6 +91,20 @@ fn persistence_event_commit_request(
         event: command.event,
         device_pairing_authorization: command.device_pairing_authorization,
         contact_projection: command.contact_projection,
+        actor_private_account_data: command.actor_private_account_data.map(|cas| {
+            soland_storage::AccountDataCasCommit {
+                record: soland_storage::AccountDataRecord {
+                    actor: cas.record.actor_id,
+                    account_data_key: cas.record.account_data_key,
+                    revision: cas.record.revision,
+                    payload: cas.record.payload,
+                    tombstone: cas.record.tombstone,
+                    updated_at: cas.record.updated_at,
+                },
+                expected_revision: cas.expected_revision,
+                conflict_code: cas.conflict_code,
+            }
+        }),
         consent_projection: command.consent_projection.map(|commit| {
             soland_storage::ConsentProjectionCommit {
                 grant: commit.grant,

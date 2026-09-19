@@ -506,74 +506,69 @@ async fn commit_consent_projection(
     let Some(cas) = commit.holder_quarantine else {
         return Ok(());
     };
+    commit_account_data_cas(conn, cas, None).await
+}
+
+/// Replace one holder-private register under the revision read frozen by
+/// admission. When `source_event_id` is present, the account-data adapter also
+/// verifies that the committed source Event describes this exact value and
+/// publishes that source into the holder sync projection. Any conflict aborts
+/// the surrounding Event transaction.
+async fn commit_account_data_cas(
+    conn: &mut AsyncPgConnection,
+    cas: soland_storage::AccountDataCasCommit,
+    source_event_id: Option<&arkret_wire::EventId>,
+) -> PersistenceResult<()> {
     let record = cas.record;
-    let revision = i64::try_from(record.revision).map_err(|_| {
-        PersistenceError::Internal("account data revision exceeds PostgreSQL BIGINT".to_owned())
-    })?;
-    let expected_revision = i64::try_from(cas.expected_revision).map_err(|_| {
-        PersistenceError::Internal("account data revision exceeds PostgreSQL BIGINT".to_owned())
-    })?;
-    let affected = if cas.expected_revision == 0 {
-        sql_query(
-            "INSERT INTO account_datas \
-             (id, actor_id, account_data_key, payload, revision, tombstone, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (actor_id, account_data_key) DO NOTHING",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Text, _>(&record.actor)
-        .bind::<Text, _>(&record.account_data_key)
-        .bind::<Jsonb, _>(&record.payload)
-        .bind::<BigInt, _>(revision)
-        .bind::<Bool, _>(record.tombstone)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?
-    } else {
-        sql_query(
-            "UPDATE account_datas SET payload = $1, revision = $2, tombstone = $3, \
-                updated_at = $4 \
-             WHERE actor_id = $5 AND account_data_key = $6 AND revision = $7",
-        )
-        .bind::<Jsonb, _>(&record.payload)
-        .bind::<BigInt, _>(revision)
-        .bind::<Bool, _>(record.tombstone)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .bind::<Text, _>(&record.actor)
-        .bind::<Text, _>(&record.account_data_key)
-        .bind::<BigInt, _>(expected_revision)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?
-    };
-    if affected == 0 {
-        return Err(conflict(cas.conflict_code));
-    }
-    sql_query(
-        "WITH changed AS ( \
-             INSERT INTO account_data_changes \
-                (actor_id, account_data_key, payload, revision, tombstone, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             RETURNING position \
-         ) \
-         INSERT INTO account_data_change_retention \
-            (actor_id, latest_position, retained_through_position, updated_at) \
-         SELECT $1, position, 0, now() FROM changed \
-         ON CONFLICT (actor_id) DO UPDATE SET \
-            latest_position = GREATEST(account_data_change_retention.latest_position, EXCLUDED.latest_position), \
-            updated_at = EXCLUDED.updated_at",
+    match crate::accounts::compare_account_data_in_transaction(
+        conn,
+        &record,
+        cas.expected_revision,
+        source_event_id,
     )
-    .bind::<Text, _>(&record.actor)
-    .bind::<Text, _>(&record.account_data_key)
-    .bind::<Jsonb, _>(&record.payload)
-    .bind::<BigInt, _>(revision)
-    .bind::<Bool, _>(record.tombstone)
-    .bind::<Timestamptz, _>(record.updated_at)
-    .execute(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    Ok(())
+    .await?
+    {
+        soland_storage::AccountDataCasResult::Applied(_) => Ok(()),
+        soland_storage::AccountDataCasResult::Conflict(_) => {
+            let exact_replay = if let Some(event_id) = source_event_id {
+                sql_query(
+                    "SELECT EXISTS ( \
+                         SELECT 1 FROM account_datas d \
+                         JOIN account_global_versions v \
+                           ON v.actor_key=d.actor_id \
+                          AND v.channel='account_data_events' \
+                          AND v.item_key='event:'||d.account_data_key \
+                          AND v.valid_until IS NULL \
+                         WHERE d.actor_id=$1 AND d.account_data_key=$2 \
+                           AND d.revision=$3 AND d.payload=$4 AND d.tombstone=$5 \
+                           AND v.payload->>'source'='event' \
+                           AND v.payload->'value'->>'event_id'=$6 \
+                     ) AS accepted",
+                )
+                .bind::<Text, _>(&record.actor)
+                .bind::<Text, _>(&record.account_data_key)
+                .bind::<BigInt, _>(i64::try_from(record.revision).map_err(|_| {
+                    PersistenceError::Internal(
+                        "account data revision exceeds PostgreSQL BIGINT".to_owned(),
+                    )
+                })?)
+                .bind::<Jsonb, _>(&record.payload)
+                .bind::<Bool, _>(record.tombstone)
+                .bind::<Text, _>(event_id.as_str())
+                .get_result::<DevicePairingCasRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?
+                .accepted
+            } else {
+                false
+            };
+            if exact_replay {
+                Ok(())
+            } else {
+                Err(conflict(cas.conflict_code))
+            }
+        }
+    }
 }
 
 /// Freeze or complete an Agent membership cascade intent.
@@ -1141,6 +1136,9 @@ async fn commit_one_in_connection(
     }
     if let Some(commit) = request.contact_projection {
         commit_contact_projection(conn, &committed_ref, commit).await?;
+    }
+    if let Some(commit) = request.actor_private_account_data {
+        commit_account_data_cas(conn, commit, Some(&event.event_id)).await?;
     }
     if let Some(commit) = request.consent_projection {
         commit_consent_projection(conn, commit).await?;

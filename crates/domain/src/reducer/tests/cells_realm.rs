@@ -657,7 +657,7 @@ fn audit_erasure_receipt_is_retained_as_a_durable_fact_without_current_projectio
 }
 
 #[test]
-fn unowned_private_effect_fails_closed() {
+fn account_blocklist_cannot_enter_the_shared_reducer() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let effect = state.apply(

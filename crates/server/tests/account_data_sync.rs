@@ -207,7 +207,7 @@ async fn signed_account_data_submission(
     frontier.validate().expect("valid actor Realm frontier");
     let mut payload = json!({
         "key": account_data_key,
-        "expected_revision": expected_revision,
+        "expected_server_revision": expected_revision,
         "updated_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
     });
     if let Some(content) = content {
@@ -761,7 +761,7 @@ fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
             event["actor_id"],
             serde_json::to_value(local_account_actor(&state, actor_core.clone())).unwrap()
         );
-        assert_eq!(event["payload"]["expected_revision"], 1);
+        assert_eq!(event["payload"]["expected_server_revision"], 1);
         assert_eq!(event["payload"]["body"], second_value);
         assert!(
             event["proofs"]
@@ -895,7 +895,7 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
             "ak.account_data.set",
             json!({
                 "key": "ak.account.blocklist",
-                "expected_revision": 0,
+                "expected_server_revision": 0,
                 "body": plaintext_blocklist,
                 "updated_at": "2026-05-21T00:00:00.000Z",
             }),
@@ -932,7 +932,7 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
             "ak.account_data.set",
             json!({
                 "key": "ak.account.blocklist",
-                "expected_revision": 0,
+                "expected_server_revision": 0,
                 "body": encrypted_blocklist.clone(),
                 "updated_at": "2026-05-21T00:00:00.000Z",
             }),
@@ -963,7 +963,7 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
             "ak.account_data.set",
             json!({
                 "key": "ak.account.blocklist",
-                "expected_revision": 0,
+                "expected_server_revision": 0,
                 "body": encrypted_account_data_value(
                     &alice_actor_core,
                     "ak.account.blocklist",

@@ -16,6 +16,7 @@ pub(super) struct ProjectionPreflightContext<'a> {
 
 pub(super) struct ProjectionPreflightOutcome {
     pub(super) consent_admission: Option<crate::routing::identity::consent::ConsentAdmission>,
+    pub(super) actor_private_account_data: Option<soland_services::events::CommitAccountDataCas>,
 }
 
 /// Run all reducer- and policy-facing projection checks before constructing
@@ -39,6 +40,7 @@ pub(super) async fn apply_projection_preflight(
         has_internal_plaintext_service_binding,
     } = context;
     let mut consent_admission = None;
+    let mut actor_private_account_data = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::semantic_schema_violation(message));
@@ -58,7 +60,7 @@ pub(super) async fn apply_projection_preflight(
             validate_cas_write_guards(state, operation, projected_cell_writes, &frozen)?;
         }
         preflight_moderation_dismiss(state, operation).await?;
-        preflight_account_data_cas(state, operation).await?;
+        actor_private_account_data = preflight_account_data_cas(state, operation).await?;
         preflight_member_identity_state_guard(state, operation)?;
         // Holder-private consent is admission state, not a post-acceptance
         // cache: resolve the whole or_set mutation and its eager invalidation
@@ -545,5 +547,8 @@ pub(super) async fn apply_projection_preflight(
             ));
         }
     }
-    Ok(ProjectionPreflightOutcome { consent_admission })
+    Ok(ProjectionPreflightOutcome {
+        consent_admission,
+        actor_private_account_data,
+    })
 }

@@ -23,6 +23,7 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
         Option<&'a arkret_wire::MembershipCompensationSubmissionEvidence>,
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
     pub(super) consent_admission: Option<&'a crate::routing::identity::consent::ConsentAdmission>,
+    pub(super) actor_private_account_data: Option<soland_services::events::CommitAccountDataCas>,
     pub(super) ackless_self_principal_ingress: Option<&'a AcklessSelfPrincipalIngress>,
     pub(super) commit_options: Option<&'a SubmitCommitOptions<'options>>,
     pub(super) received_at: chrono::DateTime<chrono::Utc>,
@@ -57,6 +58,7 @@ pub(super) async fn prepare_accepted_event_command(
         membership_compensation_evidence,
         internal_admission,
         consent_admission,
+        actor_private_account_data,
         ackless_self_principal_ingress,
         commit_options,
         received_at,
@@ -292,6 +294,7 @@ pub(super) async fn prepare_accepted_event_command(
             .and_then(|options| options.device_pairing)
             .and_then(|admission| admission.commit_authorization.clone()),
         contact_projection,
+        actor_private_account_data,
         consent_projection: consent_admission
             .map(crate::routing::identity::consent::ConsentAdmission::commit),
         event: soland_services::events::AcceptedEvent {

@@ -90,6 +90,9 @@ pub struct EventCommitRequest {
     /// boundary as the canonical Event and its reducer projection.
     pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
     pub contact_projection: Option<ContactProjectionCommit>,
+    /// Holder-private account-data effect installed atomically with its
+    /// accepted canonical Event. It is not a shared reducer projection.
+    pub actor_private_account_data: Option<AccountDataCasCommit>,
     /// Holder-private consent mutation plus its eager cache
     /// invalidation, committed with the Event that authorizes them.
     pub consent_projection: Option<ConsentProjectionCommit>,

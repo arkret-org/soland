@@ -365,12 +365,12 @@ async fn admit_caller_signed_account_data_set(
     }
     let expected_revision = event
         .payload
-        .get("expected_revision")
+        .get("expected_server_revision")
         .and_then(Value::as_u64)
         .ok_or_else(|| {
             crate::app_error!(
                 SchemaViolation,
-                "set_event payload.expected_revision is required",
+                "set_event payload.expected_server_revision is required",
             )
         })?;
 
@@ -731,7 +731,7 @@ mod tests {
             actor.clone(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000000").unwrap(),
-            json!({"key": "ak.dnd_schedule", "expected_revision": 0, "tombstone": true}),
+            json!({"key": "ak.dnd_schedule", "expected_server_revision": 0, "tombstone": true}),
             chrono::Utc::now(),
         )
         .unwrap();
