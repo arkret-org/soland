@@ -144,8 +144,10 @@ async fn prepare_agent_draft_pending_intent(
             proposed_action: payload.proposed_action,
             target: serde_json::to_value(payload.target).expect("typed target must serialize"),
             content_digest: payload.content_digest,
-            content_handoff: serde_json::to_value(payload.content_handoff)
-                .expect("typed handoff must serialize"),
+            content_handoff: Some(
+                serde_json::to_value(payload.content_handoff)
+                    .expect("typed handoff must serialize"),
+            ),
             canonical_event_digest: parsed.canonical_digest.clone(),
             accepted_event_id: parsed.event_id.clone(),
             expires_at: payload.expires_at,

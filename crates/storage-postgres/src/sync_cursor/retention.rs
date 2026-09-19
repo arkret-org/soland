@@ -204,14 +204,14 @@ mod tests {
         let mut conn = pg_conn(&pool).await.unwrap();
         conn.batch_execute("UPDATE account_summary_clock SET revision=1; UPDATE account_global_clock SET revision=1;
             INSERT INTO account_summary_versions(actor_key,realm_id,revision,activity_position,membership,title,invalidated) VALUES('actor','realm',1,1,'join','old',false);
-            INSERT INTO account_global_versions(actor_key,channel,item_key,revision,payload) VALUES('actor','station_cas','key',1,'{}');
+            INSERT INTO account_global_versions(actor_key,channel,item_key,channel_position,revision,payload) VALUES('actor','station_cas','key',1,1,'{}');
             INSERT INTO current_result_versions(realm_id,selector_key,revision,target_kind,target_key,payload) VALUES('realm','selector',1,'realm','','{}');").await.unwrap();
         assert_eq!(store.account_sync_watermarks().await.unwrap(), (1, 1));
         conn.batch_execute("UPDATE account_summary_clock SET revision=2; UPDATE account_global_clock SET revision=2;
             UPDATE account_summary_versions SET valid_until=2;
             INSERT INTO account_summary_versions(actor_key,realm_id,revision,activity_position,membership,title,invalidated) VALUES('actor','realm',2,2,'join','new',false);
             UPDATE account_global_versions SET valid_until=2;
-            INSERT INTO account_global_versions(actor_key,channel,item_key,revision,payload) VALUES('actor','station_cas','key',2,'{}');
+            INSERT INTO account_global_versions(actor_key,channel,item_key,channel_position,revision,payload) VALUES('actor','station_cas','key',2,2,'{}');
             UPDATE current_result_versions SET valid_until=2;
             INSERT INTO current_result_versions(realm_id,selector_key,revision,target_kind,target_key,payload) VALUES('realm','selector',2,'realm','','{}');").await.unwrap();
         let now = Utc::now().timestamp_millis();

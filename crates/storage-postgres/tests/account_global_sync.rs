@@ -1,8 +1,13 @@
 mod support;
 use deadpool::managed::Pool;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
-use soland_storage::{AccountDataCasResult, AccountDataRecord, AccountDataStore, SyncCursorStore};
-use soland_storage_postgres::{Db, PgAccountDataStore, PgPool, PgSyncCursorStore};
+use soland_storage::{
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, AgentDraftPendingIntentStore,
+    SyncCursorStore,
+};
+use soland_storage_postgres::{
+    Db, PgAccountDataStore, PgAgentDraftPendingIntentStore, PgPool, PgSyncCursorStore,
+};
 
 async fn pool() -> PgPool {
     let url = support::contract_database_url();
@@ -25,6 +30,135 @@ async fn put(store: &PgAccountDataStore, actor: &str, key: &str, revision: u64, 
         store.compare_and_set(&row, revision - 1).await.unwrap(),
         AccountDataCasResult::Applied(_)
     ));
+}
+
+#[tokio::test]
+async fn agent_draft_pending_intent_projects_live_and_terminal_redacted_versions() {
+    use diesel::sql_types::{Jsonb, Text, Timestamptz};
+    use diesel_async::RunQueryDsl;
+
+    let pool = pool().await;
+    let mut conn = pool.get().await.unwrap();
+    let controller = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(format!(
+            "ak:did_core:web:controller-{}.example",
+            uuid::Uuid::now_v7()
+        ))
+        .unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+    );
+    let controller_key = controller.to_string();
+    let controller_actor_key = arkret_wire::ActorId::account(controller.clone())
+        .canonical_key()
+        .unwrap();
+    let agent = arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+    let digest = |byte: char| format!("sha256:{}", byte.to_string().repeat(64));
+    let event_id =
+        arkret_wire::EventId::from_event_digest(&arkret_wire::Hash::new(digest('4')).unwrap())
+            .unwrap();
+    let created_at = "2026-09-20T00:00:00Z"
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
+    let expires_at = created_at + chrono::TimeDelta::minutes(5);
+    let handoff = serde_json::json!({
+        "scheme":"ak.hpke_x25519_aead_chacha20poly1305.v1",
+        "recipients":[{
+            "recipient_device_id":"ak:device:01964137-0000-7000-8000-000000000001",
+            "recipient_hpke_key_digest":digest('2'),
+            "enc":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ciphertext":"AAAAAAAAAAAAAAAAAAAAAA",
+            "ciphertext_digest":digest('3')
+        }]
+    });
+    diesel::sql_query(
+        "INSERT INTO agent_draft_pending_intents \
+         (controller_account_id,controller_account_key,agent_id,draft_id,proposed_action,target, \
+          content_digest,content_handoff,canonical_event_digest,accepted_event_id,expires_at,created_at) \
+         VALUES($1,$2,$3,'draft-1','compose',$4,$5,$6,$7,$8,$9,$10)",
+    )
+    .bind::<Jsonb, _>(serde_json::to_value(&controller).unwrap())
+    .bind::<Text, _>(&controller_key)
+    .bind::<Text, _>(agent.as_str())
+    .bind::<Jsonb, _>(serde_json::json!({
+        "kind":"account_data",
+        "account_data_key":"opaque"
+    }))
+    .bind::<Text, _>(digest('1'))
+    .bind::<Jsonb, _>(handoff)
+    .bind::<Text, _>(digest('4'))
+    .bind::<Text, _>(event_id.as_str())
+    .bind::<Timestamptz, _>(expires_at)
+    .bind::<Timestamptz, _>(created_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+
+    let sync = PgSyncCursorStore { pool: pool.clone() };
+    let live_cut = sync.account_global_watermark().await.unwrap();
+    let live = sync
+        .account_global_page(
+            &controller_actor_key,
+            "agent_draft_pending_intents",
+            live_cut,
+            "",
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].channel_position, 1);
+    assert!(!live[0].deleted);
+    assert_eq!(live[0].payload["state"], "available");
+    assert!(live[0].payload.get("content_handoff").is_some());
+
+    let store = PgAgentDraftPendingIntentStore { pool: pool.clone() };
+    let expired = store
+        .get_by_source_event(&controller, &event_id, expires_at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        expired.state,
+        soland_storage::AgentDraftPendingIntentState::Expired
+    );
+    assert!(expired.content_handoff.is_none());
+    assert_eq!(expired.expired_at, Some(expires_at));
+
+    let terminal_cut = sync.account_global_watermark().await.unwrap();
+    let terminal = sync
+        .account_global_page(
+            &controller_actor_key,
+            "agent_draft_pending_intents",
+            terminal_cut,
+            "",
+            Some(live[0].revision),
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0].channel_position, 2);
+    assert!(!terminal[0].deleted);
+    assert_eq!(terminal[0].payload["state"], "expired");
+    assert!(terminal[0].payload.get("content_handoff").is_none());
+    assert_eq!(
+        terminal[0].payload["expired_at"],
+        serde_json::json!(expires_at)
+    );
+
+    let deletion = diesel::sql_query(
+        "DELETE FROM agent_draft_pending_intents \
+         WHERE controller_account_key=$1 AND agent_id=$2 AND draft_id='draft-1'",
+    )
+    .bind::<Text, _>(&controller_key)
+    .bind::<Text, _>(agent.as_str())
+    .execute(&mut *conn)
+    .await;
+    assert!(
+        deletion.is_err(),
+        "create-once identity must survive terminal retention"
+    );
 }
 #[tokio::test]
 async fn account_global_snapshot_is_frozen_and_changes_are_page_bounded() {

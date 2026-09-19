@@ -33,6 +33,9 @@ pub struct AccountSummaryVersion {
 #[derive(Clone, Debug)]
 pub struct AccountGlobalVersion {
     pub item_key: String,
+    /// Monotonic position within this exact actor/channel projection. This is
+    /// distinct from `revision`, which is the private all-channel MVCC cursor.
+    pub channel_position: i64,
     pub revision: i64,
     pub deleted: bool,
     pub payload: Value,

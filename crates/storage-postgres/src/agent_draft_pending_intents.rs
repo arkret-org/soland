@@ -67,7 +67,7 @@ impl TryFrom<PendingIntentRow> for AgentDraftPendingIntentRecord {
             .map_err(|error| PersistenceError::Internal(error.to_string()))?
             .map(AgentDraftPendingIntentConsumption::try_from)
             .transpose()?;
-        Ok(Self {
+        let record = Self {
             controller_account_id: serde_json::from_value(row.controller_account_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             agent_id: arkret_wire::DidCoreId::new(row.agent_id)
@@ -77,12 +77,7 @@ impl TryFrom<PendingIntentRow> for AgentDraftPendingIntentRecord {
             target: row.target,
             content_digest: arkret_wire::Hash::new(row.content_digest)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            content_handoff: row.content_handoff.ok_or_else(|| {
-                PersistenceError::Internal(
-                    "agent draft handoff was cleared before a retention policy allowed it"
-                        .to_owned(),
-                )
-            })?,
+            content_handoff: row.content_handoff,
             canonical_event_digest: arkret_wire::Hash::new(row.canonical_event_digest)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             accepted_event_id: arkret_wire::EventId::new(row.accepted_event_id)
@@ -92,7 +87,30 @@ impl TryFrom<PendingIntentRow> for AgentDraftPendingIntentRecord {
             state,
             consumption,
             expired_at: row.expired_at,
-        })
+        };
+        let valid_shape = match record.state {
+            AgentDraftPendingIntentState::Available => {
+                record.content_handoff.is_some()
+                    && record.consumption.is_none()
+                    && record.expired_at.is_none()
+            }
+            AgentDraftPendingIntentState::Consumed => {
+                record.content_handoff.is_none()
+                    && record.consumption.is_some()
+                    && record.expired_at.is_none()
+            }
+            AgentDraftPendingIntentState::Expired => {
+                record.content_handoff.is_none()
+                    && record.consumption.is_none()
+                    && record.expired_at.is_some()
+            }
+        };
+        if !valid_shape {
+            return Err(PersistenceError::Internal(
+                "invalid live or terminal-redacted agent draft pending intent".to_owned(),
+            ));
+        }
+        Ok(record)
     }
 }
 
@@ -131,7 +149,8 @@ async fn expire_available(
     protocol_time: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
     sql_query(
-        "UPDATE agent_draft_pending_intents SET state='expired', expired_at=$2 \
+        "UPDATE agent_draft_pending_intents \
+         SET state='expired', expired_at=expires_at, content_handoff=NULL \
          WHERE controller_account_key=$1 AND state='available' AND expires_at <= $2",
     )
     .bind::<Text, _>(controller_key)
@@ -148,6 +167,7 @@ pub(crate) async fn commit_agent_draft_pending_intent_in_connection(
 ) -> PersistenceResult<()> {
     let record = &commit.record;
     if record.state != AgentDraftPendingIntentState::Available
+        || record.content_handoff.is_none()
         || record.consumption.is_some()
         || record.expired_at.is_some()
         || record.expires_at <= record.created_at
@@ -174,7 +194,12 @@ pub(crate) async fn commit_agent_draft_pending_intent_in_connection(
     .bind::<Text, _>(&record.proposed_action)
     .bind::<Jsonb, _>(&record.target)
     .bind::<Text, _>(record.content_digest.as_str())
-    .bind::<Jsonb, _>(&record.content_handoff)
+    .bind::<Jsonb, _>(
+        record
+            .content_handoff
+            .as_ref()
+            .expect("validated live handoff"),
+    )
     .bind::<Text, _>(record.canonical_event_digest.as_str())
     .bind::<Text, _>(record.accepted_event_id.as_str())
     .bind::<Timestamptz, _>(record.expires_at)
@@ -263,6 +288,7 @@ impl AgentDraftPendingIntentStore for PgAgentDraftPendingIntentStore {
 mod tests {
     use diesel::sql_types::BigInt;
     use diesel_async::RunQueryDsl;
+    use soland_storage::SyncCursorStore;
 
     use super::*;
 
@@ -290,7 +316,7 @@ mod tests {
                 proposed_action: "compose".to_owned(),
                 target: serde_json::json!({"kind":"account_data","account_data_key":"opaque"}),
                 content_digest: hash('1'),
-                content_handoff: serde_json::json!({
+                content_handoff: Some(serde_json::json!({
                     "scheme":"ak.hpke_x25519_aead_chacha20poly1305.v1",
                     "recipients":[{
                         "recipient_device_id":"ak:device:01964137-0000-7000-8000-000000000001",
@@ -299,7 +325,7 @@ mod tests {
                         "ciphertext":"AAAAAAAAAAAAAAAAAAAAAA",
                         "ciphertext_digest":hash('3')
                     }]
-                }),
+                })),
                 canonical_event_digest: hash('4'),
                 accepted_event_id: event_id('4'),
                 expires_at: now + chrono::TimeDelta::minutes(5),
@@ -334,6 +360,33 @@ mod tests {
         commit_agent_draft_pending_intent_in_connection(&mut conn, &commit)
             .await
             .expect("byte-identical replay returns the stored outcome");
+
+        let sync = crate::PgSyncCursorStore { pool: pool.clone() };
+        let controller_actor_key =
+            arkret_wire::ActorId::account(commit.record.controller_account_id.clone())
+                .canonical_key()
+                .unwrap();
+        let live_cut = sync.account_global_watermark().await.unwrap();
+        let live_page = sync
+            .account_global_page(
+                &controller_actor_key,
+                "agent_draft_pending_intents",
+                live_cut,
+                "",
+                None,
+                100,
+            )
+            .await
+            .unwrap();
+        assert_eq!(live_page.len(), 1);
+        assert_eq!(live_page[0].channel_position, 1);
+        assert!(!live_page[0].deleted);
+        assert_eq!(
+            live_page[0].payload["schema"],
+            "ak.schema.agent_draft_pending_intent.v1"
+        );
+        assert_eq!(live_page[0].payload["state"], "available");
+        assert!(live_page[0].payload.get("content_handoff").is_some());
 
         let rows = store
             .list_for_controller(&commit.record.controller_account_id, now)
@@ -385,6 +438,54 @@ mod tests {
         assert_eq!(expired.state, AgentDraftPendingIntentState::Expired);
         assert_eq!(expired.expired_at, Some(commit.record.expires_at));
         assert!(expired.consumption.is_none());
+        assert!(expired.content_handoff.is_none());
+
+        let terminal_cut = sync.account_global_watermark().await.unwrap();
+        let terminal_delta = sync
+            .account_global_page(
+                &controller_actor_key,
+                "agent_draft_pending_intents",
+                terminal_cut,
+                "",
+                Some(live_page[0].revision),
+                100,
+            )
+            .await
+            .unwrap();
+        assert_eq!(terminal_delta.len(), 1);
+        assert_eq!(terminal_delta[0].channel_position, 2);
+        assert!(!terminal_delta[0].deleted);
+        assert_eq!(terminal_delta[0].payload["state"], "expired");
+        assert!(terminal_delta[0].payload.get("content_handoff").is_none());
+        assert_eq!(
+            terminal_delta[0].payload["expired_at"],
+            serde_json::json!(commit.record.expires_at)
+        );
+
+        let deletion = diesel::sql_query(
+            "DELETE FROM agent_draft_pending_intents \
+             WHERE controller_account_key=$1 AND agent_id=$2 AND draft_id=$3",
+        )
+        .bind::<diesel::sql_types::Text, _>(commit.record.controller_account_id.to_string())
+        .bind::<diesel::sql_types::Text, _>(commit.record.agent_id.as_str())
+        .bind::<diesel::sql_types::Text, _>(&commit.record.draft_id)
+        .execute(&mut conn)
+        .await;
+        assert!(
+            deletion.is_err(),
+            "terminal retention cannot free the create-once key before an occupied-key tombstone exists"
+        );
+        assert!(
+            store
+                .get_by_source_event(
+                    &commit.record.controller_account_id,
+                    &commit.record.accepted_event_id,
+                    commit.record.expires_at,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert!(matches!(
             commit_agent_draft_pending_intent_in_connection(&mut conn, &conflicting).await,
             Err(PersistenceError::Conflict(detail)) if detail.starts_with("duplicate_conflict")

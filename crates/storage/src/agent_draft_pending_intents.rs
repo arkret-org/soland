@@ -16,7 +16,10 @@ pub struct AgentDraftPendingIntentRecord {
     pub proposed_action: String,
     pub target: Value,
     pub content_digest: arkret_wire::Hash,
-    pub content_handoff: Value,
+    /// Present only while the intent is live. Terminal rows retain their
+    /// create-once identity and outcome metadata but permanently redact the
+    /// HPKE ciphertext.
+    pub content_handoff: Option<Value>,
     pub canonical_event_digest: arkret_wire::Hash,
     pub accepted_event_id: arkret_wire::EventId,
     pub expires_at: DateTime<Utc>,
@@ -58,10 +61,11 @@ pub struct AgentDraftPendingIntentCommit {
     pub record: AgentDraftPendingIntentRecord,
 }
 
-/// Private storage read used by the eventual account-subscribe projection.
+/// Station-private source read used by the account-global projection.
 ///
-/// This port is not itself a client-visible read contract. The public carrier
-/// remains blocked until the account-subscribe schema names one.
+/// This port is not itself a client-visible carrier. Public delivery is only
+/// through the dedicated account-subscribe `agent_draft_pending_intents`
+/// baseline/delta channel.
 #[async_trait]
 pub trait AgentDraftPendingIntentStore: Send + Sync {
     async fn get_by_source_event(

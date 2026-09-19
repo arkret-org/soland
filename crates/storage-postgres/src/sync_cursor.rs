@@ -27,6 +27,8 @@ struct GlobalReadRow {
     #[diesel(sql_type = Text)]
     item_key: String,
     #[diesel(sql_type = BigInt)]
+    channel_position: i64,
+    #[diesel(sql_type = BigInt)]
     revision: i64,
     #[diesel(sql_type = sql_types::Bool)]
     deleted: bool,
@@ -298,7 +300,7 @@ impl SyncCursorStore for PgSyncCursorStore {
         conn.transaction::<_, crate::PgTransactionError, _>(async |conn| {
             retention::check(conn, None, Some(after_revision.unwrap_or(watermark))).await?;
             let result: PersistenceResult<_> = async {
-        let rows = sql_query("WITH candidates AS MATERIALIZED (SELECT item_key,revision,(deleted OR (channel='account_data_events' AND NOT EXISTS (SELECT 1 FROM committed_events e WHERE e.kind='ak.account_data.set' AND e.envelope->>'event_id'=v.payload->'value'->>'event_id')) OR (channel='device_lists' AND NOT COALESCE(account_device_interest_visible(v.actor_key,v.item_key),FALSE))) AS deleted,CASE WHEN channel='account_data_events' AND NOT EXISTS (SELECT 1 FROM committed_events e WHERE e.kind='ak.account_data.set' AND e.envelope->>'event_id'=v.payload->'value'->>'event_id') THEN jsonb_build_object('source','invalidated') ELSE payload END AS payload,CASE WHEN channel='notifications' THEN 1 ELSE octet_length(payload::text)+256 END AS byte_count FROM account_global_versions v WHERE actor_key=$1 AND channel=$2 AND revision<=$3 AND (($5::bigint IS NULL AND item_key>$4 AND (valid_until IS NULL OR valid_until>$3)) OR ($5::bigint IS NOT NULL AND revision>$5)) ORDER BY CASE WHEN $5::bigint IS NULL THEN item_key ELSE '' END, revision LIMIT $6), bounded AS (SELECT *,sum(byte_count) OVER (ORDER BY CASE WHEN $5::bigint IS NULL THEN item_key ELSE '' END, revision) AS total FROM candidates) SELECT item_key,revision,deleted,CASE WHEN total>6291456 THEN jsonb_build_object('_budget_boundary',true,'_oversized',byte_count>6291456) ELSE payload END AS payload FROM bounded WHERE total-byte_count<=6291456 ORDER BY CASE WHEN $5::bigint IS NULL THEN item_key ELSE '' END,revision")
+        let rows = sql_query("WITH candidates AS MATERIALIZED (SELECT item_key,channel_position,revision,(deleted OR (channel='account_data_events' AND NOT EXISTS (SELECT 1 FROM committed_events e WHERE e.kind='ak.account_data.set' AND e.envelope->>'event_id'=v.payload->'value'->>'event_id')) OR (channel='device_lists' AND NOT COALESCE(account_device_interest_visible(v.actor_key,v.item_key),FALSE))) AS deleted,CASE WHEN channel='account_data_events' AND NOT EXISTS (SELECT 1 FROM committed_events e WHERE e.kind='ak.account_data.set' AND e.envelope->>'event_id'=v.payload->'value'->>'event_id') THEN jsonb_build_object('source','invalidated') ELSE payload END AS payload,CASE WHEN channel='notifications' THEN 1 ELSE octet_length(payload::text)+256 END AS byte_count FROM account_global_versions v WHERE actor_key=$1 AND channel=$2 AND revision<=$3 AND (($5::bigint IS NULL AND item_key>$4 AND (valid_until IS NULL OR valid_until>$3)) OR ($5::bigint IS NOT NULL AND revision>$5)) ORDER BY CASE WHEN $5::bigint IS NULL THEN item_key ELSE '' END, revision LIMIT $6), bounded AS (SELECT *,sum(byte_count) OVER (ORDER BY CASE WHEN $5::bigint IS NULL THEN item_key ELSE '' END, revision) AS total FROM candidates) SELECT item_key,channel_position,revision,deleted,CASE WHEN total>6291456 THEN jsonb_build_object('_budget_boundary',true,'_oversized',byte_count>6291456) ELSE payload END AS payload FROM bounded WHERE total-byte_count<=6291456 ORDER BY CASE WHEN $5::bigint IS NULL THEN item_key ELSE '' END,revision")
             .bind::<Text,_>(actor_key).bind::<Text,_>(channel).bind::<BigInt,_>(watermark).bind::<Text,_>(after_key).bind::<Nullable<BigInt>,_>(after_revision).bind::<BigInt,_>(limit.min(101) as i64)
             .load::<GlobalReadRow>(&mut *conn).await.map_err(PersistenceError::database)?;
         rows.into_iter()
@@ -307,6 +309,7 @@ impl SyncCursorStore for PgSyncCursorStore {
                 if payload.get("_budget_boundary").is_some() {
                     return Ok(soland_storage::AccountGlobalVersion {
                         item_key: row.item_key,
+                        channel_position: row.channel_position,
                         revision: row.revision,
                         deleted: row.deleted,
                         payload,
@@ -317,6 +320,7 @@ impl SyncCursorStore for PgSyncCursorStore {
                 }
                 Ok(soland_storage::AccountGlobalVersion {
                     item_key: row.item_key,
+                    channel_position: row.channel_position,
                     revision: row.revision,
                     deleted: row.deleted,
                     payload,

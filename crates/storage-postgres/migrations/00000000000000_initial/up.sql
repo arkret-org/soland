@@ -95,9 +95,12 @@ CREATE TABLE public.agent_draft_pending_intents (
     CONSTRAINT agent_draft_pending_intents_state_check CHECK
         (state IN ('available', 'consumed', 'expired')),
     CONSTRAINT agent_draft_pending_intents_terminal_shape_check CHECK (
-        (state = 'available' AND consumption IS NULL AND expired_at IS NULL)
-        OR (state = 'consumed' AND consumption IS NOT NULL AND expired_at IS NULL)
-        OR (state = 'expired' AND consumption IS NULL AND expired_at IS NOT NULL)
+        (state = 'available' AND content_handoff IS NOT NULL
+            AND consumption IS NULL AND expired_at IS NULL)
+        OR (state = 'consumed' AND content_handoff IS NULL
+            AND consumption IS NOT NULL AND expired_at IS NULL)
+        OR (state = 'expired' AND content_handoff IS NULL
+            AND consumption IS NULL AND expired_at IS NOT NULL)
     )
 );
 
@@ -3672,10 +3675,17 @@ CREATE TABLE account_global_clock (
     revision BIGINT NOT NULL CHECK(revision BETWEEN 0 AND 9007199254740991)
 );
 INSERT INTO account_global_clock VALUES(TRUE,0);
+CREATE TABLE account_global_channel_clocks (
+    actor_key TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    position BIGINT NOT NULL CHECK(position BETWEEN 1 AND 9007199254740991),
+    PRIMARY KEY(actor_key,channel)
+);
 CREATE TABLE account_global_versions (
     actor_key TEXT NOT NULL,
     channel TEXT NOT NULL,
     item_key TEXT NOT NULL,
+    channel_position BIGINT NOT NULL CHECK(channel_position BETWEEN 1 AND 9007199254740991),
     revision BIGINT NOT NULL,
     valid_until BIGINT,
     deleted BOOLEAN NOT NULL DEFAULT FALSE,
@@ -3707,13 +3717,74 @@ CREATE TABLE account_sync_cursor_retention (
 CREATE INDEX account_sync_cursor_summary_floor ON account_sync_cursor_retention(summary_floor);
 CREATE INDEX account_sync_cursor_global_floor ON account_sync_cursor_retention(global_floor);
 CREATE FUNCTION project_account_global_value(a TEXT,c TEXT,k TEXT,p JSONB,d BOOLEAN) RETURNS VOID LANGUAGE plpgsql AS $$
-DECLARE r BIGINT;
+DECLARE r BIGINT; cp BIGINT;
 BEGIN
     UPDATE account_global_clock SET revision=revision+1 WHERE singleton RETURNING revision INTO r;
+    INSERT INTO account_global_channel_clocks(actor_key,channel,position)
+        VALUES(a,c,1)
+        ON CONFLICT(actor_key,channel) DO UPDATE
+        SET position=account_global_channel_clocks.position+1
+        RETURNING position INTO cp;
     UPDATE account_global_versions SET valid_until=r WHERE actor_key=a AND channel=c AND item_key=k AND valid_until IS NULL;
-    INSERT INTO account_global_versions(actor_key,channel,item_key,revision,deleted,payload) VALUES(a,c,k,r,d,p);
+    INSERT INTO account_global_versions(actor_key,channel,item_key,channel_position,revision,deleted,payload)
+        VALUES(a,c,k,cp,r,d,p);
 END;
 $$;
+-- Publish the Station-private source row only through the dedicated
+-- controller-holder account-subscribe channel. Live rows carry the HPKE
+-- handoff; terminal rows are projected only after ciphertext redaction.
+CREATE FUNCTION project_agent_draft_pending_intent() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    actor_key TEXT;
+    item_key TEXT;
+    projection_payload JSONB;
+BEGIN
+    -- account-global rows are keyed by canonical ActorId, while the private
+    -- source table deliberately keys ownership by the nested AccountId.
+    actor_key := '{"account_id":' || NEW.controller_account_key || ',"kind":"account"}';
+    item_key := jsonb_build_array(
+        NEW.controller_account_key,
+        NEW.agent_id,
+        NEW.draft_id
+    )::TEXT;
+    projection_payload := jsonb_strip_nulls(jsonb_build_object(
+        'schema', 'ak.schema.agent_draft_pending_intent.v1',
+        'controller_account_id', NEW.controller_account_id,
+        'agent_id', NEW.agent_id,
+        'draft_id', NEW.draft_id,
+        'proposed_action', NEW.proposed_action,
+        'target', NEW.target,
+        'content_digest', NEW.content_digest,
+        'content_handoff', NEW.content_handoff,
+        'canonical_event_digest', NEW.canonical_event_digest,
+        'accepted_event_id', NEW.accepted_event_id,
+        'expires_at', NEW.expires_at,
+        'created_at', NEW.created_at,
+        'state', NEW.state,
+        'consumption', NEW.consumption,
+        'expired_at', NEW.expired_at
+    ));
+    PERFORM project_account_global_value(
+        actor_key,
+        'agent_draft_pending_intents',
+        item_key,
+        projection_payload,
+        FALSE
+    );
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER account_global_agent_draft_pending_intent
+AFTER INSERT OR UPDATE ON agent_draft_pending_intents
+FOR EACH ROW EXECUTE FUNCTION project_agent_draft_pending_intent();
+CREATE FUNCTION reject_agent_draft_pending_intent_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'agent draft pending intent create-once identity cannot be deleted';
+END;
+$$;
+CREATE TRIGGER preserve_agent_draft_pending_intent_identity
+BEFORE DELETE ON agent_draft_pending_intents
+FOR EACH ROW EXECUTE FUNCTION reject_agent_draft_pending_intent_delete();
 -- Only withdrawal invalidates an already published CAS winner. Admission alone
 -- is not a successful holder CAS and must never select the current value.
 CREATE FUNCTION invalidate_account_global_event() RETURNS trigger LANGUAGE plpgsql AS $$

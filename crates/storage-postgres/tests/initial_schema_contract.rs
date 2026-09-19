@@ -9,7 +9,21 @@ fn agent_draft_pending_intent_is_a_separate_private_state_machine() {
     );
     assert!(INITIAL_UP.contains("state IN ('available', 'consumed', 'expired')"));
     assert!(INITIAL_UP.contains("agent_draft_pending_intents_terminal_shape_check"));
+    assert!(INITIAL_UP.contains("state = 'available' AND content_handoff IS NOT NULL"));
+    assert!(INITIAL_UP.contains("state = 'consumed' AND content_handoff IS NULL"));
+    assert!(INITIAL_UP.contains("state = 'expired' AND content_handoff IS NULL"));
+    assert!(INITIAL_UP.contains("CREATE FUNCTION project_agent_draft_pending_intent()"));
+    assert!(INITIAL_UP.contains("CREATE TABLE account_global_channel_clocks"));
+    assert!(INITIAL_UP.contains("channel_position BIGINT NOT NULL"));
+    assert!(INITIAL_UP.contains("'agent_draft_pending_intents'"));
+    assert!(INITIAL_UP.contains("CREATE TRIGGER account_global_agent_draft_pending_intent"));
+    assert!(INITIAL_UP.contains("CREATE TRIGGER preserve_agent_draft_pending_intent_identity"));
+    assert!(INITIAL_DOWN.contains("DROP FUNCTION IF EXISTS project_agent_draft_pending_intent()"));
+    assert!(
+        INITIAL_DOWN.contains("DROP FUNCTION IF EXISTS reject_agent_draft_pending_intent_delete()")
+    );
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS agent_draft_pending_intents CASCADE"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS account_global_channel_clocks"));
 }
 
 #[test]
