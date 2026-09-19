@@ -418,9 +418,10 @@ fn caller_signed_circle_create_id(actor: &ActorId, event: &Event) -> Result<Circ
             "create_event payload.object.mls_group_ref is reducer-derived and must not be supplied",
         ));
     }
-    let derived = arkret_schema::derived_object_id(event).ok_or_else(|| {
-        AppError::param_invalid("create_event derives no Circle id from its event_id")
-    })?;
+    let derived = arkret_schema::derived_object_id_for_kind(event.kind.as_str(), &event.event_id)
+        .ok_or_else(|| {
+            AppError::param_invalid("create_event derives no Circle id from its event_id")
+        })?;
     CircleId::new(derived).map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))
 }
 
@@ -725,9 +726,7 @@ mod tests {
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
             "actor_id": account_actor(ACTOR),
-            "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
-            "prev_refs": [],
             "payload": { "object": object },
             "proofs": [],
         }))
@@ -820,9 +819,7 @@ mod tests {
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": account_actor(actor),
-            "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
-            "prev_refs": [],
             "payload": payload,
             "proofs": [],
         }))

@@ -8,6 +8,7 @@ pub(crate) fn mls_group_id(payload: &Value) -> Option<String> {
         .ok()?
         .canonical_mls_group_id()
         .ok()
+        .map(|group_id| group_id.as_str().to_owned())
 }
 
 /// The `mls_governance_binding` object all three MLS payloads require under
@@ -36,9 +37,13 @@ mod tests {
         let payload = json!({"governance_binding": {
             "effective_scope": {"kind":"realm", "realm_id":realm}, "previous_epoch":7
         }});
+        let scope = serde_json::from_value::<arkret_wire::ScopeRef>(
+            payload["governance_binding"]["effective_scope"].clone(),
+        )
+        .unwrap();
         assert_eq!(
             mls_group_id(&payload),
-            Some(arkret_canonical::base64url_encode(realm.as_bytes()))
+            Some(scope.canonical_mls_group_id().unwrap().as_str().to_owned())
         );
         assert_eq!(commit_base_epoch(&payload), Some(7));
         assert!(mls_group_id(&json!({"mls_group_id":"legacy"})).is_none());

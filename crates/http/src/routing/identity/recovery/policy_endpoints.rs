@@ -186,7 +186,7 @@ pub(super) async fn recovery_policy_get(
         active_policy,
         recovery_policy_ref,
         as_of: active.as_ref().map(|record| record.accepted_at),
-        control_frontier: None,
+        authority_stream_head: None,
     })
 }
 
