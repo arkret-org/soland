@@ -44,7 +44,7 @@ use crate::wire::{DevLoginRequestBody, SessionLoginOutcome};
 use crate::{JsonResult, ids, json_ok};
 
 mod device_pair;
-mod device_pairing_handoff;
+mod device_pairing_code_claim;
 mod login;
 mod logout;
 mod revocation;
@@ -61,7 +61,7 @@ use device_pair::account_device_pair;
 // Cross-submodule private helpers, re-exported at `pub(super)` so every
 // submodule's `use super::*;` glob can see them.
 pub(super) use device_pair::initial_session_device_verification_state;
-use device_pairing_handoff::{claim_device_pairing_code, finalize_device_pairing};
+use device_pairing_code_claim::claim_device_pairing_code;
 pub(super) use login::account_existing_session_error;
 use login::dev_login;
 use logout::session_revoke;
@@ -99,13 +99,11 @@ pub(super) fn protocol_account_router() -> Router {
         // otherwise goes to the Account Authority process.
         .push(Router::with_path("logout").post(logout::logout))
         .push(Router::with_path("device-pair").post(account_device_pair))
-        // `device-lifecycle.md` §2.1.1 clauses 2 and 5 - the two
-        // authenticated halves of the pairing handoff. They are gate
-        // operations, so they ride `ak.operation_bundle.station.http_core.v1`,
-        // never the unauthenticated device-pairing handoff bundle.
+        // `device-lifecycle.md` §2.1.1 clause 5: an accepted account device may
+        // claim the pairing code. Finalize is owned by the Account Authority
+        // and is intentionally absent from the Station router.
         .push(
             Router::with_path("device-pairing")
-                .push(Router::with_path("finalizations").post(finalize_device_pairing))
                 .push(Router::with_path("code-claims").post(claim_device_pairing_code)),
         )
 }
@@ -122,4 +120,44 @@ pub(super) fn local_router() -> Router {
     Router::with_path("auth")
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use std::fs;
+    use std::path::Path;
+
+    fn assert_forbidden_absent(path: &Path, forbidden: &[String]) {
+        for entry in fs::read_dir(path).expect("read HTTP source directory") {
+            let entry = entry.expect("read HTTP source entry");
+            let path = entry.path();
+            if path.is_dir() {
+                assert_forbidden_absent(&path, forbidden);
+            } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+                let source = fs::read_to_string(&path).expect("read HTTP Rust source");
+                for needle in forbidden {
+                    assert!(
+                        !source.contains(needle),
+                        "Account Authority device-pairing ownership residual `{needle}` in {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn station_has_no_account_authority_pairing_finalize_residual() {
+        let forbidden = [
+            ["account_handoff", "_introspection"].concat(),
+            ["account_handoff", "_bound_account"].concat(),
+            ["finalize_device", "_pairing"].concat(),
+            ["DevicePairing", "Finalize"].concat(),
+            ["with_path(\"final", "izations\")"].concat(),
+        ];
+        assert_forbidden_absent(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &forbidden,
+        );
+    }
 }

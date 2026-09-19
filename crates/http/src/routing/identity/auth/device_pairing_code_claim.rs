@@ -1,107 +1,21 @@
-//! The two authenticated halves of the server-mediated device-pairing handoff
-//! (`crypto-media/device-lifecycle.md` §2.1.1 clauses 2 and 5):
+//! The authenticated device-pairing code-claim operation.
 //!
-//! - `POST /_arkret/gate/account/device-pairing/finalizations` —
-//!   `ak.gate.account.command.finalize_device_pairing.v1`
-//! - `POST /_arkret/gate/account/device-pairing/code-claims` —
-//!   `ak.gate.account.read.claim_device_pairing_code.v1`
+//! This module deliberately contains no pairing-finalize surface. Finalize is
+//! owned by the Account Authority, which authenticates the presented account
+//! handoff and updates its own durable pending ledger. The Station must not
+//! invent an introspection protocol or substitute an ordinary user session.
 //!
-//! These belong to the Account Authority behind `gate_audience`, so they are
-//! advertised with `ak.operation_bundle.station.http_core.v1` and never with the
-//! unauthenticated `ak.operation_bundle.station.device_pairing_handoff.v1`.
-//!
-//! Both surfaces are uniformly anti-enumerating: every failure shape collapses
-//! to the same `not_found`. Authentication does not relax that — an authorized
-//! device must not be able to learn from the error whether a code exists, which
-//! account owns it, or which device it names.
+//! Code claim remains anti-enumerating: every failure shape collapses to the
+//! same `not_found`, so an authorized device cannot learn from the error whether
+//! a code exists, which account owns it, or which device it names.
 
 use arkret_models_collaboration::http_bodies::{
     DevicePairingBootstrap, DevicePairingCode, DevicePairingCodeClaimOutcome,
-    DevicePairingCodeClaimRequestBody, DevicePairingFinalizeOutcome,
-    DevicePairingFinalizeRequestBody, DevicePairingNonce, DevicePairingReadyForClaimState,
-    DevicePairingRequestId, DevicePairingState, DevicePairingTargetProof,
+    DevicePairingCodeClaimRequestBody, DevicePairingNonce, DevicePairingRequestId,
+    DevicePairingState, DevicePairingTargetProof,
 };
 
 use super::*;
-
-#[salvo::oapi::endpoint(
-    operation_id = "ak.gate.account.command.finalize_device_pairing",
-    summary = "Bind a staged device pairing request to its account",
-    tags("account")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "ak.gate.account.command.finalize_device_pairing.v1")
-)]
-pub(super) async fn finalize_device_pairing(
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<DevicePairingFinalizeRequestBody>,
-) -> JsonResult<DevicePairingFinalizeOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    // The account MUST come from the pending account handoff the candidate
-    // presents, and from nothing else. See `account_handoff_bound_account`.
-    let account_id = account_handoff_bound_account(state, req).await?;
-    let body = body.into_inner();
-    charge_handoff_quota(state, body.target_proof.device_id.as_str(), &account_id)?;
-    let now = now();
-    let record = live_pairing_record(
-        state
-            .device_pairings()
-            .get(body.device_pairing_request_id.as_str())
-            .await
-            .map_err(pairing_lookup_failed)?,
-        now,
-    )?;
-    if record.pairing_code != body.pairing_code.as_str() {
-        return Err(device_pairing_not_found());
-    }
-    // Finalize is the `staged -> ready_for_claim` edge. A record that already
-    // left `staged` is only acceptable as the byte-identical retry the store
-    // resolves below; any other state is masked.
-    if record.state != DevicePairingState::Staged
-        && record.state != DevicePairingState::ReadyForClaim
-    {
-        return Err(device_pairing_not_found());
-    }
-    let challenge = pairing_challenge(&record, &body.pairing_code)?;
-    let new_device_pubkey = staged_public_key(&record)?;
-    // The account comes from the presented handoff credential, never from the
-    // body: `expected_account_id` is what makes the signed `account_id` member
-    // of the proof an account binding rather than a self-asserted label.
-    arkret_signatures::device_pairing::verify_server_device_pairing_target_proof(
-        &new_device_pubkey,
-        &challenge,
-        &account_id,
-        &body.target_proof,
-        now,
-    )
-    .map_err(|_| device_pairing_not_found())?;
-    let target_proof = serde_json::to_value(&body.target_proof)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let finalized = state
-        .device_pairings()
-        .finalize(
-            body.device_pairing_request_id.as_str(),
-            &account_id,
-            target_proof,
-            now,
-        )
-        .await
-        .map_err(|error| {
-            if error.kind() == soland_services::ServiceErrorKind::NotFound {
-                device_pairing_not_found()
-            } else {
-                AppError::conflict(error.detail())
-            }
-        })?;
-    json_ok(DevicePairingFinalizeOutcome {
-        device_pairing_request_id: DevicePairingRequestId::new(finalized.device_pairing_request_id)
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        state: DevicePairingReadyForClaimState::ReadyForClaim,
-        expires_at: finalized.expires_at,
-    })
-}
 
 #[salvo::oapi::endpoint(
     operation_id = "ak.gate.account.read.claim_device_pairing_code",
@@ -176,42 +90,6 @@ pub(super) async fn claim_device_pairing_code(
     })
 }
 
-/// Resolve the exact `AccountId` that the presented **pending account handoff
-/// grant** is bound to (`identity/account-lifecycle.md` §2.1.2, Bound
-/// `account_handoff_grant`), which finalize authenticates with as
-/// `Authorization: DPoP <account_handoff_grant>` plus a matching DPoP proof.
-///
-/// **This is deliberately unwired and fails closed.**
-///
-/// The handoff grant is minted and held by the Account Authority process
-/// (coauth); it is opaque to the Station, and soland has no introspection or
-/// verification path for it — the only mention of the kind anywhere in this
-/// repository is the `AuthGrantExchangeKind::AccountHandoff` variant that
-/// `ServiceDescribe` advertises. The two substitutes that suggest themselves
-/// are both wrong:
-///
-/// - inventing a Station-local handoff introspection protocol would be a private auth surface the
-///   spec does not register, and
-/// - authenticating finalize with an ordinary `user_session` would destroy the property finalize
-///   exists for. The candidate device is not yet a device of any account; if it could present an
-///   ordinary session it would already be one, and "the record is bound to the account this handoff
-///   proves" would degrade into "the record is bound to whichever account the caller already had".
-///
-/// The interface this needs from the Account Authority is narrow: given the
-/// presented grant and its DPoP proof, return the exact `AccountId` the grant
-/// is bound to, or reject. Everything below this call is already implemented
-/// and takes that `AccountId` as its only account input.
-async fn account_handoff_bound_account(
-    _state: &AppState,
-    _req: &mut Request,
-) -> Result<arkret_wire::AccountId, AppError> {
-    Err(AppError::from_rejection(
-        arkret_wire::ErrorCode::TemporarilyUnavailable,
-        "device pairing finalize requires a pending account handoff grant,          which this Station cannot yet verify",
-    )
-    .with_internal_reason("account_handoff_introspection_unwired"))
-}
-
 fn charge_handoff_quota(
     state: &AppState,
     caller_device_id: &str,
@@ -250,8 +128,8 @@ async fn ensure_claiming_device_accepted(
     Ok(())
 }
 
-/// Collapse "absent" and "window elapsed" into the single masked outcome both
-/// surfaces owe every failure shape.
+/// Collapse "absent" and "window elapsed" into the single masked outcome the
+/// code-claim operation owes every failure shape.
 fn live_pairing_record(
     record: Option<soland_services::identity::DevicePairingState>,
     now: chrono::DateTime<chrono::Utc>,
