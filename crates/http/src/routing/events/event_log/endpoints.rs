@@ -1056,6 +1056,13 @@ fn submit_event_authenticated<'a>(
                 )
                 .await
             {
+                Ok(Some(record))
+                    if is_direct_conversation_admission_rejection(&record.response_body) =>
+                {
+                    // Pre-0318 builds could have cached a rejection.  It is not
+                    // an exact committed replay identity; ignore it and fully
+                    // re-evaluate against current authority state.
+                }
                 Ok(Some(record)) if record.request_hash == request_hash => {
                     // Replay: re-emit the cached first response verbatim, no
                     // re-execution and no second side effect.
@@ -1089,7 +1096,7 @@ fn submit_event_authenticated<'a>(
             // Only deterministic outcomes are cached: a 5xx is transient, so caching
             // it would wrongly pin a server-side failure under the key and block a
             // legitimate retry. The client may safely re-send the same key.
-            if !status.is_server_error() {
+            if should_persist_idempotency_response(status, &body) {
                 persist_idempotency_first_response(
                     state,
                     &authenticated_actor,
@@ -1215,6 +1222,16 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         );
         return (StatusCode::OK, submit_outcome_value(&outcome));
     }
+    if let Some(reason_code) = error.direct_conversation_admission_reason() {
+        let outcome = arkret_wire::AuthoritySubmitOutcome::Rejected {
+            status: arkret_wire::AuthorityRejectionStatus::Rejected,
+            reason_code: reason_code.to_owned(),
+        };
+        return (
+            StatusCode::OK,
+            serde_json::to_value(outcome).expect("authority rejection is serializable"),
+        );
+    }
     let SubmitOneError::Rejected { error, details } = error else {
         unreachable!();
     };
@@ -1231,6 +1248,17 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         problem.extend(details.clone());
     }
     (error.http_status(), body)
+}
+
+fn is_direct_conversation_admission_rejection(body: &Value) -> bool {
+    body.get("reason_code")
+        .and_then(Value::as_str)
+        .or_else(|| body.pointer("/details/reason_code").and_then(Value::as_str))
+        .is_some_and(is_direct_conversation_admission_reason)
+}
+
+fn should_persist_idempotency_response(status: StatusCode, body: &Value) -> bool {
+    !status.is_server_error() && !is_direct_conversation_admission_rejection(body)
 }
 
 /// Persist the FIRST response under an `Idempotency-Key`. Best-effort: a failed
@@ -2043,6 +2071,32 @@ async fn applet_managed_actor_pcr_access(
 )]
 mod applet_managed_actor_pcr_access_tests {
     use super::*;
+
+    #[test]
+    fn direct_conversation_admission_rejection_is_a_closed_uncached_outcome() {
+        let error = SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            arkret_wire::ReasonCode::DIRECT_CONVERSATION_MEMBER_COUNT_INVALID,
+        )
+        .with_details(serde_json::json!({
+            "reason_code": arkret_wire::ReasonCode::DIRECT_CONVERSATION_MEMBER_COUNT_INVALID,
+        }));
+        let (status, body) = submit_one_error_value(error);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "status": "rejected",
+                "reason_code": "direct_conversation_member_count_invalid",
+            })
+        );
+        assert!(!should_persist_idempotency_response(status, &body));
+        assert!(should_persist_idempotency_response(
+            StatusCode::OK,
+            &serde_json::json!({"status": "committed"}),
+        ));
+    }
 
     #[test]
     fn prepare_fence_recovery_reconstructs_and_revalidates_exact_material() {

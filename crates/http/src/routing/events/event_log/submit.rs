@@ -1135,6 +1135,19 @@ impl SubmitOneError {
         }
     }
 
+    pub(in crate::routing) fn direct_conversation_admission_reason(&self) -> Option<&str> {
+        let Self::Rejected { error, details } = self else {
+            return None;
+        };
+        details
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|details| details.get("reason_code"))
+            .and_then(Value::as_str)
+            .or(error.reason_code.as_deref())
+            .filter(|reason| is_direct_conversation_admission_reason(reason))
+    }
+
     pub(in crate::routing) fn details(&self) -> Option<&Value> {
         match self {
             Self::Rejected { details, .. } => details.as_ref(),
@@ -1171,6 +1184,19 @@ impl SubmitOneError {
             Self::Quarantined { message, .. } => message.clone(),
         }
     }
+}
+
+pub(super) fn is_direct_conversation_admission_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        arkret_wire::ReasonCode::DIRECT_CONVERSATION_BINDING_INVALID
+            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN
+            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_MEMBER_COUNT_INVALID
+            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_THIRD_PARTY_MEMBER_FORBIDDEN
+            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_INVITE_FORBIDDEN
+            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_ROOT_MASK_VIOLATION
+            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED
+    )
 }
 
 pub(super) fn validate_membership_compensation_semantics(
@@ -1296,6 +1322,14 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
             vec![event_id],
             None,
         )));
+        return;
+    }
+    if let Some(reason_code) = error.direct_conversation_admission_reason() {
+        res.status_code(StatusCode::OK);
+        res.render(Json(arkret_wire::AuthoritySubmitOutcome::Rejected {
+            status: arkret_wire::AuthorityRejectionStatus::Rejected,
+            reason_code: reason_code.to_owned(),
+        }));
         return;
     }
     let SubmitOneError::Rejected { error, details } = error else {

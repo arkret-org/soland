@@ -180,7 +180,13 @@ pub(super) async fn apply_projection_preflight(
         if let Err(message) = policy_result {
             let (status, code) =
                 crate::routing::events::operations::operation_policy_reason_code(message);
-            return Err(SubmitOneError::new(status, code, message));
+            let mut rejection = SubmitOneError::new(status, code, message);
+            if is_direct_conversation_admission_reason(message) {
+                rejection = rejection.with_details(serde_json::json!({
+                    "reason_code": message,
+                }));
+            }
+            return Err(rejection);
         }
         // Recipient trust is checked by the claim ledger only after the exact
         // destination receipt has been authenticated, never by a local DID lookup.

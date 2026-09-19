@@ -250,7 +250,8 @@ pub(in crate::routing) use submit::{
 };
 use submit::{
     IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
-    event_validation_error, events_submit_outcome, render_submit_one_error,
+    event_validation_error, events_submit_outcome, is_direct_conversation_admission_reason,
+    render_submit_one_error,
 };
 pub(crate) use submit::{accepted_event_digest_suites, publish_confirmed_realm_bootstrap};
 
