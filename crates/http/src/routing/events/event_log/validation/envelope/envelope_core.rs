@@ -27,7 +27,7 @@ fn validate_canonical_mls_group_id(
             "MLS effective_scope cannot identify a canonical group",
         )
     })?;
-    if group_id != expected {
+    if group_id != expected.as_str() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             arkret_wire::ErrorCode::SCHEMA_VIOLATION,

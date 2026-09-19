@@ -7,9 +7,7 @@ use arkret_models_collaboration::agent_operations::{
     PendingSidecarAccessReconciliation, PendingSidecarAccessReconciliationStage,
     agent_sidecar_participant_authority_digest,
 };
-use arkret_models_collaboration::events_payloads::sidecar::{
-    SidecarCreatePayload, SidecarEncryptionProfile,
-};
+use arkret_models_collaboration::events_payloads::sidecar::SidecarCreatePayload;
 use arkret_models_collaboration::prepared_event_draft::PreparedEventDraft;
 use arkret_models_collaboration::sidecar_operations::{
     SidecarContextAttachPayload, SidecarContextRef, SidecarEnsureOutcome, SidecarEnsureRequestBody,
@@ -907,9 +905,7 @@ async fn prepare_sidecar(
             frontier.frontier_event_ids.clone(),
             Vec::new(),
             created_at,
-            SidecarCreatePayload {
-                encryption_profile: SidecarEncryptionProfile::MlsRfc9420,
-            },
+            SidecarCreatePayload::default(),
             digest_suite,
         )?)
     } else {
@@ -1423,7 +1419,7 @@ pub(super) async fn list_sidecars(
         items.push(sidecar_view(state, &record, &session).await?);
     }
     json_ok(AgentSidecarList {
-        agent_sidecar_views: items,
+        sidecars: items,
         next_cursor,
     })
 }
@@ -1455,9 +1451,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             created_at,
-            SidecarCreatePayload {
-                encryption_profile: SidecarEncryptionProfile::MlsRfc9420,
-            },
+            SidecarCreatePayload::default(),
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
