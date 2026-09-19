@@ -390,6 +390,7 @@ pub(crate) async fn validate_direct_message_bootstrap(
 pub(crate) async fn validate_direct_message_participant(
     state: &AppState,
     realm_id: &str,
+    kind: &str,
     object: &serde_json::Map<String, Value>,
     derived_cells: &[String],
     state_at_ref: &BTreeMap<
@@ -407,6 +408,12 @@ pub(crate) async fn validate_direct_message_participant(
             .ok_or("missing participant")?,
     )
     .map_err(|_| "invalid participant")?;
+    let action_payload = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or("missing participant action payload")?;
+    let action = direct_participant_event_action(kind, action_payload, &actor)
+        .ok_or("participant action is not allowlisted")?;
     let binding = state
         .contacts()
         .settled_direct_binding_for_realm(realm_id)
@@ -474,18 +481,8 @@ pub(crate) async fn validate_direct_message_participant(
         "ak:cell:ak.component.direct_conversation.binding.v1:{}",
         payload.pair_key
     );
-    let timeline = format!(
-        "ak:cell:ak.component.strand.discussion.timeline.v1:{}",
-        binding.main_strand_id
-    );
-    if !direct_message_seal_covers(
-        state_at_ref,
-        &binding_cell,
-        &payload_value,
-        &timeline,
-        derived_cells,
-    ) {
-        return Err("message Seal does not cover the exact binding and main Strand");
+    if !direct_participant_seal_covers(state_at_ref, &binding_cell, &payload_value, derived_cells) {
+        return Err("participant Seal does not cover the exact binding");
     }
     validate_direct_binding_event_refs(state, &payload).await?;
     let create = accepted_direct_realm_create(state, &payload.realm_id).await?;
@@ -494,15 +491,180 @@ pub(crate) async fn validate_direct_message_participant(
         .iter()
         .find(|id| **id != create.actor_id)
         .ok_or("missing founder peer")?;
-    validate_current_direct_pair_authority(state, &create.actor_id, founder_peer).await?;
-    if direct_group_state_for_realm(state, realm_id)
+    if action.requires_directional_contact() {
+        validate_current_direct_pair_authority(state, &create.actor_id, founder_peer).await?;
+    }
+    let current_group_state_ref = direct_group_state_for_realm(state, realm_id)
         .await
         .map_err(|_| "MLS authority lookup failed")?
-        .is_none()
-    {
-        return Err("Direct Conversation has no unique current MLS state");
+        .ok_or("Direct Conversation has no unique current MLS state")?;
+    if !direct_participant_resource_is_active(
+        state,
+        realm_id,
+        action,
+        action_payload,
+        &actor,
+        current_group_state_ref.as_str(),
+    ) {
+        return Err("participant action resource or lifecycle is not active");
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectParticipantEventAction {
+    MemberLeaveOwn,
+    MessageCreate,
+    MessageRedactOwn,
+    MessageReviseOwn,
+    MlsCommit,
+    ReactionAdd,
+    ReactionRemove,
+    ReadCursorAdvance,
+    StrandCreate,
+}
+
+impl DirectParticipantEventAction {
+    fn requires_directional_contact(self) -> bool {
+        matches!(
+            self,
+            Self::MessageCreate | Self::ReactionAdd | Self::ReactionRemove
+        )
+    }
+}
+
+fn direct_participant_event_action(
+    kind: &str,
+    payload: &serde_json::Map<String, Value>,
+    actor: &arkret_wire::ActorId,
+) -> Option<DirectParticipantEventAction> {
+    match arkret_wire::EventKind::from(kind) {
+        arkret_wire::EventKind::MemberState
+            if payload.get("membership").and_then(Value::as_str) == Some("leave")
+                && payload
+                    .get("member_id")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+                    .as_ref()
+                    == Some(actor) =>
+        {
+            Some(DirectParticipantEventAction::MemberLeaveOwn)
+        }
+        arkret_wire::EventKind::MessageCreate => Some(DirectParticipantEventAction::MessageCreate),
+        arkret_wire::EventKind::MessageRedact => {
+            Some(DirectParticipantEventAction::MessageRedactOwn)
+        }
+        arkret_wire::EventKind::MessageRevise => {
+            Some(DirectParticipantEventAction::MessageReviseOwn)
+        }
+        arkret_wire::EventKind::MlsCommit => Some(DirectParticipantEventAction::MlsCommit),
+        arkret_wire::EventKind::ReactionAdd => Some(DirectParticipantEventAction::ReactionAdd),
+        arkret_wire::EventKind::ReactionRemove => {
+            Some(DirectParticipantEventAction::ReactionRemove)
+        }
+        arkret_wire::EventKind::ReadCursorAdvance => {
+            Some(DirectParticipantEventAction::ReadCursorAdvance)
+        }
+        arkret_wire::EventKind::StrandCreate => Some(DirectParticipantEventAction::StrandCreate),
+        _ => None,
+    }
+}
+
+fn direct_participant_resource_is_active(
+    state: &AppState,
+    realm_id: &str,
+    action: DirectParticipantEventAction,
+    payload: &serde_json::Map<String, Value>,
+    actor: &arkret_wire::ActorId,
+    current_group_state_ref: &str,
+) -> bool {
+    let projection = state.projections().snapshot();
+    direct_participant_resource_is_active_in_projection(
+        &projection,
+        realm_id,
+        action,
+        payload,
+        actor,
+        current_group_state_ref,
+    )
+}
+
+fn direct_participant_resource_is_active_in_projection(
+    projection: &soland_domain::reducer::ProjectionState,
+    realm_id: &str,
+    action: DirectParticipantEventAction,
+    payload: &serde_json::Map<String, Value>,
+    actor: &arkret_wire::ActorId,
+    current_group_state_ref: &str,
+) -> bool {
+    let strand_is_active_discussion = |strand_id: &str| {
+        projection.strands.get(strand_id).is_some_and(|strand| {
+            strand.realm_id == realm_id
+                && strand.scope_circle_id.is_none()
+                && strand.state
+                    == soland_domain::reducer::ObjectLifecycleState::Active
+                && strand.tracks.get(
+                    arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION,
+                ).is_some_and(|track| track.enabled != Some(false))
+        })
+    };
+    let target_message = || {
+        payload
+            .get("message_id")
+            .or_else(|| payload.get("target_ref"))
+            .and_then(Value::as_str)
+            .and_then(|target| projection.message_origin(target))
+    };
+    match action {
+        DirectParticipantEventAction::MemberLeaveOwn => payload
+            .get("member_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+            .as_ref()
+            == Some(actor),
+        DirectParticipantEventAction::MessageCreate => payload
+            .get("strand_id")
+            .and_then(Value::as_str)
+            .is_some_and(strand_is_active_discussion),
+        DirectParticipantEventAction::MessageRedactOwn
+        | DirectParticipantEventAction::MessageReviseOwn =>
+            target_message().is_some_and(|(_, sender, strand_id)| {
+                sender == actor.to_string() && strand_is_active_discussion(&strand_id)
+            }),
+        DirectParticipantEventAction::ReactionAdd
+        | DirectParticipantEventAction::ReactionRemove => target_message()
+            .is_some_and(|(_, _, strand_id)| strand_is_active_discussion(&strand_id)),
+        DirectParticipantEventAction::StrandCreate => payload
+            .get("object")
+            .and_then(Value::as_object)
+            .is_some_and(|object| {
+                object.get("realm_id").and_then(Value::as_str) == Some(realm_id)
+                    && object.get("scope_circle_id").is_none()
+                    && object
+                        .get("tracks")
+                        .and_then(Value::as_object)
+                        .and_then(|tracks| tracks.get(
+                            arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION,
+                        ))
+                        .and_then(Value::as_object)
+                        .is_some_and(|track| {
+                            track.get("enabled").and_then(Value::as_bool) != Some(false)
+                        })
+            }),
+        DirectParticipantEventAction::MlsCommit => payload
+            .get("base_group_state_ref")
+            .and_then(Value::as_str)
+            == Some(current_group_state_ref),
+        DirectParticipantEventAction::ReadCursorAdvance => {
+            payload.get("realm_id").and_then(Value::as_str) == Some(realm_id)
+                && payload
+                    .get("actor_id")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+                    .as_ref()
+                    == Some(actor)
+        }
+    }
 }
 
 /// Both provisional and settled sends require current pair authority. The
@@ -557,17 +719,16 @@ async fn validate_current_direct_pair_authority(
     Ok(())
 }
 
-fn direct_message_seal_covers(
+fn direct_participant_seal_covers(
     state_at_ref: &BTreeMap<
         arkret_identifiers::CellRef,
         arkret_state::state_model::ResolvedCellState,
     >,
     binding_cell: &str,
     binding_payload: &Value,
-    timeline: &str,
     derived_cells: &[String],
 ) -> bool {
-    derived_cells.len() == 1 && derived_cells[0] == timeline
+    !derived_cells.is_empty()
         && state_at_ref.iter().any(|(cell, value)| {
             cell.as_str() == binding_cell && matches!(value,
                 arkret_state::state_model::ResolvedCellState::Value(value) if value.as_array().is_some_and(|entries|
@@ -580,24 +741,22 @@ mod participant_authority_tests {
     use super::*;
 
     #[test]
-    fn direct_message_seal_rejects_missing_conflicted_foreign_or_widened_authority() {
+    fn participant_seal_rejects_missing_conflicted_or_foreign_authority() {
         use arkret_state::state_model::ResolvedCellState;
         let cell = "ak:cell:ak.component.direct_conversation.binding.v1:pair";
-        let timeline = "ak:cell:ak.component.strand.discussion.timeline.v1:main";
         let payload = serde_json::json!({"realm_id": "realm-a", "main_strand_id": "main"});
-        let writes = vec![timeline.to_owned()];
+        let writes = vec!["ak:cell:ak.component.test.v1:subject".to_owned()];
         let state = BTreeMap::from([(
             arkret_identifiers::CellRef::new(cell).unwrap(),
             ResolvedCellState::Value(serde_json::json!([{"tag":"endorsement", "value":payload}])),
         )]);
-        assert!(direct_message_seal_covers(
-            &state, cell, &payload, timeline, &writes
+        assert!(direct_participant_seal_covers(
+            &state, cell, &payload, &writes
         ));
-        assert!(!direct_message_seal_covers(
+        assert!(!direct_participant_seal_covers(
             &BTreeMap::new(),
             cell,
             &payload,
-            timeline,
             &writes
         ));
         let bottom = BTreeMap::from([(
@@ -607,30 +766,222 @@ mod participant_authority_tests {
                 Vec::new(),
             )),
         )]);
-        assert!(!direct_message_seal_covers(
-            &bottom, cell, &payload, timeline, &writes
+        assert!(!direct_participant_seal_covers(
+            &bottom, cell, &payload, &writes
         ));
-        assert!(!direct_message_seal_covers(
+        assert!(!direct_participant_seal_covers(
             &state,
             cell,
             &serde_json::json!({"realm_id":"other"}),
-            timeline,
             &writes
         ));
-        assert!(!direct_message_seal_covers(
-            &state,
-            cell,
-            &payload,
-            "other-strand",
-            &writes
-        ));
-        assert!(!direct_message_seal_covers(
-            &state,
-            cell,
-            &payload,
-            timeline,
-            &[timeline.to_owned(), "other-cell".to_owned()]
-        ));
+        assert!(!direct_participant_seal_covers(&state, cell, &payload, &[]));
+    }
+
+    #[test]
+    fn participant_event_allowlist_accepts_each_event_and_rejects_one_field_mutations() {
+        let actor: arkret_wire::ActorId = serde_json::from_value(serde_json::json!({
+            "kind": "account",
+            "account_id": {
+                "principal_id": "ak:did_core:web:alice.example",
+                "station_id": "ak:did_core:web:station.example"
+            }
+        }))
+        .unwrap();
+        let ordinary = serde_json::json!({}).as_object().unwrap().clone();
+        for kind in [
+            arkret_wire::EventKind::MessageCreate,
+            arkret_wire::EventKind::MessageRedact,
+            arkret_wire::EventKind::MessageRevise,
+            arkret_wire::EventKind::MlsCommit,
+            arkret_wire::EventKind::ReactionAdd,
+            arkret_wire::EventKind::ReactionRemove,
+            arkret_wire::EventKind::ReadCursorAdvance,
+            arkret_wire::EventKind::StrandCreate,
+        ] {
+            assert!(
+                direct_participant_event_action(kind.as_str(), &ordinary, &actor).is_some(),
+                "{} must stay in the participant Event allowlist",
+                kind.as_str()
+            );
+        }
+
+        let own_leave = serde_json::json!({
+            "membership": "leave",
+            "member_id": actor,
+        });
+        assert_eq!(
+            direct_participant_event_action(
+                arkret_wire::EventKind::MemberState.as_str(),
+                own_leave.as_object().unwrap(),
+                &actor,
+            ),
+            Some(DirectParticipantEventAction::MemberLeaveOwn)
+        );
+        for mutation in [
+            serde_json::json!({"membership":"join", "member_id":actor}),
+            serde_json::json!({"membership":"leave", "member_id":{
+                "kind":"account",
+                "account_id":{
+                    "principal_id":"ak:did_core:web:bob.example",
+                    "station_id":"ak:did_core:web:station.example"
+                }
+            }}),
+        ] {
+            assert!(
+                direct_participant_event_action(
+                    arkret_wire::EventKind::MemberState.as_str(),
+                    mutation.as_object().unwrap(),
+                    &actor,
+                )
+                .is_none()
+            );
+        }
+        assert!(
+            direct_participant_event_action(
+                arkret_wire::EventKind::RealmArchive.as_str(),
+                &ordinary,
+                &actor,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn every_participant_event_resource_has_a_positive_and_single_point_failure() {
+        let realm_id = "ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6";
+        let strand_id = "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D";
+        let message_id = "ak:message:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D";
+        let group_ref = "ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5";
+        let actor: arkret_wire::ActorId = serde_json::from_value(serde_json::json!({
+            "kind": "account",
+            "account_id": {
+                "principal_id": "ak:did_core:web:alice.example",
+                "station_id": "ak:did_core:web:station.example"
+            }
+        }))
+        .unwrap();
+        let now = chrono::Utc::now();
+        let mut projection = soland_domain::reducer::ProjectionState::default();
+        projection.strands.insert(
+            strand_id.to_owned(),
+            soland_domain::reducer::StrandProjection {
+                strand_id: strand_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                tracks: std::collections::BTreeMap::from([(
+                    arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
+                        .to_owned(),
+                    arkret_models_collaboration::objects::profiles::StrandTrack::discussion_primary(
+                    ),
+                )]),
+                title: "Direct conversation".to_owned(),
+                summary: None,
+                content: None,
+                encrypted_content: None,
+                fields: std::collections::BTreeMap::new(),
+                state: soland_domain::reducer::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                stage: None,
+                stage_changed_at: None,
+                created_by: actor.to_string(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: None,
+                schema_refs: Vec::new(),
+            },
+        );
+        projection.messages.insert(
+            "event-message".to_owned(),
+            soland_domain::reducer::MessageState {
+                event_id: "event-message".to_owned(),
+                message_id: message_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                sender: actor.to_string(),
+                thread_id: strand_id.to_owned(),
+                content: serde_json::json!({}),
+                encrypted: true,
+                operation_id: "operation-message".to_owned(),
+                created_at: now,
+                revision_of: None,
+                redacted_at: None,
+            },
+        );
+        let check = |action, payload: Value| {
+            direct_participant_resource_is_active_in_projection(
+                &projection,
+                realm_id,
+                action,
+                payload.as_object().unwrap(),
+                &actor,
+                group_ref,
+            )
+        };
+
+        let cases = [
+            (
+                DirectParticipantEventAction::MemberLeaveOwn,
+                serde_json::json!({"member_id": actor}),
+                serde_json::json!({"member_id": {
+                    "kind":"account",
+                    "account_id":{
+                        "principal_id":"ak:did_core:web:bob.example",
+                        "station_id":"ak:did_core:web:station.example"
+                    }
+                }}),
+            ),
+            (
+                DirectParticipantEventAction::MessageCreate,
+                serde_json::json!({"strand_id": strand_id}),
+                serde_json::json!({"strand_id": "ak:strand:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+            ),
+            (
+                DirectParticipantEventAction::MessageRedactOwn,
+                serde_json::json!({"message_id": message_id}),
+                serde_json::json!({"message_id": "ak:message:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+            ),
+            (
+                DirectParticipantEventAction::MessageReviseOwn,
+                serde_json::json!({"message_id": message_id}),
+                serde_json::json!({"message_id": "ak:message:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+            ),
+            (
+                DirectParticipantEventAction::MlsCommit,
+                serde_json::json!({"base_group_state_ref": group_ref}),
+                serde_json::json!({"base_group_state_ref": "ak:event:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+            ),
+            (
+                DirectParticipantEventAction::ReactionAdd,
+                serde_json::json!({"target_ref": message_id}),
+                serde_json::json!({"target_ref": "ak:message:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+            ),
+            (
+                DirectParticipantEventAction::ReactionRemove,
+                serde_json::json!({"target_ref": message_id}),
+                serde_json::json!({"target_ref": "ak:message:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+            ),
+            (
+                DirectParticipantEventAction::ReadCursorAdvance,
+                serde_json::json!({"realm_id": realm_id, "actor_id": actor}),
+                serde_json::json!({"realm_id": "ak:realm:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "actor_id": actor}),
+            ),
+            (
+                DirectParticipantEventAction::StrandCreate,
+                serde_json::json!({"object": {
+                    "realm_id": realm_id,
+                    "tracks": {"discussion": {"enabled": true}}
+                }}),
+                serde_json::json!({"object": {
+                    "realm_id": realm_id,
+                    "scope_circle_id": "ak:circle:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "tracks": {"discussion": {"enabled": true}}
+                }}),
+            ),
+        ];
+        for (action, positive, mutation) in cases {
+            assert!(check(action, positive), "{action:?} positive must pass");
+            assert!(!check(action, mutation), "{action:?} mutation must fail");
+        }
     }
 }
 

@@ -386,12 +386,10 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
         return Err(direct_conversation_participant_denied());
     }
     if direct_participant_authorized {
-        if kind != arkret_wire::EventKind::MessageCreate.as_str() {
-            return Err(direct_conversation_participant_denied());
-        }
         crate::routing::identity::account::validate_direct_message_participant(
             state,
             realm_id,
+            kind,
             object,
             derived_cells,
             &state_at_ref,
