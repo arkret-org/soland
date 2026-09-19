@@ -860,17 +860,6 @@ impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
             .await?)
     }
 
-    async fn get_by_pairing_code(
-        &self,
-        pairing_code: &str,
-    ) -> crate::ServiceResult<Option<crate::identity::DevicePairingState>> {
-        Ok(self
-            .0
-            .device_pairings()
-            .get_by_pairing_code(pairing_code)
-            .await?)
-    }
-
     async fn finalize(
         &self,
         device_pairing_request_id: &str,

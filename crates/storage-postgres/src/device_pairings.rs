@@ -48,24 +48,6 @@ impl DevicePairingStore for PgDevicePairingStore {
             .transpose()
     }
 
-    async fn get_by_pairing_code(
-        &self,
-        pairing_code: &str,
-    ) -> PersistenceResult<Option<DevicePairingRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        device_pairings::table
-            .filter(device_pairings::pairing_code.eq(pairing_code))
-            .select(DevicePairingRow::as_select())
-            .first::<DevicePairingRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .map(DevicePairingRecord::try_from)
-            .transpose()
-    }
-
     async fn finalize(
         &self,
         device_pairing_request_id: &str,

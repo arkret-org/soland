@@ -17,6 +17,7 @@ pub struct DeviceRevocationGateSelector {
 pub enum DeviceRevocationGateAction {
     SessionGrantIssue,
     SessionGrantRefresh,
+    DevicePairingCodeClaim,
     KeyPackageClaim,
     ToDeviceWrite,
     EventWrite,
@@ -28,6 +29,7 @@ impl DeviceRevocationGateAction {
         match self {
             Self::SessionGrantIssue => "session_grant_issue",
             Self::SessionGrantRefresh => "session_grant_refresh",
+            Self::DevicePairingCodeClaim => "device_pairing_code_claim",
             Self::KeyPackageClaim => "keypackage_claim",
             Self::ToDeviceWrite => "to_device_write",
             Self::EventWrite => "event_write",
@@ -214,6 +216,18 @@ mod tests {
         assert_eq!(
             selector_comparison_status(&request, None),
             Some(DeviceRevocationGateStatus::AuthorityMismatch)
+        );
+    }
+
+    #[test]
+    fn device_pairing_code_claim_has_a_distinct_durable_action() {
+        assert_eq!(
+            DeviceRevocationGateAction::DevicePairingCodeClaim.as_str(),
+            "device_pairing_code_claim"
+        );
+        assert_ne!(
+            DeviceRevocationGateAction::DevicePairingCodeClaim,
+            DeviceRevocationGateAction::EventWrite
         );
     }
 }

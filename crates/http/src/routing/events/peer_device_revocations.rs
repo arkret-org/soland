@@ -159,9 +159,10 @@ pub(super) async fn check_device_revocation_gate(
         DeviceRevocationGateActionClass::SessionGrantIssue
             | DeviceRevocationGateActionClass::ReturningSessionGrantIssue
             | DeviceRevocationGateActionClass::SessionGrantRefresh
+            | DeviceRevocationGateActionClass::DevicePairingCodeClaim
     ) {
         return Err(schema_violation(
-            "peer device revocation check only admits session grant issue or refresh",
+            "peer device revocation check only admits session grant or device-pairing current-device actions",
         ));
     }
 
@@ -274,7 +275,10 @@ pub(super) async fn check_device_revocation_gate(
         DeviceRevocationGateActionClass::SessionGrantRefresh => {
             soland_storage::DeviceRevocationGateAction::SessionGrantRefresh
         }
-        _ => unreachable!("non-session action rejected above"),
+        DeviceRevocationGateActionClass::DevicePairingCodeClaim => {
+            soland_storage::DeviceRevocationGateAction::DevicePairingCodeClaim
+        }
+        _ => unreachable!("unsupported current-device action rejected above"),
     };
     let linearization = state
         .persistence()

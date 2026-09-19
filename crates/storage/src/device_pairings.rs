@@ -10,7 +10,7 @@ use super::{PersistenceResult, Value, async_trait};
 /// and receives a short `device_pairing_request_id` + `pairing_code`. The
 /// authenticated finalize call binds the row one way to the exact `AccountId`
 /// its target proof signs over (`staged -> ready_for_claim`); only then can it
-/// be resolved, claimed by code, or authorized. The row is flipped to
+/// be resolved by its exact request id or authorized. The row is flipped to
 /// `authorized` when a verified sibling device drives the existing
 /// authenticated `ak.gate.account.command.pair_device.v1`. Mirrors the
 /// agent-pairing template but has no controller/PCR binding — it grants nothing
@@ -106,13 +106,6 @@ pub trait DevicePairingStore: Send + Sync {
         device_pairing_request_id: &str,
     ) -> PersistenceResult<Option<DevicePairingRecord>>;
     async fn get_terminal(&self, request_id: &str) -> PersistenceResult<Option<Value>>;
-    /// Look a live record up by its pairing code. The code is unique across the
-    /// live pending set, so this is the sole lookup key of the authenticated
-    /// code claim.
-    async fn get_by_pairing_code(
-        &self,
-        pairing_code: &str,
-    ) -> PersistenceResult<Option<DevicePairingRecord>>;
     /// One-way `staged -> ready_for_claim` transition that attaches the exact
     /// account binding and its signed target proof. Returns the stored record;
     /// a byte-identical retry returns the already finalized row unchanged, and

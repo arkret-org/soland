@@ -44,7 +44,6 @@ use crate::wire::{DevLoginRequestBody, SessionLoginOutcome};
 use crate::{JsonResult, ids, json_ok};
 
 mod device_pair;
-mod device_pairing_code_claim;
 mod login;
 mod logout;
 mod revocation;
@@ -61,7 +60,6 @@ use device_pair::account_device_pair;
 // Cross-submodule private helpers, re-exported at `pub(super)` so every
 // submodule's `use super::*;` glob can see them.
 pub(super) use device_pair::initial_session_device_verification_state;
-use device_pairing_code_claim::claim_device_pairing_code;
 pub(super) use login::account_existing_session_error;
 use login::dev_login;
 use logout::session_revoke;
@@ -99,13 +97,6 @@ pub(super) fn protocol_account_router() -> Router {
         // otherwise goes to the Account Authority process.
         .push(Router::with_path("logout").post(logout::logout))
         .push(Router::with_path("device-pair").post(account_device_pair))
-        // `device-lifecycle.md` §2.1.1 clause 5: an accepted account device may
-        // claim the pairing code. Finalize is owned by the Account Authority
-        // and is intentionally absent from the Station router.
-        .push(
-            Router::with_path("device-pairing")
-                .push(Router::with_path("code-claims").post(claim_device_pairing_code)),
-        )
 }
 
 pub(super) fn local_router() -> Router {
@@ -154,6 +145,9 @@ mod ownership_tests {
             ["finalize_device", "_pairing"].concat(),
             ["DevicePairing", "Finalize"].concat(),
             ["with_path(\"final", "izations\")"].concat(),
+            ["claim_device", "_pairing_code"].concat(),
+            ["get_by_pairing", "_code"].concat(),
+            ["with_path(\"code-", "claims\")"].concat(),
         ];
         assert_forbidden_absent(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),

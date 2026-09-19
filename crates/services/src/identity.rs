@@ -1305,10 +1305,6 @@ pub trait DevicePairingPort: Send + Sync {
         &self,
         device_pairing_request_id: &str,
     ) -> ServiceResult<Option<DevicePairingState>>;
-    async fn get_by_pairing_code(
-        &self,
-        pairing_code: &str,
-    ) -> ServiceResult<Option<DevicePairingState>>;
     async fn finalize(
         &self,
         device_pairing_request_id: &str,
@@ -1321,7 +1317,7 @@ pub trait DevicePairingPort: Send + Sync {
 
 /// Minimal façade over the device-pairing short-link store: stage a new
 /// account-less request, bind it to its account at finalize, look one up by id
-/// or by code, flip it to authorized once a verified sibling drives
+/// by exact request id, flip it to authorized once a verified sibling drives
 /// `ak.gate.account.command.pair_device.v1`, and prune expired rows.
 #[derive(Clone)]
 pub struct DevicePairingService {
@@ -1346,13 +1342,6 @@ impl DevicePairingService {
         device_pairing_request_id: &str,
     ) -> ServiceResult<Option<DevicePairingState>> {
         self.pairing.get(device_pairing_request_id).await
-    }
-
-    pub async fn get_by_pairing_code(
-        &self,
-        pairing_code: &str,
-    ) -> ServiceResult<Option<DevicePairingState>> {
-        self.pairing.get_by_pairing_code(pairing_code).await
     }
 
     pub async fn finalize(

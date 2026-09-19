@@ -1254,10 +1254,12 @@ pub async fn assert_device_pairing_finalize_supersession_contract(
     // cannot be minted again inside the window it could still be replayed in.
     assert!(
         store
-            .get_by_pairing_code(&code("first"))
+            .get_by_request_id(&first_id)
             .await
             .expect("read the retired code")
-            .is_some_and(|record| record.state == DevicePairingState::Expired),
+            .is_some_and(|record| {
+                record.pairing_code == code("first") && record.state == DevicePairingState::Expired
+            }),
         "a superseded code keeps a tombstone until its own expires_at"
     );
     // A retired record can never be finalized back into the approvable set.
