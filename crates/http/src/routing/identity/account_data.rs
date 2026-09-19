@@ -320,10 +320,10 @@ async fn admit_caller_signed_account_data_set(
     state: &AppState,
     session: &soland_services::identity::SessionIdentityState,
     account_data_key: &str,
-    set_event: arkret_wire::EventInitialSubmission,
+    set_event: arkret_wire::Event,
     expect_tombstone: bool,
 ) -> Result<u64, AppError> {
-    let event = &set_event.event;
+    let event = &set_event;
     let session_actor = super::session_actor::session_actor_from_credential(state, session)?;
     validate_account_data_holder(event, &session_actor)?;
     let account_key = session_actor.to_string();
@@ -331,7 +331,7 @@ async fn admit_caller_signed_account_data_set(
         return Err(crate::app_error!(
             SchemaViolation,
             format!(
-                "set_event.event.kind must be {}",
+                "set_event.kind must be {}",
                 arkret_wire::EventKind::AccountDataSet
             ),
         ));
@@ -400,13 +400,13 @@ async fn admit_caller_signed_account_data_set(
     {
         return Err(crate::app_error!(
             SchemaViolation,
-            "set_event.event.realm_id must be the holder's principal-control Realm",
+            "set_event.realm_id must be the holder's principal-control Realm",
         ));
     }
 
     // The caller's exact bytes. Re-serializing the parsed Event would be the service
     // rebuilding it, and the proof covers the bytes as submitted.
-    let envelope = serde_json::to_value(&set_event.event).map_err(|error| {
+    let envelope = serde_json::to_value(&set_event).map_err(|error| {
         AppError::internal(format!("account_data Event serialize failed: {error}"))
     })?;
     crate::routing::events::event_log::submit_account_data_event_value(
@@ -444,7 +444,7 @@ fn validate_account_data_holder(
     if event.actor_id != *authenticated_actor {
         return Err(crate::app_error!(
             PolicyViolation,
-            "set_event.event.actor_id must be the authenticated Account Actor",
+            "set_event.actor_id must be the authenticated Account Actor",
         ));
     }
     Ok(())
@@ -489,14 +489,13 @@ async fn put_account_data(
 
     let body = body.into_inner();
     let account_actor = super::session_actor::session_actor_from_credential(state, &session)?;
-    validate_account_data_holder(&body.set_event.event, &account_actor)?;
+    validate_account_data_holder(&body.set_event, &account_actor)?;
     let account_key = account_actor.to_string();
     let content = body
         .set_event
-        .event
         .payload
         .get("body")
-        .or_else(|| body.set_event.event.payload.get("encrypted_payload"))
+        .or_else(|| body.set_event.payload.get("encrypted_payload"))
         .cloned()
         .ok_or_else(|| {
             crate::app_error!(

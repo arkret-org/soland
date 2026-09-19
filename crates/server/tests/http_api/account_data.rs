@@ -362,9 +362,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata_body() {
     )
     .await;
     let request = arkret_models_identity::account::AccountDataReplaceRequestBody {
-        set_event: arkret_wire::EventInitialSubmission::online(
-            serde_json::from_value(event).expect("signed account_data Event"),
-        ),
+        set_event: serde_json::from_value(event).expect("signed account_data Event"),
     };
     let mut response = TestClient::put(format!(
         "http://server/_arkret/self/account_data/{marker_key}"
