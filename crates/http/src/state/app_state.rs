@@ -270,7 +270,6 @@ pub struct AppStateRuntime {
 /// Founding principal of the development demo Realm.
 pub const DEVELOPMENT_DEMO_SUBJECT_DID: &str = "did:web:alice.example";
 const DEVELOPMENT_DEMO_TRUST_DOMAIN: &str = "ak:trust_domain:soland.test";
-const DEVELOPMENT_DEMO_GENESIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const DEVELOPMENT_DEMO_GENESIS_CREATED_AT: &str = "2026-01-01T00:00:00Z";
 
 /// Canonical `ak.realm.create` payload for a deterministic Realm genesis.
@@ -351,13 +350,7 @@ pub fn development_demo_genesis_event(
         payload,
     )
     .expect("development demo genesis draft")
-    .author_with_digest_suite(
-        0,
-        arkret_identifiers::Hlc::new(DEVELOPMENT_DEMO_GENESIS_HLC)
-            .expect("development demo genesis HLC"),
-        created_at,
-        arkret_canonical::DigestSuite::Sha256,
-    )
+    .author_with_digest_suite(created_at, arkret_canonical::DigestSuite::Sha256)
     .expect("development demo genesis Event")
 }
 

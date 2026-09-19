@@ -16,12 +16,12 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::RealmId;
+use arkret_identifiers::{RealmCommitId, RealmId};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
     RealmOrganizationRelationshipRow,
 };
-use arkret_wire::{DidCoreId, Hash};
+use arkret_wire::DidCoreId;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -121,7 +121,7 @@ async fn list_realm_organizations_impl(
             let realm_commit_ref = row
                 .realm_commit_ref
                 .as_deref()
-                .map(|s| de_str::<Hash>("realm_commit_ref", s))
+                .map(|s| de_str::<RealmCommitId>("realm_commit_ref", s))
                 .transpose()?;
             relationships.push(RealmOrganizationRelationshipRow {
                 statement_id: row.statement_id.clone(),
