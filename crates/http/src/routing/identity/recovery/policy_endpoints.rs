@@ -41,7 +41,7 @@ pub(super) fn typed_recovery_policy_summary(
     let policy: RecoveryPolicy = serde_json::from_value(record.raw_payload.clone())
         .map_err(|error| stored_recovery_type_error("policy payload", error))?;
     policy
-        .validate()
+        .validate_shape()
         .map_err(|error| stored_recovery_type_error("policy methods", error))?;
     Ok(RecoveryPolicySummary {
         policy_id: PolicyId::new(record.policy_id.clone())
@@ -61,7 +61,7 @@ pub(super) fn typed_recovery_policy_summary(
             .map_err(|error| stored_recovery_type_error("superseded policy id", error))?,
         expires_at: record.expires_at,
         issued_at: record.issued_at,
-        accepted_at: record.accepted_at,
+        accepted_at: Some(record.accepted_at),
         policy: Some(
             serde_json::from_value(record.raw_payload.clone())
                 .map_err(|error| stored_recovery_type_error("policy payload", error))?,
