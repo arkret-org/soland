@@ -112,7 +112,7 @@ async fn agent_draft_pending_intent_projects_live_and_terminal_redacted_versions
     assert_eq!(live[0].payload["state"], "available");
     assert!(live[0].payload.get("content_handoff").is_some());
 
-    let store = PgAgentDraftPendingIntentStore { pool: pool.clone() };
+    let store = PgAgentDraftPendingIntentStore::new(pool.clone());
     let expired = store
         .get_by_source_event(&controller, &event_id, expires_at)
         .await

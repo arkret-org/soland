@@ -137,11 +137,16 @@ impl Fixture {
             series_seq: 0,
             supersedes_id: None,
             supersedes_digest: None,
-            source_ref: None,
+            source_commit_ref: Some(crypto::KeyBackupSourceCommitRef {
+                realm_commit_id: wire::RealmCommitId::from_digest([79u8; 32]),
+                device_generation_ref: 1,
+            }),
             extra: Default::default(),
         };
         backup.validate().unwrap();
         let backup = serde_json::to_value(backup).unwrap();
+        assert!(backup.get("source_ref").is_none());
+        assert_eq!(backup["source_commit_ref"]["device_generation_ref"], 1);
         let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [81; 32],

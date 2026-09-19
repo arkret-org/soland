@@ -14,6 +14,13 @@ pub struct PgAgentDraftPendingIntentStore {
     pub(crate) pool: PgPool,
 }
 
+impl PgAgentDraftPendingIntentStore {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
 #[derive(diesel::QueryableByName)]
 struct PendingIntentRow {
     #[diesel(sql_type = Jsonb)]
