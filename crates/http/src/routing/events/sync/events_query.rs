@@ -1276,7 +1276,6 @@ async fn events_query_impl(
         for index in &indices {
             let (record, _, view) = &candidates[*index];
             let mut view = view.clone();
-            tombstone_projection_event_for_erased_actor(&projection, &mut view);
             tombstone_projection_event_for_message_redaction(&projection, &redactions, &mut view);
             if let Some(tombstone) =
                 super::super::projection::retention_tombstone_for_event(state, &record.event_id)

@@ -91,7 +91,6 @@ pub async fn projected_event_page_for_realms_through(
     {
         let projection = state.projections().snapshot();
         for event in &mut page_items {
-            tombstone_projection_event_for_erased_actor(&projection, event);
             tombstone_projection_event_for_message_redaction(
                 &projection,
                 &durable_redactions,

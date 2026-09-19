@@ -10,6 +10,9 @@
 //!
 //! All persistence access is mediated by `GovernanceService`.
 
+use arkret_models_collaboration::governance::erasure::{
+    ErasureFanoutStatus, ErasureOutcome, ErasureReceipt, ErasureStorageBoundary, ErasureSubjectKind,
+};
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -32,12 +35,12 @@ struct AuditErasureReceiptsOutcome {
 struct AuditErasureReceiptItem {
     receipt_id: Option<String>,
     issuer_id: Option<arkret_wire::DidCoreId>,
-    subject_kind: Option<String>,
+    subject_kind: Option<ErasureSubjectKind>,
     subject_ref: Option<String>,
-    outcome: String,
-    storage_boundary: Option<String>,
+    outcome: ErasureOutcome,
+    storage_boundary: Option<ErasureStorageBoundary>,
     scope_realm_id: Option<String>,
-    fanout_status: String,
+    fanout_status: ErasureFanoutStatus,
     recorded_at: String,
     payload: Value,
 }
@@ -58,14 +61,12 @@ pub(super) fn ops_router() -> Router {
         .push(Router::with_path("audit/erasure-receipts").get(audit_erasure_receipts))
 }
 
-/// Spec `realm-and-space.md` §2.5.2 — exposes the
-/// `ak.audit.erasure_receipt` projection so verifiers / auditors can
-/// query the local receipt list, including the canonical `fanout_status`.
-/// Advertised via
-/// `/_arkret/describe.erasure_receipts_endpoint`.
+/// Operator view over durable `ak.audit.erasure_receipt` Events, including
+/// the canonical `fanout_status`. Receipts deliberately have no current-result
+/// projection, so this endpoint derives its list from the immutable Event log.
 ///
 /// The endpoint is authentication-gated; reading the receipt list does
-/// not leak any post-erasure payload (the projection holds canonical
+/// not leak any post-erasure payload (the durable Events hold canonical
 /// receipt envelopes — issuer / subject / outcome / scope — which are
 /// the auditable surface by design).
 #[salvo::oapi::endpoint(
@@ -83,25 +84,46 @@ async fn audit_erasure_receipts(
     // unauthenticated; we don't restrict cross-actor reads because the
     // receipt list is the auditable surface (see method doc above).
     let _session = aa.authenticated_session(state, req).await?;
-    let receipts: Vec<AuditErasureReceiptItem> = {
-        let proj = state.projections().snapshot();
-        proj.erasure_receipts
-            .iter()
-            .map(|r| AuditErasureReceiptItem {
-                receipt_id: r.receipt_id.clone(),
-                issuer_id: r.issuer_id.clone(),
-                subject_kind: r.subject_kind.clone(),
-                subject_ref: r.subject_ref.clone(),
-                outcome: r.outcome.clone(),
-                storage_boundary: r.storage_boundary.clone(),
-                scope_realm_id: r.scope_realm_id.clone(),
-                fanout_status: r.fanout_status.clone(),
-                recorded_at: arkret_canonical::format_timestamp_canonical(r.recorded_at),
-                payload: r.payload.clone(),
-            })
-            .collect()
-    };
+    let receipts = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("erasure receipt query failed: {error}")))?
+        .into_iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::AuditErasureReceipt.as_str())
+        .map(|record| audit_erasure_receipt_item(&record))
+        .collect::<Result<Vec<_>, _>>()?;
     json_ok(AuditErasureReceiptsOutcome { receipts })
+}
+
+fn audit_erasure_receipt_item(
+    record: &soland_services::events::AcceptedEvent,
+) -> Result<AuditErasureReceiptItem, AppError> {
+    let payload = record
+        .envelope
+        .get("payload")
+        .cloned()
+        .ok_or_else(|| AppError::internal("erasure receipt Event has no payload"))?;
+    let receipt: ErasureReceipt = serde_json::from_value(payload.clone()).map_err(|error| {
+        AppError::internal(format!("accepted erasure receipt is not typed: {error}"))
+    })?;
+    receipt.validate_minimal().map_err(|error| {
+        AppError::internal(format!("accepted erasure receipt is invalid: {error}"))
+    })?;
+    Ok(AuditErasureReceiptItem {
+        receipt_id: Some(receipt.receipt_id),
+        issuer_id: Some(receipt.issuer_id),
+        subject_kind: Some(receipt.subject.kind),
+        subject_ref: Some(receipt.subject.subject_ref),
+        outcome: receipt.outcome,
+        storage_boundary: Some(receipt.scope.storage_boundary),
+        scope_realm_id: receipt.scope.realm_id.map(|realm_id| realm_id.to_string()),
+        fanout_status: receipt
+            .fanout_status
+            .unwrap_or(ErasureFanoutStatus::Pending),
+        recorded_at: arkret_canonical::format_timestamp_canonical(record.received_at),
+        payload,
+    })
 }
 
 #[salvo::oapi::endpoint(operation_id = "org.arkret.soland.audit.events", tags("soland_admin"))]
@@ -257,5 +279,105 @@ pub async fn append_audit_log(
         // tailing the trace stream.
         tracing::error!(%error, action, outcome, "failed to append audit log entry");
         crate::metrics::record_audit_append_failure();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use arkret_models_collaboration::events_payloads::event_wire::ErasureTrigger;
+    use arkret_models_collaboration::governance::erasure::{
+        ErasedClass, ErasureReceiptProof, ErasureScope, ErasureSubject,
+    };
+
+    use super::*;
+
+    #[test]
+    fn erasure_receipt_audit_item_is_derived_from_the_durable_event_payload() {
+        let recorded_at = chrono::DateTime::parse_from_rfc3339("2026-09-19T12:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let receipt = ErasureReceipt {
+            receipt_id: "ak:receipt:019b5c20-0000-7000-8000-000000000030".to_owned(),
+            trigger: ErasureTrigger::AccountStatusRecord {
+                account_status_record_id: arkret_wire::AccountStatusRecordId::new(
+                    "ak:account_status_record:AUPhm9XGSn2ah7YYExswNu0yaccqupAufE2bFvqEoD5N",
+                )
+                .unwrap(),
+            },
+            schema: ErasureReceipt::SCHEMA.to_owned(),
+            issuer_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:webvh:z6mkfixtureissuerstation".to_owned(),
+            )
+            .unwrap(),
+            subject: ErasureSubject {
+                kind: ErasureSubjectKind::Space,
+                subject_ref: "ak:space:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb".to_owned(),
+            },
+            scope: ErasureScope {
+                storage_boundary: ErasureStorageBoundary::ProjectionStore,
+                realm_id: Some(
+                    arkret_identifiers::RealmId::new(
+                        "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb".to_owned(),
+                    )
+                    .unwrap(),
+                ),
+                target_refs: Vec::new(),
+                retention_policy_id: None,
+                service_scope: None,
+            },
+            outcome: ErasureOutcome::Completed,
+            erased_classes: vec![ErasedClass::ProjectionRows],
+            retained_stub_digest: arkret_identifiers::Hash::new(
+                "sha256:aa67f34cd4e055246b8a73abe15734c39945b5c0e2e5693c00cada4e13d93e59",
+            )
+            .unwrap(),
+            retained_stub: None,
+            legal_hold_ref: None,
+            completed_at: recorded_at,
+            issued_at: Some(recorded_at),
+            proofs: vec![ErasureReceiptProof {
+                verification_method: arkret_identifiers::DidUrl::new(
+                    "did:webvh:z6mkfixtureissuerstation:issuer.example#key-1".to_owned(),
+                )
+                .unwrap(),
+                payload_digest: arkret_identifiers::Hash::new(
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                )
+                .unwrap(),
+                signature: "receipt-signature-base64url-placeholder".to_owned(),
+                extra: BTreeMap::new(),
+            }],
+            fanout_status: None,
+            peer_receipts: Vec::new(),
+        };
+        let payload = serde_json::to_value(receipt).unwrap();
+        let record = soland_services::events::AcceptedEvent {
+            event_id: "ak:event:Adpb76fsaup_4Y_cV39of-L1_k6Nv1kSoCzXa9TM4szu".to_owned(),
+            actor_id: "service".to_owned(),
+            realm_id: None,
+            kind: arkret_wire::EventKind::AuditErasureReceipt
+                .as_str()
+                .to_owned(),
+            schema_id: "schemas/event-payload.schema.json#/$defs/erasure_receipt_payload"
+                .to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest:
+                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
+            canonical_bytes: Vec::new(),
+            envelope: json!({"payload": payload}),
+            received_at: recorded_at,
+        };
+
+        let item = audit_erasure_receipt_item(&record).unwrap();
+        assert_eq!(item.outcome, ErasureOutcome::Completed);
+        assert_eq!(item.subject_kind, Some(ErasureSubjectKind::Space));
+        assert_eq!(
+            item.storage_boundary,
+            Some(ErasureStorageBoundary::ProjectionStore)
+        );
+        assert_eq!(item.fanout_status, ErasureFanoutStatus::Pending);
+        assert_eq!(item.payload, record.envelope["payload"]);
     }
 }

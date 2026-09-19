@@ -62,8 +62,8 @@ pub(in crate::routing) use validation::{
 };
 
 use super::projection::{
-    actor_erased_in_realm, retention_risk_audit_flag, retention_risk_reason,
-    retention_risk_ui_flag, retention_tombstone_for_event,
+    retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag,
+    retention_tombstone_for_event,
 };
 use super::{
     append_audit_log, auth_or_render, now, realm_allows_plaintext_service_for_data_class,

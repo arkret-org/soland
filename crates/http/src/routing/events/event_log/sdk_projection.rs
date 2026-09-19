@@ -378,14 +378,7 @@ pub(crate) fn sdk_event_for_state(
     record: &AcceptedEvent,
 ) -> Result<Event, AppError> {
     let event = canonical_event_for_read(record)?;
-    if retention_tombstone_for_event(state, &record.event_id).is_some()
-        || (event.kind != arkret_wire::EventKind::AuditErasureReceipt
-            && actor_erased_in_realm(
-                &state.projections().snapshot(),
-                &record.actor_id,
-                event.realm_id.as_str(),
-            ))
-    {
+    if retention_tombstone_for_event(state, &record.event_id).is_some() {
         return Err(AppError::internal(
             "Event-only surface cannot materialize a privacy-redacted Event",
         ));
@@ -404,14 +397,6 @@ pub(crate) async fn canonical_event_read_row(
     let event = canonical_event_for_read(record)?;
     let reason = if retention_tombstone_for_event(state, &record.event_id).is_some() {
         Some(EventRedactionReason::RetentionPruned)
-    } else if event.kind != arkret_wire::EventKind::AuditErasureReceipt
-        && actor_erased_in_realm(
-            &state.projections().snapshot(),
-            &record.actor_id,
-            event.realm_id.as_str(),
-        )
-    {
-        Some(EventRedactionReason::PolicyHidden)
     } else if matches!(
         event.kind,
         arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise

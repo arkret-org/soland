@@ -607,8 +607,8 @@ fn realm_freeze_requires_explicit_unfreeze_and_preserves_archive() {
     assert!(state.realm_ordinary_writes_blocked("unknown"));
 }
 
-/// The `ak.audit.erasure_receipt` reducer pass extracts `scope.realm_id`
-/// and stamps the payload's default `fanout_status = "pending"`.
+/// A valid receipt remains a durable fact. It is intentionally not parsed into
+/// or defaulted by the shared current-result reducer.
 fn valid_erasure_receipt_payload() -> Value {
     serde_json::json!({
         "receipt_id": "ak:receipt:019b5c20-0000-7000-8000-000000000030",
@@ -654,6 +654,8 @@ fn audit_erasure_receipt_is_retained_as_a_durable_fact_without_current_projectio
             if kind == arkret_wire::EventKind::AuditErasureReceipt.as_str()
                 && event_id == operation.context.event_id.to_string()
     ));
+    assert!(state.realm_states.is_empty());
+    assert!(state.messages.is_empty());
 }
 
 #[test]

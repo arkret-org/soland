@@ -103,13 +103,6 @@ pub struct InviteClaimProofContext {
 }
 
 #[derive(Clone, Debug)]
-pub struct ErasureReceiptView {
-    pub receipt_id: Option<String>,
-    pub scope_realm_id: Option<String>,
-    pub payload: Value,
-}
-
-#[derive(Clone, Debug)]
 pub enum MlsProjectionEffect {
     KeyPackagePublished {
         keypackage_id: String,
@@ -436,20 +429,6 @@ impl ProjectionService {
             expected_verification_id: expected_verification_id.to_owned(),
             invite_digest,
         }))
-    }
-
-    pub fn erasure_receipt(&self, receipt_id: &str) -> Option<ErasureReceiptView> {
-        self.state
-            .lock()
-            .erasure_receipts
-            .iter()
-            .rev()
-            .find(|record| record.receipt_id.as_deref() == Some(receipt_id))
-            .map(|record| ErasureReceiptView {
-                receipt_id: record.receipt_id.clone(),
-                scope_realm_id: record.scope_realm_id.clone(),
-                payload: record.payload.clone(),
-            })
     }
 
     /// Confirm that an accepted `ak.agent.action.approve` authorizes exactly

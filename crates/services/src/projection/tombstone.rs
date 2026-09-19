@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 use crate::events::ProjectedEvent as ProjectionEventRecord;
 use crate::governance::RetentionTombstoneRecord;
 
+/// Marker retained for decoding projection rows written by older runtimes.
+/// Current v1 erasure receipts are durable facts and do not synthesize this
+/// value into the shared current projection.
 pub const ERASED_USER_PLACEHOLDER: &str = "[user erased]";
 pub const RETENTION_EXPIRED_PLACEHOLDER: &str = "[expired]";
 
@@ -117,43 +120,6 @@ pub fn event_is_visible(event: &ProjectionEventRecord) -> bool {
     // exposes its target slots after applying tombstones rather than adding a
     // second visible timeline row for the reducer command itself.
     !arkret_wire::events::kinds::is_redaction_kind(&event.event_kind)
-}
-
-pub fn actor_erased_in_realm(
-    projection: &soland_domain::reducer::ProjectionState,
-    actor: &str,
-    realm_id: &str,
-) -> bool {
-    projection.erasure_receipts.iter().any(|receipt| {
-        receipt.outcome == "completed"
-            && receipt.subject_kind.as_deref() == Some("principal")
-            && receipt.subject_ref.as_deref() == Some(actor)
-            && receipt
-                .scope_realm_id
-                .as_deref()
-                .is_some_and(|scope| scope == realm_id)
-    })
-}
-
-pub fn projection_event_actor(event: &ProjectionEventRecord) -> Option<&str> {
-    event.sender.as_deref()
-}
-
-pub fn tombstone_projection_event_for_erased_actor(
-    projection: &soland_domain::reducer::ProjectionState,
-    event: &mut ProjectionEventRecord,
-) {
-    if event.event_kind == arkret_wire::EventKind::AuditErasureReceipt {
-        return;
-    }
-    let Some(actor) = projection_event_actor(event) else {
-        return;
-    };
-    if !actor_erased_in_realm(projection, actor, &event.realm_id) {
-        return;
-    }
-    event.sender = Some(ERASED_USER_PLACEHOLDER.to_owned());
-    event.payload = erasure_tombstone_payload_value(&event.payload);
 }
 
 pub fn tombstone_projection_event_for_message_redaction(
@@ -307,28 +273,6 @@ pub fn retention_risk_reason(tombstone: &RetentionTombstoneRecord) -> &'static s
     } else {
         "none"
     }
-}
-
-pub fn erasure_tombstone_payload_value(payload: &Value) -> Value {
-    let mut value = payload.clone();
-    let Some(object) = value.as_object_mut() else {
-        return json!({
-            "content": placeholder_content(ERASED_USER_PLACEHOLDER),
-            "erasure_tombstone": true,
-        });
-    };
-    for key in ["sender", "actor_id", "actor", "member"] {
-        if object.contains_key(key) {
-            object.insert(key.to_owned(), json!(ERASED_USER_PLACEHOLDER));
-        }
-    }
-    object.insert("erasure_tombstone".to_owned(), json!(true));
-    object.insert(
-        "content".to_owned(),
-        placeholder_content(ERASED_USER_PLACEHOLDER),
-    );
-    object.insert("encrypted".to_owned(), json!(false));
-    value
 }
 
 fn placeholder_content(body: &str) -> Value {
