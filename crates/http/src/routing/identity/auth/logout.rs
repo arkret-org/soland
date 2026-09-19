@@ -302,6 +302,13 @@ mod logout_introspection_tests {
     use super::*;
     use crate::wire::SessionGrantAdminIntrospectionStatus;
 
+    #[test]
+    fn session_revoke_outcome_remains_an_openapi_response_schema() {
+        fn assert_to_schema<T: salvo::oapi::ToSchema>() {}
+
+        assert_to_schema::<SessionRevokeOutcome>();
+    }
+
     fn outcome(
         active: bool,
         status: SessionGrantAdminIntrospectionStatus,
