@@ -1027,6 +1027,191 @@ async fn verify_owned_agent_direct_founding(
         "a different controller join generation must not revive the founding Agent membership"
     );
     drop(projection);
+
+    // Exercise the real public submit transaction after the Direct Conversation
+    // has a settled binding and exact two-member projection.  `ak.realm.archive`
+    // is deliberately outside the participant Event allowlist: the closed
+    // participant source must return its one non-enumerating rejection and the
+    // transaction must not publish any success carrier or derived side effect.
+    let coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let participant_basis = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let leaves = state
+                .test_seal_leaves(&realm_id)
+                .await
+                .expect("Direct Conversation Seal frontier");
+            if let [leaf] = leaves.as_slice() {
+                break leaf.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("Direct Conversation founding unit becomes sealed");
+    coordinator.abort();
+
+    let previous_event_id = submission.events[3].event.event_id.to_string();
+    let mut denied_event = CallerSignedEvent::new(
+        arkret_wire::EventKind::RealmArchive.as_str(),
+        controller,
+        super::agents::CONTROLLER_DEVICE_ID,
+        realm_id.as_str(),
+        serde_json::json!({}),
+    )
+    .with_actor_seq(4)
+    .with_prev_refs(vec![previous_event_id.as_str()])
+    .with_basis(CallerSignedBasis::AcceptedSeal(participant_basis))
+    .build();
+    denied_event.authorization_ref = Some(
+        arkret_wire::AuthorizationRef::new(
+            arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_PARTICIPANT_V1,
+        )
+        .unwrap(),
+    );
+    denied_event.proofs.clear();
+    let denied_event = sign_fixture_event(
+        denied_event,
+        controller,
+        super::agents::CONTROLLER_DEVICE_ID,
+        super::agents::CONTROLLER_DEVICE_SIGNING_SEED,
+    );
+    let denied_event_id = denied_event.event_id.clone();
+    let denied_submission = arkret_wire::EventInitialSubmission::online(denied_event);
+    let denied_body = arkret_canonical::canonical_json_bytes(&denied_submission).unwrap();
+    let idempotency_key = "direct-participant-denied-is-not-success";
+
+    let canonical_event_count = state
+        .test_persistence()
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap()
+        .len();
+    let realm_commit_heads = state
+        .test_persistence()
+        .authority_commits()
+        .realm_stream_heads(&realm_id)
+        .await
+        .unwrap();
+    let projection_event_count = state
+        .test_persistence()
+        .projection_events()
+        .snapshot_all()
+        .await
+        .unwrap()
+        .len();
+    let federation_outbox = state
+        .test_persistence()
+        .federation_outbox()
+        .snapshot_all()
+        .await
+        .unwrap();
+
+    for attempt in 0..2 {
+        let mut denied = TestClient::post("http://server/_arkret/self/events")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("Idempotency-Key", idempotency_key, true)
+            .add_header("content-type", "application/json", true)
+            .body(denied_body.clone())
+            .send(&app)
+            .await;
+        let denied_status = denied.status_code;
+        let denied_outcome: Value = denied.take_json().await.unwrap();
+        assert_eq!(denied_status, Some(StatusCode::OK), "{denied_outcome}");
+        assert_eq!(
+            denied_outcome,
+            serde_json::json!({
+                "status": "rejected",
+                "reason_code": arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED,
+            }),
+            "attempt {attempt} must re-evaluate the closed participant authority"
+        );
+    }
+
+    assert_eq!(
+        state
+            .test_persistence()
+            .events()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .len(),
+        canonical_event_count,
+        "participant rejection must append no canonical Event"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .get(denied_event_id.as_str())
+            .await
+            .unwrap()
+            .is_none(),
+        "participant rejection must not leave the rejected Event addressable"
+    );
+    assert_eq!(
+        state
+            .test_persistence()
+            .authority_commits()
+            .realm_stream_heads(&realm_id)
+            .await
+            .unwrap(),
+        realm_commit_heads,
+        "participant rejection must append no RealmCommit"
+    );
+    assert_eq!(
+        state
+            .test_persistence()
+            .projection_events()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .len(),
+        projection_event_count,
+        "participant rejection must append no durable projection"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .projection_events()
+            .get(denied_event_id.as_str())
+            .await
+            .unwrap()
+            .is_none(),
+        "participant rejection must not publish a projection for the rejected Event"
+    );
+    assert!(
+        !state
+            .test_projections()
+            .snapshot()
+            .realm_is_archived(realm_id.as_str()),
+        "participant rejection must not mutate the live Realm projection"
+    );
+    assert_eq!(
+        state
+            .test_persistence()
+            .federation_outbox()
+            .snapshot_all()
+            .await
+            .unwrap(),
+        federation_outbox,
+        "participant rejection must enqueue no federation outbox row"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .idempotency_keys()
+            .get(
+                &arkret_wire::ActorId::account(founder.clone()),
+                "ak.self.events.command.submit.v1",
+                idempotency_key,
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "participant rejection must not become a dedup success"
+    );
+
     state
         .hydrate()
         .await
