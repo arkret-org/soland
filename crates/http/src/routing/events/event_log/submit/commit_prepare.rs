@@ -136,6 +136,14 @@ async fn prepare_agent_draft_pending_intent(
             ));
         }
     }
+    let canonical_event_digest =
+        arkret_wire::Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("validated canonical Event digest is invalid: {error}"),
+            )
+        })?;
     Ok(Some(soland_storage::AgentDraftPendingIntentCommit {
         record: soland_storage::AgentDraftPendingIntentRecord {
             controller_account_id: payload.controller_account_id,
@@ -148,7 +156,7 @@ async fn prepare_agent_draft_pending_intent(
                 serde_json::to_value(payload.content_handoff)
                     .expect("typed handoff must serialize"),
             ),
-            canonical_event_digest: parsed.canonical_digest.clone(),
+            canonical_event_digest,
             accepted_event_id: parsed.event_id.clone(),
             expires_at: payload.expires_at,
             created_at: payload.created_at,
