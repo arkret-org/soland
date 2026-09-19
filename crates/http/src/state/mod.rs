@@ -4,12 +4,16 @@
 #[path = "../did_resolver_chain.rs"]
 pub mod did_resolver_chain;
 
+mod account_authority_device_pairing;
 mod agent_evidence_cache;
 mod app_state;
 mod member_identity;
 mod notification;
 mod service_route_fetcher;
 
+#[doc(hidden)]
+pub use account_authority_device_pairing::AccountAuthorityDevicePairingPort;
+pub(crate) use account_authority_device_pairing::UnavailableAccountAuthorityDevicePairing;
 pub use app_state::{
     AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_SUBJECT_DID,
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,

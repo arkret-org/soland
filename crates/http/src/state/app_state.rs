@@ -54,7 +54,10 @@ use soland_services::sync::SyncService;
 
 use super::member_identity::MemberIdentityRegistry;
 use super::notification::{EventBroadcast, EventNotification, Mutex};
-use super::{VerifiedBindingRouteFetcher, did_resolver_chain};
+use super::{
+    AccountAuthorityDevicePairingPort, UnavailableAccountAuthorityDevicePairing,
+    VerifiedBindingRouteFetcher, did_resolver_chain,
+};
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
 use crate::verified_profiles::VerifiedProfileArtifactEntry;
@@ -117,6 +120,9 @@ pub struct AppState {
     agent_pairings: AgentPairingService,
     pub(crate) agent_evidence_cache: Arc<super::agent_evidence_cache::AgentEvidenceCache>,
     device_pairings: DevicePairingService,
+    /// Typed, fail-closed Station -> Account Authority device-pairing edge.
+    /// Public open handlers never read or write the local pairing service.
+    account_authority_device_pairing: Arc<dyn AccountAuthorityDevicePairingPort>,
     agent_participations: AgentParticipationService,
     key_backups: KeyBackupService,
     sessions: SessionService,
@@ -1218,6 +1224,7 @@ impl AppState {
                 super::agent_evidence_cache::AgentEvidenceCache::default(),
             ),
             device_pairings,
+            account_authority_device_pairing: Arc::new(UnavailableAccountAuthorityDevicePairing),
             agent_participations,
             key_backups,
             sessions,
@@ -1471,6 +1478,21 @@ impl AppState {
 
     pub(crate) fn device_pairings(&self) -> &DevicePairingService {
         &self.device_pairings
+    }
+
+    pub(crate) fn account_authority_device_pairing(
+        &self,
+    ) -> &dyn AccountAuthorityDevicePairingPort {
+        self.account_authority_device_pairing.as_ref()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn test_set_account_authority_device_pairing(
+        &mut self,
+        port: Arc<dyn AccountAuthorityDevicePairingPort>,
+    ) {
+        self.account_authority_device_pairing = port;
     }
 
     pub(crate) fn agent_participations(&self) -> &AgentParticipationService {
