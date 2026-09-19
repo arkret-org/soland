@@ -106,21 +106,7 @@ async fn health_and_describe_work_body() {
             .iter()
             .any(|profile| profile == "ak.reducer.core.v1")
     );
-    // Every advertised reducer profile has to be one the Spec registers.
-    let reducer_profiles = describe["supported_reducer_profiles"].as_array().unwrap();
-    assert!(!reducer_profiles.is_empty());
-    for profile in reducer_profiles {
-        let profile = profile.as_str().expect("reducer profile id is a string");
-        assert!(
-            arkret_wire::is_reducer_profile_id(profile),
-            "advertised reducer profile {profile} is not in the reducer-profile registry"
-        );
-    }
-    assert!(
-        reducer_profiles
-            .iter()
-            .any(|profile| profile == "ak.reducer.core.v1")
-    );
+    assert!(describe.get("supported_reducer_profiles").is_none());
     assert_eq!(
         describe["limits"]["profile_status"]["conformance"],
         "limited_reference"

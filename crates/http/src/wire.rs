@@ -30,8 +30,8 @@ pub use arkret_models_identity::admin_grant::SessionGrantAdminIntrospectionStatu
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
 pub use arkret_models_integration::OkOutcome;
 use arkret_wire::{
-    MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES,
-    MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH, ProfileId,
+    MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_REFS,
+    MAX_EVENT_SUBMIT_BATCH, ProfileId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -649,15 +649,10 @@ pub fn describe(
             "ak.feature.mls_exporter_aead.v1".to_owned(),
             "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
         ],
-        supported_reducer_profiles: SUPPORTED_REDUCER_PROFILES
-            .iter()
-            .map(|profile| (*profile).to_owned())
-            .collect(),
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,
         limits: arkret_models_discovery::service_description::ServerLimits {
-            mls_governance_proof: Some(Default::default()),
             extensions: serde_json::from_value(serde_json::json!({
             "storage": storage,
             "max_limit": 100,
@@ -797,7 +792,6 @@ pub fn describe(
                 "max_event_bytes": MAX_EVENT_ENVELOPE_BYTES,
                 "max_events_batch_submit": MAX_EVENT_SUBMIT_BATCH,
                 "max_page_items": 100,
-                "max_prev_refs": MAX_EVENT_PREV_REFS,
                 "max_refs": MAX_EVENT_REFS,
                 "max_auth_refs": MAX_AUTHORIZED_BY_REFS,
                 "max_relation_expansion_depth": 32,
@@ -913,10 +907,7 @@ mod tests {
             );
         }
         let value = serde_json::to_value(description).expect("description serializes");
-        assert_eq!(
-            value["limits"]["mls_governance_proof"]["max_exact_response_bytes"],
-            arkret_wire::constants::MLS_GOVERNANCE_PROOF_MAX_BYTES
-        );
+        assert!(value["limits"].get("mls_governance_proof").is_none());
         assert_eq!(value["transport_bindings"][0]["kind"], "http_json");
         assert_eq!(
             value["transport_bindings"][0]["base_url"],
@@ -1024,9 +1015,10 @@ mod tests {
             value["limits"]["scalability_constraints"]["max_events_batch_submit"],
             json!(arkret_wire::event_envelope::MAX_EVENT_SUBMIT_BATCH)
         );
-        assert_eq!(
-            value["limits"]["scalability_constraints"]["max_prev_refs"],
-            json!(arkret_wire::event_envelope::MAX_EVENT_PREV_REFS)
+        assert!(
+            value["limits"]["scalability_constraints"]
+                .get("max_prev_refs")
+                .is_none()
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_refs"],

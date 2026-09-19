@@ -188,7 +188,6 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         ],
         takedown_contact: None,
         rate_limits: Some(BTreeMap::new()),
-        supported_reducer_profiles: Vec::new(),
         extensions: Default::default(),
     };
     description
