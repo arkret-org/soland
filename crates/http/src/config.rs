@@ -333,6 +333,11 @@ pub struct AppConfig {
     /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub account_authority_url: Option<String>,
+    /// Explicit destination trust domain for signed Station -> Account
+    /// Authority requests. It is independent of the older shared-secret
+    /// channel: RFC 9421 transport requires this value even when that channel
+    /// is absent.
+    pub account_authority_trust_domain: Option<TrustDomainId>,
     /// Public assertion key delegated in this Station's signed DID inception.
     /// Changing this pin requires an authorized DID history update.
     pub account_authority_public_key_multibase: Option<String>,
@@ -943,6 +948,7 @@ impl AppConfig {
             media: MediaIssuerConfig::test_default(),
             cors_allow_origin: None,
             account_authority_url: None,
+            account_authority_trust_domain: None,
             account_authority_public_key_multibase: None,
             oidc_client_id: None,
             development_mode: false,
@@ -1013,6 +1019,7 @@ impl AppConfig {
             "test internal channel requires an Account Authority URL"
         );
         let credential = credential.into();
+        self.account_authority_trust_domain = Some(self.trust_domain.clone());
         self.internal_authority_shared_secret = Some(credential.clone());
         self.internal_authority_channel = Some(InternalAuthorityChannelConfig {
             credential,
@@ -1148,7 +1155,7 @@ impl AppConfig {
         let internal_authority_channel = match (
             account_authority_url.as_deref(),
             internal_authority_shared_secret.as_deref(),
-            account_authority_trust_domain,
+            account_authority_trust_domain.as_ref(),
         ) {
             (Some(authority_url), Some(credential), Some(account_authority_trust_domain)) => {
                 if let Some(introspection_url) = session_grant_introspection_url.as_deref() {
@@ -1169,7 +1176,7 @@ impl AppConfig {
                 }
                 Some(InternalAuthorityChannelConfig {
                     credential: credential.to_owned(),
-                    account_authority_trust_domain,
+                    account_authority_trust_domain: account_authority_trust_domain.clone(),
                     controller_gate_url: internal_authority_operation_url(
                         authority_url,
                         INTERNAL_CONTROLLER_GATE_PATH,
@@ -1406,6 +1413,7 @@ impl AppConfig {
             media,
             cors_allow_origin,
             account_authority_url,
+            account_authority_trust_domain,
             account_authority_public_key_multibase,
             oidc_client_id,
             development_mode,
@@ -2275,6 +2283,25 @@ mod tests {
                 .unwrap()
                 .controller_gate_url(),
             "https://auth.example/_arkret/gate/account/controller-gate-attestations"
+        );
+    }
+
+    #[test]
+    fn signed_pairing_transport_does_not_require_the_shared_secret_channel() {
+        let mut values = registered_internal_channel_values();
+        values.remove("SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET");
+        values.remove("SOLAND_SESSION_GRANT_INTROSPECTION_URL");
+        values.remove("SOLAND_AUTH_SESSION_LOGOUT_URL");
+        let config =
+            AppConfig::from_values(&values, StartupOverrides::default()).expect("valid config");
+        assert!(config.internal_authority_channel.is_none());
+        assert!(config.internal_authority_shared_secret.is_none());
+        assert_eq!(
+            config
+                .account_authority_trust_domain
+                .as_ref()
+                .map(TrustDomainId::as_str),
+            Some("ak:trust_domain:auth.example")
         );
     }
 

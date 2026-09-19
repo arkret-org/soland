@@ -55,7 +55,7 @@ use soland_services::sync::SyncService;
 use super::member_identity::MemberIdentityRegistry;
 use super::notification::{EventBroadcast, EventNotification, Mutex};
 use super::{
-    AccountAuthorityDevicePairingPort, UnavailableAccountAuthorityDevicePairing,
+    AccountAuthorityDevicePairingPort, Rfc9421AccountAuthorityDevicePairing,
     VerifiedBindingRouteFetcher, did_resolver_chain,
 };
 use crate::authz::SolandAuthzEngine;
@@ -1224,7 +1224,7 @@ impl AppState {
                 super::agent_evidence_cache::AgentEvidenceCache::default(),
             ),
             device_pairings,
-            account_authority_device_pairing: Arc::new(UnavailableAccountAuthorityDevicePairing),
+            account_authority_device_pairing: Arc::new(Rfc9421AccountAuthorityDevicePairing),
             agent_participations,
             key_backups,
             sessions,

@@ -59,7 +59,7 @@ pub(super) async fn stage_device_pairing(
     let idempotency_key = new_internal_stage_idempotency_key();
     let outcome = state
         .account_authority_device_pairing()
-        .stage(&body, &idempotency_key)
+        .stage(state, &body, &idempotency_key)
         .await?;
     json_ok(outcome)
 }
@@ -86,7 +86,7 @@ pub(super) async fn resolve_device_pairing(
     }
     let outcome = state
         .account_authority_device_pairing()
-        .resolve(&body)
+        .resolve(state, &body)
         .await?;
     json_ok(outcome)
 }
@@ -109,7 +109,7 @@ pub(super) async fn device_pairing_status(
         .map_err(|_| AppError::json_invalid("invalid device pairing status request body"))?;
     let outcome = state
         .account_authority_device_pairing()
-        .status(&body)
+        .status(state, &body)
         .await?;
     outcome.validate().map_err(|error| {
         crate::app_error!(
@@ -214,9 +214,9 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("production source precedes tests");
-        assert!(production.contains(".stage(&body, &idempotency_key)"));
-        assert!(production.contains(".resolve(&body)"));
-        assert!(production.contains(".status(&body)"));
+        assert!(production.contains(".stage(state, &body, &idempotency_key)"));
+        assert!(production.contains(".resolve(state, &body)"));
+        assert!(production.contains(".status(state, &body)"));
         assert!(!production.contains(".device_pairings()"));
         assert!(!production.contains("DevicePairingState"));
         assert!(!production.contains("DevicePairingRecord"));

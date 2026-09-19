@@ -13,7 +13,7 @@ mod service_route_fetcher;
 
 #[doc(hidden)]
 pub use account_authority_device_pairing::AccountAuthorityDevicePairingPort;
-pub(crate) use account_authority_device_pairing::UnavailableAccountAuthorityDevicePairing;
+pub(crate) use account_authority_device_pairing::Rfc9421AccountAuthorityDevicePairing;
 pub use app_state::{
     AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_SUBJECT_DID,
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,
