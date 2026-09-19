@@ -600,6 +600,18 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
     async fn account_global_watermark(&self) -> crate::ServiceResult<i64> {
         Ok(self.0.sync_cursors().account_global_watermark().await?)
     }
+    async fn account_global_channel_position(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+    ) -> crate::ServiceResult<i64> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .account_global_channel_position(actor_key, channel, watermark)
+            .await?)
+    }
     async fn account_global_page(
         &self,
         actor_key: &str,

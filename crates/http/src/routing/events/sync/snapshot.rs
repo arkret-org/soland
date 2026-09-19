@@ -187,6 +187,7 @@ pub(crate) async fn build_sync_snapshot(
         }),
         device_lists: Some(global.device_lists),
         account_data: Some(global.account_data),
+        agent_draft_pending_intents: global.agent_draft_pending_intents,
         notifications: Some(global.notifications),
         partial: None,
         priority: None,

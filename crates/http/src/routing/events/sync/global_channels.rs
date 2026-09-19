@@ -1,6 +1,8 @@
 use arkret_models_collaboration::sync_frames::account_subscribe::{
-    AccountDataContainer, AccountSubscribeDeviceListChanges, NotificationContainer,
-    StationCasAccountDataContainer, StationCasAccountDataRemoval,
+    AccountDataContainer, AccountSubscribeDeviceListChanges, AgentDraftPendingIntent,
+    AgentDraftPendingIntentChange, AgentDraftPendingIntentContainer,
+    AgentDraftPendingIntentRemoval, NotificationContainer, StationCasAccountDataContainer,
+    StationCasAccountDataRemoval,
 };
 use arkret_models_collaboration::sync_frames::demand_sync::{
     AccountBaselineChannel, AccountBaselineSegment,
@@ -17,6 +19,12 @@ struct GlobalProgress {
     offsets: BTreeMap<String, String>,
     completed: BTreeSet<String>,
     positions: BTreeMap<String, i64>,
+    #[serde(default)]
+    pending_snapshot_cut_position: Option<i64>,
+    #[serde(default)]
+    pending_page_offset: u64,
+    #[serde(default)]
+    pending_projection_position: i64,
 }
 
 pub(crate) struct GlobalDelta {
@@ -25,6 +33,26 @@ pub(crate) struct GlobalDelta {
     pub account_data: AccountDataContainer,
     pub notifications: NotificationContainer,
     pub device_lists: AccountSubscribeDeviceListChanges,
+    pub agent_draft_pending_intents: Option<AgentDraftPendingIntentContainer>,
+}
+
+fn pending_intents_allowed(has_agent_session: bool, has_account_binding: bool) -> bool {
+    !has_agent_session && has_account_binding
+}
+
+fn global_baseline_complete(progress: &GlobalProgress, pending_allowed: bool) -> bool {
+    let mut required = vec![
+        "account_data_events",
+        "station_cas",
+        "notifications",
+        "device_lists",
+    ];
+    if pending_allowed {
+        required.push("agent_draft_pending_intents");
+    }
+    required
+        .into_iter()
+        .all(|channel| progress.completed.contains(channel))
 }
 
 pub(crate) async fn read(
@@ -37,6 +65,13 @@ pub(crate) async fn read(
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)
             .map_err(|_| "invalid account actor".to_owned())?;
     let actor_key = actor.canonical_key().map_err(|error| error.to_string())?;
+    // Authentication already revalidates the human device authorization on
+    // every request. Agent and recovery credentials must not receive this
+    // controller-holder-private projection.
+    let pending_allowed = pending_intents_allowed(
+        session.agent_session.is_some(),
+        session.account_pk.is_some(),
+    );
     let watermark = state
         .sync()
         .account_global_watermark()
@@ -60,9 +95,12 @@ pub(crate) async fn read(
             offsets: BTreeMap::new(),
             completed: BTreeSet::new(),
             positions: BTreeMap::new(),
+            pending_snapshot_cut_position: None,
+            pending_page_offset: 0,
+            pending_projection_position: 0,
         }
     };
-    if progress.completed.len() < 4
+    if !global_baseline_complete(&progress, pending_allowed)
         && progress.snapshot_expires_at_ms <= chrono::Utc::now().timestamp_millis()
     {
         return Err("account baseline snapshot expired; establish a fresh baseline".into());
@@ -74,10 +112,11 @@ pub(crate) async fn read(
         changed_ids: Vec::new(),
         left_ids: Vec::new(),
     };
+    let mut agent_draft_pending_intents = None;
     let mut channels = Vec::new();
     let mut completed_channels = Vec::new();
     let mut remaining_bytes = 6 * 1024 * 1024;
-    for (name, channel) in [
+    let mut channel_defs = vec![
         (
             "account_data_events",
             AccountBaselineChannel::AccountDataEvents,
@@ -85,7 +124,27 @@ pub(crate) async fn read(
         ("station_cas", AccountBaselineChannel::StationCas),
         ("notifications", AccountBaselineChannel::Notifications),
         ("device_lists", AccountBaselineChannel::DeviceLists),
-    ] {
+    ];
+    if pending_allowed {
+        channel_defs.push((
+            "agent_draft_pending_intents",
+            AccountBaselineChannel::AgentDraftPendingIntents,
+        ));
+        if progress.pending_snapshot_cut_position.is_none() {
+            progress.pending_snapshot_cut_position = Some(
+                state
+                    .sync()
+                    .account_global_channel_position(
+                        &actor_key,
+                        "agent_draft_pending_intents",
+                        progress.snapshot_watermark,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+    }
+    for (name, channel) in channel_defs {
         let baseline = !progress.completed.contains(name);
         let cut = if baseline {
             progress.snapshot_watermark
@@ -112,6 +171,8 @@ pub(crate) async fn read(
             .map_err(|error| error.to_string())?;
         let mut consumed = 0usize;
         let mut by_key = BTreeMap::new();
+        let mut pending_items = Vec::new();
+        let pending_page_offset = progress.pending_page_offset;
         for row in &rows {
             if row.payload.get("_oversized").and_then(Value::as_bool) == Some(true) {
                 return Err("one account-global value exceeds the byte budget".to_owned());
@@ -155,18 +216,63 @@ pub(crate) async fn read(
             } else {
                 progress.positions.insert(name.to_owned(), row.revision);
             }
-            by_key.insert(row.item_key.clone(), (row.deleted, payload));
+            if name == "agent_draft_pending_intents" {
+                let change = if row.deleted {
+                    AgentDraftPendingIntentChange::Remove(
+                        serde_json::from_value::<AgentDraftPendingIntentRemoval>(payload)
+                            .map_err(|error| error.to_string())?,
+                    )
+                } else {
+                    AgentDraftPendingIntentChange::Upsert(
+                        serde_json::from_value::<AgentDraftPendingIntent>(payload)
+                            .map_err(|error| error.to_string())?,
+                    )
+                };
+                pending_items.push(change);
+                if !baseline {
+                    progress.pending_projection_position = row.channel_position;
+                }
+            } else {
+                by_key.insert(row.item_key.clone(), (row.deleted, payload));
+            }
         }
+        let terminal_page = consumed == rows.len() && rows.len() < 101;
         if baseline {
             channels.push(channel);
-            if consumed == rows.len() && rows.len() < 101 {
+            if name == "agent_draft_pending_intents" {
+                progress.pending_page_offset =
+                    progress.pending_page_offset.saturating_add(consumed as u64);
+                if terminal_page {
+                    progress.pending_projection_position =
+                        progress.pending_snapshot_cut_position.unwrap_or_default();
+                }
+                agent_draft_pending_intents = Some(AgentDraftPendingIntentContainer::Baseline {
+                    snapshot_cut_position: u64::try_from(
+                        progress.pending_snapshot_cut_position.unwrap_or_default(),
+                    )
+                    .map_err(|_| "pending snapshot position is negative")?,
+                    page_offset: pending_page_offset,
+                    next_page_offset: (!terminal_page).then_some(progress.pending_page_offset),
+                    items: pending_items,
+                });
+            }
+            if terminal_page {
                 progress.completed.insert(name.to_owned());
                 progress.positions.insert(name.to_owned(), cut);
                 progress.offsets.remove(name);
                 completed_channels.push(channel);
             }
-        } else if consumed == rows.len() && rows.len() < 101 {
-            progress.positions.insert(name.to_owned(), cut);
+        } else {
+            if name == "agent_draft_pending_intents" && !pending_items.is_empty() {
+                agent_draft_pending_intents = Some(AgentDraftPendingIntentContainer::Delta {
+                    projection_position: u64::try_from(progress.pending_projection_position)
+                        .map_err(|_| "pending projection position is negative")?,
+                    items: pending_items,
+                });
+            }
+            if terminal_page {
+                progress.positions.insert(name.to_owned(), cut);
+            }
         }
         for (deleted, payload) in by_key.into_values() {
             if baseline && deleted {
@@ -231,6 +337,7 @@ pub(crate) async fn read(
                         device_lists.changed_ids.push(owner);
                     }
                 }
+                "agent_draft_pending_intents" => unreachable!("handled in channel order"),
                 _ => unreachable!(),
             }
         }
@@ -246,11 +353,133 @@ pub(crate) async fn read(
         channels,
         completed_channels,
     });
+    if let Some(container) = &agent_draft_pending_intents {
+        container.validate().map_err(|error| error.to_string())?;
+    }
     Ok(GlobalDelta {
         context: serde_json::to_value(progress).map_err(|error| error.to_string())?,
         baseline,
         account_data,
         notifications,
         device_lists,
+        agent_draft_pending_intents,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress(completed: &[&str]) -> GlobalProgress {
+        GlobalProgress {
+            snapshot_cursor: arkret_wire::Cursor::new(
+                "ak:cursor:01964137000070008000000000000001",
+            )
+            .unwrap(),
+            snapshot_watermark: 7,
+            snapshot_expires_at_ms: 9,
+            offsets: BTreeMap::new(),
+            completed: completed.iter().map(|value| (*value).to_owned()).collect(),
+            positions: BTreeMap::new(),
+            pending_snapshot_cut_position: Some(11),
+            pending_page_offset: 100,
+            pending_projection_position: 11,
+        }
+    }
+
+    #[test]
+    fn pending_channel_requires_a_human_account_holder() {
+        assert!(pending_intents_allowed(false, true));
+        assert!(!pending_intents_allowed(true, true));
+        assert!(!pending_intents_allowed(false, false));
+    }
+
+    #[test]
+    fn fifth_channel_participates_in_resync_completion_only_for_its_audience() {
+        let four = progress(&[
+            "account_data_events",
+            "station_cas",
+            "notifications",
+            "device_lists",
+        ]);
+        assert!(global_baseline_complete(&four, false));
+        assert!(!global_baseline_complete(&four, true));
+        let five = progress(&[
+            "account_data_events",
+            "station_cas",
+            "notifications",
+            "device_lists",
+            "agent_draft_pending_intents",
+        ]);
+        assert!(global_baseline_complete(&five, true));
+    }
+
+    #[test]
+    fn legacy_cursor_context_defaults_private_channel_progress() {
+        let value = serde_json::json!({
+            "snapshot_cursor": "ak:cursor:01964137000070008000000000000001",
+            "snapshot_watermark": 7,
+            "snapshot_expires_at_ms": 9,
+            "offsets": {},
+            "completed": [],
+            "positions": {}
+        });
+        let decoded: GlobalProgress = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.pending_snapshot_cut_position, None);
+        assert_eq!(decoded.pending_page_offset, 0);
+        assert_eq!(decoded.pending_projection_position, 0);
+    }
+
+    #[test]
+    fn cursor_context_serializes_private_offsets_without_exposing_them_in_the_dto() {
+        let encoded = serde_json::to_value(progress(&[])).unwrap();
+        assert_eq!(encoded["pending_snapshot_cut_position"], 11);
+        assert_eq!(encoded["pending_page_offset"], 100);
+        assert_eq!(encoded["pending_projection_position"], 11);
+    }
+
+    #[test]
+    fn terminal_private_baseline_page_serializes_with_fifth_channel_completion() {
+        use arkret_models_collaboration::sync_frames::account_subscribe::{
+            AccountSubscribeFrame, AccountSubscribeFrameKind,
+        };
+
+        let channel = AccountBaselineChannel::AgentDraftPendingIntents;
+        let frame = AccountSubscribeFrame {
+            kind: AccountSubscribeFrameKind::Delta,
+            cursor: Some("ak:cursor:01964137000070008000000000000001".to_owned()),
+            realms: None,
+            to_device: None,
+            device_lists: None,
+            account_data: None,
+            agent_draft_pending_intents: Some(AgentDraftPendingIntentContainer::Baseline {
+                snapshot_cut_position: 11,
+                page_offset: 100,
+                next_page_offset: None,
+                items: Vec::new(),
+            }),
+            notifications: None,
+            partial: None,
+            priority: None,
+            reconnect_after_ms: None,
+            realm_list: None,
+            realm_list_changes: None,
+            baseline: Some(AccountBaselineSegment {
+                snapshot_cursor: arkret_wire::Cursor::new(
+                    "ak:cursor:01964137000070008000000000000001",
+                )
+                .unwrap(),
+                channels: vec![channel],
+                completed_channels: vec![channel],
+            }),
+            realm_invalidations: None,
+        };
+        frame.validate().unwrap();
+        let encoded = serde_json::to_value(frame).unwrap();
+        assert_eq!(encoded["agent_draft_pending_intents"]["mode"], "baseline");
+        assert_eq!(
+            encoded["baseline"]["completed_channels"][0],
+            "agent_draft_pending_intents"
+        );
+    }
 }

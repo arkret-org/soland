@@ -381,6 +381,7 @@ pub(crate) fn account_frontier_frame(
         to_device: None,
         device_lists: None,
         account_data: None,
+        agent_draft_pending_intents: None,
         notifications: None,
         partial: None,
         priority: None,
@@ -402,6 +403,7 @@ pub(crate) fn account_catchup_complete_frame(
         to_device: None,
         device_lists: None,
         account_data: None,
+        agent_draft_pending_intents: None,
         notifications: None,
         partial: None,
         priority: None,
@@ -428,6 +430,13 @@ pub(crate) fn delta_is_empty(
                 .as_ref()
                 .is_none_or(|cas| cas.upserts.is_empty() && cas.removals.is_empty())
     }) && response
+        .agent_draft_pending_intents
+        .as_ref()
+        .is_none_or(|pending| match pending {
+            arkret_models_collaboration::sync_frames::account_subscribe::AgentDraftPendingIntentContainer::Delta { items, .. }
+            | arkret_models_collaboration::sync_frames::account_subscribe::AgentDraftPendingIntentContainer::Baseline { items, .. } => items.is_empty(),
+        })
+        && response
         .device_lists
         .as_ref()
         .is_none_or(|devices| devices.changed_ids.is_empty() && devices.left_ids.is_empty())
@@ -688,6 +697,7 @@ fn account_reconnect_control_frame(
         to_device: None,
         device_lists: None,
         account_data: None,
+        agent_draft_pending_intents: None,
         notifications: None,
         partial: None,
         priority: None,

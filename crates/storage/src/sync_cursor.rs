@@ -91,6 +91,12 @@ pub trait SyncCursorStore: Send + Sync {
     ) -> PersistenceResult<bool>;
     async fn account_sync_watermarks(&self) -> PersistenceResult<(i64, i64)>;
     async fn account_global_watermark(&self) -> PersistenceResult<i64>;
+    async fn account_global_channel_position(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+    ) -> PersistenceResult<i64>;
     async fn account_global_page(
         &self,
         actor_key: &str,

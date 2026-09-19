@@ -374,6 +374,17 @@ mod tests {
                 .canonical_key()
                 .unwrap();
         let live_cut = sync.account_global_watermark().await.unwrap();
+        assert_eq!(
+            sync.account_global_channel_position(
+                &controller_actor_key,
+                "agent_draft_pending_intents",
+                live_cut,
+            )
+            .await
+            .unwrap(),
+            1,
+            "the frozen baseline cut uses the private channel position",
+        );
         let live_page = sync
             .account_global_page(
                 &controller_actor_key,
@@ -448,6 +459,17 @@ mod tests {
         assert!(expired.content_handoff.is_none());
 
         let terminal_cut = sync.account_global_watermark().await.unwrap();
+        assert_eq!(
+            sync.account_global_channel_position(
+                &controller_actor_key,
+                "agent_draft_pending_intents",
+                terminal_cut,
+            )
+            .await
+            .unwrap(),
+            2,
+            "terminal redaction advances the same private channel",
+        );
         let terminal_delta = sync
             .account_global_page(
                 &controller_actor_key,

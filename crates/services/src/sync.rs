@@ -31,6 +31,12 @@ pub trait CursorStorePort: Send + Sync {
     ) -> ServiceResult<bool>;
     async fn account_sync_watermarks(&self) -> ServiceResult<(i64, i64)>;
     async fn account_global_watermark(&self) -> ServiceResult<i64>;
+    async fn account_global_channel_position(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+    ) -> ServiceResult<i64>;
     async fn account_global_page(
         &self,
         actor_key: &str,
@@ -125,6 +131,16 @@ impl SyncService {
     }
     pub async fn account_global_watermark(&self) -> ServiceResult<i64> {
         self.cursors.account_global_watermark().await
+    }
+    pub async fn account_global_channel_position(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+    ) -> ServiceResult<i64> {
+        self.cursors
+            .account_global_channel_position(actor_key, channel, watermark)
+            .await
     }
     pub async fn account_global_page(
         &self,
@@ -335,6 +351,14 @@ mod tests {
             Ok((0, 0))
         }
         async fn account_global_watermark(&self) -> ServiceResult<i64> {
+            Ok(0)
+        }
+        async fn account_global_channel_position(
+            &self,
+            _: &str,
+            _: &str,
+            _: i64,
+        ) -> ServiceResult<i64> {
             Ok(0)
         }
         async fn account_global_page(

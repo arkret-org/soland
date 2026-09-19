@@ -285,6 +285,28 @@ impl SyncCursorStore for PgSyncCursorStore {
             .map(|row| row.revision)
             .map_err(PersistenceError::database)
     }
+    async fn account_global_channel_position(
+        &self,
+        actor_key: &str,
+        channel: &str,
+        watermark: i64,
+    ) -> PersistenceResult<i64> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT COALESCE(MAX(channel_position), 0)::bigint AS revision \
+             FROM account_global_versions \
+             WHERE actor_key = $1 AND channel = $2 AND revision <= $3",
+        )
+        .bind::<Text, _>(actor_key)
+        .bind::<Text, _>(channel)
+        .bind::<BigInt, _>(watermark)
+        .get_result::<SummaryWatermarkRow>(&mut *conn)
+        .await
+        .map(|row| row.revision)
+        .map_err(PersistenceError::database)
+    }
     async fn account_global_page(
         &self,
         actor_key: &str,
