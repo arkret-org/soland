@@ -2,9 +2,10 @@ pub use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
 pub use arkret_models_collaboration::http_bodies::{
     ContactListRow, ContactState, DirectConversationSummary, DirectConversationSummaryState,
 };
-pub use arkret_models_collaboration::session_grant_bodies::{
+pub use arkret_models_collaboration::session_grant_bodies::SessionLoginOutcome;
+pub use arkret_models_collaboration::session_grants::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
-    SessionGrantIntrospectStatus, SessionGrantIntrospectionProof, SessionLoginOutcome,
+    SessionGrantIntrospectionProof,
 };
 pub use arkret_models_collaboration::sync_frames::account_sync::{
     DeviceMessageEnvelope, DeviceMessageSender, DeviceMessageTarget, DeviceMessagesAckOutcome,
@@ -25,6 +26,7 @@ pub use arkret_models_discovery::{
     RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceKind,
     RealmJoinCandidateSource, RealmJoinMethod,
 };
+pub use arkret_models_identity::admin_grant::SessionGrantAdminIntrospectionStatus;
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
 pub use arkret_models_integration::OkOutcome;
 use arkret_wire::{

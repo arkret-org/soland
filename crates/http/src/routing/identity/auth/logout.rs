@@ -1,4 +1,4 @@
-use arkret_models_collaboration::session_grant_bodies::AuthSessionLogoutOutcome;
+use arkret_models_collaboration::session_grants::AuthSessionLogoutOutcome;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, Verifier as _};
 
@@ -218,20 +218,23 @@ async fn introspect_session_grant_for_logout(
 fn classify_logout_introspection(
     outcome: crate::wire::SessionGrantIntrospectOutcome,
 ) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
-    use crate::wire::SessionGrantIntrospectStatus;
+    use crate::wire::SessionGrantAdminIntrospectionStatus;
 
     match outcome.status {
-        SessionGrantIntrospectStatus::NotFound if !outcome.active && outcome.grant.is_none() => {
+        SessionGrantAdminIntrospectionStatus::NotFound
+            if !outcome.active && outcome.grant.is_none() =>
+        {
             Ok(None)
         }
-        SessionGrantIntrospectStatus::AudienceMismatch => Err(AppError::unauthenticated(
+        SessionGrantAdminIntrospectionStatus::AudienceMismatch => Err(AppError::unauthenticated(
             "session grant audience does not match this Account Authority",
         )),
-        SessionGrantIntrospectStatus::Active if outcome.active => outcome
+        SessionGrantAdminIntrospectionStatus::Active if outcome.active => outcome
             .grant
             .map(Some)
             .ok_or_else(|| invalid_logout_introspection(outcome.status)),
-        SessionGrantIntrospectStatus::Active | SessionGrantIntrospectStatus::NotFound => {
+        SessionGrantAdminIntrospectionStatus::Active
+        | SessionGrantAdminIntrospectionStatus::NotFound => {
             Err(invalid_logout_introspection(outcome.status))
         }
         status if !outcome.active => outcome
@@ -242,7 +245,9 @@ fn classify_logout_introspection(
     }
 }
 
-fn invalid_logout_introspection(status: crate::wire::SessionGrantIntrospectStatus) -> AppError {
+fn invalid_logout_introspection(
+    status: crate::wire::SessionGrantAdminIntrospectionStatus,
+) -> AppError {
     crate::app_error!(
         TemporarilyUnavailable,
         format!("invalid session grant logout introspection outcome for status {status:?}"),
@@ -295,11 +300,11 @@ async fn revoke_sessions_for_actor_device(
 #[cfg(test)]
 mod logout_introspection_tests {
     use super::*;
-    use crate::wire::SessionGrantIntrospectStatus;
+    use crate::wire::SessionGrantAdminIntrospectionStatus;
 
     fn outcome(
         active: bool,
-        status: SessionGrantIntrospectStatus,
+        status: SessionGrantAdminIntrospectionStatus,
     ) -> crate::wire::SessionGrantIntrospectOutcome {
         crate::wire::SessionGrantIntrospectOutcome {
             active,
@@ -313,7 +318,10 @@ mod logout_introspection_tests {
     #[test]
     fn not_found_is_an_idempotent_logout_retry_state() {
         assert!(matches!(
-            classify_logout_introspection(outcome(false, SessionGrantIntrospectStatus::NotFound)),
+            classify_logout_introspection(outcome(
+                false,
+                SessionGrantAdminIntrospectionStatus::NotFound,
+            )),
             Ok(None)
         ));
     }
@@ -322,7 +330,7 @@ mod logout_introspection_tests {
     fn audience_mismatch_remains_fail_closed() {
         let error = classify_logout_introspection(outcome(
             false,
-            SessionGrantIntrospectStatus::AudienceMismatch,
+            SessionGrantAdminIntrospectionStatus::AudienceMismatch,
         ))
         .expect_err("audience mismatch must be rejected");
         assert_eq!(error.code, ErrorCode::Unauthenticated);
@@ -331,12 +339,12 @@ mod logout_introspection_tests {
     #[test]
     fn missing_metadata_for_other_statuses_is_a_protocol_failure() {
         for status in [
-            SessionGrantIntrospectStatus::Active,
-            SessionGrantIntrospectStatus::Revoked,
-            SessionGrantIntrospectStatus::Expired,
+            SessionGrantAdminIntrospectionStatus::Active,
+            SessionGrantAdminIntrospectionStatus::Revoked,
+            SessionGrantAdminIntrospectionStatus::Expired,
         ] {
             let error = classify_logout_introspection(outcome(
-                status == SessionGrantIntrospectStatus::Active,
+                status == SessionGrantAdminIntrospectionStatus::Active,
                 status,
             ))
             .expect_err("non-not-found outcome must carry grant metadata");

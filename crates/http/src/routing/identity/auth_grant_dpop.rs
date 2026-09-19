@@ -42,7 +42,7 @@ use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
 use arkret_identifiers::{DeviceId, DidCoreId};
-use arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt;
+use arkret_models_collaboration::session_grants::SessionGrantIntrospectByJwt;
 use arkret_models_identity::session_credential::SessionGrantHolderBinding;
 use arkret_wire::FreshnessState;
 use base64::Engine as _;
@@ -59,8 +59,8 @@ use soland_services::identity::{
 
 use crate::state::AppState;
 use crate::wire::{
-    SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
-    SessionGrantIntrospectStatus,
+    SessionGrantAdminIntrospectionStatus, SessionGrantIntrospectGrant,
+    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
 };
 
 /// Device-scope prefix carried in a `ak.session.grant`'s scope set
@@ -480,7 +480,7 @@ async fn introspect_session_grant_remote(
                 "session grant introspection response was invalid",
             )
         })?;
-    if !outcome.active || outcome.status != SessionGrantIntrospectStatus::Active {
+    if !outcome.active || outcome.status != SessionGrantAdminIntrospectionStatus::Active {
         return Err(unauthenticated("session grant is not active"));
     }
     outcome.grant.ok_or((
@@ -1101,7 +1101,7 @@ mod tests {
         let grant = test_introspection_grant();
         let outcome = SessionGrantIntrospectOutcome {
             active: true,
-            status: SessionGrantIntrospectStatus::Active,
+            status: SessionGrantAdminIntrospectionStatus::Active,
             proof_required: false,
             one_time_use_consumed: false,
             grant: Some(grant),

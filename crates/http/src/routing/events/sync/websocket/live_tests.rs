@@ -215,7 +215,7 @@ async fn run_introspection_mock(
             }
         });
         serde_json::from_value::<
-            arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectOutcome,
+            arkret_models_collaboration::session_grants::SessionGrantIntrospectOutcome,
         >(outcome.clone())
         .expect("mock outcome matches the SDK introspection DTO");
         let bytes = serde_json::to_vec(&outcome).expect("serialize introspection");
