@@ -22,8 +22,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use arkret_identifiers::DidCoreId;
-use arkret_models_collaboration::session_grant_bodies::{
-    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
+use arkret_models_collaboration::session_grants::{
+    SessionGrantIntrospectByJwt, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
 };
 use arkret_models_identity::admin_grant::{
     SessionGrantAdminIntrospectionStatus, SessionGrantIntrospection,
@@ -109,7 +109,7 @@ fn prune_cache_locked(cache: &mut HashMap<String, CacheEntry>, now: Instant) {
     cache.retain(|_, entry| now.duration_since(entry.inserted_at) < INTROSPECTION_CACHE_TTL);
 }
 
-fn session_grant_status_wire(status: SessionGrantIntrospectStatus) -> String {
+fn session_grant_status_wire(status: SessionGrantAdminIntrospectionStatus) -> String {
     serde_json::to_value(status)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -119,7 +119,7 @@ fn session_grant_status_wire(status: SessionGrantIntrospectStatus) -> String {
 fn admin_grant_from_introspection_outcome(
     outcome: SessionGrantIntrospectOutcome,
 ) -> Result<SessionGrantIntrospection, AppError> {
-    if !outcome.active || outcome.status != SessionGrantIntrospectStatus::Active {
+    if !outcome.active || outcome.status != SessionGrantAdminIntrospectionStatus::Active {
         return Err(crate::app_error!(
             CapabilityDenied,
             format!(
@@ -169,13 +169,17 @@ fn bearer_token_from_request(req: &Request) -> Option<String> {
 /// Synthetic introspection used in development mode when no upstream IdP
 /// is configured. Grants every well-known admin scope to any DID listed
 /// in `admin_principal_ids` (or any principal in development_mode).
-fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
+fn synthetic_dev_admin_scopes() -> Vec<String> {
     use arkret_models_identity::admin_grant::admin_scopes::*;
-    let scopes = vec![
-        NOTARY_RECONFIGURE.to_owned(),
-        SEAL_COMPACT.to_owned(),
+    vec![
+        AUTHORITY_HANDOFF.to_owned(),
+        COMMIT_LOG_COMPACT.to_owned(),
+        STREAM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
-    ];
+    ]
+}
+
+fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
     let principal_id =
         arkret_identifiers::DidCoreId::new(session.actor.clone()).unwrap_or_else(|_| {
             // Dev-login actors may be handles rather than DIDs. Reuse the
@@ -188,7 +192,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         active: true,
         status: SessionGrantAdminIntrospectionStatus::Active,
         principal_id,
-        admin_scopes: scopes,
+        admin_scopes: synthetic_dev_admin_scopes(),
         expires_at: Some(arkret_canonical::normalize_timestamp_canonical(
             session.expires_at,
         )),
@@ -235,13 +239,11 @@ pub(crate) async fn introspect_admin_scopes(
             "runtime principal service_id is not a core_id: {error}"
         ))
     })?;
-    let request = SessionGrantIntrospectRequestBody::ByJwt(
-        arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
-            grant_jwt: token,
-            audience_id: Some(audience),
-            proof: None,
-        },
-    );
+    let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
+        grant_jwt: token,
+        audience_id: Some(audience),
+        proof: None,
+    });
     let channel = state
         .config()
         .internal_authority_channel
@@ -371,5 +373,24 @@ mod tests {
         );
         assert!(read_cached_at(key, inserted_at + INTROSPECTION_CACHE_TTL).is_none());
         cache().lock().remove(key);
+    }
+
+    #[test]
+    fn admin_adapter_uses_current_status_and_scope_vocabulary() {
+        use arkret_models_identity::admin_grant::admin_scopes;
+
+        assert_eq!(
+            session_grant_status_wire(SessionGrantAdminIntrospectionStatus::Active),
+            "active"
+        );
+        assert_eq!(
+            synthetic_dev_admin_scopes(),
+            vec![
+                admin_scopes::AUTHORITY_HANDOFF.to_owned(),
+                admin_scopes::COMMIT_LOG_COMPACT.to_owned(),
+                admin_scopes::STREAM_REPAIR.to_owned(),
+                admin_scopes::ADMIN_READ.to_owned(),
+            ]
+        );
     }
 }
