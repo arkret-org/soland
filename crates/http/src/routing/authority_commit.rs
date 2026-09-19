@@ -1,8 +1,11 @@
 //! Canonical current-protocol routes.
 
+use arkret_models_collaboration::authority_commit::{
+    PeerAuthoritySubmitRequest, SelfAuthoritySubmitRequest,
+};
 use arkret_wire::{
-    AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitRequest,
-    CommittedEventResolveRequest, StreamScanRequest,
+    AuthorityBundleRequest, AuthorityHandoffRequest, CommittedEventResolveRequest,
+    StreamScanRequest,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -17,11 +20,12 @@ pub fn router(state: AppState) -> Router {
         Router::with_path("_arkret")
             .push(
                 Router::with_path("self")
-                    .push(Router::with_path("events").post(submit))
+                    .push(Router::with_path("events").post(submit_self))
                     .push(Router::with_path("streams/scan").post(scan_stream)),
             )
             .push(
                 Router::with_path("peer")
+                    .push(Router::with_path("events").post(submit_peer))
                     .push(Router::with_path("streams/resolve").post(resolve_committed))
                     .push(
                         Router::with_path("realm-authority/handoff")
@@ -97,8 +101,8 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
 }
 
 #[handler]
-async fn submit(req: &mut Request, depot: &Depot, res: &mut Response) {
-    let request = match parse_current_json::<AuthoritySubmitRequest>(req).await {
+async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Response) {
+    let request = match parse_current_json::<SelfAuthoritySubmitRequest>(req).await {
         Ok(request) => request,
         Err(error) => return render_bad_request(res, error),
     };
@@ -109,12 +113,40 @@ async fn submit(req: &mut Request, depot: &Depot, res: &mut Response) {
         Ok(state) => state.authority(),
         Err(error) => return render_bad_request(res, error),
     };
-    let result = authority.submit(request.clone()).await.and_then(|outcome| {
-        outcome
-            .validate_for_request(&request)
-            .map_err(invalid_application_output)?;
-        Ok(outcome)
-    });
+    let result = authority
+        .submit_self(request.clone())
+        .await
+        .and_then(|outcome| {
+            outcome
+                .validate_for_request(&request)
+                .map_err(invalid_application_output)?;
+            Ok(outcome)
+        });
+    render_result(res, result);
+}
+
+#[handler]
+async fn submit_peer(req: &mut Request, depot: &Depot, res: &mut Response) {
+    let request = match parse_current_json::<PeerAuthoritySubmitRequest>(req).await {
+        Ok(request) => request,
+        Err(error) => return render_bad_request(res, error),
+    };
+    if let Err(error) = request.validate() {
+        return render_bad_request(res, validation_error(error));
+    }
+    let authority = match state(depot) {
+        Ok(state) => state.authority(),
+        Err(error) => return render_bad_request(res, error),
+    };
+    let result = authority
+        .submit_peer(request.clone())
+        .await
+        .and_then(|outcome| {
+            outcome
+                .validate_for_request(&request)
+                .map_err(invalid_application_output)?;
+            Ok(outcome)
+        });
     render_result(res, result);
 }
 
@@ -228,9 +260,12 @@ async fn install_authority_handoff(req: &mut Request, depot: &Depot, res: &mut R
 mod tests {
     use std::sync::Arc;
 
+    use arkret_models_collaboration::authority_commit::{
+        PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest,
+    };
     use arkret_wire::{
-        AuthoritySubmitOutcome, CommittedEventResolveOutcome, RealmAuthorityBundle,
-        RealmAuthorityHandoff, StreamScanOutcome,
+        AuthoritySubmitOutcome, CommittedEventResolveOutcome, EventCommitSubmission,
+        MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityHandoff, StreamScanOutcome,
     };
     use async_trait::async_trait;
     use salvo::test::TestClient;
@@ -243,9 +278,30 @@ mod tests {
 
     #[async_trait]
     impl AuthorityProtocolPort for NeverCalled {
-        async fn submit(
+        async fn submit_self_event(
             &self,
-            _request: AuthoritySubmitRequest,
+            _request: EventCommitSubmission,
+        ) -> ServiceResult<AuthoritySubmitOutcome> {
+            panic!("invalid input must not reach the application port")
+        }
+
+        async fn submit_self_mls(
+            &self,
+            _request: MlsCommitSubmission,
+        ) -> ServiceResult<AuthoritySubmitOutcome> {
+            panic!("invalid input must not reach the application port")
+        }
+
+        async fn submit_peer_authority_forward_event(
+            &self,
+            _request: PeerAuthorityForwardEventRequest,
+        ) -> ServiceResult<AuthoritySubmitOutcome> {
+            panic!("invalid input must not reach the application port")
+        }
+
+        async fn submit_peer_authority_forward_mls(
+            &self,
+            _request: PeerAuthorityForwardMlsRequest,
         ) -> ServiceResult<AuthoritySubmitOutcome> {
             panic!("invalid input must not reach the application port")
         }
@@ -283,6 +339,7 @@ mod tests {
     fn current_routes_are_registered_without_a_legacy_recovery_surface() {
         let expected = [
             "/_arkret/self/events",
+            "/_arkret/peer/events",
             "/_arkret/self/streams/scan",
             "/_arkret/peer/streams/resolve",
             "/_arkret/open/realm-authority/bundle",
@@ -303,6 +360,7 @@ mod tests {
         let service = crate::service(AppState::new(Arc::new(NeverCalled)));
         for path in [
             "/_arkret/self/events",
+            "/_arkret/peer/events",
             "/_arkret/self/streams/scan",
             "/_arkret/peer/streams/resolve",
             "/_arkret/open/realm-authority/bundle",
@@ -320,4 +378,3 @@ mod tests {
         }
     }
 }
-

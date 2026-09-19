@@ -2,10 +2,19 @@
 
 use std::sync::Arc;
 
+use arkret_models_collaboration::authority_commit::{
+    DirectConversationFoundingAcceptanceOutcome, DirectConversationFoundingFederationSubmission,
+    DirectConversationFoundingUnitSubmission, MembershipCompensationAcceptanceOutcome,
+    MembershipCompensationFederationSubmission, MembershipCompensationUnitSubmission,
+    PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest, PeerAuthorityForwardOutcome,
+    PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome,
+    PeerCommittedReplicationRequest, PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
+    PeerRegisteredAtomicUnitOutcomeValue, SelfAuthoritySubmitOutcome, SelfAuthoritySubmitRequest,
+};
 use arkret_wire::{
-    AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome,
-    AuthoritySubmitRequest, CommitStreamHead, CommitStreamRef, CommittedEventResolveOutcome,
-    CommittedEventResolveRequest, Event, RealmAuthorityBundle, RealmAuthorityHandoff,
+    AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome, CommitStreamHead,
+    CommitStreamRef, CommittedEventResolveOutcome, CommittedEventResolveRequest, Event,
+    EventCommitSubmission, MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityHandoff,
     RealmStateSnapshot, StreamScanOutcome, StreamScanRequest,
 };
 use async_trait::async_trait;
@@ -129,20 +138,174 @@ impl AuthorityCommitApplication {
 ///
 /// The concrete Station implementation performs authorization and signing;
 /// HTTP only validates/deserializes current SDK DTOs and delegates. Keeping
-/// the port in services makes the five protocol operations directly testable
+/// the port in services makes the protocol operations directly testable
 /// without transport concerns.
 #[async_trait]
 pub trait AuthorityProtocolPort: Send + Sync {
-    /// Queue and adjudicate one producer submission at the current authority.
-    ///
-    /// For `MlsCommit`, an `Accepted` result is forbidden until the MLS state
-    /// has been installed and every addressed Welcome has entered the durable
-    /// delivery queue. Implementations use [`AuthorityCommitTransaction`] so
-    /// those Welcome rows and the stream commit become visible atomically.
-    async fn submit(
+    async fn submit_self_event(
         &self,
-        request: AuthoritySubmitRequest,
+        request: EventCommitSubmission,
     ) -> ServiceResult<AuthoritySubmitOutcome>;
+
+    /// An accepted MLS result is forbidden until the MLS state, every Welcome,
+    /// and its authority Commit are visible through one transaction.
+    async fn submit_self_mls(
+        &self,
+        request: MlsCommitSubmission,
+    ) -> ServiceResult<AuthoritySubmitOutcome>;
+
+    async fn submit_self_direct_conversation_founding(
+        &self,
+        _request: DirectConversationFoundingUnitSubmission,
+    ) -> ServiceResult<DirectConversationFoundingAcceptanceOutcome> {
+        Err(crate::ServiceError::internal(
+            "Direct Conversation founding is not connected to the authority transaction path",
+        ))
+    }
+
+    async fn submit_self_membership_compensation(
+        &self,
+        _request: MembershipCompensationUnitSubmission,
+    ) -> ServiceResult<MembershipCompensationAcceptanceOutcome> {
+        Err(crate::ServiceError::internal(
+            "membership compensation is not connected to the authority transaction path",
+        ))
+    }
+
+    /// Closed self-endpoint dispatcher. It validates both sides at the service
+    /// boundary so a handler cannot return the response branch for a different
+    /// request or degrade an aggregate into a partial ordinary outcome.
+    async fn submit_self(
+        &self,
+        request: SelfAuthoritySubmitRequest,
+    ) -> ServiceResult<SelfAuthoritySubmitOutcome> {
+        request.validate().map_err(|error| {
+            crate::ServiceError::SchemaViolation(format!(
+                "invalid self authority submission: {error}"
+            ))
+        })?;
+        let outcome = match request.clone() {
+            SelfAuthoritySubmitRequest::Event(value) => {
+                SelfAuthoritySubmitOutcome::Ordinary(self.submit_self_event(value).await?)
+            }
+            SelfAuthoritySubmitRequest::MlsCommit(value) => {
+                SelfAuthoritySubmitOutcome::Ordinary(self.submit_self_mls(value).await?)
+            }
+            SelfAuthoritySubmitRequest::DirectConversationFounding(value) => {
+                SelfAuthoritySubmitOutcome::DirectConversationFounding(
+                    self.submit_self_direct_conversation_founding(value).await?,
+                )
+            }
+            SelfAuthoritySubmitRequest::MembershipCompensation(value) => {
+                SelfAuthoritySubmitOutcome::MembershipCompensation(
+                    self.submit_self_membership_compensation(value).await?,
+                )
+            }
+        };
+        outcome.validate_for_request(&request).map_err(|error| {
+            crate::ServiceError::Internal(format!(
+                "self authority dispatcher produced an invalid outcome: {error}"
+            ))
+        })?;
+        Ok(outcome)
+    }
+
+    async fn submit_peer_authority_forward_event(
+        &self,
+        request: PeerAuthorityForwardEventRequest,
+    ) -> ServiceResult<AuthoritySubmitOutcome>;
+
+    async fn submit_peer_authority_forward_mls(
+        &self,
+        request: PeerAuthorityForwardMlsRequest,
+    ) -> ServiceResult<AuthoritySubmitOutcome>;
+
+    async fn submit_peer_committed_replication(
+        &self,
+        _request: PeerCommittedReplicationRequest,
+    ) -> ServiceResult<PeerCommittedReplicationOutcome> {
+        Err(crate::ServiceError::internal(
+            "committed replication is not connected to durable replica persistence",
+        ))
+    }
+
+    async fn submit_peer_direct_conversation_founding(
+        &self,
+        _request: DirectConversationFoundingFederationSubmission,
+    ) -> ServiceResult<DirectConversationFoundingAcceptanceOutcome> {
+        Err(crate::ServiceError::internal(
+            "peer Direct Conversation founding is not connected to atomic materialization",
+        ))
+    }
+
+    async fn submit_peer_membership_compensation(
+        &self,
+        _request: MembershipCompensationFederationSubmission,
+    ) -> ServiceResult<MembershipCompensationAcceptanceOutcome> {
+        Err(crate::ServiceError::internal(
+            "peer membership compensation is not connected to atomic materialization",
+        ))
+    }
+
+    /// Dispatch the closed peer carrier without collapsing authority-forward,
+    /// source-committed replication, or registered atomic units into one
+    /// ambiguous submission shape.
+    async fn submit_peer(
+        &self,
+        request: PeerAuthoritySubmitRequest,
+    ) -> ServiceResult<PeerAuthoritySubmitOutcome> {
+        request.validate().map_err(|error| {
+            crate::ServiceError::SchemaViolation(format!(
+                "invalid peer authority submission: {error}"
+            ))
+        })?;
+        let outcome = match request.clone() {
+            PeerAuthoritySubmitRequest::AuthorityForwardEvent(value) => {
+                let branch = value.branch;
+                PeerAuthoritySubmitOutcome::AuthorityForward(PeerAuthorityForwardOutcome {
+                    branch,
+                    outcome: self.submit_peer_authority_forward_event(value).await?,
+                })
+            }
+            PeerAuthoritySubmitRequest::AuthorityForwardMls(value) => {
+                let branch = value.branch;
+                PeerAuthoritySubmitOutcome::AuthorityForward(PeerAuthorityForwardOutcome {
+                    branch,
+                    outcome: self.submit_peer_authority_forward_mls(value).await?,
+                })
+            }
+            PeerAuthoritySubmitRequest::CommittedReplication(value) => {
+                PeerAuthoritySubmitOutcome::CommittedReplication(
+                    self.submit_peer_committed_replication(value).await?,
+                )
+            }
+            PeerAuthoritySubmitRequest::RegisteredAtomicUnit(value) => {
+                let branch = value.branch;
+                let unit = match value.unit {
+                    PeerRegisteredAtomicUnit::DirectConversationFounding(unit) => {
+                        PeerRegisteredAtomicUnitOutcomeValue::DirectConversationFounding(
+                            self.submit_peer_direct_conversation_founding(unit).await?,
+                        )
+                    }
+                    PeerRegisteredAtomicUnit::MembershipCompensation(unit) => {
+                        PeerRegisteredAtomicUnitOutcomeValue::MembershipCompensation(
+                            self.submit_peer_membership_compensation(unit).await?,
+                        )
+                    }
+                };
+                PeerAuthoritySubmitOutcome::RegisteredAtomicUnit(PeerRegisteredAtomicUnitOutcome {
+                    branch,
+                    outcome: unit,
+                })
+            }
+        };
+        outcome.validate_for_request(&request).map_err(|error| {
+            crate::ServiceError::Internal(format!(
+                "peer authority dispatcher produced an invalid outcome: {error}"
+            ))
+        })?;
+        Ok(outcome)
+    }
 
     async fn scan_stream(&self, request: StreamScanRequest) -> ServiceResult<StreamScanOutcome>;
 
