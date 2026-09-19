@@ -879,12 +879,12 @@ pub(crate) async fn compare_account_data_in_transaction(
     }
     let applied = sql_query(
             "WITH source AS MATERIALIZED ( SELECT e.envelope FROM canonical_events e \
-                 WHERE e.id=$9 AND e.state='accepted' AND e.kind='ak.account_data.set' AND e.actor_id=$2 \
+                 WHERE e.id=$9 AND e.state='committed' AND e.kind='ak.account_data.set' AND e.actor_id=$2 \
                    AND e.envelope->'payload'->>'key'=$3 AND e.realm_id IS NOT DISTINCT FROM e.envelope->>'realm_id' \
                    AND (e.envelope->'payload'->>'expected_revision')::bigint=$8 \
                    AND COALESCE((e.envelope->'payload'->>'tombstone')::boolean,FALSE)=$6 \
                    AND ($6 OR COALESCE(e.envelope->'payload'->'body',e.envelope->'payload'->'encrypted_payload')=$5) \
-                   AND EXISTS (SELECT 1 FROM accepted_events a WHERE a.id=e.id) FOR SHARE OF e \
+                   AND EXISTS (SELECT 1 FROM committed_events a WHERE a.id=e.id) FOR SHARE OF e \
              ), updated AS ( \
                  UPDATE account_datas SET revision = $4, payload = $5, tombstone = $6, updated_at = $7 \
                  WHERE actor_id = $2 AND account_data_key = $3 AND revision = $8 AND ($9::bytea IS NULL OR EXISTS (SELECT 1 FROM source)) \

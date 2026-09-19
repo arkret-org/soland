@@ -140,3 +140,58 @@ fn direct_invite_live_uniqueness_covers_only_the_live_states() {
         "claimed is not in the direct-invite live set"
     );
 }
+
+#[test]
+fn canonical_event_surfaces_use_the_committed_terminal_state() {
+    assert!(INITIAL_UP.contains("CHECK (state IN ('queued', 'committed', 'rejected'))"));
+    assert!(INITIAL_UP.contains("WHERE event.state = 'committed'"));
+    assert!(INITIAL_UP.contains("CREATE VIEW public.committed_events AS"));
+    assert!(!INITIAL_UP.contains("CREATE VIEW public.accepted_events AS"));
+    assert!(INITIAL_UP.contains("WHERE state = 'committed';"));
+    assert!(
+        INITIAL_UP.contains("WHERE (kind = 'ak.realm.create'::text AND state = 'committed'::text)")
+    );
+    assert!(INITIAL_UP.contains("CREATE TRIGGER canonical_events_immutable"));
+    assert!(INITIAL_UP.contains("BEFORE UPDATE ON public.canonical_events"));
+    for immutable_column in [
+        "OLD.id",
+        "OLD.digest_suite",
+        "OLD.digest",
+        "OLD.actor_id",
+        "OLD.actor_seq",
+        "OLD.realm_id",
+        "OLD.realm_pk",
+        "OLD.scope_ref",
+        "OLD.kind",
+        "OLD.schema_id",
+        "OLD.canonical_bytes",
+        "OLD.envelope",
+        "OLD.received_at",
+        "OLD.committed_at",
+        "OLD.rejection_reason",
+    ] {
+        assert!(
+            INITIAL_UP.contains(immutable_column),
+            "canonical Event immutability trigger omitted {immutable_column}"
+        );
+    }
+
+    for stale in [
+        "WHERE event.state = 'accepted'",
+        "WHERE state = 'accepted' AND kind = 'ak.moderation.franking_proof'",
+        "kind = 'ak.realm.create'::text AND state = 'accepted'::text",
+        "OLD.kind='ak.account_data.set' AND OLD.state='accepted'",
+        "visible := NEW.state='accepted'",
+    ] {
+        assert!(
+            !INITIAL_UP.contains(stale),
+            "canonical Event surface retained stale state predicate: {stale}"
+        );
+    }
+}
+
+#[test]
+fn security_transaction_uses_the_protocol_terminal_outcome_name_at_creation() {
+    assert!(INITIAL_UP.contains("terminal_outcome jsonb"));
+    assert!(!INITIAL_UP.contains("terminal_result"));
+}

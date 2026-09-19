@@ -41,32 +41,6 @@ pub struct StrandWatchProjection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Stream-F (Wave 1B) — `ak.audit.erasure_receipt` projection record.
-/// Mirrors a subset of the canonical `ak.schema.erasure_receipt.v1`
-/// payload (see
-/// `arkret-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
-/// We only keep the fields the local audit layer actually consults — the
-/// rest of the payload (`proofs`,
-/// `erased_classes`, `retained_stub_digest`, …) round-trips through the
-/// raw `payload` blob for replay.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ErasureReceiptRecord {
-    pub receipt_id: Option<String>,
-    pub issuer_id: Option<arkret_wire::DidCoreId>,
-    pub subject_kind: Option<String>,
-    pub subject_ref: Option<String>,
-    pub outcome: String,
-    pub storage_boundary: Option<String>,
-    /// Affected Realm extracted from `payload.scope.realm_id`. `None` for
-    /// purely account-scoped receipts.
-    pub scope_realm_id: Option<String>,
-    /// Propagation status carried by the canonical receipt payload.
-    pub fanout_status: String,
-    pub recorded_at: chrono::DateTime<chrono::Utc>,
-    /// Raw payload preserved for replay / audit verifier round-trip.
-    pub payload: Value,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PushRouteCellValue {
     pub revision: u64,

@@ -275,6 +275,20 @@ pub enum ProjectionEffect {
         kind: EventKind,
         event_id: String,
     },
+    /// The registry classifies this committed Event as a durable fact with no
+    /// typed current projection.  Emitting an explicit effect keeps that
+    /// ownership distinguishable from an unimplemented reducer branch.
+    DurableFactRetained {
+        kind: EventKind,
+        event_id: String,
+    },
+    /// A planned governance-Station change is owned by the authority-commit
+    /// handoff service.  The shared product reducer acknowledges the committed
+    /// fact without mirroring a governance counter in [`ProjectionState`].
+    AuthorityCommitEffectAccepted {
+        event_id: String,
+        new_governance_station_id: DidCoreId,
+    },
     /// MID-1..6 (R3.1/R3.2, arkret-spec @ b56cab1) —
     /// `ak.member.identity.update` accepted into the ordered-log
     /// `ak.component.member.identity.v1` cell. The actual replacement-edge

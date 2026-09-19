@@ -1,49 +1,4 @@
-use arkret_models_collaboration::governance::erasure::{
-    ErasureFanoutStatus, ErasureOutcome, ErasureReceipt, ErasureStorageBoundary, ErasureSubjectKind,
-};
-
 use super::*;
-
-fn erasure_subject_kind_name(kind: ErasureSubjectKind) -> &'static str {
-    match kind {
-        ErasureSubjectKind::Principal => "principal",
-        ErasureSubjectKind::Space => "space",
-        ErasureSubjectKind::Event => "event",
-        ErasureSubjectKind::Blob => "blob",
-        ErasureSubjectKind::Device => "device",
-        ErasureSubjectKind::AccountPrivateState => "account_private_state",
-    }
-}
-
-fn erasure_storage_boundary_name(boundary: ErasureStorageBoundary) -> &'static str {
-    match boundary {
-        ErasureStorageBoundary::CanonicalLogMinimization => "canonical_log_minimization",
-        ErasureStorageBoundary::BlobStore => "blob_store",
-        ErasureStorageBoundary::ProjectionStore => "projection_store",
-        ErasureStorageBoundary::AccountPrivateStore => "account_private_store",
-        ErasureStorageBoundary::SearchIndex => "search_index",
-        ErasureStorageBoundary::PushRoutes => "push_routes",
-        ErasureStorageBoundary::DeviceSecretStore => "device_secret_store",
-        ErasureStorageBoundary::MediaDerivatives => "media_derivatives",
-        ErasureStorageBoundary::ServiceDefined => "service_defined",
-    }
-}
-
-fn erasure_outcome_name(outcome: ErasureOutcome) -> &'static str {
-    match outcome {
-        ErasureOutcome::Completed => "completed",
-        ErasureOutcome::PartiallyCompleted => "partially_completed",
-        ErasureOutcome::BlockedByLegalHold => "blocked_by_legal_hold",
-    }
-}
-
-fn erasure_fanout_status_name(status: ErasureFanoutStatus) -> &'static str {
-    match status {
-        ErasureFanoutStatus::Pending => "pending",
-        ErasureFanoutStatus::Complete => "complete",
-        ErasureFanoutStatus::Incomplete => "incomplete",
-    }
-}
 
 fn principal_genesis_resolution_value(
     operation: &Operation,
@@ -132,10 +87,10 @@ impl ProjectionState {
         self.realm_facet_value(realm_id, facet::REALM_AUTHORITY_ROOT)
     }
 
-    /// Apply one of the two authority-root CAS transitions: an owner transfer
-    /// rotates the controller binding, a governance-Station change rotates the
-    /// Station and bumps the authority generation. Both compare-and-swap
-    /// against the currently projected root.
+    /// Apply an authority-root CAS transition. Owner transfer rotates the
+    /// controller binding; authority reset advances the delegation generation.
+    /// Governance-Station handoff is owned by the authority-commit service and
+    /// never reaches this typed-current-result helper.
     pub(crate) fn apply_realm_authority_transition(
         &mut self,
         operation: &Operation,
@@ -172,19 +127,9 @@ impl ProjectionState {
                 };
             }
         };
-        // `authz/capabilities.md` section 3.2 — `ak.realm.owner.transfer` and
-        // `ak.realm.authority.reset` both compare-and-swap the authority root
-        // against the `expected_state_digest` inside their own signature.
-        // `ak.realm.governance_station.change` is the exception: it CASes on
-        // the authority generation plus the Realm-stream head instead.
-        let digest_compare_and_swap = matches!(
-            kind,
-            arkret_wire::EventKind::RealmOwnerTransfer
-                | arkret_wire::EventKind::RealmAuthorityReset
-        );
-        if digest_compare_and_swap
-            && operation.payload.get("realm_id").and_then(Value::as_str) != Some(realm_id.as_str())
-        {
+        // Both authority-root transitions compare-and-swap against the exact
+        // typed current result digest carried in their signature.
+        if operation.payload.get("realm_id").and_then(Value::as_str) != Some(realm_id.as_str()) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
@@ -197,12 +142,11 @@ impl ProjectionState {
                 };
             }
         };
-        if digest_compare_and_swap
-            && operation
-                .payload
-                .get("expected_state_digest")
-                .and_then(Value::as_str)
-                != Some(expected_digest.as_str())
+        if operation
+            .payload
+            .get("expected_state_digest")
+            .and_then(Value::as_str)
+            != Some(expected_digest.as_str())
         {
             return ProjectionEffect::Rejected {
                 reason: "realm_authority_root_conflict".to_owned(),
@@ -289,45 +233,6 @@ impl ProjectionState {
                 root.insert(
                     "authority_generation".to_owned(),
                     successor_generation.into(),
-                );
-            }
-            arkret_wire::EventKind::RealmGovernanceStationChange => {
-                let payload = match serde_json::from_value::<
-                    arkret_models_collaboration::events_payloads::RealmGovernanceStationChangePayload,
-                >(operation.payload.clone())
-                {
-                    Ok(payload) => payload,
-                    Err(_) => {
-                        return ProjectionEffect::Rejected {
-                            reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                        };
-                    }
-                };
-                // `authority_generation` is NOT touched here.
-                // `authz/capabilities.md` section 10 and
-                // `sync/authority-commit-log.md:62` make the two counters
-                // disjoint: `authority_generation` is the delegation
-                // generation and only `ak.realm.authority.reset` advances it,
-                // while `governance_generation` is the governance Station's
-                // term and only this kind advances it. The spec names the
-                // failure mode of conflating them in as many words -- reading
-                // a custodian handoff as an authority reset revokes the whole
-                // Realm's grant tree, because a `realm_root` ref is valid only
-                // while the Realm's current `authority_generation` equals the
-                // one the ref pinned (`capabilities.md:674`).
-                //
-                // `payload.expected_governance_generation` CASes the
-                // governance counter, which this reducer cannot read: it lives
-                // on the RealmCommit and the Realm snapshot
-                // (`storage/authority_commit.rs:70`,
-                // `storage-postgres/authority_commit.rs:700`), not on the
-                // authority-root typed current result. Comparing it against
-                // `authority_generation` only ever appeared to work because
-                // this branch also advanced that counter in lockstep. The CAS
-                // belongs at admission, next to the counter it names.
-                root.insert(
-                    "governance_station_id".to_owned(),
-                    Value::String(payload.new_governance_station_id.to_string()),
                 );
             }
             _ => {
@@ -1301,80 +1206,5 @@ impl ProjectionState {
             orphaned_space_containers = orphaned_count,
             "stream-F realm.destroy cascade applied"
         );
-    }
-
-    /// Stream-F (Wave 1B + Wave 2C) — apply a
-    /// `ak.audit.erasure_receipt` event. Stores the receipt in
-    /// [`ProjectionState::erasure_receipts`] with validated `outcome` +
-    /// `scope.storage_boundary` + `fanout_status` fields. The receipt
-    /// is durable; this projection cache backs the
-    /// `erasure_receipts_endpoint` server-describe surface.
-    ///
-    /// `scope.realm_id` is retained so standard Event fanout consumers can
-    /// correlate the receipt with its affected Realm.
-    pub(crate) fn apply_audit_erasure_receipt(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let payload = &operation.payload;
-        // The generic projected-operation envelope intentionally erases its
-        // heterogeneous payload. Restore the event-kind-specific type exactly
-        // once at this reducer boundary so required fields, identifiers, and
-        // enums cannot degrade into optional strings.
-        let receipt = match serde_json::from_value::<ErasureReceipt>(payload.clone()) {
-            Ok(receipt) if receipt.validate_minimal().is_ok() => receipt,
-            _ => {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            }
-        };
-
-        let receipt_id = receipt.receipt_id.clone();
-        let issuer_id = receipt.issuer_id.clone();
-        let subject_kind = erasure_subject_kind_name(receipt.subject.kind).to_owned();
-        let subject_ref = receipt.subject.subject_ref.clone();
-        let outcome = erasure_outcome_name(receipt.outcome).to_owned();
-        let storage_boundary =
-            erasure_storage_boundary_name(receipt.scope.storage_boundary).to_owned();
-        let scope_realm_id = receipt.scope.realm_id.as_ref().map(ToString::to_string);
-        let fanout_status = erasure_fanout_status_name(
-            receipt
-                .fanout_status
-                .unwrap_or(ErasureFanoutStatus::Pending),
-        )
-        .to_owned();
-
-        self.erasure_receipts.push(ErasureReceiptRecord {
-            receipt_id: Some(receipt_id.clone()),
-            issuer_id: Some(issuer_id),
-            subject_kind: Some(subject_kind),
-            subject_ref: Some(subject_ref),
-            outcome: outcome.clone(),
-            storage_boundary: Some(storage_boundary),
-            scope_realm_id,
-            fanout_status,
-            recorded_at: now,
-            payload: payload.clone(),
-        });
-
-        tracing::info!(
-            receipt_id = %receipt_id,
-            outcome = %outcome,
-            operation_id = %operation.operation_id.as_str(),
-            "stream-F erasure_receipt recorded"
-        );
-
-        // No dedicated ProjectionEffect variant yet — surface as
-        // RealmLifecycle with a synthetic action so existing
-        // dispatchers (e.g. the broadcast layer) treat the event as
-        // a Realm-level audit signal. TODO(stream-F-followup): add
-        // a dedicated `ProjectionEffect::ErasureReceiptRecorded` once
-        // the federation layer wants a typed handle.
-        ProjectionEffect::RealmLifecycle {
-            realm_id: operation.realm_id.to_string(),
-            action: "audit.erasure_receipt".to_owned(),
-        }
     }
 }

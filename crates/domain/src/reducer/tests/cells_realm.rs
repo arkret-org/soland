@@ -639,66 +639,40 @@ fn valid_erasure_receipt_payload() -> Value {
 }
 
 #[test]
-fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
+fn audit_erasure_receipt_is_retained_as_a_durable_fact_without_current_projection() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::AuditErasureReceipt,
-            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            valid_erasure_receipt_payload(),
-        ),
-        &hlc,
+    let operation = make_operation(
+        arkret_wire::EventKind::AuditErasureReceipt,
+        "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+        valid_erasure_receipt_payload(),
     );
-    assert_eq!(state.erasure_receipts.len(), 1);
-    let record = &state.erasure_receipts[0];
-    assert_eq!(
-        record.receipt_id.as_deref(),
-        Some("ak:receipt:019b5c20-0000-7000-8000-000000000030")
-    );
-    assert_eq!(record.outcome, "completed");
-    assert_eq!(
-        record.scope_realm_id.as_deref(),
-        Some("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"),
-        "scope.realm_id MUST be extracted for receipt inspection"
-    );
-    assert_eq!(record.fanout_status, "pending");
+    let effect = state.apply(&operation, &hlc);
+    assert!(matches!(
+        effect,
+        ProjectionEffect::DurableFactRetained { kind, event_id }
+            if kind == arkret_wire::EventKind::AuditErasureReceipt.as_str()
+                && event_id == operation.context.event_id.to_string()
+    ));
 }
 
 #[test]
-fn audit_erasure_receipt_rejects_noncanonical_or_incomplete_payloads() {
+fn unowned_private_effect_fails_closed() {
+    let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-
-    for payload in [
-        {
-            let mut payload = valid_erasure_receipt_payload();
-            payload["outcome"] = serde_json::json!("scheduled");
-            payload
-        },
-        {
-            let mut payload = valid_erasure_receipt_payload();
-            payload.as_object_mut().unwrap().remove("issuer_id");
-            payload
-        },
-    ] {
-        let mut state = ProjectionState::new();
-        let effect = state.apply(
-            &make_operation(
-                arkret_wire::EventKind::AuditErasureReceipt,
-                realm_id,
-                payload,
-            ),
-            &hlc,
-        );
-
-        assert!(matches!(
-            effect,
-            ProjectionEffect::Rejected { reason }
-                if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
-        ));
-        assert!(state.erasure_receipts.is_empty());
-    }
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::AccountBlocklist,
+            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+            serde_json::json!({}),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason }
+            if reason == "unregistered_private_event_effect"
+    ));
 }
 
 #[test]

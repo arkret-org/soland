@@ -253,13 +253,6 @@ pub struct ProjectionState {
     /// `ak.device.push_route` writes whose `recipient_id` does
     /// not match this service are rejected instead of cached.
     pub local_service_id: Option<String>,
-    /// Stream-F (Wave 1B) — `ak.audit.erasure_receipt` projection.
-    /// Append-only list of receipts the reducer has accepted. Spec
-    /// `realm-and-space.md` §2.5.2 + erasure-receipt.schema.json.
-    /// Receipts are durable events; the projection cache here is used
-    /// by the `erasure_receipts_endpoint` server-describe surface and
-    /// by `apply_audit_erasure_receipt_dispatch`.
-    pub erasure_receipts: Vec<ErasureReceiptRecord>,
 }
 
 impl ProjectionState {
@@ -654,13 +647,9 @@ impl ProjectionState {
     /// dispatch table is now data, the helpers are the same, and adding
     /// a new event_kind only touches the registry builder + one adapter.
     ///
-    /// Tolerance for unknown kinds is preserved: a miss in the registry
-    /// returns `ProjectionEffect::Ignored` (same as the old wildcard
-    /// arm). Durable-event projection's state model-registry probe
-    /// (`apply_via_state_model_registry`) still fails closed for unknown
-    /// canonical kinds — the registry miss path here is the
-    /// "cell-state-only event reached the inline cache by mistake"
-    /// branch.
+    /// A registry miss always fails closed. Non-reducer events have a separate,
+    /// explicit service-effect dispatch below and may not enter this shared
+    /// projection path as a successful no-op.
     ///
     /// All cell-state events (ak.realm.policy / ak.realm.read_receipt_policy /
     /// ak.consent.* / ak.member.state / ak.realm.* facets) are routed via
@@ -675,9 +664,13 @@ impl ProjectionState {
         };
         let effect = match APPLY_REGISTRY.get(&kind) {
             Some(dispatch) => dispatch(self, operation, hlc),
-            None if !kind.is_reducer_input() => ProjectionEffect::Ignored,
             None => ProjectionEffect::Rejected {
-                reason: "unregistered_reducer_event_kind".to_owned(),
+                reason: if kind.is_reducer_input() {
+                    "unregistered_reducer_event_kind"
+                } else {
+                    "non_reducer_event_on_shared_projection_path"
+                }
+                .to_owned(),
             },
         };
         effect
@@ -706,10 +699,13 @@ impl ProjectionState {
             arkret_wire::EventKind::AgentActionReject => {
                 self.apply_agent_action_resolution(operation, AgentActionRequestStatus::Rejected)
             }
-            arkret_wire::EventKind::AuditErasureReceipt => {
-                self.apply_audit_erasure_receipt(operation, operation.created_at)
-            }
-            _ => ProjectionEffect::Ignored,
+            arkret_wire::EventKind::AuditErasureReceipt => ProjectionEffect::DurableFactRetained {
+                kind: operation.event_kind.clone(),
+                event_id: operation.context.event_id.to_string(),
+            },
+            _ => ProjectionEffect::Rejected {
+                reason: "unregistered_private_event_effect".to_owned(),
+            },
         }
     }
 

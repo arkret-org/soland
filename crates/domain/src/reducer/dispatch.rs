@@ -52,9 +52,9 @@ pub(crate) fn upsert_realm_link(vec: &mut Vec<RealmLinkState>, row: &RealmLinkSt
 // canonical event_kind maps to a single `ApplyFn` adapter that calls
 // the corresponding `apply_*` helper with the per-kind extra args
 // baked in. `apply()` becomes a typed HashMap lookup + indirect call.
-// Every active reducer-input kind is present: kinds without a local
-// structured projection use the explicit no-op adapter, while unknown kinds
-// remain fail-closed before lookup.
+// Every implemented reducer-input kind is present. Registry-owned durable
+// facts and authority-commit effects use explicit adapters; an unimplemented
+// reducer input remains absent and therefore fails closed before mutation.
 
 fn projection_received_at(op: &Operation) -> chrono::DateTime<chrono::Utc> {
     op.payload
@@ -68,12 +68,15 @@ fn projection_received_at(op: &Operation) -> chrono::DateTime<chrono::Utc> {
 /// Adapter signature for entries in [`default_apply_registry`].
 pub type ApplyFn = fn(&mut ProjectionState, &Operation, &ServerHlc) -> ProjectionEffect;
 
-fn apply_noop_dispatch(
+fn apply_durable_fact_dispatch(
     _state: &mut ProjectionState,
-    _operation: &Operation,
+    operation: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    ProjectionEffect::Ignored
+    ProjectionEffect::DurableFactRetained {
+        kind: operation.event_kind.clone(),
+        event_id: operation.context.event_id.to_string(),
+    }
 }
 
 fn apply_message_dispatch(
@@ -181,13 +184,6 @@ fn apply_invite_claim_dispatch(
 ) -> ProjectionEffect {
     s.apply_invite_claim(op, op.created_at)
 }
-fn apply_invite_create_dispatch(
-    _s: &mut ProjectionState,
-    _op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    ProjectionEffect::Ignored
-}
 fn apply_key_backup_active_series_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -266,11 +262,25 @@ fn apply_realm_owner_transfer_dispatch(
     s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmOwnerTransfer)
 }
 fn apply_realm_governance_station_change_dispatch(
-    s: &mut ProjectionState,
+    _state: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmGovernanceStationChange)
+    let payload = match serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::RealmGovernanceStationChangePayload,
+    >(op.payload.clone())
+    {
+        Ok(payload) => payload,
+        Err(_) => {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        }
+    };
+    ProjectionEffect::AuthorityCommitEffectAccepted {
+        event_id: op.context.event_id.to_string(),
+        new_governance_station_id: payload.new_governance_station_id,
+    }
 }
 fn apply_realm_authority_reset_dispatch(
     s: &mut ProjectionState,
@@ -906,10 +916,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_invite_claim_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::InviteCreate,
-        apply_invite_create_dispatch,
-    );
-    m.insert(
         arkret_wire::EventKind::KeyBackupActiveSeries,
         apply_key_backup_active_series_dispatch,
     );
@@ -1260,17 +1266,15 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_mls_genesis_dispatch,
     );
     m.insert(arkret_wire::EventKind::MlsCommit, apply_mls_commit_dispatch);
-    for kind in EventKind::ALL.iter().filter(|kind| kind.is_reducer_input()) {
-        m.entry(kind.clone()).or_insert(apply_noop_dispatch);
+    for kind in [
+        EventKind::AppletBridgeError,
+        EventKind::AppletManagedActorProvision,
+        EventKind::AuditAccessed,
+        EventKind::DeviceListUpdate,
+    ] {
+        m.insert(kind, apply_durable_fact_dispatch);
     }
     debug_assert!(m.keys().all(EventKind::is_reducer_input));
-    debug_assert_eq!(
-        m.len(),
-        EventKind::ALL
-            .iter()
-            .filter(|kind| kind.is_reducer_input())
-            .count()
-    );
     m
 }
 
@@ -1285,6 +1289,19 @@ mod tests {
     use arkret_wire::EventKind;
 
     use super::default_apply_registry;
+
+    fn operation(kind: &EventKind) -> arkret_event_draft::ProjectedEventOperation {
+        arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AW2XhEBfjbMHqDBzRGwBXCaBZtSGUQTBe5CkC4pjU8O2",
+            )
+            .unwrap(),
+            kind.as_str(),
+            serde_json::json!({}),
+        )
+    }
 
     #[test]
     fn member_identity_dispatch_preserves_the_complete_actor() {
@@ -1333,14 +1350,55 @@ mod tests {
     }
 
     #[test]
-    fn apply_registry_exactly_covers_active_reducer_inputs() {
+    fn apply_registry_contains_only_active_reducer_inputs() {
         let actual = default_apply_registry().into_keys().collect::<HashSet<_>>();
-        let expected = EventKind::ALL
-            .iter()
-            .filter(|kind| kind.is_reducer_input())
-            .cloned()
-            .collect::<HashSet<_>>();
+        assert!(actual.iter().all(EventKind::is_reducer_input));
+        assert!(actual.contains(&EventKind::AppletBridgeError));
+        assert!(actual.contains(&EventKind::AppletManagedActorProvision));
+        assert!(actual.contains(&EventKind::AuditAccessed));
+        assert!(actual.contains(&EventKind::DeviceListUpdate));
+        assert!(actual.contains(&EventKind::RealmGovernanceStationChange));
+    }
 
-        assert_eq!(actual, expected);
+    #[test]
+    fn durable_fact_owners_have_an_explicit_non_projection_effect() {
+        let mut state = super::ProjectionState::default();
+        let hlc = super::ServerHlc::new("durable-fact-owner-test");
+        for kind in [
+            EventKind::AppletBridgeError,
+            EventKind::AppletManagedActorProvision,
+            EventKind::AuditAccessed,
+            EventKind::DeviceListUpdate,
+        ] {
+            let effect = state.apply_projected(&operation(&kind), &hlc);
+            assert!(
+                matches!(
+                    effect,
+                    super::ProjectionEffect::DurableFactRetained {
+                        kind: effect_kind,
+                        ..
+                    } if effect_kind == kind
+                ),
+                "{kind} must be acknowledged as a durable fact"
+            );
+        }
+    }
+
+    #[test]
+    fn unimplemented_reducer_inputs_fail_closed_instead_of_becoming_noops() {
+        let registry = default_apply_registry();
+        let kind = EventKind::InviteCreate;
+        assert!(kind.is_reducer_input());
+        assert!(!registry.contains_key(&kind));
+        let mut state = super::ProjectionState::default();
+        let effect = state.apply_projected(
+            &operation(&kind),
+            &super::ServerHlc::new("missing-effect-owner-test"),
+        );
+        assert!(matches!(
+            effect,
+            super::ProjectionEffect::Rejected { ref reason }
+                if reason == "unregistered_reducer_event_kind"
+        ));
     }
 }

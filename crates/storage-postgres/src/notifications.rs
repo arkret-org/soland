@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(
             delta.ordinary_removal_reason(),
             Some(
-                arkret_models_collaboration::sync_frames::account_sync::OrdinaryNotificationRemovalReason::AccessRevoked
+                arkret_models_collaboration::sync_frames::account_subscribe::OrdinaryNotificationRemovalReason::AccessRevoked
             )
         );
     }

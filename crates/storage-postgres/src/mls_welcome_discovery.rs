@@ -81,9 +81,9 @@ mod tests {
         id.extend([seed; 32]);
         let reference = crate::ids::format_event_id(&id.try_into().unwrap());
         let envelope = json!({"event_id":reference,"scope_ref":query().scope,"payload":payload});
-        sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,actor_seq,realm_id,kind,schema_id,canonical_bytes,envelope) VALUES($1,1,$2,'author',$3,'realm',$4,'test',$5,$6)")
+        sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,actor_seq,realm_id,scope_ref,kind,schema_id,canonical_bytes,envelope,state,committed_at) VALUES($1,1,$2,'author',$3,'realm',$4,$5,'test',$6,$7,'committed',now())")
             .bind::<Binary,_>(crate::ids::parse_event_id(&reference).unwrap().to_vec()).bind::<Binary,_>(vec![seed;32]).bind::<BigInt,_>(i64::from(seed))
-            .bind::<Text,_>(kind).bind::<Binary,_>(vec![seed]).bind::<Jsonb,_>(envelope).execute(conn).await.unwrap();
+            .bind::<Jsonb,_>(query().scope).bind::<Text,_>(kind).bind::<Binary,_>(vec![seed]).bind::<Jsonb,_>(envelope).execute(conn).await.unwrap();
         reference
     }
     async fn welcome(conn: &mut AsyncPgConnection, seed: u8, commit: &str) -> String {
@@ -187,7 +187,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn welcome_index_quarantine_invalidates_only_the_affected_chain_suffix() {
+    async fn welcome_index_rejects_quarantine_without_changing_the_chain() {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let mut conn = pg_conn(&pool).await.unwrap();
@@ -199,11 +199,12 @@ mod tests {
         welcome(&mut conn, 53, &genesis).await;
         welcome(&mut conn, 54, &commit).await;
         let unrelated = event(&mut conn, 55, "ak.message", json!({})).await;
-        sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
-            .bind::<Binary, _>(crate::ids::parse_event_id(&unrelated).unwrap().to_vec())
-            .execute(&mut *conn)
-            .await
-            .unwrap();
+        let unrelated_quarantine =
+            sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
+                .bind::<Binary, _>(crate::ids::parse_event_id(&unrelated).unwrap().to_vec())
+                .execute(&mut *conn)
+                .await;
+        assert!(unrelated_quarantine.is_err());
         let unchanged =
             sql_query("SELECT revision,position,available FROM mls_welcome_discovery_scopes")
                 .get_result::<ScopeRow>(&mut *conn)
@@ -211,20 +212,21 @@ mod tests {
                 .unwrap();
         assert_eq!(unchanged.revision, 1);
         assert!(unchanged.available);
-        sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
-            .bind::<Binary, _>(crate::ids::parse_event_id(&commit).unwrap().to_vec())
-            .execute(&mut *conn)
-            .await
-            .unwrap();
+        let commit_quarantine =
+            sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
+                .bind::<Binary, _>(crate::ids::parse_event_id(&commit).unwrap().to_vec())
+                .execute(&mut *conn)
+                .await;
+        assert!(commit_quarantine.is_err());
         let affected =
             sql_query("SELECT revision,position,available FROM mls_welcome_discovery_scopes")
                 .get_result::<ScopeRow>(&mut *conn)
                 .await
                 .unwrap();
-        assert!(!affected.available);
-        assert_eq!(affected.revision, 2);
+        assert!(affected.available);
+        assert_eq!(affected.revision, 1);
         let rows=sql_query("SELECT event_ref,position FROM mls_welcome_discovery_entries WHERE eligible ORDER BY position").load::<RefRow>(&mut *conn).await.unwrap();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].position, 1);
         let prefix = sql_query(
             "SELECT EXISTS(SELECT 1 FROM mls_welcome_discovery_chain WHERE epoch=0) AS present",

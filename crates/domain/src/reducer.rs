@@ -83,15 +83,14 @@ pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
     AppletProjection, CapabilityDerivedState, CircleLifecycleState, CircleMembershipState,
-    CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, InviteProjection,
-    KeyPackageLifetimeProjection, MessageState, MlsCommitEpoch, MlsCommitEpochKey,
-    MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
-    MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
-    PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
-    RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
-    RedactionCellValue, RsvpProjection, SidecarContextProjection, SidecarProjection,
-    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
-    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    CircleProjection, DocumentVersionProjection, InviteProjection, KeyPackageLifetimeProjection,
+    MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation,
+    MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
+    PendingReplayEntry, PinProjection, PollState, ProjectedMessageView, PushRouteCellValue,
+    PushRouteSubject, ReactionState, RealmInheritancePolicyState, RealmLinkState,
+    RealmOrganizationStatementState, RedactionCellValue, RsvpProjection, SidecarContextProjection,
+    SidecarProjection, SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState,
+    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
 

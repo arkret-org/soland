@@ -102,7 +102,7 @@ async fn insert_source(
     };
     let envelope = serde_json::json!({"event_id":id,"actor_id":serde_json::from_str::<serde_json::Value>(actor).unwrap(),"scope_ref":scope_ref,"payload":payload});
     let mut conn = pool.get().await.unwrap();
-    diesel::sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope) VALUES($1,1,$2,$3,$4,$5,$6,$7,$8)")
+    diesel::sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,committed_at) VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,'committed',now())")
         .bind::<Binary,_>(token.to_vec()).bind::<Binary,_>(digest.to_vec()).bind::<Text,_>(actor)
         .bind::<Nullable<Text>,_>(realm).bind::<Jsonb,_>(scope_ref)
         .bind::<Text,_>(kind).bind::<Binary,_>(b"fixture".to_vec())
@@ -111,7 +111,7 @@ async fn insert_source(
 }
 
 #[tokio::test]
-async fn holder_current_event_changes_only_with_successful_cas_and_withdrawal_resets_it() {
+async fn holder_current_event_changes_only_with_successful_cas_and_committed_source_is_immutable() {
     use diesel::sql_types::Binary;
     use diesel_async::RunQueryDsl;
     let pool = pool().await;
@@ -218,30 +218,30 @@ async fn holder_current_event_changes_only_with_successful_cas_and_withdrawal_re
         serde_json::json!(second)
     );
     let mut conn = pool.get().await.unwrap();
-    diesel::sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
-        .bind::<Binary, _>(second.token_bytes().to_vec())
-        .execute(&mut *conn)
-        .await
-        .unwrap();
+    let quarantine =
+        diesel::sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
+            .bind::<Binary, _>(second.token_bytes().to_vec())
+            .execute(&mut *conn)
+            .await;
+    assert!(
+        quarantine.is_err(),
+        "committed Event cannot become quarantined"
+    );
     let now = sync.account_global_watermark().await.unwrap();
     let changes = sync
         .account_global_page(&actor, "account_data_events", now, "", Some(cut), 100)
         .await
         .unwrap();
-    assert_eq!(changes[0].payload["source"], "invalidated");
-    assert!(changes[0].deleted);
+    assert!(
+        changes.is_empty(),
+        "rejected mutation must publish no effect"
+    );
     let old = sync
         .account_global_page(&actor, "account_data_events", cut, "", None, 100)
         .await
         .unwrap();
-    assert!(
-        old[0].deleted,
-        "frozen baseline must not revive withdrawn source"
-    );
-    assert!(
-        cas.get(&actor, key).await.is_err(),
-        "withdrawn current content must not be returned by get"
-    );
+    assert!(!old[0].deleted, "committed source remains visible");
+    assert_eq!(cas.get(&actor, key).await.unwrap().unwrap().revision, 2);
 }
 
 #[tokio::test]
@@ -328,30 +328,21 @@ async fn device_interest_requires_exact_actor_current_membership_and_nonminimal_
         .await;
         assert_eq!(visible(&pool, &recipient, &peer).await, !minimal);
         if !minimal {
-            // Establish the authorized interest, then revoke only Create. No
-            // additional Seal/summary mutation may be required for left_ids.
+            // Establish the authorized interest. A committed Create cannot be
+            // withdrawn by writing a local quarantine state.
             diesel::sql_query("SELECT refresh_account_device_interest($1,$2)")
                 .bind::<diesel::sql_types::Text, _>(&recipient)
                 .bind::<diesel::sql_types::Text, _>(&peer)
                 .execute(&mut *conn)
                 .await
                 .unwrap();
-            let sync = PgSyncCursorStore { pool: pool.clone() };
-            let cut = sync.account_global_watermark().await.unwrap();
-            diesel::sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
-                .bind::<diesel::sql_types::Binary, _>(create_id.token_bytes().to_vec())
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-            let now = sync.account_global_watermark().await.unwrap();
-            let delta = sync
-                .account_global_page(&recipient, "device_lists", now, "", Some(cut), 100)
-                .await
-                .unwrap();
-            assert!(
-                delta.iter().any(|row| row.item_key == peer && row.deleted),
-                "Create withdrawal must emit durable left without a Seal"
-            );
+            let quarantine =
+                diesel::sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
+                    .bind::<diesel::sql_types::Binary, _>(create_id.token_bytes().to_vec())
+                    .execute(&mut *conn)
+                    .await;
+            assert!(quarantine.is_err());
+            assert!(visible(&pool, &recipient, &peer).await);
         }
         assert!(!visible(&pool, &recipient, &same_principal_other_station).await);
         diesel::sql_query("UPDATE account_summary_current SET available=FALSE WHERE realm_id=$1")
@@ -375,7 +366,7 @@ struct Count {
     count: i64,
 }
 #[tokio::test]
-async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source() {
+async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
     use diesel_async::RunQueryDsl;
     use soland_storage::EventCommitUnitOfWork;
     let pool = pool().await;
@@ -415,7 +406,7 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
     .await
     .unwrap();
     let make = |value| {
-        let mut event=arkret_wire::test_support::raw_event_at("ak.account_data.set",arkret_wire::ScopeRef::Realm{realm_id:realm.clone()},principal.clone(),station.clone(),serde_json::json!({"key":"ak.dnd_schedule","expected_revision":0,"body":{"value":value}}),now).unwrap();
+        let mut event=arkret_wire::test_support::raw_event_at("ak.message",arkret_wire::ScopeRef::Realm{realm_id:realm.clone()},principal.clone(),station.clone(),serde_json::json!({"content":{"kind":"ak.content.text","text":format!("message-{value}")}}),now).unwrap();
         let event_digest = arkret_wire::Hash::new(
             event
                 .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
@@ -441,7 +432,7 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
             actor_id: event.actor_id.to_string(),
             realm_id: Some(realm.to_string()),
             kind: event.kind.to_string(),
-            schema_id: "schemas/event-payload.schema.json#/$defs/account_data_set_payload".into(),
+            schema_id: "schemas/event-payload.schema.json#/$defs/message_payload".into(),
             digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest: event
                 .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
@@ -500,7 +491,6 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
     };
     let a = make(1);
     let b = make(2);
-    let actor = a.event.actor_id.clone();
     let a_id = a.event.event_id.clone();
     let b_id = b.event.event_id.clone();
     let first = soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone());
@@ -533,14 +523,21 @@ async fn racing_holder_cas_accepts_only_one_event_and_publishes_only_its_source(
     .unwrap();
     assert_eq!(
         rejected_count.count, 0,
-        "failed CAS must roll back even accepted Event insertion"
+        "failed CAS must roll back the canonical Event insertion"
     );
-    let sync = PgSyncCursorStore { pool };
-    let cut = sync.account_global_watermark().await.unwrap();
-    let page = sync
-        .account_global_page(&actor, "account_data_events", cut, "", None, 100)
-        .await
-        .unwrap();
-    assert_eq!(page.len(), 1);
-    assert_ne!(page[0].payload["value"]["event_id"], rejected);
+    let committed = diesel::sql_query(
+        "SELECT count(*) AS count FROM canonical_events WHERE realm_id=$1 AND state='committed'",
+    )
+    .bind::<diesel::sql_types::Text, _>(realm.as_str())
+    .get_result::<Count>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(committed.count, 1);
+    let commits =
+        diesel::sql_query("SELECT count(*) AS count FROM realm_commits WHERE realm_id=$1")
+            .bind::<diesel::sql_types::Text, _>(realm.as_str())
+            .get_result::<Count>(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(commits.count, 1);
 }

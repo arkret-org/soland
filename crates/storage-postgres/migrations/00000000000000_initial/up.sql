@@ -601,6 +601,60 @@ CREATE TABLE public.canonical_events (
 CREATE INDEX canonical_events_realm_state_idx
     ON public.canonical_events (realm_id, state, received_at);
 
+-- Event identity bytes never change, and a terminal admission result never
+-- returns to the queue or changes branch.  Domain moderation/delivery state
+-- belongs to its own durable carrier, not to a fourth canonical Event state.
+CREATE FUNCTION public.enforce_canonical_event_immutability() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF ROW(
+        OLD.id,
+        OLD.digest_suite,
+        OLD.digest,
+        OLD.actor_id,
+        OLD.actor_seq,
+        OLD.realm_id,
+        OLD.realm_pk,
+        OLD.scope_ref,
+        OLD.kind,
+        OLD.schema_id,
+        OLD.canonical_bytes,
+        OLD.envelope,
+        OLD.received_at
+    ) IS DISTINCT FROM ROW(
+        NEW.id,
+        NEW.digest_suite,
+        NEW.digest,
+        NEW.actor_id,
+        NEW.actor_seq,
+        NEW.realm_id,
+        NEW.realm_pk,
+        NEW.scope_ref,
+        NEW.kind,
+        NEW.schema_id,
+        NEW.canonical_bytes,
+        NEW.envelope,
+        NEW.received_at
+    ) THEN
+        RAISE EXCEPTION 'canonical Event identity and content are immutable';
+    END IF;
+    IF OLD.state IN ('committed', 'rejected') AND ROW(
+        OLD.state,
+        OLD.committed_at,
+        OLD.rejection_reason
+    ) IS DISTINCT FROM ROW(
+        NEW.state,
+        NEW.committed_at,
+        NEW.rejection_reason
+    ) THEN
+        RAISE EXCEPTION 'terminal canonical Event result is immutable';
+    END IF;
+    RETURN NEW;
+END
+$$;
+CREATE TRIGGER canonical_events_immutable
+BEFORE UPDATE ON public.canonical_events
+FOR EACH ROW EXECUTE FUNCTION public.enforce_canonical_event_immutability();
+
 -- Single current write authority per Realm. This row is the write-serialization
 -- fence: every append locks it before inspecting a stream tail, so a Station
 -- that lost a completed handoff can never commit behind the new one.
@@ -746,7 +800,7 @@ CREATE TABLE public.mls_public_transition_dependencies (
 CREATE INDEX mls_public_transition_source_idx ON public.mls_public_transition_dependencies(source_event_pk);
 CREATE FUNCTION public.invalidate_mls_public_suffix() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF (OLD.state = 'accepted' AND NEW.state <> 'accepted') OR OLD.canonical_bytes IS DISTINCT FROM NEW.canonical_bytes THEN
+    IF (OLD.state = 'committed' AND NEW.state <> 'committed') OR OLD.canonical_bytes IS DISTINCT FROM NEW.canonical_bytes THEN
         UPDATE mls_public_genesis_states SET source_available=FALSE WHERE event_pk=NEW.pk;
         UPDATE mls_public_proposal_sources SET source_available=FALSE WHERE event_pk=NEW.pk;
         WITH RECURSIVE affected(event_pk) AS (
@@ -779,7 +833,7 @@ CREATE TABLE public.membership_compensation_evidence (
 );
 
 -- Ordinary reads never select from this table. They go through
--- public.accepted_events, which subtracts the siblings an accepted
+-- public.committed_events, which subtracts the siblings a committed
 -- ak.fork.resolution verdict adjudicated out of the local read surface.
 CREATE INDEX canonical_events_realm_pk_idx
     ON public.canonical_events USING btree (realm_pk, received_at, pk);
@@ -788,7 +842,7 @@ CREATE INDEX canonical_events_actor_idx ON public.canonical_events USING btree (
 
 CREATE INDEX canonical_events_realm_actor_position_idx
     ON public.canonical_events USING btree (realm_pk, actor_id, actor_seq, id)
-    WHERE state = 'accepted';
+    WHERE state = 'committed';
 
 -- Position occupancy for one `(realm_id, actor_id)` in every state.
 -- `sync/federation.md` section 5.3.4 condition 3 requires the enumeration behind
@@ -808,12 +862,12 @@ CREATE INDEX canonical_events_franking_target_idx ON public.canonical_events USI
     realm_pk,
     actor_id,
     ((envelope -> 'payload' ->> 'event_id'))
-) WHERE state = 'accepted' AND kind = 'ak.moderation.franking_proof';
+) WHERE state = 'committed' AND kind = 'ak.moderation.franking_proof';
 
 
 CREATE INDEX canonical_events_received_idx ON public.canonical_events USING btree (received_at, id);
 
-CREATE UNIQUE INDEX canonical_events_realm_create_unique_idx ON public.canonical_events USING btree (realm_id) WHERE (kind = 'ak.realm.create'::text AND state = 'accepted'::text);
+CREATE UNIQUE INDEX canonical_events_realm_create_unique_idx ON public.canonical_events USING btree (realm_id) WHERE (kind = 'ak.realm.create'::text AND state = 'committed'::text);
 
 CREATE INDEX canonical_events_space_idx ON public.canonical_events USING btree (realm_id);
 
@@ -2006,7 +2060,7 @@ CREATE TABLE public.federation_frontier_resolution (
 -- What the verdict on one adjudicated subject subtracts from the local read
 -- surface. Written in the same transaction as its federation_frontier_resolution
 -- row, and the only thing that makes an accepted verdict visible to a reader:
--- public.accepted_events subtracts everything at the subject the verdict did
+-- public.committed_events subtracts everything at the subject the verdict did
 -- not name. Nothing is deleted here — the canonical bytes a Seal pinned and the
 -- reducer output it produced stay exactly where they are — because a verdict
 -- governs what is read, not what is retained.
@@ -2061,17 +2115,17 @@ CREATE INDEX federation_fork_normalization_collision_idx
     ON public.federation_fork_normalization USING btree (collision_event_id)
     WHERE collision_event_id IS NOT NULL;
 
--- The accepted read surface, and the only one. Ordinary Event reads, the
+-- The committed read surface, and the only one. Ordinary Event reads, the
 -- frontier this Station publishes, the reducer's rebuild input and the
 -- federation sibling-position disclosure all read through this view, so a
 -- fork-resolution verdict cannot reach one of them and miss another. Writers,
 -- identity preflight and collision forensics keep reading canonical_events
 -- directly: an adjudicated loser still occupies its identity and still has to
 -- be retained.
-CREATE VIEW public.accepted_events AS
+CREATE VIEW public.committed_events AS
 SELECT event.*
 FROM public.canonical_events event
-WHERE event.state = 'accepted'
+WHERE event.state = 'committed'
   AND NOT EXISTS (
       SELECT 1 FROM public.federation_fork_normalization norm
       WHERE norm.realm_id = event.realm_id
@@ -3092,7 +3146,7 @@ CREATE TABLE public.security_transactions (
     prepared_plan jsonb NOT NULL,
     prepared_plan_digest text NOT NULL,
     accepted_steps jsonb NOT NULL,
-    terminal_result jsonb,
+    terminal_outcome jsonb,
     canonical_request bytea NOT NULL,
     CONSTRAINT security_transactions_pkey PRIMARY KEY (id),
     CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text])))
@@ -3631,7 +3685,7 @@ $$;
 -- is not a successful holder CAS and must never select the current value.
 CREATE FUNCTION invalidate_account_global_event() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.kind='ak.account_data.set' AND OLD.state='accepted' AND NEW.state<>'accepted' THEN
+    IF OLD.kind='ak.account_data.set' AND OLD.state='committed' AND NEW.state<>'committed' THEN
         -- Serialize the current-source comparison with all CAS publications.
         -- A withdrawal must not invalidate a newer source installed while waiting.
         PERFORM 1 FROM account_global_clock WHERE singleton FOR UPDATE;
@@ -3668,7 +3722,7 @@ $$;
 CREATE TRIGGER account_global_notification AFTER INSERT OR UPDATE ON notifications FOR EACH ROW EXECUTE FUNCTION project_account_global_notification();
 CREATE FUNCTION project_notification_source_state() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.state='accepted' AND NEW.state<>'accepted' THEN
+    IF OLD.state='committed' AND NEW.state<>'committed' THEN
         UPDATE notifications SET
             projection_action='remove',
             projection_data=jsonb_build_object('reason','source_removed'),
@@ -3676,7 +3730,7 @@ BEGIN
             updated_at=now()
         WHERE source_event_id=OLD.envelope->>'event_id'
           AND projection_action<>'remove';
-    ELSIF OLD.state<>'accepted' AND NEW.state='accepted' THEN
+    ELSIF OLD.state<>'committed' AND NEW.state='committed' THEN
         UPDATE notifications SET
             projection_action='upsert',
             projection_data=ordinary_projection_data,
@@ -3720,7 +3774,7 @@ CREATE FUNCTION account_device_interest_visible(recipient TEXT, owner TEXT) RETU
     SELECT recipient::jsonb->>'kind'='account' AND owner::jsonb->>'kind'='account'
     AND (recipient=owner OR EXISTS (
         SELECT 1 FROM account_summary_current a JOIN account_summary_current b USING(realm_id)
-        JOIN accepted_events creation ON creation.realm_id=a.realm_id AND creation.kind='ak.realm.create'
+        JOIN committed_events creation ON creation.realm_id=a.realm_id AND creation.kind='ak.realm.create'
         WHERE a.actor_key=recipient AND b.actor_key=owner
           AND a.membership='join' AND b.membership='join' AND a.available AND b.available
           AND jsonb_typeof(creation.envelope->'payload'->'object'->'schema_refs')='array'
@@ -3844,7 +3898,7 @@ BEGIN
     ELSE
         UPDATE mls_welcome_discovery_scopes SET revision=revision+1 WHERE scope=s AND group_id=g;
     END IF;
-    visible := NEW.state='accepted' AND EXISTS(SELECT 1 FROM mls_welcome_discovery_chain WHERE scope=s AND group_id=g AND event_ref=p->>'commit_ref')
+    visible := NEW.state='committed' AND EXISTS(SELECT 1 FROM mls_welcome_discovery_chain WHERE scope=s AND group_id=g AND event_ref=p->>'commit_ref')
       AND EXISTS(SELECT 1 FROM peer_keypackage_claims ledger WHERE ledger.source_id=p#>>'{claim_receipt,source_id}' AND ledger.claim_request_id=p#>>'{claim_receipt,claim_request_id}' AND ledger.state IN ('claimed','last_resort_claimed')
         AND ledger.outcome->'claim_receipt'=p->'claim_receipt' AND ledger.outcome#>>'{claims,0,claim_id}'=p->>'claim_id');
     INSERT INTO mls_welcome_discovery_entries(event_pk,event_ref,scope,group_id,endpoint,authorization_ref,position,commit_ref,expires_at,claim_source,claim_request,claim_id,eligible)
@@ -3878,7 +3932,7 @@ CREATE FUNCTION account_data_source_current(a TEXT,k TEXT) RETURNS BOOLEAN LANGU
 BEGIN
     IF EXISTS (SELECT 1 FROM account_global_versions v WHERE actor_key=a AND channel='account_data_events'
         AND item_key='event:'||k AND valid_until IS NULL AND (payload->>'source'='invalidated'
-        OR NOT EXISTS(SELECT 1 FROM accepted_events e WHERE e.kind='ak.account_data.set'
+        OR NOT EXISTS(SELECT 1 FROM committed_events e WHERE e.kind='ak.account_data.set'
             AND e.envelope->>'event_id'=v.payload->'value'->>'event_id'))) THEN
         RAISE EXCEPTION 'account data current source is unavailable';
     END IF;
@@ -3891,7 +3945,7 @@ $$;
 CREATE FUNCTION invalidate_account_device_create() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE interest RECORD;
 BEGIN
-    IF OLD.kind='ak.realm.create' AND OLD.state='accepted' AND NEW.state<>'accepted' THEN
+    IF OLD.kind='ak.realm.create' AND OLD.state='committed' AND NEW.state<>'committed' THEN
         PERFORM 1 FROM account_global_clock WHERE singleton FOR UPDATE;
         FOR interest IN
             SELECT v.actor_key,v.item_key FROM account_global_versions v
@@ -3955,7 +4009,7 @@ CREATE INDEX current_data_dependencies_ancestor ON current_data_dependencies(anc
 
 CREATE FUNCTION invalidate_current_data_sources() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.state='accepted' AND NEW.state<>'accepted' THEN
+    IF OLD.state='committed' AND NEW.state<>'committed' THEN
         WITH RECURSIVE affected(realm_id,scope_key,cell_id,event_digest) AS (
             SELECT realm_id,scope_key,cell_id,event_digest FROM current_data_sources
             WHERE event_id=OLD.id OR event_id IN (
