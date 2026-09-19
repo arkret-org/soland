@@ -162,6 +162,7 @@ async fn validate_and_prepare(
         governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
+        agent_draft_pending_intent: None,
         actor_private_account_data: None,
         consent_projection: None,
         event: soland_services::events::AcceptedEvent {

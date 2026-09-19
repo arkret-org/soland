@@ -3,10 +3,10 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::{
-    AccountDataRecord, CanonicalEventRecord, ConsentGrantRecord, ContactRecord,
-    ContactVerifiedMirrorRecord, DevicePairingAuthorizationCommit, DeviceRevocationGateSelector,
-    DeviceRevocationTransition, FederationOutboxRecord, IdempotencyRecord, PersistenceError,
-    PersistenceResult, ProjectionEventRecord,
+    AccountDataRecord, AgentDraftPendingIntentCommit, CanonicalEventRecord, ConsentGrantRecord,
+    ContactRecord, ContactVerifiedMirrorRecord, DevicePairingAuthorizationCommit,
+    DeviceRevocationGateSelector, DeviceRevocationTransition, FederationOutboxRecord,
+    IdempotencyRecord, PersistenceError, PersistenceResult, ProjectionEventRecord,
 };
 
 /// Project an already-admitted Agent cascade Event onto the frozen Agent ActorId
@@ -90,6 +90,9 @@ pub struct EventCommitRequest {
     /// boundary as the canonical Event and its reducer projection.
     pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
     pub contact_projection: Option<ContactProjectionCommit>,
+    /// Structured Station-private result of an accepted Agent draft proposal.
+    /// It is neither account data nor a shared reducer projection.
+    pub agent_draft_pending_intent: Option<AgentDraftPendingIntentCommit>,
     /// Holder-private account-data effect installed atomically with its
     /// accepted canonical Event. It is not a shared reducer projection.
     pub actor_private_account_data: Option<AccountDataCasCommit>,

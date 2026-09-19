@@ -15,6 +15,7 @@ pub struct PgPersistenceStore {
     authority_commits: PgAuthorityCommitStore,
     event_commits: PgEventCommitUnitOfWork,
     agent_membership_cascades: PgAgentMembershipCascadeStore,
+    agent_draft_pending_intents: PgAgentDraftPendingIntentStore,
     accounts: PgAccountStore,
     account_localparts: PgAccountLocalpartStore,
     account_lifecycle: PgAccountLifecycleStore,
@@ -94,6 +95,7 @@ impl PgPersistenceStore {
             authority_commits: PgAuthorityCommitStore { pool: pool.clone() },
             event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
             agent_membership_cascades: PgAgentMembershipCascadeStore { pool: pool.clone() },
+            agent_draft_pending_intents: PgAgentDraftPendingIntentStore { pool: pool.clone() },
             accounts: PgAccountStore { pool: pool.clone() },
             account_localparts: PgAccountLocalpartStore { pool: pool.clone() },
             account_lifecycle: PgAccountLifecycleStore { pool: pool.clone() },
@@ -431,6 +433,10 @@ impl MlsAgentStoreRegistry for PgPersistenceStore {
 
     fn agent_membership_cascades(&self) -> &dyn AgentMembershipCascadeStore {
         &self.agent_membership_cascades
+    }
+
+    fn agent_draft_pending_intents(&self) -> &dyn AgentDraftPendingIntentStore {
+        &self.agent_draft_pending_intents
     }
 
     fn sidecars(&self) -> &dyn SidecarStore {

@@ -17,6 +17,7 @@ use soland_storage::{
     EventCommitUnitOfWork, PersistenceError, PersistenceResult, ids,
 };
 
+use crate::agent_draft_pending_intents::commit_agent_draft_pending_intent_in_connection;
 use crate::authority_commit::{commit_transaction_in_connection, queue_event_in_connection};
 use crate::device_revocations::{
     commit_revocation_in_connection, ensure_gate_allowed_in_transaction,
@@ -1136,6 +1137,19 @@ async fn commit_one_in_connection(
     }
     if let Some(commit) = request.contact_projection {
         commit_contact_projection(conn, &committed_ref, commit).await?;
+    }
+    if let Some(commit) = request.agent_draft_pending_intent.as_ref() {
+        if event.kind != arkret_wire::EventKind::AgentDraftPropose
+            || commit.record.accepted_event_id != event.event_id
+            || commit.record.canonical_event_digest.as_str()
+                != request.event.canonical_digest.as_str()
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "agent draft pending intent does not bind its accepted proposal Event".to_owned(),
+            )
+            .into());
+        }
+        commit_agent_draft_pending_intent_in_connection(conn, commit).await?;
     }
     if let Some(commit) = request.actor_private_account_data {
         commit_account_data_cas(conn, commit, Some(&event.event_id)).await?;

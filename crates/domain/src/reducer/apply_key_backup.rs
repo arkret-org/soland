@@ -55,7 +55,7 @@ impl ProjectionState {
             series_pointer_version: head.series_pointer_version,
             previous_series_ids,
             record_digest: head.record_digest,
-            source_ref: record.source_ref.clone(),
+            source_commit_ref: record.source_commit_ref.clone(),
             issued_at: record.issued_at,
             auth_data: record.auth_data.clone(),
             extra: record.extra.clone(),

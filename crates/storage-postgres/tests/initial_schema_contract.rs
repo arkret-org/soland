@@ -2,6 +2,17 @@ const INITIAL_UP: &str = include_str!("../migrations/00000000000000_initial/up.s
 const INITIAL_DOWN: &str = include_str!("../migrations/00000000000000_initial/down.sql");
 
 #[test]
+fn agent_draft_pending_intent_is_a_separate_private_state_machine() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.agent_draft_pending_intents"));
+    assert!(
+        INITIAL_UP.contains("PRIMARY KEY\n        (controller_account_key, agent_id, draft_id)")
+    );
+    assert!(INITIAL_UP.contains("state IN ('available', 'consumed', 'expired')"));
+    assert!(INITIAL_UP.contains("agent_draft_pending_intents_terminal_shape_check"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS agent_draft_pending_intents CASCADE"));
+}
+
+#[test]
 fn history_response_stream_tables_are_created_and_dropped_symmetrically() {
     for table in [
         "history_key_response_streams",

@@ -73,7 +73,8 @@ pub struct SolandKeyBackupActiveSeries {
     pub series_pointer_version: u64,
     pub previous_series_ids: Vec<String>,
     pub record_digest: String,
-    pub source_ref: arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesSourceRef,
+    pub source_commit_ref:
+        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesSourceCommitRef,
     pub issued_at: chrono::DateTime<chrono::Utc>,
     pub auth_data: arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesAuthData,
     pub extra: BTreeMap<String, Value>,

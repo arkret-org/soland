@@ -765,6 +765,8 @@ pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
+    /// Station-private pending intent created by `ak.agent.draft.propose`.
+    pub agent_draft_pending_intent: Option<soland_storage::AgentDraftPendingIntentCommit>,
     /// Holder-private account-data register mutation owned by this Event.
     ///
     /// This is committed in the same transaction as the canonical Event and
@@ -2319,6 +2321,7 @@ mod tests {
                 authority_commit,
                 device_pairing_authorization: None,
                 contact_projection: None,
+                agent_draft_pending_intent: None,
                 actor_private_account_data: None,
                 consent_projection: None,
                 event: AcceptedEvent {

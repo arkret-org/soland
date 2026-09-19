@@ -481,6 +481,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
             event: record,
             device_pairing_authorization: None,
             contact_projection: None,
+            agent_draft_pending_intent: None,
             actor_private_account_data: None,
             consent_projection: None,
             device_revocation_transition: None,
@@ -688,6 +689,7 @@ async fn account_blocklist_commit_replays_exactly_and_cas_conflict_rolls_back_ev
                 event: record,
                 device_pairing_authorization: None,
                 contact_projection: None,
+                agent_draft_pending_intent: None,
                 actor_private_account_data: Some(soland_storage::AccountDataCasCommit {
                     record: AccountDataRecord {
                         actor: actor.clone(),

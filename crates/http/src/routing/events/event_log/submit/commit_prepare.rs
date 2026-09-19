@@ -33,6 +33,130 @@ pub(super) struct PreparedAcceptedEventCommand {
     pub(super) command: soland_services::events::CommitAcceptedEventCommand,
 }
 
+async fn prepare_agent_draft_pending_intent(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<soland_storage::AgentDraftPendingIntentCommit>, SubmitOneError> {
+    if parsed.kind != arkret_wire::EventKind::AgentDraftPropose.as_str() {
+        return Ok(None);
+    }
+    let payload: arkret_models_collaboration::events_payloads::agent::AgentDraftProposePayload =
+        serde_json::from_value(envelope.get("payload").cloned().unwrap_or(Value::Null)).map_err(
+            |error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("agent draft proposal violates its typed SDK contract: {error}"),
+                )
+            },
+        )?;
+    if payload.controller_account_id.station_id != *state.service_core_id() {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "policy_violation",
+            "agent draft pending intent belongs to another Account Station",
+        ));
+    }
+    if payload.expires_at <= received_at {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "agent draft proposal is already expired at protocol admission time",
+        ));
+    }
+    if !(1..=32).contains(&payload.content_handoff.recipients.len()) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "agent draft content handoff requires 1..=32 recipients",
+        ));
+    }
+    let controller_actor = arkret_wire::ActorId::account(payload.controller_account_id.clone());
+    let mut recipients = std::collections::BTreeSet::new();
+    for recipient in &payload.content_handoff.recipients {
+        if !recipients.insert(recipient.recipient_device_id.clone()) {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "agent draft content handoff repeats a recipient device",
+            ));
+        }
+        let facet =
+            crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
+                state,
+                payload.controller_account_id.principal_id.as_str(),
+                recipient.recipient_device_id.as_str(),
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("controller device authorization is unavailable: {error}"),
+                )
+            })?;
+        let authorization = crate::routing::identity::device_signing::current_device_authorization(
+            state,
+            &controller_actor,
+            &recipient.recipient_device_id,
+            &facet,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("controller device authorization is unavailable: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "policy_violation",
+                "agent draft handoff recipient is not a current accepted controller device",
+            )
+        })?;
+        let expected_digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            authorization.hpke_key.as_str().as_bytes(),
+        ))
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("controller HPKE key digest failed: {error}"),
+            )
+        })?;
+        if recipient.recipient_hpke_key_digest != expected_digest {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "agent draft recipient HPKE key digest is stale or mismatched",
+            ));
+        }
+    }
+    Ok(Some(soland_storage::AgentDraftPendingIntentCommit {
+        record: soland_storage::AgentDraftPendingIntentRecord {
+            controller_account_id: payload.controller_account_id,
+            agent_id: payload.agent_id,
+            draft_id: payload.draft_id,
+            proposed_action: payload.proposed_action,
+            target: serde_json::to_value(payload.target).expect("typed target must serialize"),
+            content_digest: payload.content_digest,
+            content_handoff: serde_json::to_value(payload.content_handoff)
+                .expect("typed handoff must serialize"),
+            canonical_event_digest: parsed.canonical_digest.clone(),
+            accepted_event_id: parsed.event_id.clone(),
+            expires_at: payload.expires_at,
+            created_at: payload.created_at,
+            state: soland_storage::AgentDraftPendingIntentState::Available,
+            consumption: None,
+            expired_at: None,
+        },
+    }))
+}
+
 /// Freeze every atomic sidecar into the canonical Event commit command.
 ///
 /// This stage performs no persistence write. The caller keeps all submit-lane
@@ -63,6 +187,8 @@ pub(super) async fn prepare_accepted_event_command(
         commit_options,
         received_at,
     } = preparation;
+    let agent_draft_pending_intent =
+        prepare_agent_draft_pending_intent(state, parsed, &envelope, received_at).await?;
     let device_revocation_transition =
         if let Some(target_device_id) = device_revoke_target_device_id {
             let control_proposal_ack = control_proposal_ack.cloned().ok_or_else(|| {
@@ -294,6 +420,7 @@ pub(super) async fn prepare_accepted_event_command(
             .and_then(|options| options.device_pairing)
             .and_then(|admission| admission.commit_authorization.clone()),
         contact_projection,
+        agent_draft_pending_intent,
         actor_private_account_data,
         consent_projection: consent_admission
             .map(crate::routing::identity::consent::ConsentAdmission::commit),

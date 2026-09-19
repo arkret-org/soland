@@ -383,6 +383,7 @@ async fn prepare_ghost_event(
         governance_dependencies: governance_dependency.into_iter().collect(),
         device_pairing_authorization: None,
         contact_projection: None,
+        agent_draft_pending_intent: None,
         actor_private_account_data: None,
         consent_projection: None,
         event: soland_services::events::AcceptedEvent {

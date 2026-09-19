@@ -1165,7 +1165,7 @@ impl ProjectionService {
                         .map(arkret_identifiers::BackupSeriesId::new)
                         .collect::<Result<Vec<_>, _>>()
                         .ok()?,
-                    source_ref: row.source_ref.clone(),
+                    source_commit_ref: row.source_commit_ref.clone(),
                     issued_at: row.issued_at,
                     auth_data: row.auth_data.clone(),
                     extra: row.extra.clone(),

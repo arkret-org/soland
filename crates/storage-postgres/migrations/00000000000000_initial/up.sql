@@ -71,6 +71,39 @@ CREATE TABLE public.account_datas (
 ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_actor_data_type_key UNIQUE (actor_id, account_data_key);
 
+-- Structured Station-private handoff created by ak.agent.draft.propose. This
+-- table is deliberately separate from account_datas and all shared reducers.
+CREATE TABLE public.agent_draft_pending_intents (
+    controller_account_id jsonb NOT NULL,
+    controller_account_key text NOT NULL,
+    agent_id text NOT NULL,
+    draft_id text NOT NULL,
+    proposed_action text NOT NULL,
+    target jsonb NOT NULL,
+    content_digest text NOT NULL,
+    content_handoff jsonb,
+    canonical_event_digest text NOT NULL,
+    accepted_event_id text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    state text NOT NULL DEFAULT 'available',
+    consumption jsonb,
+    expired_at timestamp with time zone,
+    CONSTRAINT agent_draft_pending_intents_pk PRIMARY KEY
+        (controller_account_key, agent_id, draft_id),
+    CONSTRAINT agent_draft_pending_intents_event_key UNIQUE (accepted_event_id),
+    CONSTRAINT agent_draft_pending_intents_state_check CHECK
+        (state IN ('available', 'consumed', 'expired')),
+    CONSTRAINT agent_draft_pending_intents_terminal_shape_check CHECK (
+        (state = 'available' AND consumption IS NULL AND expired_at IS NULL)
+        OR (state = 'consumed' AND consumption IS NOT NULL AND expired_at IS NULL)
+        OR (state = 'expired' AND consumption IS NULL AND expired_at IS NOT NULL)
+    )
+);
+
+CREATE INDEX agent_draft_pending_intents_controller_expiry_idx
+    ON public.agent_draft_pending_intents (controller_account_key, expires_at);
+
 CREATE TABLE public.account_data_changes (
     position bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     actor_id text NOT NULL,

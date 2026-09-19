@@ -91,6 +91,7 @@ fn persistence_event_commit_request(
         event: command.event,
         device_pairing_authorization: command.device_pairing_authorization,
         contact_projection: command.contact_projection,
+        agent_draft_pending_intent: command.agent_draft_pending_intent,
         actor_private_account_data: command.actor_private_account_data.map(|cas| {
             soland_storage::AccountDataCasCommit {
                 record: soland_storage::AccountDataRecord {

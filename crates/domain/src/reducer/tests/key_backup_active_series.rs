@@ -10,22 +10,11 @@ const PREVIOUS_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-00000000
 /// The committed Realm-stream position the active-series selection was taken
 /// against.
 ///
-/// `KeyBackupActiveSeriesSourceRef` is a closed `(commit_ref,
-/// device_generation_ref)` pair and `CommittedEventRef` is a closed
-/// `(event_id, commit_id, stream_ref, stream_position)` tuple, so the fixture
-/// is built through the SDK types rather than hand-written JSON that only the
-/// test believes in.
-fn source_ref() -> Value {
-    let commit_ref = arkret_wire::CommittedEventRef {
-        event_id: arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [3; 32]),
-        commit_id: arkret_wire::RealmCommitId::from_digest([4; 32]),
-        stream_ref: arkret_wire::CommitStreamRef::Realm {
-            realm_id: arkret_identifiers::RealmId::new(REALM).unwrap(),
-        },
-        stream_position: 0,
-    };
+/// The closed source checkpoint carries only the Realm commit id and the
+/// controller-device generation that the active-series selection binds.
+fn source_commit_ref() -> Value {
     json!({
-        "commit_ref": commit_ref,
+        "realm_commit_id": arkret_wire::RealmCommitId::from_digest([4; 32]),
         "device_generation_ref": 2
     })
 }
@@ -38,7 +27,7 @@ fn active_series_payload() -> Value {
         "active_series_id": ACTIVE_SERIES,
         "series_pointer_version": 1,
         "previous_series_ids": [PREVIOUS_SERIES],
-        "source_ref": source_ref(),
+        "source_commit_ref": source_commit_ref(),
         "issued_at": "2026-04-27T00:00:00.000Z",
         "auth_data": {
             "verification_method": "did:web:alice.example#ak_device_01964137",

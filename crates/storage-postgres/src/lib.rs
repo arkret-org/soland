@@ -26,6 +26,7 @@ pub(crate) use query_rows::{ExistsRow, JsonPayloadRow, MaxSeqRow};
 
 mod account_status;
 mod accounts;
+mod agent_draft_pending_intents;
 mod agent_membership_cascades;
 mod agent_principal_row;
 mod agents;
@@ -78,6 +79,7 @@ mod webvh;
 
 pub(crate) use account_status::PgAccountStatusReplicaStore;
 pub use accounts::*;
+pub use agent_draft_pending_intents::*;
 pub use agent_membership_cascades::*;
 pub(crate) use agent_principal_row::{AgentPrincipalRow, pack_runtime_key_material};
 pub use agents::*;
