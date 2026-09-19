@@ -383,19 +383,11 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
         && !direct_bootstrap_authorized
         && !object.contains_key("executed_by")
     {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "Direct Conversation messages require the registered participant authority source",
-        ));
+        return Err(direct_conversation_participant_denied());
     }
     if direct_participant_authorized {
         if kind != arkret_wire::EventKind::MessageCreate.as_str() {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "participant source does not authorize this operation",
-            ));
+            return Err(direct_conversation_participant_denied());
         }
         crate::routing::identity::account::validate_direct_message_participant(
             state,
@@ -405,9 +397,7 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
             &state_at_ref,
         )
         .await
-        .map_err(|reason| {
-            event_validation_error(StatusCode::FORBIDDEN, "capability_denied", reason)
-        })?;
+        .map_err(|_| direct_conversation_participant_denied())?;
     }
     if direct_bootstrap_authorized {
         if kind != arkret_wire::EventKind::MessageCreate.as_str() {
@@ -474,6 +464,20 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
         &used_grant_ids,
     )
     .await
+}
+
+/// The participant evaluator is intentionally non-enumerating.  Its internal
+/// binding/member/MLS/Contact/device/Agent diagnostics are useful only to the
+/// server trace; the signed submit surface exposes one closed reason.
+fn direct_conversation_participant_denied() -> EventValidationError {
+    EventValidationError {
+        status: StatusCode::PRECONDITION_FAILED,
+        code: "failed_precondition",
+        message: "Direct Conversation participant authority denied".to_owned(),
+        reason_code: Some(
+            arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED,
+        ),
+    }
 }
 
 async fn validate_open_data_basis(

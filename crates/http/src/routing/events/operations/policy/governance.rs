@@ -9,40 +9,145 @@ use super::*;
 pub(crate) const REALM_MEMBERSHIP_ADMIN_ACTIONS: &[&str] =
     &[arkret_wire::CapabilityActionId::REALM_ADMIN];
 
-pub(super) fn validate_direct_conversation_realm_policy(
+/// Apply the closed Direct Conversation admission table in registry order.
+///
+/// This is deliberately one gate rather than a collection of call-site checks:
+/// the first matching reason is wire-visible, so reordering these predicates is
+/// a protocol change.  The caller runs this before any reducer/projection work.
+pub(super) async fn validate_direct_conversation_admission(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
+    let kind = kinds::canonical_kind_for_operation(operation);
+
+    // 1. Binding integrity is evaluated even for the first endorsement, when
+    // no settled binding exists yet.  Keep the pair-materialization conflict
+    // reason distinct; every malformed/mismatched binding input is collapsed
+    // to the registered binding-invalid reason.
+    if kind == Some(arkret_wire::EventKind::DirectConversationBound) {
+        if let Err(reason) =
+            crate::routing::identity::account::validate_direct_binding_operation(state, operation)
+                .await
+        {
+            return Err(
+                if reason
+                    == arkret_wire::ReasonCode::DIRECT_CONVERSATION_PAIR_MATERIALIZATION_CONFLICT
+                {
+                    reason
+                } else {
+                    arkret_wire::ReasonCode::DIRECT_CONVERSATION_BINDING_INVALID
+                },
+            );
+        }
+    }
+
     if !is_direct_conversation_realm(state, operation.realm_id.as_str()) {
         return Ok(());
     }
-    // §8.1 — DM coordinates are permanent and successor-free, so an
+
+    // 2. §8.1 — DM coordinates are permanent and successor-free, so an
     // irreversible terminal is refused outright. Reversible `ak.realm.archive`
     // / `ak.realm.freeze` stay available through ordinary Realm authority and
     // only surface as resolver send blockers.
     if matches!(
-        kinds::canonical_kind(operation),
-        arkret_wire::EventKind::RealmTombstone | arkret_wire::EventKind::RealmDestroy
+        kind,
+        Some(arkret_wire::EventKind::RealmTombstone | arkret_wire::EventKind::RealmDestroy)
     ) {
         return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN);
     }
-    let binding = active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str());
-    // The envelope verifier separately proves the registered provisional
-    // founder source, exact founding unit, exporter Seal and current gates.
-    // A missing final binding is expected in that phase (§7.2), not a bad roster.
-    if kinds::operation_is_message_create(operation)
-        && binding.is_none()
-        && operation
-            .context
-            .authorization_ref
+
+    let authorization_ref = operation
+        .context
+        .authorization_ref
+        .as_ref()
+        .map(|reference| reference.as_str());
+    let bootstrap_authority = authorization_ref
+        == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1);
+    let raw_binding = state
+        .contacts()
+        .settled_direct_binding_for_realm(operation.realm_id.as_str());
+
+    // 3. The authoritative member projection and immutable binding must name
+    // the same two distinct full ActorIds.  The incoming first binding supplies
+    // the expected pair; the provisional founder lane is the sole no-binding
+    // exception and is independently proved by its registered authority.
+    let expected_participants = if let Some(binding) = raw_binding.as_ref() {
+        Some(binding.participants_unordered.clone())
+    } else if kind == Some(arkret_wire::EventKind::DirectConversationBound) {
+        serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+        >(operation.payload.clone())
+        .ok()
+        .map(|payload| {
+            payload
+                .unordered_participant_ids
+                .into_iter()
+                .map(|actor| actor.to_string())
+                .collect()
+        })
+    } else {
+        None
+    };
+    if !bootstrap_authority {
+        let participants = expected_participants
             .as_ref()
-            .map(|reference| reference.as_str())
-            != Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1)
-    {
-        return Err("direct_conversation_member_count_invalid");
+            .ok_or(arkret_wire::ReasonCode::DIRECT_CONVERSATION_MEMBER_COUNT_INVALID)?;
+        let participant_set = participants.iter().cloned().collect::<BTreeSet<_>>();
+        let member_set = state
+            .projections()
+            .snapshot()
+            .members_of_realm(operation.realm_id.as_str())
+            .into_iter()
+            .map(|member| member.member.clone())
+            .collect::<BTreeSet<_>>();
+        if participants.len() != 2 || participant_set.len() != 2 || member_set != participant_set {
+            return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_MEMBER_COUNT_INVALID);
+        }
     }
+
+    // 4. Candidate-pair membership precedes the invite-class guard.  A 3PID
+    // invite is necessarily pair-external; a directed invite or join is
+    // external when its full candidate ActorId is outside the immutable pair.
+    let candidate = direct_conversation_candidate(operation);
+    if (kind == Some(arkret_wire::EventKind::InviteThirdParty)
+        || candidate.as_ref().is_some_and(|candidate| {
+            expected_participants
+                .as_ref()
+                .is_none_or(|participants| !participants.contains(candidate))
+        }))
+        && matches!(
+            kind,
+            Some(
+                arkret_wire::EventKind::InviteCreate
+                    | arkret_wire::EventKind::InviteThirdParty
+                    | arkret_wire::EventKind::MemberState
+            )
+        )
+    {
+        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_THIRD_PARTY_MEMBER_FORBIDDEN);
+    }
+
+    // 5. Founding peer membership is not an invite.  Every invite against an
+    // established DM is otherwise closed here.
     if kinds::operation_is_invite(operation) {
-        return Err("direct_conversation_invite_forbidden");
+        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_INVITE_FORBIDDEN);
+    }
+
+    // 6. An accepted Direct Conversation has left the founding/materializing
+    // root phase.  No general owner aggregation can reopen operational,
+    // governance, policy, grant, or terminal writes.
+    if authorization_ref == Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL) {
+        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_ROOT_MASK_VIOLATION);
+    }
+
+    // 7. The expensive closed evaluator runs during envelope validation where
+    // the accepted-Seal state is available.  This policy-stage assertion keeps
+    // an unsupported participant-source action fail-closed under the same
+    // non-enumerating reason.
+    if authorization_ref == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_PARTICIPANT_V1)
+        && !direct_conversation_participant_event_is_allowlisted(operation)
+    {
+        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED);
     }
     if operation_is_space_container(operation) {
         return Err("direct_conversation_space_forbidden");
@@ -56,6 +161,51 @@ pub(super) fn validate_direct_conversation_realm_policy(
         return Err("capability_denied");
     }
     Ok(())
+}
+
+fn direct_conversation_candidate(operation: &Operation) -> Option<String> {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(arkret_wire::EventKind::MemberState) => {
+            membership_target(operation).map(|actor| actor.to_string())
+        }
+        Some(arkret_wire::EventKind::InviteCreate) => operation
+            .payload
+            .get("invitee_account_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok())
+            .map(arkret_wire::ActorId::account)
+            .map(|actor| actor.to_string())
+            // Keep the old operation fixture spelling readable while all real
+            // envelopes remain closed by the typed payload schema.
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("invitee_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            }),
+        _ => None,
+    }
+}
+
+fn direct_conversation_participant_event_is_allowlisted(operation: &Operation) -> bool {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(
+            arkret_wire::EventKind::MessageCreate
+            | arkret_wire::EventKind::MessageRedact
+            | arkret_wire::EventKind::MessageRevise
+            | arkret_wire::EventKind::MlsCommit
+            | arkret_wire::EventKind::ReactionAdd
+            | arkret_wire::EventKind::ReactionRemove
+            | arkret_wire::EventKind::ReadCursorAdvance
+            | arkret_wire::EventKind::StrandCreate,
+        ) => true,
+        Some(arkret_wire::EventKind::MemberState) => {
+            operation.payload.get("membership").and_then(Value::as_str) == Some("leave")
+                && membership_target(operation).as_ref() == Some(&operation.context.sender)
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn operation_is_space_container(operation: &Operation) -> bool {

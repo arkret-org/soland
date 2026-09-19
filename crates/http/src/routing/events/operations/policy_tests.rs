@@ -1457,7 +1457,7 @@ fn insert_approved_agent_action(
 }
 
 #[tokio::test]
-async fn active_direct_conversation_rejects_invite_space_and_third_party_member() {
+async fn active_direct_conversation_rejects_invites_space_and_third_party_member() {
     let (state, realm_id) = state_with_direct_binding();
 
     let invite = op(
@@ -1474,7 +1474,28 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         validate_operation_policy(&state, &[invite])
             .await
             .unwrap_err(),
-        "direct_conversation_invite_forbidden"
+        arkret_wire::ReasonCode::DIRECT_CONVERSATION_THIRD_PARTY_MEMBER_FORBIDDEN
+    );
+
+    let bob = fixture_actor("ak:did_core:webvh:z6mkbob")
+        .as_account_id()
+        .expect("Bob fixture is an account Actor")
+        .clone();
+    let pair_member_invite = op(
+        realm_id.clone(),
+        "000000000609",
+        arkret_wire::EventKind::InviteCreate,
+        json!({
+            "invitee_account_id": bob,
+            "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "expires_at": "2026-08-05T10:00:00.000Z"
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[pair_member_invite])
+            .await
+            .unwrap_err(),
+        arkret_wire::ReasonCode::DIRECT_CONVERSATION_INVITE_FORBIDDEN
     );
 
     let space_create = op(
@@ -1508,6 +1529,75 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
             .await
             .unwrap_err(),
         "direct_conversation_third_party_member_forbidden"
+    );
+}
+
+#[tokio::test]
+async fn direct_conversation_admission_precedence_is_registry_order() {
+    let (state, realm_id) = state_with_direct_binding();
+
+    let malformed_binding = op(
+        realm_id.clone(),
+        "00000000060a",
+        arkret_wire::EventKind::DirectConversationBound,
+        json!({}),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[malformed_binding])
+            .await
+            .unwrap_err(),
+        arkret_wire::ReasonCode::DIRECT_CONVERSATION_BINDING_INVALID
+    );
+
+    let mut root_terminal = op(
+        realm_id.clone(),
+        "00000000060b",
+        arkret_wire::EventKind::RealmTombstone,
+        json!({ "sender": "ak:did_core:web:alice.example" }),
+    );
+    root_terminal.context.authorization_ref = Some(
+        arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap(),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[root_terminal])
+            .await
+            .unwrap_err(),
+        arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN
+    );
+
+    let mut root_operational = op(
+        realm_id.clone(),
+        "00000000060c",
+        arkret_wire::EventKind::RealmArchive,
+        json!({ "sender": "ak:did_core:web:alice.example" }),
+    );
+    root_operational.context.authorization_ref = Some(
+        arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap(),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[root_operational])
+            .await
+            .unwrap_err(),
+        arkret_wire::ReasonCode::DIRECT_CONVERSATION_ROOT_MASK_VIOLATION
+    );
+
+    let mut unsupported_participant_action = op(
+        realm_id,
+        "00000000060d",
+        arkret_wire::EventKind::RealmArchive,
+        json!({ "sender": "ak:did_core:web:alice.example" }),
+    );
+    unsupported_participant_action.context.authorization_ref = Some(
+        arkret_wire::AuthorizationRef::new(
+            arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_PARTICIPANT_V1,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[unsupported_participant_action])
+            .await
+            .unwrap_err(),
+        arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED
     );
 }
 

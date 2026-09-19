@@ -1815,6 +1815,26 @@ async fn direct_conversation_resolve(
                 group_state_ref,
             });
         }
+        let participant_set = binding
+            .participants_unordered
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let member_set = projection
+            .members_of_realm(&binding.realm_id)
+            .into_iter()
+            .map(|member| member.member.clone())
+            .collect::<BTreeSet<_>>();
+        if binding.participants_unordered.len() != 2
+            || participant_set.len() != 2
+            || member_set != participant_set
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::MemberCountInvalid],
+                group_state_ref,
+            });
+        }
         if !direct_binding_matches_projection(state, &binding) {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
