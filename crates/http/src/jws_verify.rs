@@ -1,11 +1,10 @@
 //! Soland thin adapter over the canonical detached-JWS verifier in the SDK.
 //!
 //! All JWS verification semantics (RFC 7515 detached shape, Ed25519
-//! signature check, authority binding, replay-window timing) live in the
-//! SDK so inkson, floria, cotest, teabay and soland share one
-//! wire-compatible implementation. This module selects a document or accepted
-//! key from [`AppState`], then hands pinned material to the resolver-free SDK
-//! verifier. It also re-exports pure replay-window helpers.
+//! signature check and authority binding) live in the SDK so inkson, floria,
+//! cotest, teabay and soland share one wire-compatible implementation. This
+//! module selects a document or accepted key from [`AppState`], then hands
+//! pinned material to the resolver-free SDK verifier.
 //!
 //! # Two-tier verifier model (unchanged)
 //!
@@ -20,9 +19,7 @@ use std::collections::BTreeMap;
 
 use arkret_identifiers::{Did, Hash};
 use arkret_identity::{DidDocument, DidResolver as _};
-use arkret_signatures::{
-    Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
-};
+use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError};
 use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
 use serde_json::Value;
 use soland_services::identity::{
@@ -57,16 +54,6 @@ pub struct VerifiedPrincipalDeviceSignatureBinding {
     pub generation_ref: u64,
 }
 
-// Re-exports of pure helpers from the SDK. Identical signatures so call
-// sites in `notary.rs`, `compactor.rs`, `routing::admin::seal.rs`,
-// `routing::federation::move_seal.rs` and `routing::events::event_log.rs`
-// keep working unchanged.
-pub use arkret_identity::jws::{
-    effective_window_for_projection, physical_millis_from_hlc, verify_replay_window,
-    verify_replay_window_at, verify_replay_window_for_projection,
-    verify_replay_window_for_projection_at,
-};
-
 /// Shape-only detached-JWS verifier for development mode.
 ///
 /// This is intentionally colocated with soland's production SDK verifier
@@ -91,28 +78,13 @@ pub fn verify_jws_shape(
         return Err("empty canonical bytes".to_owned());
     }
 
-    let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))
-        .map_err(|error| error.to_string())?;
     // §2.2 — even the development-mode shape verifier refuses a DID without a fragment: a
     // proof key is always a `#fragment` DID URL.
-    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+    arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
-    let proof = build_proof_envelope(
-        "detached_jws",
-        verification_method,
-        payload_digest,
-        arkret_wire::SignerEvidenceRef::new(format!(
-            "ak:signer_evidence:sha256:{}",
-            "0".repeat(64)
-        ))
-        .expect("static signer evidence ref"),
-        None,
-        None,
-        jws,
-    );
     let verifier = Ed25519DetachedJwsVerifier::new();
     let material = dev_shape_only_public_key();
-    match verifier.verify_detached_jws(&proof.jws, canonical_bytes, &material) {
+    match verifier.verify_detached_jws(jws, canonical_bytes, &material) {
         Ok(()) => reject_zero_signature_sentinel(jws),
         Err(VerifierError::Backend(error)) if error.contains("Ed25519 verification failed") => {
             reject_zero_signature_sentinel(jws)
@@ -1610,15 +1582,10 @@ mod did_binding_tests {
             br#"{"actor_id":"ak:did_core:web:principal.example","kind":"ak.test.event"}"#.to_vec();
         let event_digest =
             Hash::new(arkret_canonical::sha256_digest(&envelope_bytes)).expect("event digest");
-        let proof = build_proof_envelope(
+        let proof = arkret_signatures::build_proof_envelope(
             "detached_jws",
             arkret_wire::DidUrl::new(verification_method.to_owned()).expect("DID URL"),
             event_digest,
-            arkret_wire::SignerEvidenceRef::new(format!(
-                "ak:signer_evidence:sha256:{}",
-                "0".repeat(64)
-            ))
-            .expect("static signer evidence ref"),
             None,
             None,
             "",
