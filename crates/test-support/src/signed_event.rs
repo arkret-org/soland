@@ -13,7 +13,6 @@ use arkret_identifiers::{Hlc, RealmId};
 use arkret_wire::{DidUrl, Event, EventId, EventInitialSubmission, Precondition, ScopeRef};
 use serde_json::Value;
 
-
 /// The Ed25519 seed a fixture actor's device key is derived from.
 ///
 /// The dev-login device fixtures publish the matching public key, so an envelope

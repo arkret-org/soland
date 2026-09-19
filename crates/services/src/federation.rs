@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use crate::ServiceResult;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::DidCoreId;
 use async_trait::async_trait;
+
+use crate::ServiceResult;
 
 /// Identity and payload of one outbound delivery intent. This is the shape the
 /// admission path builds *before* the Event transaction commits; the durable

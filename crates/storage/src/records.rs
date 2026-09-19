@@ -5,8 +5,8 @@ use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvit
 use arkret_models_collaboration::objects::blob::BlobVisibility;
 use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
 use arkret_wire::{
-    ActorId, CommitStreamHead, CommittedEventRef, DidCoreId, EventId, FreshnessState,
-    PlaintextDataClassKind, RealmCommitAuthorityRef, RealmId,
+    ActorId, CommitStreamHead, DidCoreId, EventId, FreshnessState, PlaintextDataClassKind,
+    RealmCommitAuthorityRef, RealmId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -132,7 +132,7 @@ pub struct RecoveryPolicyRecord {
     pub policy_id: String,
     pub account_id: arkret_wire::AccountId,
     pub version: u32,
-    pub acceptance_ref: CommittedEventRef,
+    pub acceptance_basis: arkret_wire::RealmCommitId,
     pub trust_domain: String,
 
     pub supersedes: Option<String>,

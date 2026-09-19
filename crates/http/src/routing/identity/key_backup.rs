@@ -696,8 +696,8 @@ pub(crate) async fn recovery_unlock_manifest(
         "realm_id": pointers.control_realm_id,
     });
     if let Some(committed_ref) = pointers.source_commit_ref.as_ref() {
-        frozen["committed_ref"] =
-            serde_json::to_value(committed_ref).map_err(|error| AppError::internal(error.to_string()))?;
+        frozen["committed_ref"] = serde_json::to_value(committed_ref)
+            .map_err(|error| AppError::internal(error.to_string()))?;
     }
     Ok(frozen)
 }

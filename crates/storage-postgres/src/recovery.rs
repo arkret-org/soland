@@ -23,7 +23,7 @@ struct RecoveryPolicyRow {
     #[diesel(sql_type = Integer)]
     version: i32,
     #[diesel(sql_type = Jsonb)]
-    acceptance_ref: Value,
+    acceptance_basis: Value,
     #[diesel(sql_type = Text)]
     trust_domain: String,
 
@@ -50,9 +50,9 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
                 row.policy_id, row.version
             ))
         })?;
-        let acceptance_ref = serde_json::from_value(row.acceptance_ref).map_err(|error| {
+        let acceptance_basis = serde_json::from_value(row.acceptance_basis).map_err(|error| {
             PersistenceError::Internal(format!(
-                "recovery policy `{}` has invalid acceptance_ref: {error}",
+                "recovery policy `{}` has invalid acceptance_basis: {error}",
                 row.policy_id
             ))
         })?;
@@ -60,7 +60,7 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             account_id: arkret_wire::AccountId::new(row.principal_id, row.station_id),
             version,
-            acceptance_ref,
+            acceptance_basis,
             trust_domain: row.trust_domain,
             supersedes: row.supersedes.map(|u| ids::format_typed_uuid("policy", &u)),
             expires_at: row.expires_at,
@@ -81,7 +81,7 @@ impl PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 AND version = $3",
         )
@@ -105,7 +105,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE id = $1",
         )
@@ -125,7 +125,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC LIMIT 1",
@@ -147,7 +147,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_ref, trust_domain, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC",
@@ -242,7 +242,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         sql_query(
             "INSERT INTO recovery_policies \
              (id, principal_id, station_id, version, trust_domain, supersedes, \
-              acceptance_ref, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
+              acceptance_basis, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
@@ -257,9 +257,9 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
                 .map(ids::typed_uuid_part_expect_internal),
         )
         .bind::<Jsonb, _>(
-            serde_json::to_value(&record.acceptance_ref).map_err(|error| {
+            serde_json::to_value(&record.acceptance_basis).map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "recovery policy acceptance_ref encode failed: {error}"
+                    "recovery policy acceptance_basis encode failed: {error}"
                 ))
             })?,
         )

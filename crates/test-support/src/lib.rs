@@ -25,9 +25,8 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationReceipt,
 };
 use arkret_state::state::{
-    CellStateRegistry, CellStore, ControlEventStore, MemoryCellStore,
-    MemoryControlEventStore, MemorySealStore, SealStore, StoreError, StoreResult,
-    compute_state_root,
+    CellStateRegistry, CellStore, ControlEventStore, MemoryCellStore, MemoryControlEventStore,
+    MemorySealStore, SealStore, StoreError, StoreResult, compute_state_root,
 };
 use arkret_state::state_model::ResolvedCellState;
 use arkret_state::state_model::ordered_log::IssuedOp;

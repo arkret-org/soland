@@ -2,7 +2,6 @@ use arkret_state::state::store::ControlProposalIngressClass;
 
 use super::*;
 
-
 /// Resolve governance health with the one Ack-less authority class replayed
 /// from its durable ingress classification.
 ///

@@ -1347,7 +1347,7 @@ diesel::table! {
         principal_id -> Text,
         station_id -> Text,
         version -> Int4,
-        acceptance_ref -> Jsonb,
+        acceptance_basis -> Jsonb,
         trust_domain -> Text,
         supersedes -> Nullable<Uuid>,
         expires_at -> Nullable<Timestamptz>,

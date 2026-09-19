@@ -152,8 +152,8 @@ impl SyncCursorStore for PgSyncCursorStore {
             let written = sql_query(
                 "INSERT INTO realm_join_downloads (context_key, assembly, expires_at) VALUES ($1, $2, $3) \
                  ON CONFLICT (context_key) DO UPDATE SET assembly = EXCLUDED.assembly \
-                 WHERE realm_join_downloads.assembly->'snapshot' = EXCLUDED.assembly->'snapshot' \
-                   AND (realm_join_downloads.assembly->'items' <@ EXCLUDED.assembly->'items' \
+                 WHERE (realm_join_downloads.assembly->'snapshot') = (EXCLUDED.assembly->'snapshot') \
+                   AND ((realm_join_downloads.assembly->'items') <@ (EXCLUDED.assembly->'items') \
                         OR realm_join_downloads.assembly = EXCLUDED.assembly)"
             ).bind::<Text, _>(key).bind::<Jsonb, _>(&value)
                 .bind::<Timestamptz, _>(assembly.expires_at)

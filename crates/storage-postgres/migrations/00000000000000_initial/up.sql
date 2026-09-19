@@ -3075,7 +3075,7 @@ CREATE TABLE public.recovery_policies (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
     version integer NOT NULL,
-    acceptance_ref jsonb NOT NULL,
+    acceptance_basis jsonb NOT NULL,
     trust_domain text NOT NULL,
     supersedes uuid,
     expires_at timestamp with time zone,

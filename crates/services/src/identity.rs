@@ -3018,16 +3018,8 @@ impl DidService {
 mod tests {
     use super::*;
 
-    fn recovery_policy_basis() -> arkret_wire::CommittedEventRef {
-        let event_id =
-            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [10; 32]);
-        let realm_id = arkret_identifiers::RealmId::from_event_id(&event_id);
-        arkret_wire::CommittedEventRef {
-            event_id,
-            commit_id: arkret_wire::RealmCommitId::from_digest([11; 32]),
-            stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id },
-            stream_position: 0,
-        }
+    fn recovery_policy_basis() -> arkret_wire::RealmCommitId {
+        arkret_wire::RealmCommitId::from_digest([11; 32])
     }
 
     struct StaticAccount;
@@ -3490,7 +3482,7 @@ mod tests {
                 policy_id: "ak:policy:current".to_owned(),
                 account_id: account_id.clone(),
                 version: 2,
-                acceptance_ref: recovery_policy_basis(),
+                acceptance_basis: recovery_policy_basis(),
                 trust_domain: "ak:trust_domain:personal".to_owned(),
 
                 supersedes: Some("ak:policy:genesis".to_owned()),
@@ -3565,7 +3557,7 @@ mod tests {
                             .unwrap(),
                     ),
                     version: 2,
-                    acceptance_ref: recovery_policy_basis(),
+                    acceptance_basis: recovery_policy_basis(),
                     trust_domain: "ak:trust_domain:personal".to_owned(),
 
                     supersedes: Some("ak:policy:current".to_owned()),

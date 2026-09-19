@@ -30,10 +30,13 @@ async fn insert_policy(pool: &crate::PgPool, policy: &Value) {
     let typed: arkret_models_crypto::RecoveryPolicy =
         serde_json::from_value(policy.clone()).unwrap();
     typed.validate_shape().unwrap();
+    let acceptance_basis =
+        wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(b"recovery-policy"));
     let mut conn = pg_conn(pool).await.unwrap();
-    sql_query("INSERT INTO recovery_policies(id,principal_id,station_id,version,acceptance_basis,trust_domain,expires_at,issued_at,verification_method,raw_payload,accepted_at) VALUES($1,$2,$3,$4,'{}','ak:trust_domain:station.example',$5,$6,'did:web:unlock-test.example#root',$7,$6)")
+    sql_query("INSERT INTO recovery_policies(id,principal_id,station_id,version,acceptance_basis,trust_domain,expires_at,issued_at,verification_method,raw_payload,accepted_at) VALUES($1,$2,$3,$4,$5,'ak:trust_domain:station.example',$6,$7,'did:web:unlock-test.example#root',$8,$7)")
         .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(typed.policy_id.as_str()))
         .bind::<Text,_>(PRINCIPAL).bind::<Text,_>(STATION).bind::<crate::Integer,_>(typed.version as i32)
+        .bind::<Jsonb,_>(serde_json::to_value(acceptance_basis).unwrap())
         .bind::<Nullable<Timestamptz>,_>(typed.expires_at).bind::<Timestamptz,_>(typed.issued_at)
         .bind::<Jsonb,_>(policy).execute(&mut *conn).await.unwrap();
 }
@@ -176,7 +179,8 @@ impl Fixture {
             signature: wire::DetachedObjectSignature {
                 context: wire::DetachedSignatureContext::RealmCommit,
                 signature_algorithm: wire::DetachedSignatureAlgorithm::Ed25519,
-                verification_method: wire::DidUrl::new("did:web:station.example#authority").unwrap(),
+                verification_method: wire::DidUrl::new("did:web:station.example#authority")
+                    .unwrap(),
                 signed_digest: wire::Hash::new(REQUEST).unwrap(),
                 created_at: now,
                 sig: wire::Base64UrlString::new(signature.clone()).unwrap(),
@@ -409,7 +413,7 @@ async fn recovery_unlock_pg_revoke_then_reenable_rejects_first_consumption() {
     let before = fixture.ledger().await;
     assert_eq!(before["session_state"], "verified");
     let error = fixture.consume(Utc::now()).await.unwrap_err();
-    assert!(error.to_string().contains("expired or revoked"), "{error}");
+    assert!(error.to_string().contains("revoked"), "{error}");
     assert_eq!(
         fixture.ledger().await,
         before,
@@ -425,7 +429,7 @@ async fn recovery_unlock_pg_exact_retry_rechecks_historical_policy_revocation() 
     fixture.add_policy(2, true).await;
     fixture.add_policy(3, false).await;
     let error = fixture.consume(Utc::now()).await.unwrap_err();
-    assert!(error.to_string().contains("expired or revoked"), "{error}");
+    assert!(error.to_string().contains("revoked"), "{error}");
     assert_eq!(
         fixture.ledger().await,
         before,
@@ -444,6 +448,6 @@ async fn recovery_unlock_pg_exact_retry_rechecks_frozen_policy_expiry() {
         .consume(fixture.policy_expiry + chrono::Duration::seconds(1))
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("expired or revoked"), "{error}");
+    assert!(error.to_string().contains("expired"), "{error}");
     assert_eq!(fixture.ledger().await, before);
 }

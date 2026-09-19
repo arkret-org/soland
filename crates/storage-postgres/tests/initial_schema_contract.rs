@@ -195,3 +195,9 @@ fn security_transaction_uses_the_protocol_terminal_outcome_name_at_creation() {
     assert!(INITIAL_UP.contains("terminal_outcome jsonb"));
     assert!(!INITIAL_UP.contains("terminal_result"));
 }
+
+#[test]
+fn recovery_policy_uses_the_protocol_acceptance_basis_name_at_creation() {
+    assert!(INITIAL_UP.contains("acceptance_basis jsonb NOT NULL"));
+    assert!(!INITIAL_UP.contains("acceptance_ref jsonb"));
+}
