@@ -1,4 +1,4 @@
-use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz};
+use diesel::sql_types::{Binary, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
@@ -149,6 +149,142 @@ impl TryFrom<PendingIntentConsumptionWire> for AgentDraftPendingIntentConsumptio
 const SELECT_COLUMNS: &str = "controller_account_id, agent_id, draft_id, proposed_action, target, \
     content_digest, content_handoff, canonical_event_digest, accepted_event_id, expires_at, \
     created_at, state, consumption, expired_at";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgentDraftConsumptionLock {
+    Available,
+    ExactReplay,
+}
+
+/// Lock and validate the Station-private source row selected by an initial
+/// holder-authored Agent draft Account Data create.
+///
+/// The digest components in `account_data_key` are intentionally opaque. The
+/// only accepted binding recomputes them from the exact source-row literals by
+/// calling the public SDK helper. The row lock remains held by the surrounding
+/// Event transaction until both the Account Data CAS and the terminal
+/// transition commit or roll back together.
+pub(crate) async fn lock_agent_draft_consumption_source(
+    conn: &mut AsyncPgConnection,
+    controller_account_id: &arkret_wire::AccountId,
+    source_pending_event_id: &arkret_wire::EventId,
+    consuming_event_id: &arkret_wire::EventId,
+    account_data_key: &str,
+    accepted_revision: u64,
+    protocol_time: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<AgentDraftConsumptionLock> {
+    if accepted_revision != 1 {
+        return Err(PersistenceError::SchemaViolation(
+            "initial Agent draft consumption must create Account Data revision 1".to_owned(),
+        ));
+    }
+    let controller_key = controller_account_id.to_string();
+    let row = sql_query(format!(
+        "SELECT {SELECT_COLUMNS} FROM agent_draft_pending_intents pending \
+         WHERE controller_account_key=$1 AND accepted_event_id=$2 \
+           AND EXISTS (SELECT 1 FROM committed_events source \
+                       WHERE source.id=$3 AND source.kind='ak.agent.draft.propose') \
+         FOR UPDATE OF pending"
+    ))
+    .bind::<Text, _>(&controller_key)
+    .bind::<Text, _>(source_pending_event_id.as_str())
+    .bind::<Binary, _>(source_pending_event_id.token_bytes().to_vec())
+    .get_result::<PendingIntentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| {
+        PersistenceError::Conflict(
+            "failed_precondition: Agent draft pending source is unavailable for this controller"
+                .to_owned(),
+        )
+    })?;
+    let record = AgentDraftPendingIntentRecord::try_from(row)?;
+    if record.controller_account_id != *controller_account_id {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: Agent draft pending source owner binding is inconsistent"
+                .to_owned(),
+        ));
+    }
+    arkret_models_collaboration::events_payloads::account_data::validate_agent_draft_account_data_key_source(
+        account_data_key,
+        &record.agent_id,
+        &record.draft_id,
+    )
+    .map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "failed_precondition: Agent draft Account Data key does not bind its pending source: {error}"
+        ))
+    })?;
+
+    match record.state {
+        AgentDraftPendingIntentState::Available => {
+            if protocol_time >= record.expires_at {
+                return Err(PersistenceError::Conflict(
+                    "failed_precondition: Agent draft pending source has expired".to_owned(),
+                ));
+            }
+            Ok(AgentDraftConsumptionLock::Available)
+        }
+        AgentDraftPendingIntentState::Consumed => {
+            let exact = record.consumption.as_ref().is_some_and(|consumption| {
+                consumption.account_data_set_event_id == *consuming_event_id
+                    && consumption.account_data_key == account_data_key
+                    && consumption.accepted_revision == accepted_revision
+            });
+            if exact {
+                Ok(AgentDraftConsumptionLock::ExactReplay)
+            } else {
+                Err(PersistenceError::Conflict(
+                    "duplicate_conflict: Agent draft pending source was consumed by another Event"
+                        .to_owned(),
+                ))
+            }
+        }
+        AgentDraftPendingIntentState::Expired => Err(PersistenceError::Conflict(
+            "failed_precondition: Agent draft pending source has expired".to_owned(),
+        )),
+    }
+}
+
+/// Complete an already locked available source row. The guarded update is a
+/// second line of defence against accidental use outside the Event unit of
+/// work; zero affected rows aborts the whole transaction.
+pub(crate) async fn mark_agent_draft_consumed(
+    conn: &mut AsyncPgConnection,
+    controller_account_id: &arkret_wire::AccountId,
+    source_pending_event_id: &arkret_wire::EventId,
+    consuming_event_id: &arkret_wire::EventId,
+    account_data_key: &str,
+    accepted_revision: u64,
+    consumed_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let consumption = serde_json::json!({
+        "account_data_set_event_id": consuming_event_id,
+        "account_data_key": account_data_key,
+        "accepted_revision": accepted_revision,
+        "consumed_at": consumed_at,
+    });
+    let affected = sql_query(
+        "UPDATE agent_draft_pending_intents \
+         SET state='consumed', content_handoff=NULL, consumption=$3 \
+         WHERE controller_account_key=$1 AND accepted_event_id=$2 \
+           AND state='available' AND expires_at > $4",
+    )
+    .bind::<Text, _>(controller_account_id.to_string())
+    .bind::<Text, _>(source_pending_event_id.as_str())
+    .bind::<Jsonb, _>(consumption)
+    .bind::<Timestamptz, _>(consumed_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if affected != 1 {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: Agent draft pending source changed before consumption".to_owned(),
+        ));
+    }
+    Ok(())
+}
 
 async fn expire_available(
     conn: &mut AsyncPgConnection,
