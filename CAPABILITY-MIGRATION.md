@@ -474,6 +474,10 @@ authorization remain separate registered surfaces.
 The two `seals/mls-*` read rows are historical as well: the current
 `sync/client-sync.md` §10.0 retires those Seal queries while retaining the
 producer-signed Welcome recipient queue, retry, account delivery and ACK.
+The `seals/pending-control`, `seals/prepare`, `seals/prepare-fence-result` and
+`seals` command rows are likewise retired by `sync/service-http-binding.md`:
+device revocation pending state remains a durable proposal/RealmCommit result
+fold, not a Seal or Notary query result.
 
 Meanwhile `routing/authority_commit.rs` — which declares `self/events`,
 `self/streams/scan`, `peer/streams/resolve`, `peer/realm-authority/handoff` and
