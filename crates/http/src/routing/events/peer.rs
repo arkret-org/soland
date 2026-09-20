@@ -4,8 +4,10 @@ use arkret_identifiers::{DidCoreId, EventId, RealmId};
 use arkret_models_collaboration::account_lifecycle::{
     AccountStatusPropagationState, AccountStatusPublication, AccountStatusPublicationOutcome,
     AccountStatusPublicationRequestBody, AccountStatusPublicationStatus,
-    AccountStatusReceiptedPublication, UnsignedAccountStatusReceipt,
+    AccountStatusReceiptedPublication, AccountStatusResolveOutcome,
+    AccountStatusResolveRequestBody,
 };
+use arkret_models_collaboration::account_status::UnsignedAccountStatusReceipt;
 use arkret_models_collaboration::event_query::{
     EventsQueryPostRequestBody, PeerEventsFrontierRequestBody, SealFrontierRequestBody,
 };
@@ -43,6 +45,8 @@ use crate::state::AppState;
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const MAX_PEER_EVENTS_READ_LIMIT: usize = 100;
+const ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATUS: i32 = 102;
+const ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATE: &str = "account_status_submission_pending";
 
 async fn retained_federation_submission(
     state: &AppState,
@@ -169,6 +173,7 @@ pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("events").post(peer_events_submit))
         .push(Router::with_path("account-status").post(peer_account_status_submit))
+        .push(Router::with_path("account-status/resolve").post(peer_account_status_resolve))
         .push(Router::with_path("signal").post(peer_signal_relay))
 }
 
@@ -576,19 +581,42 @@ async fn peer_account_status_submit(
     })?;
     let idempotency_principal_id = arkret_wire::DidCoreId::new(source_id.clone())
         .map_err(|error| AppError::param_invalid(format!("Source-Service-ID invalid: {error}")))?;
-    if let Some(stored) = state
-        .jobs()
-        .idempotency_record(&idempotency_principal_id, &idempotency_key)
+    let idempotency_actor = arkret_wire::ActorId::service(idempotency_principal_id);
+    let stored_at = Utc::now();
+    let reservation = soland_services::jobs::IdempotencyState {
+        authenticated_actor: idempotency_actor.clone(),
+        operation_id: arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1
+            .to_owned(),
+        idempotency_key: idempotency_key.clone(),
+        request_hash: request_hash.clone(),
+        response_status: ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATUS,
+        response_body: json!({"state": ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATE}),
+        created_at: stored_at,
+        expires_at: stored_at + Duration::days(3650),
+    };
+    state
+        .persistence()
+        .record_idempotency(&reservation)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let reservation = state
+        .persistence()
+        .scoped_idempotency_record(
+            &idempotency_actor,
+            arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
+            &idempotency_key,
+        )
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        if stored.request_hash != request_hash {
-            return Err(AppError::conflict(
-                "Idempotency-Key reused with another account-status publication",
-            )
-            .with_wire_code("duplicate_conflict"));
-        }
-        let outcome = serde_json::from_value(stored.response_body).map_err(|error| {
+        .ok_or_else(|| AppError::internal("account-status idempotency reservation disappeared"))?;
+    if reservation.request_hash != request_hash {
+        return Err(AppError::conflict(
+            "Idempotency-Key reused with another account-status publication",
+        )
+        .with_wire_code("duplicate_conflict"));
+    }
+    if !account_status_idempotency_is_pending(&reservation) {
+        let outcome = serde_json::from_value(reservation.response_body).map_err(|error| {
             AppError::internal(format!("stored account-status outcome invalid: {error}"))
         })?;
         return json_ok(outcome);
@@ -694,23 +722,152 @@ async fn peer_account_status_submit(
         pending_destination_count,
         receipt: Some(receipt),
     };
-    let stored_at = Utc::now();
-    state
-        .jobs()
-        .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id),
-            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
-            idempotency_key,
-            request_hash,
-            response_status: StatusCode::OK.as_u16() as i32,
-            response_body: serde_json::to_value(&outcome)
-                .map_err(|error| AppError::internal(error.to_string()))?,
-            created_at: stored_at,
-            expires_at: stored_at + Duration::days(3650),
-        })
+    let completed = soland_services::jobs::IdempotencyState {
+        response_status: StatusCode::OK.as_u16() as i32,
+        response_body: serde_json::to_value(&outcome)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        ..reservation.clone()
+    };
+    let completed_here = state
+        .persistence()
+        .complete_idempotency_reservation(&reservation, &completed)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if completed_here {
+        return json_ok(outcome);
+    }
+    let landed = state
+        .persistence()
+        .scoped_idempotency_record(
+            &idempotency_actor,
+            arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
+            &idempotency_key,
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("account-status idempotency completion disappeared"))?;
+    if landed.request_hash != request_hash || account_status_idempotency_is_pending(&landed) {
+        return Err(AppError::internal(
+            "account-status idempotency completion did not converge",
+        ));
+    }
+    serde_json::from_value(landed.response_body)
+        .map_err(|error| {
+            AppError::internal(format!("stored account-status outcome invalid: {error}"))
+        })
+        .and_then(json_ok)
+}
+
+fn account_status_idempotency_is_pending(record: &soland_services::jobs::IdempotencyState) -> bool {
+    record.response_status == ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATUS
+        && record.response_body.get("state").and_then(Value::as_str)
+            == Some(ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATE)
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.peer.account_status.read.resolve", tags("events"))]
+async fn peer_account_status_resolve(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountStatusResolveOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_id = source_id_from_request(req)?;
+    let request = parse_json_body::<AccountStatusResolveRequestBody>(
+        req,
+        "invalid ak.peer.account_status.read.resolve.v1 request body",
+    )
+    .await?;
+    request
+        .validate()
+        .map_err(|error| schema_violation(error.to_string()))?;
+
+    // All relationship checks precede ledger access so unknown accounts and
+    // unrelated callers collapse into the same non-enumerating response.
+    let local_authority = trusted_account_authority_id(state).await?;
+    let affected_services =
+        crate::routing::identity::account::lifecycle::deactivation_peer_service_targets_for_account(
+            state,
+            &request.account_id,
+        );
+    if request.account_authority_id != local_authority
+        || !account_status_resolve_source_authorized(
+            &source_id,
+            &request.account_authority_id,
+            &request.account_id,
+            &affected_services,
+        )
+    {
+        return Err(account_status_resolve_not_found());
+    }
+
+    let current_exists = state
+        .persistence()
+        .current_account_status_record(request.account_authority_id.as_str(), &request.account_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("account-status resolve unavailable: {error}"))
+        })?
+        .is_some();
+    if !current_exists {
+        return Err(account_status_resolve_not_found());
+    }
+    let fetch_limit = request.limit.saturating_add(1);
+    let mut records = state
+        .persistence()
+        .resolve_account_status_records(
+            request.account_authority_id.as_str(),
+            &request.account_id,
+            request.from_status_seq,
+            fetch_limit,
+        )
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("account-status resolve unavailable: {error}"))
+        })?;
+    let has_more = records.len() > usize::from(request.limit);
+    records.truncate(usize::from(request.limit));
+    let next_status_seq = if has_more {
+        Some(
+            records
+                .last()
+                .expect("positive resolve limit retains one row when has_more")
+                .status_seq
+                .checked_add(1)
+                .ok_or_else(|| AppError::internal("account-status sequence overflow"))?,
+        )
+    } else {
+        None
+    };
+    // A current head can legitimately precede from_status_seq; that is an
+    // authorized empty freshness observation, not an unknown-account signal.
+    let outcome = AccountStatusResolveOutcome {
+        account_authority_id: request.account_authority_id.clone(),
+        account_id: request.account_id.clone(),
+        records,
+        has_more,
+        next_status_seq,
+    };
+    outcome.validate_for_request(&request).map_err(|error| {
+        AppError::internal(format!("account-status resolve invariant: {error}"))
+    })?;
     json_ok(outcome)
+}
+
+fn account_status_resolve_not_found() -> AppError {
+    AppError::not_found("account-status records not found")
+}
+
+fn account_status_resolve_source_authorized(
+    source_id: &str,
+    account_authority_id: &DidCoreId,
+    account_id: &arkret_wire::AccountId,
+    affected_services: &[Value],
+) -> bool {
+    source_id == account_authority_id.as_str()
+        || source_id == account_id.station_id.as_str()
+        || affected_services
+            .iter()
+            .any(|target| target.get("service_id").and_then(Value::as_str) == Some(source_id))
 }
 
 async fn enqueue_account_status_fanout(
@@ -3085,5 +3242,71 @@ mod account_authority_identity_tests {
                 state.service_core_id()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod account_status_resolution_tests {
+    use super::*;
+
+    fn account_id() -> arkret_wire::AccountId {
+        arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:origin.example").unwrap(),
+        )
+    }
+
+    #[test]
+    fn resolve_admits_only_authority_origin_or_indexed_affected_service() {
+        let authority = DidCoreId::new("ak:did_core:web:authority.example").unwrap();
+        let account_id = account_id();
+        let affected = vec![json!({
+            "service_id": "ak:did_core:web:affected.example",
+            "realm_ids": [],
+            "membership_frontier": []
+        })];
+
+        for authorized in [
+            authority.as_str(),
+            account_id.station_id.as_str(),
+            "ak:did_core:web:affected.example",
+        ] {
+            assert!(account_status_resolve_source_authorized(
+                authorized,
+                &authority,
+                &account_id,
+                &affected,
+            ));
+        }
+        assert!(!account_status_resolve_source_authorized(
+            "ak:did_core:web:unrelated.example",
+            &authority,
+            &account_id,
+            &affected,
+        ));
+    }
+
+    #[test]
+    fn account_status_reservation_is_operation_scoped_and_explicit() {
+        let now = Utc::now();
+        let authority = DidCoreId::new("ak:did_core:web:authority.example").unwrap();
+        let mut record = soland_services::jobs::IdempotencyState {
+            authenticated_actor: arkret_wire::ActorId::service(authority),
+            operation_id: arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1
+                .to_owned(),
+            idempotency_key: "status-7".to_owned(),
+            request_hash: "sha256:fixture".to_owned(),
+            response_status: ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATUS,
+            response_body: json!({"state": ACCOUNT_STATUS_IDEMPOTENCY_RESERVED_STATE}),
+            created_at: now,
+            expires_at: now + Duration::days(1),
+        };
+        assert!(account_status_idempotency_is_pending(&record));
+        assert_eq!(
+            record.operation_id,
+            "ak.peer.account_status.command.submit.v1"
+        );
+        record.response_status = StatusCode::OK.as_u16() as i32;
+        assert!(!account_status_idempotency_is_pending(&record));
     }
 }
