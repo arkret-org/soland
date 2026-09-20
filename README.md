@@ -25,7 +25,7 @@ in-memory mode keeps the same API for fast local iteration.
 - **Space:** navigation container — board, list, section, calendar bucket
   inside a Realm.
 
-`ak.realm.link`, `ak.realm.inheritance_policy`, and `ak.capability.derived`
+`ak.realm.link` relationship metadata and local `ak.capability.grant`
 are the typed edges that wire boundaries together (governed_by /
 discoverable_from / mirror_of). Container lifecycle events use `ak.space.*`;
 security-boundary lifecycle and policy events use `ak.realm.*`.

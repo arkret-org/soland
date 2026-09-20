@@ -16,7 +16,7 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_http::error::AppError;
 use soland_services::governance::OrganizationRecord;
 
@@ -65,16 +65,6 @@ pub(crate) struct OrganizationView {
 struct OrganizationListOutcome {
     organizations: Vec<OrganizationView>,
     total: usize,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct OrganizationPolicyLayer {
-    source: String,
-    organization_id: String,
-    policy_id: String,
-    policy: Value,
-    #[serde(default)]
-    applies_to_realms: Vec<String>,
 }
 
 pub(crate) fn router() -> Router {
@@ -263,37 +253,6 @@ pub(crate) async fn link_realm_to_organization(
 /// discovery surface ONLY; never use this to drive policy inheritance.
 pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<DidCoreId> {
     state.governance().cached_realm_organizations(realm_id)
-}
-
-/// SOL-ORG-05 — the stable organization ids whose active, in-window
-/// `ak.realm.organization` statement endorses `realm_id` with a
-/// `moderation_policy` control scope. This is the ONLY basis on which an
-/// organization's moderation policy may flow into the Realm's effective policy;
-/// `owning_organization_ids` declared hints no longer qualify. Returns a stable,
-/// de-duplicated, sorted list.
-pub(crate) fn effective_policy_value_for_realm(state: &AppState, realm_id: &str) -> Value {
-    // SOL-ORG-05 — only organizations with a verified, active, in-window
-    // `ak.realm.organization` statement carrying the `moderation_policy`
-    // control scope drive the effective moderation policy. Declared
-    // `owning_organization_ids` hints no longer qualify.
-    let org_layers = applicable_organization_policies(state, realm_id, None)
-        .into_iter()
-        .map(|(organization_id, policy)| OrganizationPolicyLayer {
-            source: "organization".to_owned(),
-            organization_id: organization_id.to_string(),
-            policy_id: policy.policy_id.to_string(),
-            policy: serde_json::to_value(&policy).unwrap_or(Value::Null),
-            applies_to_realms: state
-                .governance()
-                .cached_organization_realms(&organization_id),
-        })
-        .collect::<Vec<_>>();
-
-    json!({
-        "organization_policy_layers": org_layers,
-        "effective_rules": effective_rules(state, realm_id),
-        "policy_merge_strategy": "most_restrictive",
-    })
 }
 
 pub(crate) async fn organization_policy_blocks_join(

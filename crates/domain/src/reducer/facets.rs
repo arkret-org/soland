@@ -26,7 +26,6 @@ pub mod facet {
     pub const CALL_SUMMARY: &str = "call.summary";
     pub const CALL_TRANSCRIPT: &str = "call.transcript";
     pub const CALL_TRANSCRIPT_RESULT: &str = "call.transcript_result";
-    pub const CAPABILITY_DERIVED: &str = "capability.derived";
     pub const CAPABILITY_GRANT: &str = "capability.grant";
     pub const CIRCLE_HISTORY_ACCESS: &str = "circle.history_access";
     pub const CIRCLE_MEMBER: &str = "circle.member";
@@ -56,7 +55,6 @@ pub mod facet {
     pub const REALM_FREEZE: &str = "realm.freeze";
     pub const REALM_GENESIS: &str = "realm.genesis";
     pub const REALM_HISTORY_ACCESS: &str = "realm.history_access";
-    pub const REALM_INHERITANCE_POLICY: &str = "realm.inheritance_policy";
     pub const REALM_JOIN_RULE: &str = "realm.join_rule";
     pub const REALM_LINK: &str = "realm.link";
     pub const REALM_MEDIA_SERVICE: &str = "realm.media_service";

@@ -203,18 +203,6 @@ pub enum ProjectionEffect {
         link_kind: String,
         status: String,
     },
-    /// R3.2 — `ak.realm.inheritance_policy` event was projected into the
-    /// `ak.component.realm.inheritance_policy.v1` registered state model cell.
-    RealmInheritancePolicyProjected {
-        realm_id: String,
-        source_realm_id: String,
-    },
-    /// R3.2 — `ak.capability.derived` event was projected into the
-    /// `ak.component.capability.derived.v1` sequenced safety-set cell.
-    CapabilityDerivedProjected {
-        grant_id: String,
-        realm_id: String,
-    },
     /// SOL-ORG-02 — `ak.realm.organization` relationship statement projected
     /// into the `ak.component.realm.organization.v1` registered state model cell keyed by
     /// `(organization_id, relationship)` + the `realm_organization_statements`

@@ -553,13 +553,6 @@ pub(crate) fn did_list_contains(
         .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(did)))
 }
 
-pub(crate) fn membership_state_satisfies_minimum(state: &str, required: &str) -> bool {
-    match required {
-        "join" => state == "join",
-        _ => false,
-    }
-}
-
 /// `join-policy.md` §4 rule 4 — the binding tuple every gate proof carries.
 ///
 /// This is compared before any signature is looked at, so a proof minted for

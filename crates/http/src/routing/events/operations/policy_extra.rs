@@ -1,8 +1,5 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_models_collaboration::objects::read_receipts::{
-    ReadReceiptPolicy, ReadReceiptPolicyChildViolation,
-};
-use arkret_wire::EventKind;
+use arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy;
 use serde_json::Value;
 
 use super::*;
@@ -47,14 +44,13 @@ pub(crate) async fn validate_history_access_content_scheme_policy(
 }
 
 pub(crate) async fn validate_read_receipt_policy_combination_write(
-    state: &AppState,
-    operations: &[Operation],
+    _state: &AppState,
+    _operations: &[Operation],
     operation: &Operation,
 ) -> Result<(), &'static str> {
     match kinds::canonical_kind_for_operation(operation) {
         Some(arkret_wire::EventKind::RealmReadReceiptPolicy) => {
-            let policy = read_receipt_policy_projection_from_payload(&operation.payload)?;
-            validate_read_receipt_child_policy_write(state, operations, operation, &policy).await
+            read_receipt_policy_projection_from_payload(&operation.payload).map(|_| ())
         }
         _ => Ok(()),
     }
@@ -138,160 +134,6 @@ async fn intended_encryption_profile_for_realm(
         .ok()
         .flatten()
         .and_then(|meta| meta.encryption_profile)
-}
-
-async fn intended_read_receipt_policy_for_realm(
-    state: &AppState,
-    operations: &[Operation],
-    realm_id: &str,
-) -> Result<ReadReceiptPolicy, &'static str> {
-    for operation in operations.iter().rev() {
-        if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::RealmReadReceiptPolicy)
-            && operation.realm_id.as_str() == realm_id
-        {
-            return read_receipt_policy_projection_from_payload(&operation.payload);
-        }
-    }
-    let policy =
-        crate::routing::events::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
-            .await
-            .unwrap_or_default();
-    Ok(policy)
-}
-
-async fn validate_read_receipt_child_policy_write(
-    state: &AppState,
-    operations: &[Operation],
-    operation: &Operation,
-    child_policy: &ReadReceiptPolicy,
-) -> Result<(), &'static str> {
-    let realm_id = operation.realm_id.as_str();
-    let Some(parent_realm_id) = read_receipt_policy_parent_realm_id(state, operations, realm_id)
-    else {
-        return Ok(());
-    };
-    let parent_policy =
-        intended_read_receipt_policy_for_realm(state, operations, &parent_realm_id).await?;
-    parent_policy
-        .validate_child_policy(child_policy)
-        .map_err(read_receipt_child_violation_reason)
-}
-
-fn read_receipt_child_violation_reason(violation: ReadReceiptPolicyChildViolation) -> &'static str {
-    match violation {
-        ReadReceiptPolicyChildViolation::ComplianceFloorViolated => {
-            arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
-        }
-        ReadReceiptPolicyChildViolation::ScopeOverridesDisabled
-        | ReadReceiptPolicyChildViolation::DisclosurePrivacyLoosened
-        | ReadReceiptPolicyChildViolation::VisibilityLoosened => "policy_denied",
-    }
-}
-
-fn read_receipt_policy_parent_realm_id(
-    state: &AppState,
-    operations: &[Operation],
-    realm_id: &str,
-) -> Option<String> {
-    if let Some(pending) = pending_read_receipt_policy_source_realm(operations, realm_id) {
-        return pending.and_then(|source_realm_id| {
-            active_read_receipt_parent_link(state, operations, realm_id, &source_realm_id)
-                .then_some(source_realm_id)
-        });
-    }
-    let policy = {
-        let projection = state.projections().snapshot();
-        projection.realm_inheritance_policy(realm_id).cloned()
-    }?;
-    if !policy
-        .allowed_policies
-        .iter()
-        .any(|policy| policy == EventKind::RealmReadReceiptPolicy.as_str())
-    {
-        return None;
-    }
-    active_read_receipt_parent_link(state, operations, realm_id, &policy.source_realm_id)
-        .then_some(policy.source_realm_id)
-}
-
-fn pending_read_receipt_policy_source_realm(
-    operations: &[Operation],
-    realm_id: &str,
-) -> Option<Option<String>> {
-    for operation in operations.iter().rev() {
-        if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::RealmInheritancePolicy)
-            || operation.realm_id.as_str() != realm_id
-        {
-            continue;
-        }
-        let policies =
-            soland_services::operation_semantics::inheritance_allowed_policies(&operation.payload);
-        if !policies
-            .iter()
-            .any(|policy| policy == EventKind::RealmReadReceiptPolicy.as_str())
-        {
-            return Some(None);
-        }
-        return Some(
-            operation
-                .payload
-                .get("source_realm_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-        );
-    }
-    None
-}
-
-fn active_read_receipt_parent_link(
-    state: &AppState,
-    operations: &[Operation],
-    realm_id: &str,
-    source_realm_id: &str,
-) -> bool {
-    if realm_id == source_realm_id {
-        return false;
-    }
-    for operation in operations.iter().rev() {
-        if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::RealmLink)
-            || operation.realm_id.as_str() != realm_id
-            || operation
-                .payload
-                .get("target_realm_id")
-                .and_then(Value::as_str)
-                != Some(source_realm_id)
-        {
-            continue;
-        }
-        return operation
-            .payload
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("active")
-            == "active"
-            && operation
-                .payload
-                .get("link_kind")
-                .and_then(Value::as_str)
-                .is_some_and(read_receipt_parent_link_kind);
-    }
-    {
-        let projection = state.projections().snapshot();
-        projection.realm_links.get(realm_id).cloned()
-    }
-    .is_some_and(|links| {
-        links.iter().any(|link| {
-            link.target_realm_id == source_realm_id
-                && link.status == "active"
-                && read_receipt_parent_link_kind(&link.link_kind)
-        })
-    })
-}
-
-fn read_receipt_parent_link_kind(link_kind: &str) -> bool {
-    matches!(link_kind, "governed_by" | "inherits_policy_from")
 }
 
 /// The complete member ActorId named by a membership operation's closed payload.

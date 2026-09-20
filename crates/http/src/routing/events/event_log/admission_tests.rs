@@ -109,6 +109,27 @@ fn realm_policy_bundle_media_plaintext_authorization() {
 }
 
 #[test]
+fn parent_membership_policy_fails_closed_without_durable_authority_cut() {
+    let payload = json!({
+        "join_policy": {
+            "gates": [{
+                "gate_id": "same-station-parent",
+                "kind": "parent_membership",
+                "auto_resolve": true,
+                "membership_source_realm_ids": [
+                    "ak:realm:AYCKiTPA1bjQa3rIKg4O1PGpeq_EXPw1fnNCfHYhPsdG"
+                ],
+                "require_min_membership": "join"
+            }],
+            "combinator": "all"
+        }
+    });
+    let err = realm_policy_bundle_check(&payload, false, false).unwrap_err();
+    assert_eq!(err.0, ErrorCode::FailedPrecondition);
+    assert!(err.1.starts_with("gate_check_failed"));
+}
+
+#[test]
 fn media_plaintext_authority_requires_matching_service_and_data_class() {
     let service_id =
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";

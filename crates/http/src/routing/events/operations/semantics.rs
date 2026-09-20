@@ -328,9 +328,6 @@ fn operation_extra_validator_for_kind(kind: &arkret_wire::EventKind) -> Option<O
         arkret_wire::EventKind::RealmReadReceiptPolicy => {
             Some(validate_read_receipt_policy_payload)
         }
-        arkret_wire::EventKind::RealmInheritancePolicy => {
-            Some(validate_realm_inheritance_policy_payload)
-        }
         // views.md §3.1 — a shared View Event carrying `visibility="private"`
         // is `schema_violation` / `private_view_requires_account_data`; the
         // retired presentation-local fields are rejected in the same pass.

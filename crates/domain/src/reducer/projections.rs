@@ -100,18 +100,6 @@ pub struct RealmLinkState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// R3.2 — structured cache row for `ak.realm.inheritance_policy`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealmInheritancePolicyState {
-    pub realm_id: String,
-    pub operation_id: String,
-    pub source_realm_id: String,
-    pub allowed_policies: Vec<String>,
-    pub allowed_capability_bundles: Vec<String>,
-    pub max_depth: u32,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
 /// SOL-ORG-02 — structured cache row for one `ak.realm.organization`
 /// relationship statement projection. Mirrors the canonical
 /// `ak.component.realm.organization.v1` registered state model cell keyed by the
@@ -176,18 +164,6 @@ impl RealmOrganizationStatementState {
     pub fn covers_scope(&self, scope: &str) -> bool {
         self.control_scopes.iter().any(|s| s == scope)
     }
-}
-
-/// R3.2 — structured cache row for `ak.capability.derived`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CapabilityDerivedState {
-    pub grant_id: String,
-    pub realm_id: String,
-    pub source_grant_id: String,
-    pub grant: Value,
-    pub effective_actions: Vec<String>,
-    pub effective_resources: Vec<Value>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// G3.S1 — KeyPackage lifetime window. MLS KeyPackages carry a

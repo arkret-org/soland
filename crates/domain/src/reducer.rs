@@ -29,11 +29,11 @@ mod apply_realm_organization;
 mod apply_realm_policy;
 mod apply_relations;
 mod apply_space_container;
+mod capability_helpers;
 pub mod mls;
 pub mod realm_links;
 // Top-level projection types, free helpers, the dispatch registry, and the
 // `ProjectionState` struct plus its inline impl.
-mod capability_derivation;
 mod dispatch;
 mod effects;
 mod message_helpers;
@@ -47,6 +47,7 @@ mod projections;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use apply_capability::derive_authority_audit;
+pub(crate) use capability_helpers::*;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::read_receipts::{
@@ -60,8 +61,6 @@ pub use crate::hlc::ServerHlc;
 pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
 pub use apply_capability::{engine_grant_from_capability_facet, engine_grant_from_cell_body};
-pub use capability_derivation::inheritance_allowed_policies;
-pub(crate) use capability_derivation::*;
 pub use commit_stream::{CommitStreamEffect, CommitStreamProjection};
 pub(crate) use dispatch::{APPLY_REGISTRY, upsert_realm_link};
 pub use dispatch::{ApplyFn, default_apply_registry};
@@ -82,17 +81,16 @@ pub use projection_state::ProjectionState;
 pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
-    AppletProjection, CapabilityDerivedState, CircleLifecycleState, CircleMembershipState,
-    CircleProjection, DocumentVersionProjection, InviteProjection, KeyPackageLifetimeProjection,
-    MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation,
+    AppletProjection, CircleLifecycleState, CircleMembershipState, CircleProjection,
+    DocumentVersionProjection, InviteProjection, KeyPackageLifetimeProjection, MessageState,
+    MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation,
     MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
     PendingReplayEntry, PinProjection, PollState, ProjectedMessageView, PushRouteCellValue,
-    PushRouteSubject, ReactionState, RealmInheritancePolicyState, RealmLinkState,
-    RealmOrganizationStatementState, RedactionCellValue, RelationCurrentResultProjection,
-    RsvpProjection, SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,
-    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
-    SpaceContainerProjection, StrandProjection, StrandWatchProjection,
-    object_stage_from_wire_value, object_stage_wire_value,
+    PushRouteSubject, ReactionState, RealmLinkState, RealmOrganizationStatementState,
+    RedactionCellValue, RelationCurrentResultProjection, RsvpProjection, SidecarContextProjection,
+    SidecarProjection, SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState,
+    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
 
 #[cfg(test)]

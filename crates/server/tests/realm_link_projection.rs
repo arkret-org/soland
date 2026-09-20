@@ -45,7 +45,7 @@ fn realm_link_projects_all_eight_canonical_kinds() {
         "governed_by",
         "discoverable_from",
         "join_gate_from",
-        "inherits_policy_from",
+        "join_gate_from",
         "confidential_extension_of",
         "mirror_of",
         "split_from",

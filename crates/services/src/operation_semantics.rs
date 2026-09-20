@@ -55,10 +55,6 @@ pub fn validate_join_policy_payload(join_policy: &Value) -> Result<(), &'static 
     soland_domain::reducer::validate_join_policy_payload(join_policy)
 }
 
-pub fn inheritance_allowed_policies(payload: &Value) -> Vec<String> {
-    soland_domain::reducer::inheritance_allowed_policies(payload)
-}
-
 pub fn message_redaction_target_ref(payload: &Value) -> Option<String> {
     soland_domain::reducer::message_redaction_target_ref(payload)
 }

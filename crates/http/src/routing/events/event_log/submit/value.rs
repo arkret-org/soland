@@ -3217,55 +3217,6 @@ mod cas_write_guard_tests {
     }
 
     #[test]
-    fn cas_admission_keeps_same_non_null_cell_in_distinct_realms_separate() {
-        let state = AppState::new(
-            crate::config::AppConfig::test_default(),
-            soland_storage_postgres::Db { pool: None },
-        );
-        let source =
-            arkret_wire::RealmId::new("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb")
-                .unwrap();
-        let child =
-            arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
-                .unwrap();
-        let cell = arkret_wire::CellRef::new(format!(
-            "ak:cell:ak.component.realm.inheritance_policy.v1:{source}"
-        ))
-        .unwrap();
-        let operation = arkret_event_draft::test_support::raw_projected_operation(
-            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
-                .unwrap(),
-            child.clone(),
-            arkret_wire::EventKind::RealmInheritancePolicy.as_str(),
-            json!({"source_realm_id": source, "inherits": {}, "mode": "narrow_only", "max_depth": 1}),
-        );
-        let mut op = arkret_wire::cbs::LatticeOp::empty();
-        op.op_type = arkret_wire::cbs::LatticeOpType::Set;
-        op.value = Some(operation.payload.clone());
-        let writes = vec![arkret_wire::cbs::ProjectedCellWrite {
-            cell_id: cell.clone(),
-            op: arkret_wire::cbs::ProjectedOp::Direct(op),
-        }];
-        let mut frozen = std::collections::BTreeMap::new();
-        let value = arkret_state::state_model::ResolvedCellState::Value(operation.payload.clone());
-        let mut snapshot = state.projections().snapshot();
-        snapshot.install_reloaded_cells(&source, [(cell.clone(), value.clone())]);
-        state.projections().install_snapshot(snapshot);
-        assert!(
-            validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok(),
-            "source Realm's same-named cell must not require a child Realm predecessor"
-        );
-        let mut snapshot = state.projections().snapshot();
-        snapshot.install_reloaded_cells(&child, [(cell.clone(), value.clone())]);
-        frozen.insert(cell.clone(), value);
-        state.projections().install_snapshot(snapshot);
-        assert!(
-            validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok(),
-            "a real child predecessor is guarded by identity at Seal admission,              not by a wire head_eq preflight demands"
-        );
-    }
-
-    #[test]
     fn a_sole_recovery_family_in_bottom_has_no_ordinary_write_exit() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),

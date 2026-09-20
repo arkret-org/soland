@@ -329,7 +329,7 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 }
 
 #[test]
-fn any_combinator_accepts_parent_membership_gate_without_challenge() {
+fn parent_membership_gate_never_uses_projection_cache_as_authority() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let parent_join = member_state_op(REALM_PARENT, BOB, "join");
@@ -364,10 +364,10 @@ fn any_combinator_accepts_parent_membership_gate_without_challenge() {
         }),
     );
 
-    assert!(matches!(
-        state.apply(&join_op(BOB), &hlc),
-        ProjectionEffect::MembershipChanged { .. }
-    ));
+    match state.apply(&join_op(BOB), &hlc) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
+        other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
+    }
     match state.apply(&join_op(MALLORY), &hlc) {
         ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
         other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
@@ -424,10 +424,10 @@ fn all_combinator_requires_parent_membership_and_challenge_proof() {
         BOB,
         now - Duration::minutes(1)
     )]);
-    assert!(matches!(
-        state.apply(&accepted, &hlc),
-        ProjectionEffect::MembershipChanged { .. }
-    ));
+    match state.apply(&accepted, &hlc) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
+        other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
+    }
 }
 
 #[test]

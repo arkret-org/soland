@@ -48,13 +48,6 @@ pub fn check_realm_link_admissible(
     )
 }
 
-pub fn effective_policy_for_realm(
-    projection: &ProjectionState,
-    realm_id: &str,
-) -> arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyOutcome {
-    soland_domain::reducer::realm_links::effective_policy_for_realm(projection, realm_id)
-}
-
 /// Process-local hybrid logical clock owned by the application layer.
 pub struct ServiceClock {
     inner: ServerHlc,

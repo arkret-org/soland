@@ -759,27 +759,6 @@ fn apply_realm_organization_dispatch(
     s.apply_realm_organization(op, op.created_at)
 }
 
-/// R3.2 — dispatch for `ak.realm.inheritance_policy`. Projects the
-/// registered state model cell + structured cache; validates parent grant bounds
-/// when the relevant parent grant cells are available.
-fn apply_realm_inheritance_policy_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_inheritance_policy(op, op.created_at)
-}
-
-/// R3.2 — dispatch for `ak.capability.derived`. Projects the OR-set cell
-/// and structured cache after reducer-side derive evaluation.
-fn apply_capability_derived_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_capability_derived(op, op.created_at)
-}
-
 /// P1 — dispatch for `ak.capability.grant`. Projects the grant snapshot as
 /// an or_set add into the `ak.component.capability.grant.v1` cell keyed by
 /// the Event-derived GrantId.
@@ -1225,14 +1204,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmOrganization,
         apply_realm_organization_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmInheritancePolicy,
-        apply_realm_inheritance_policy_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CapabilityDerived,
-        apply_capability_derived_dispatch,
     );
     // Capability control-plane projection. Grant adds to the canonical grant
     // cell; revoke and subject-only relinquish perform observed-remove.

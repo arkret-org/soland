@@ -197,24 +197,6 @@ pub struct ProjectionState {
     /// target `realm_id`. Lets the query API answer
     /// `direction=inbound` in O(1) without a full scan.
     pub realm_links_inbound: BTreeMap<String, Vec<RealmLinkState>>,
-    /// R3.2 — `ak.realm.inheritance_policy` projection, keyed by the
-    /// child `realm_id` (the envelope `realm_id`). Registered state-model
-    /// semantics — last write wins.
-    pub realm_inheritance_policies: BTreeMap<String, RealmInheritancePolicyState>,
-    /// realm-links.md §6.2 — per-`(child_realm, source_realm)` inheritance
-    /// declarations, so a child that opts into multiple governance sources
-    /// (multi-`governed_by`) retains each source's narrowed allow-list
-    /// independently. Registered state-model per `(child, source)` pair — a re-declared
-    /// `(child, source)` replaces only that pair. This is the substrate the
-    /// effective-policy read uses to compute the narrow-only intersection
-    /// across all opted-in sources, distinct from the single last-write
-    /// `realm_inheritance_policies` map used by the single-source aggregate read.
-    pub realm_inheritance_policies_by_source:
-        BTreeMap<(String, String), RealmInheritancePolicyState>,
-    /// R3.2 — `ak.capability.derived` projection, keyed by
-    /// `capability_id`. Registered state-model semantics — last write wins per
-    /// capability.
-    pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
     /// SOL-ORG-02 — `ak.realm.organization` relationship-statement
     /// projection, keyed by `(realm_id, organization_id, relationship)`.
     /// Registered state-model semantics per `(organization_id, relationship)` cell

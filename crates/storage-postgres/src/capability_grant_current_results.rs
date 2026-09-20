@@ -564,14 +564,6 @@ fn mutation_for_event(
                 body: payload.grant,
             }))
         }
-        arkret_wire::EventKind::CapabilityDerived => {
-            // The payload carries a materialized target grant but no
-            // authenticated current-source proof/checkpoint. D3+ explicitly
-            // forbids guessing that proof or trusting the producer-carried
-            // value, so this writer remains blocked until its admission
-            // submission supplies the registered reducer-only evidence.
-            Err(conflict("capability_derived_current_source_unavailable"))
-        }
         arkret_wire::EventKind::CapabilityRevoke => {
             let payload = serde_json::from_value::<
                 arkret_models_collaboration::events_payloads::CapabilityRevokePayload,

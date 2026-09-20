@@ -93,6 +93,20 @@ pub fn realm_policy_bundle_check(
                 )
             },
         )?;
+        if join_policy
+            .get("gates")
+            .and_then(Value::as_array)
+            .is_some_and(|gates| {
+                gates.iter().any(|gate| {
+                    gate.get("kind").and_then(Value::as_str) == Some("parent_membership")
+                })
+            })
+        {
+            return Err((
+                ErrorCode::FailedPrecondition,
+                "gate_check_failed: durable parent-membership authority cut unavailable".to_owned(),
+            ));
+        }
     }
 
     // (1) T09 — relaxed_window_max_ms ceiling.

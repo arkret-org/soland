@@ -358,7 +358,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(access::router())
                 // self/circles/* (ak.self.circle.*).
                 .push(circles::router())
-                // self/realms/{realm_id}/links* + effective-policy
+                // self/realms/{realm_id}/links
                 // (ak.self.realm_link.*).
                 .push(realms::router())
                 .push(realm_join::self_router())

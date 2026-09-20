@@ -635,7 +635,9 @@ impl ProjectionState {
 
     /// One automatic gate's verdict.
     ///
-    /// `parent_membership` is replayed from accepted state and takes no proof.
+    /// `parent_membership` takes no caller proof, but projection state is not
+    /// its authority source; until durable transactional admission handles it,
+    /// this path fails closed.
     /// The two proof-bearing kinds each require an item naming this gate whose
     /// binding tuple holds against this Realm, applicant and policy revision;
     /// a missing item gives the same verdict as a failing one, which is what
@@ -645,7 +647,7 @@ impl ProjectionState {
         &self,
         gate: &serde_json::Map<String, Value>,
         proofs: &[JoinGateProof],
-        member: &str,
+        _member: &str,
         applicant_actor_id: &arkret_wire::ActorId,
         policy_digest: &arkret_wire::Hash,
         realm_id: &str,
@@ -653,7 +655,11 @@ impl ProjectionState {
     ) -> bool {
         let kind = gate.get("kind").and_then(Value::as_str);
         if kind == Some("parent_membership") {
-            return self.parent_membership_gate_allows(gate, member);
+            // This gate is authoritative only when the storage admission
+            // transaction locks target policy/link/authority rows and source
+            // authority/member rows. ProjectionState is a cache and cannot
+            // satisfy that contract, so it must never authorize a join.
+            return false;
         }
         let Some(proof) = gate
             .get("gate_id")
@@ -686,29 +692,6 @@ impl ProjectionState {
             Some("claim_required") => claim_required_gate_has_proof(gate, proof),
             _ => false,
         }
-    }
-
-    fn parent_membership_gate_allows(
-        &self,
-        gate: &serde_json::Map<String, Value>,
-        member: &str,
-    ) -> bool {
-        let required = gate
-            .get("require_min_membership")
-            .and_then(Value::as_str)
-            .unwrap_or("join");
-        gate.get("membership_source_realm_ids")
-            .and_then(Value::as_array)
-            .is_some_and(|source_realms| {
-                source_realms
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .any(|realm_id| {
-                        self.member(realm_id, member).is_some_and(|membership| {
-                            membership_state_satisfies_minimum(&membership.state, required)
-                        })
-                    })
-            })
     }
 
     pub fn realm_search_policy_value(&self, realm_id: &str) -> Option<&Value> {
@@ -757,34 +740,6 @@ impl ProjectionState {
                 .then(a.realm_id.cmp(&b.realm_id))
         });
         out
-    }
-
-    /// R3.2 — read the most-recent `ak.realm.inheritance_policy`
-    /// projection for a child Realm, if any.
-    pub fn realm_inheritance_policy(&self, realm_id: &str) -> Option<&RealmInheritancePolicyState> {
-        self.realm_inheritance_policies.get(realm_id)
-    }
-
-    /// realm-links.md §6.2 — every per-`(child, source)` inheritance
-    /// declaration the child Realm has on file, in deterministic source
-    /// order. Unlike [`Self::realm_inheritance_policy`] this surfaces ALL
-    /// opted-in sources (multi-`governed_by`), so the effective-policy read
-    /// can compute the narrow-only intersection across them.
-    pub fn realm_inheritance_policies_for_child(
-        &self,
-        realm_id: &str,
-    ) -> Vec<&RealmInheritancePolicyState> {
-        self.realm_inheritance_policies_by_source
-            .iter()
-            .filter(|((child, _source), _state)| child == realm_id)
-            .map(|(_key, state)| state)
-            .collect()
-    }
-
-    /// R3.2 — read the most-recent `ak.capability.derived` projection
-    /// for a capability id, if any.
-    pub fn capability_derived_state(&self, grant_id: &str) -> Option<&CapabilityDerivedState> {
-        self.capability_derived.get(grant_id)
     }
 
     /// Profiles the Realm object declares in `schema_refs[]`.

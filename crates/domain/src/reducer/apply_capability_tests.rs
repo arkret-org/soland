@@ -1371,7 +1371,7 @@ mod authority_cycle_tests {
         proj.set_facet(REALM, parent_facet, body);
 
         let parent = proj.effective_engine_grant(G_A).unwrap();
-        assert_eq!(parent.authority_depth, Some(1));
+        assert_eq!(parent.authority_depth, 1);
         assert_eq!(parent.authority_root_refs.len(), 1);
         let child = proj.apply_capability_grant(
             &regrant_op_with_constraints(
@@ -1390,7 +1390,7 @@ mod authority_cycle_tests {
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
         let child = proj.effective_engine_grant(G_C).unwrap();
-        assert_eq!(child.authority_depth, Some(2));
+        assert_eq!(child.authority_depth, 2);
         assert_eq!(child.authority_root_refs.len(), 1);
     }
 
