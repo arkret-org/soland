@@ -1115,10 +1115,9 @@ struct StrandRsvpProjectionView {
     /// `null` is the whole series; a string is a canonical instance key.
     occurrence: Option<String>,
     actor_id: String,
-    /// Exact Event identity selected by `(causal depth, full EventId bytes)`.
+    /// Exact source Event identity of the settled current RSVP.
     source_event_id: String,
     source_event_digest: String,
-    winner_depth: u64,
     /// Complete signed state-model value, including schedule basis and response.
     entry: Value,
 }
@@ -1289,16 +1288,12 @@ async fn get_strand_projection(
         proj.rsvps
             .values()
             .filter(|cell| cell.event_ref == strand_id)
-            .filter_map(|cell| {
-                let winner = cell.winner()?;
-                Some(StrandRsvpProjectionView {
-                    occurrence: cell.occurrence.clone(),
-                    actor_id: cell.actor_id.clone(),
-                    source_event_id: winner.source_event_id.to_string(),
-                    source_event_digest: winner.source_event_digest.to_string(),
-                    winner_depth: cell.winner_depth,
-                    entry: winner.entry.clone(),
-                })
+            .map(|cell| StrandRsvpProjectionView {
+                occurrence: cell.occurrence.clone(),
+                actor_id: cell.actor_id.clone(),
+                source_event_id: cell.source_event_id.to_string(),
+                source_event_digest: cell.source_event_digest.to_string(),
+                entry: cell.entry.clone(),
             })
             .collect::<Vec<_>>()
     };
@@ -1898,4 +1893,27 @@ async fn list_morph_projections(
         next_cursor: None,
         has_more: false,
     })
+}
+
+#[cfg(test)]
+mod rsvp_view_tests {
+    use serde_json::json;
+
+    use super::StrandRsvpProjectionView;
+
+    #[test]
+    fn settled_rsvp_view_has_no_retired_causal_winner_depth() {
+        let view = StrandRsvpProjectionView {
+            occurrence: None,
+            actor_id: "actor-1".to_owned(),
+            source_event_id: "event-2".to_owned(),
+            source_event_digest: "digest-2".to_owned(),
+            entry: json!({"response": "yes"}),
+        };
+        let value = serde_json::to_value(view).expect("RSVP view serializes");
+        assert_eq!(value["source_event_id"], "event-2");
+        assert_eq!(value["source_event_digest"], "digest-2");
+        assert_eq!(value["entry"]["response"], "yes");
+        assert!(value.get("winner_depth").is_none());
+    }
 }
