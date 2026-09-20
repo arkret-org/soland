@@ -227,14 +227,12 @@ pub(in crate::routing::events) fn router() -> Router {
             Router::with_path("authorization-leases")
                 .post(super::lease_issue::issue_authorization_leases),
         )
-        .push(Router::with_path("events/describe").query(events_describe))
         .push(Router::with_path("events/delivery-status").query(event_delivery_status))
         .push(
             Router::with_path("committed-events/subscribe")
                 .get(super::super::sync::events_subscribe),
         )
         .push(Router::with_path("events").post(submit_event))
-        .push(Router::with_path("events/frontier").query(events_frontier))
         .push(Router::with_path("seals/frontier").query(seals_frontier))
         .push(Router::with_path("seals/pending-control").query(pcr_pending_control))
         .push(Router::with_path("seals/prepare").post(prepare_pcr_seal))
@@ -839,8 +837,7 @@ async fn submit_event_seal(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.describe", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.describe.v1"))]
+#[allow(dead_code)]
 async fn events_describe(
     depot: &mut Depot,
     req: &mut Request,
@@ -849,7 +846,7 @@ async fn events_describe(
         req.parse_json::<arkret_models_collaboration::event_query::EventsDescribeRequestBody>()
             .await
             .map_err(|_| {
-                AppError::json_invalid("invalid ak.self.events.read.describe.v1 request body")
+                AppError::json_invalid("invalid retired event service description request body")
             })?;
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -1489,8 +1486,7 @@ async fn caller_can_read_delivery_target_service(
     false
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve.v1"))]
+#[allow(dead_code)]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventsResolveRequestBody>,
@@ -1737,8 +1733,7 @@ async fn seals_frontier(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier.v1"))]
+#[allow(dead_code)]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -1752,7 +1747,7 @@ async fn events_frontier(
         .parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
         .await
         .map_err(|_| {
-            AppError::json_invalid("invalid ak.self.events.read.frontier.v1 request body")
+            AppError::json_invalid("invalid retired Event frontier request body")
         })?;
     let selected_actor_id = query_body.actor_id.clone();
     let is_session_actor = selected_actor_id == session_actor;

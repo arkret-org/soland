@@ -230,7 +230,7 @@ async fn a_window_shorter_than_its_history_reports_one_prev_cursor_for_the_whole
         first.timeline.events[0].event_id.to_string()
     );
 
-    // The same token round-trips as an `ak.self.events.read.scan.v1` `before=`
+    // The same token round-trips as an `ak.self.committed_event.read.scan.v1` `before=`
     // for this Realm: it validates against the digest that path recomputes.
     let target = super::super::cursor::parse_and_validate_events_query_cursor(
         &prev_cursor,

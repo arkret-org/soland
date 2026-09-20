@@ -745,7 +745,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
             .add_header("authorization", format!("Bearer {token}"), true)
             .add_header(
                 "Arkret-Operation",
-                arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1,
+                "retired-event-frontier",
                 true,
             )
             .send(&app_from_state(state.clone()))
@@ -934,7 +934,7 @@ async fn since_join_hides_pre_join_messages_from_sync_and_events_query_body() {
         .add_header("authorization", format!("Bearer {bob}"), true)
         .add_header(
             "Arkret-Operation",
-            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
+            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1,
             true,
         )
         .send(&app_from_state(state.clone()))
@@ -1136,7 +1136,7 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages_body() {
         .add_header("authorization", format!("Bearer {bob}"), true)
         .add_header(
             "Arkret-Operation",
-            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
+            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1,
             true,
         )
         .send(&app_from_state(state.clone()))

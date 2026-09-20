@@ -1607,9 +1607,8 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
         "production-agent",
         serde_json::json!({
                 "actions": [
-                    "ak.self.events.stream.subscribe.v1",
-                    "ak.self.events.read.scan.v1",
-                    "ak.self.events.read.frontier.v1",
+                    "ak.self.committed_event.stream.subscribe.v1",
+                    "ak.self.committed_event.read.scan.v1",
                     "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1",
                     "ak.event.read",
@@ -1734,9 +1733,8 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
 
         let requested_scope = serde_json::json!({
             "actions": [
-                "ak.self.events.stream.subscribe.v1",
-                "ak.self.events.read.scan.v1",
-                "ak.self.events.read.frontier.v1",
+                "ak.self.committed_event.stream.subscribe.v1",
+                "ak.self.committed_event.read.scan.v1",
                 "ak.self.seals.read.frontier.v1",
                 "ak.self.events.command.submit.v1",
                 "ak.event.read",
@@ -1899,15 +1897,14 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
         arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
     >(serde_json::json!({
         "actions": [
-            "ak.self.events.stream.subscribe.v1",
-            "ak.self.events.read.scan.v1",
-            "ak.self.events.read.frontier.v1",
+            "ak.self.committed_event.stream.subscribe.v1",
+            "ak.self.committed_event.read.scan.v1",
             "ak.self.seals.read.frontier.v1",
             "ak.self.events.command.submit.v1"
         ],
         "resources": [{
             "kind": "operation",
-            "operation": "ak.self.events.stream.subscribe.v1"
+            "operation": "ak.self.committed_event.stream.subscribe.v1"
         }],
         "constraints": []
     }))
@@ -1998,20 +1995,19 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
 
     let requested_scope = serde_json::json!({
         "actions": [
-            "ak.self.events.stream.subscribe.v1",
-            "ak.self.events.read.scan.v1",
-            "ak.self.events.read.frontier.v1",
+            "ak.self.committed_event.stream.subscribe.v1",
+            "ak.self.committed_event.read.scan.v1",
             "ak.self.seals.read.frontier.v1",
             "ak.self.events.command.submit.v1"
         ],
         "resources": [
             {
                 "kind": "operation",
-                "operation": "ak.self.events.stream.subscribe.v1"
+                "operation": "ak.self.committed_event.stream.subscribe.v1"
             },
             {
                 "kind": "operation",
-                "operation": "ak.self.events.read.scan.v1"
+                "operation": "ak.self.committed_event.read.scan.v1"
             },
             {
                 "kind": "operation",
@@ -2181,15 +2177,14 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation_b
         "generation-bound",
         serde_json::json!({
                 "actions": [
-                    "ak.self.events.stream.subscribe.v1",
-                    "ak.self.events.read.scan.v1",
-                    "ak.self.events.read.frontier.v1",
+                    "ak.self.committed_event.stream.subscribe.v1",
+                    "ak.self.committed_event.read.scan.v1",
                     "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1"
                 ],
                 "resources": [{
                     "kind": "operation",
-                    "operation": "ak.self.events.stream.subscribe.v1"
+                    "operation": "ak.self.committed_event.stream.subscribe.v1"
                 }],
                 "constraints": []
         }),

@@ -151,7 +151,7 @@ pub(crate) async fn account_primary_handle_claim_for(
 /// Re-derive the registered local account's primary handle claim for
 /// `subject`, bound to `audience`. `None` when `subject` is not a known local
 /// account or has no primary localpart binding. Lets the
-/// directory `list_handles_for_subject` surface stay consistent with the
+/// historical directory subject-handle projection stayed consistent with the
 /// account viewer's `primary_handle_claim` so an account's own handle resolves
 /// through both read paths.
 pub(crate) async fn local_account_primary_handle_claim(

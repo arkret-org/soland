@@ -179,9 +179,8 @@ fn pending_pairing_record(
 fn requested_agent_scope() -> Value {
     json!({
         "actions": [
-            "ak.self.events.stream.subscribe.v1",
-            "ak.self.events.read.scan.v1",
-            "ak.self.events.read.frontier.v1",
+            "ak.self.committed_event.stream.subscribe.v1",
+            "ak.self.committed_event.read.scan.v1",
             "ak.self.seals.read.frontier.v1",
             "ak.self.events.command.submit.v1",
             "ak.event.read",
@@ -1153,7 +1152,7 @@ fn key_authorize_event_accepts_narrower_scope_and_rejects_widening() {
         "2999-01-01T00:00:00.000Z",
     );
     let weaker_scope = json!({
-        "actions": ["ak.self.events.stream.subscribe.v1"],
+        "actions": ["ak.self.committed_event.stream.subscribe.v1"],
         "resources": [{ "kind": "service", "service_id": service_id }]
     });
     let envelope = key_authorize_envelope(

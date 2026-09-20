@@ -183,7 +183,7 @@ fn shared_realm_evidence(realm_id: &str) -> IntroductionEvidence {
 }
 
 /// Seed an accepted local `ak.invite.create` for Bob and read it back through
-/// `ak.self.events.read.resolve.v1`, which is the only way §7 lets a client fill
+/// the committed-event resource read, which is the only way §7 lets a client fill
 /// `invite_event`.
 ///
 /// The evidence is chosen from the seeded Realm id because

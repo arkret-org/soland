@@ -1,4 +1,4 @@
-use arkret_models_collaboration::session_grants::AuthSessionLogoutOutcome;
+use arkret_models_collaboration::session_grants::AuthSessionTerminationResult;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, Verifier as _};
 
@@ -200,7 +200,7 @@ async fn dev_mode_local_logout(
 async fn introspect_session_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
-) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
+) -> Result<Option<crate::wire::SessionGrantValidationMetadata>, AppError> {
     let response =
         super::super::account_authority_client::AccountAuthorityClient::from_state(state)?
             .introspect_logout_grant(grant_jwt)
@@ -216,8 +216,8 @@ async fn introspect_session_grant_for_logout(
 /// logout sub-operation before returning success. `audience_mismatch` is a
 /// routing/authentication error and must never be treated as already gone.
 fn classify_logout_introspection(
-    outcome: crate::wire::SessionGrantIntrospectOutcome,
-) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
+    outcome: crate::wire::SessionGrantValidationResult,
+) -> Result<Option<crate::wire::SessionGrantValidationMetadata>, AppError> {
     use crate::wire::SessionGrantAdminIntrospectionStatus;
 
     match outcome.status {
@@ -271,7 +271,7 @@ async fn trigger_auth_side_auth_session_logout(
     confirm_auth_side_logout(body)
 }
 
-fn confirm_auth_side_logout(body: AuthSessionLogoutOutcome) -> Result<(), AppError> {
+fn confirm_auth_side_logout(body: AuthSessionTerminationResult) -> Result<(), AppError> {
     if body.grant_chain_terminated && body.auth_session_logged_out {
         return Ok(());
     }
@@ -312,8 +312,8 @@ mod logout_introspection_tests {
     fn outcome(
         active: bool,
         status: SessionGrantAdminIntrospectionStatus,
-    ) -> crate::wire::SessionGrantIntrospectOutcome {
-        crate::wire::SessionGrantIntrospectOutcome {
+    ) -> crate::wire::SessionGrantValidationResult {
+        crate::wire::SessionGrantValidationResult {
             active,
             status,
             proof_required: false,
@@ -362,7 +362,7 @@ mod logout_introspection_tests {
     #[test]
     fn auth_side_must_confirm_both_terminal_states() {
         assert!(
-            confirm_auth_side_logout(AuthSessionLogoutOutcome {
+            confirm_auth_side_logout(AuthSessionTerminationResult {
                 grant_chain_terminated: true,
                 auth_session_logged_out: true,
             })
@@ -370,15 +370,15 @@ mod logout_introspection_tests {
         );
 
         for body in [
-            AuthSessionLogoutOutcome {
+            AuthSessionTerminationResult {
                 grant_chain_terminated: false,
                 auth_session_logged_out: true,
             },
-            AuthSessionLogoutOutcome {
+            AuthSessionTerminationResult {
                 grant_chain_terminated: true,
                 auth_session_logged_out: false,
             },
-            AuthSessionLogoutOutcome {
+            AuthSessionTerminationResult {
                 grant_chain_terminated: false,
                 auth_session_logged_out: false,
             },

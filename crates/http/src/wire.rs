@@ -4,8 +4,8 @@ pub use arkret_models_collaboration::http_bodies::{
 };
 pub use arkret_models_collaboration::session_grant_bodies::SessionLoginOutcome;
 pub use arkret_models_collaboration::session_grants::{
-    SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
-    SessionGrantIntrospectionProof,
+    SessionGrantHolderProof, SessionGrantValidationInput, SessionGrantValidationMetadata,
+    SessionGrantValidationResult,
 };
 pub use arkret_models_collaboration::sync_frames::account_sync::{
     DeviceMessageEnvelope, DeviceMessageSender, DeviceMessageTarget, DeviceMessagesAckOutcome,

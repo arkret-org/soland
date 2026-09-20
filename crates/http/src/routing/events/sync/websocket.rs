@@ -1395,7 +1395,7 @@ fn operation_scope(operation: WebSocketOperationId) -> &'static str {
             ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE_V1
         }
         WebSocketOperationId::EventsStreamSubscribe => {
-            ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1
+            ServiceOperationId::SELF_COMMITTED_EVENT_STREAM_SUBSCRIBE_V1
         }
         WebSocketOperationId::SignalStreamSubscribe => {
             ServiceOperationId::SELF_SIGNAL_STREAM_SUBSCRIBE_V1

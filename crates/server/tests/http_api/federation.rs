@@ -772,7 +772,7 @@ fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason() {
 
 async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_body() {
     // encoding.md §8.3 closed set on the federation read path
-    // (`ak.peer.events.read.scan.v1`): an `ak:cursor:`-prefixed token that fails
+    // (`ak.peer.committed_event.read.scan.v1`): an `ak:cursor:`-prefixed token that fails
     // base64url/JSON/schema decoding MUST return top-level `param_invalid`
     // with reason `invalid_cursor`.
     let state = soland_test_support::app_state(test_config());

@@ -96,7 +96,7 @@ pub(crate) async fn dispatch_message_notifications(
 `routing/events/projection.rs` 处理 `ProjectionEffect::MessageCreated`(及 revise 的新增 mention)处,`spawn` 调 `dispatch_message_notifications`(或推入轻量队列 worker)。同一处也覆盖 `ak.message.revise` 仅对"新增 mention"派生(spec §9.4)。
 
 ### 读取 API
-`GET /_arkret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ak.self.events.stream.subscribe.v1` 投影获得被允许的 mention。
+`GET /_arkret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ak.self.committed_event.stream.subscribe.v1` 投影获得被允许的 mention。
 
 ### 验收
 - alice @bob(普通)→ bob 收到 notification + push。
@@ -110,7 +110,7 @@ pub(crate) async fn dispatch_message_notifications(
 **目标**:agent runtime 通过 `ak.session.grant` direct presentation 拿到 resolved 参与契约。当前 session-grant introspection outcome 需要覆盖 agent scope_details 与 agent_key_proof 分支。
 
 ### proof_kind 分支
-`SessionGrantIntrospectRequestBody.proof` 携带 `proof_kind` 所需证明；`agent_key_proof` 时走 agent 分支并携带 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ak.profile.agent_auth.v1` overlay,见 AKP-0008 §4.6)。session-grant introspection:
+`SessionGrantValidationInput.proof` 携带 `proof_kind` 所需证明；`agent_key_proof` 时走 agent 分支并携带 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ak.profile.agent_auth.v1` overlay,见 AKP-0008 §4.6)。session-grant validation:
 - `agent_key_proof`:校验 key 被 active 未撤销 `ak.agent.key.authorize` 授权 + challenge/audience/digest/nonce/expiry binding(AKP-0008 §4.6 校验链),不走 coauth human 分支;TTL ≤ 15min。
 - 返回类型扩展:在 session-grant introspection outcome 中返回 `granted_scope[]` 与:
 

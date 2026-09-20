@@ -109,7 +109,6 @@ fn assert_required_migrated_operations(root: &Value) {
     for expected in [
         "org.arkret.soland.system.health",
         "ak.server.read.describe",
-        "ak.self.events.read.scan",
         "ak.self.realm_state_snapshot.read.manifest_head",
         "ak.self.blob.command.presign",
         "org.arkret.soland.interop.mimi.protocol_directory",
@@ -125,34 +124,12 @@ fn assert_required_migrated_operations(root: &Value) {
 fn assert_event_read_query_bindings(root: &Value) {
     for (path, operation_id) in [
         (
-            "/_arkret/self/events/describe",
-            "ak.self.events.read.describe",
-        ),
-        (
-            "/_arkret/self/events/frontier",
-            "ak.self.events.read.frontier",
-        ),
-        (
             "/_arkret/self/seals/frontier",
             "ak.self.seals.read.frontier",
-        ),
-        ("/_arkret/self/events", "ak.self.events.read.scan"),
-        (
-            "/_arkret/self/events/resolve",
-            "ak.self.events.read.resolve",
-        ),
-        (
-            "/_arkret/peer/events/frontier",
-            "ak.peer.events.read.frontier",
         ),
         (
             "/_arkret/peer/seals/frontier",
             "ak.peer.seals.read.frontier",
-        ),
-        ("/_arkret/peer/events", "ak.peer.events.read.scan"),
-        (
-            "/_arkret/peer/events/resolve",
-            "ak.peer.events.read.resolve",
         ),
     ] {
         let query = &root["paths"][path]["query"];
@@ -161,6 +138,16 @@ fn assert_event_read_query_bindings(root: &Value) {
             query["requestBody"]["content"]["application/json"].is_object(),
             "canonical QUERY binding {operation_id} must expose JSON content"
         );
+    }
+    for retired in [
+        "/_arkret/self/events/describe",
+        "/_arkret/self/events/frontier",
+        "/_arkret/self/events/resolve",
+        "/_arkret/peer/events/frontier",
+        "/_arkret/peer/events/resolve",
+        "/_arkret/peer/events/sibling-positions",
+    ] {
+        assert!(root["paths"].get(retired).is_none(), "retired path leaked: {retired}");
     }
     let proof = &root["paths"]["/_arkret/self/seals/mls-governance-proof"]["post"];
     assert_eq!(

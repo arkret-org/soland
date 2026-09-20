@@ -185,7 +185,7 @@ pub struct AppState {
     /// validates the document's Station endpoint binding before
     /// publishing a key.
     federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
-    /// Live event notification bus for `ak.self.events.stream.subscribe.v1`.
+    /// Live event notification bus for `ak.self.committed_event.stream.subscribe.v1`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
     /// replica receive the same live frames.

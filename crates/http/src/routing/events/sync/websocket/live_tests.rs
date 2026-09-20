@@ -201,7 +201,7 @@ async fn run_introspection_mock(
                 "audience_id": audience,
                 "scopes": [
                     "ak.self.account.stream.subscribe.v1",
-                    "ak.self.events.stream.subscribe.v1"
+                    "ak.self.committed_event.stream.subscribe.v1"
                 ],
                 "expires_at": expires_at,
                 "revocation_ref": "ak:session:live-websocket-test",
@@ -215,7 +215,7 @@ async fn run_introspection_mock(
             }
         });
         serde_json::from_value::<
-            arkret_models_collaboration::session_grants::SessionGrantIntrospectOutcome,
+            arkret_models_collaboration::session_grants::SessionGrantValidationResult,
         >(outcome.clone())
         .expect("mock outcome matches the SDK introspection DTO");
         let bytes = serde_json::to_vec(&outcome).expect("serialize introspection");

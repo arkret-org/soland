@@ -47,7 +47,7 @@ async fn health_and_describe_work_body() {
     assert_eq!(missing_selector["status"], 400);
 
     let mut wrong_selector = salvo::test::TestClient::get("http://server/_arkret/describe")
-        .add_header("Arkret-Operation", "ak.self.events.read.describe.v1", true)
+        .add_header("Arkret-Operation", "not-a-registered-operation", true)
         .send(&app())
         .await;
     assert_eq!(
@@ -388,7 +388,7 @@ async fn readyz_returns_503_until_session_grant_internal_channel_is_complete_bod
     let mut config = test_config();
     config.development_mode = false;
     config.session_grant_introspection_url =
-        Some("https://coauth.example/_arkret/gate/account/session-grants/introspect".to_owned());
+        Some("https://coauth.example/_coauth/internal/session-grants/introspect".to_owned());
     // URL + bearer alone must not make the process ready: the unsigned
     // introspection path is unavailable until trust-domain and integrity
     // registration have also produced `internal_authority_channel`.

@@ -15,8 +15,8 @@ use arkret_models_identity::agent_signer_evidence::{
     AgentAuthorityStateAttestation, AgentAuthorityStateEvidence, AgentAuthorizationEvidence,
     AgentAuthorizationStateWitness, AgentAuthorizationStatus, AgentDetachedJws, AgentKeyCellEntry,
     AgentLifecycleProvenance, AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence,
-    ControllerAccountGateAttestation, ControllerAccountGateAttestationIssueOutcome,
-    ControllerAccountGateAttestationIssueRequestBody, CurrentAgentSignerEvidence,
+    ControllerAccountGateAttestation, ControllerAccountGateIssuanceInput,
+    ControllerAccountGateIssuanceResult, CurrentAgentSignerEvidence,
     StationSigningKey,
 };
 use arkret_signatures::proof::PublicKeyMaterial;
@@ -988,7 +988,7 @@ async fn preflight_controller_gate(
     let target = channel.controller_gate_url();
     let request_id = RequestId::new(format!("ak:request:{}", uuid::Uuid::now_v7()))
         .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    let request = ControllerAccountGateAttestationIssueRequestBody {
+    let request = ControllerAccountGateIssuanceInput {
         request_id: request_id.clone(),
         principal_id: principal_id.clone(),
         agent_authority_id: source_id.clone(),
@@ -1002,8 +1002,8 @@ async fn preflight_controller_gate(
         Duration::from_secs(10),
     )
     .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
-    // `service-http-binding.md` §2.2.3 registers this operation on the
-    // deployment-internal authenticated channel, and the Agent same-server
+    // This product-private adapter runs on the deployment-internal authenticated
+    // channel, and the Agent same-server
     // invariant means it has no external calling branch. The channel credential
     // is the complete authentication contract: it replaces the RFC 9421 request
     // signature, and the request carries no service-resolution carrier.
@@ -1012,7 +1012,7 @@ async fn preflight_controller_gate(
     // with no peer registered the call fails closed rather than falling back to
     // an unauthenticated or self-asserted identity.
     //
-    // The fixed call site supplies the operation and destination. No redundant
+    // The fixed call site supplies the destination. No redundant
     // service-identity or trust-domain headers are sent. §2.5.1 forbids the
     // `Content-Digest` that existed only for the removed request signature.
     //
@@ -1032,11 +1032,6 @@ async fn preflight_controller_gate(
             })
             .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     headers.insert(reqwest::header::AUTHORIZATION, authorization);
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "arkret-operation",
-        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
-    );
     let response = client
         .post(url)
         .headers(headers)
@@ -1055,7 +1050,7 @@ async fn preflight_controller_gate(
     if response.len() > 1024 * 1024 {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
-    let outcome: ControllerAccountGateAttestationIssueOutcome =
+    let outcome: ControllerAccountGateIssuanceResult =
         serde_json::from_slice(&response)
             .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     if outcome.request_id != request_id

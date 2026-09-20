@@ -1232,7 +1232,7 @@ mod tests {
             "actions": ["ak.event.read"],
             "resources": [{
                 "kind": "operation",
-                "operation": "ak.self.events.read.scan.v1"
+                "operation": "ak.self.committed_event.read.scan.v1"
             }]
         })
     }

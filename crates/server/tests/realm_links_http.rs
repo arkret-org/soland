@@ -263,7 +263,7 @@ async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, 
     });
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .add_header("Arkret-Operation", "ak.self.events.read.frontier.v1", true)
+            .add_header("Arkret-Operation", "retired-event-frontier", true)
             .add_header("content-type", "application/json", true)
             .body(arkret_canonical::canonical_json_bytes(&request).unwrap())
             .add_header("authorization", format!("Bearer {token}"), true)

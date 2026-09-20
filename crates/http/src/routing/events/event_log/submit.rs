@@ -2186,9 +2186,9 @@ pub(in crate::routing) async fn submit_recovery_identity_anchor_batch(
 /// transport has authenticated the Account Authority service.
 pub(in crate::routing) async fn submit_peer_pcr_genesis(
     state: &AppState,
-    request: &arkret_models_collaboration::principal_operations::PcrGenesisSubmitRequestBody,
+    request: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
 ) -> Result<
-    arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome,
+    arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult,
     SubmitOneError,
 > {
     request.validate().map_err(|error| {
@@ -2294,10 +2294,10 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
 
 async fn existing_pcr_genesis_outcome(
     state: &AppState,
-    request: &arkret_models_collaboration::principal_operations::PcrGenesisSubmitRequestBody,
+    request: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
     accepted_device_id: arkret_wire::DeviceId,
 ) -> Result<
-    Option<arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome>,
+    Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult>,
     SubmitOneError,
 > {
     let create = state
@@ -2334,7 +2334,7 @@ async fn existing_pcr_genesis_outcome(
             "PCR genesis event id is committed with different canonical content",
         ));
     }
-    let outcome = arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome {
+    let outcome = arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult {
         principal_id: request.principal_id.clone(),
         pcr_realm_id: request.pcr_realm_id.clone(),
         accepted_device_id,
@@ -2352,7 +2352,7 @@ async fn existing_pcr_genesis_outcome(
 
 async fn validate_identity_creation_control_proof(
     state: &AppState,
-    request: &arkret_models_collaboration::principal_operations::PcrGenesisSubmitRequestBody,
+    request: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
 ) -> Result<(), SubmitOneError> {
     let proof = &request.identity_creation_control_proof;
     let now = Utc::now();

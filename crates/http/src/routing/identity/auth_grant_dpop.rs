@@ -42,7 +42,7 @@ use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
 use arkret_identifiers::{DeviceId, DidCoreId};
-use arkret_models_collaboration::session_grants::SessionGrantIntrospectByJwt;
+use arkret_models_collaboration::session_grants::SessionGrantValidationByJwt;
 use arkret_models_identity::session_credential::SessionGrantHolderBinding;
 use arkret_wire::FreshnessState;
 use base64::Engine as _;
@@ -59,8 +59,8 @@ use soland_services::identity::{
 
 use crate::state::AppState;
 use crate::wire::{
-    SessionGrantAdminIntrospectionStatus, SessionGrantIntrospectGrant,
-    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
+    SessionGrantAdminIntrospectionStatus, SessionGrantValidationInput,
+    SessionGrantValidationMetadata, SessionGrantValidationResult,
 };
 
 /// Device-scope prefix carried in a `ak.session.grant`'s scope set
@@ -101,7 +101,7 @@ fn configured_service_audience(state: &AppState) -> Result<DidCoreId, AuthError>
 
 #[derive(Clone)]
 struct CachedIntrospection {
-    grant: SessionGrantIntrospectGrant,
+    grant: SessionGrantValidationMetadata,
     inserted_at: Instant,
 }
 
@@ -172,11 +172,11 @@ fn introspection_cache_key_for(state: &AppState, grant_jwt: &str) -> String {
     )
 }
 
-fn cache_lookup(key: &str) -> Option<SessionGrantIntrospectGrant> {
+fn cache_lookup(key: &str) -> Option<SessionGrantValidationMetadata> {
     cache_lookup_at(key, Instant::now())
 }
 
-fn cache_lookup_at(key: &str, now: Instant) -> Option<SessionGrantIntrospectGrant> {
+fn cache_lookup_at(key: &str, now: Instant) -> Option<SessionGrantValidationMetadata> {
     let mut cache = INTROSPECTION_CACHE.lock();
     prune_introspection_cache_locked(&mut cache, now);
     match cache.get(key) {
@@ -191,7 +191,7 @@ fn cache_lookup_at(key: &str, now: Instant) -> Option<SessionGrantIntrospectGran
     }
 }
 
-fn cache_store(key: String, grant: SessionGrantIntrospectGrant) {
+fn cache_store(key: String, grant: SessionGrantValidationMetadata) {
     {
         let mut cache = INTROSPECTION_CACHE.lock();
         prune_introspection_cache_locked(&mut cache, Instant::now());
@@ -296,7 +296,7 @@ pub(crate) async fn introspect_session_grant_cached(
     state: &AppState,
     grant_jwt: &str,
     force_fresh: bool,
-) -> Result<SessionGrantIntrospectGrant, AuthError> {
+) -> Result<SessionGrantValidationMetadata, AuthError> {
     let key = introspection_cache_key_for(state, grant_jwt);
     if !force_fresh && let Some(grant) = cache_lookup(&key) {
         // Cached grants can still expire between introspection and use.
@@ -337,7 +337,7 @@ struct RequestAuthoritativeGrant {
     /// fresh also satisfies a later consumer that only needs the cached
     /// freshness; the reverse is not true and re-introspects.
     taken_fresh: bool,
-    grant: SessionGrantIntrospectGrant,
+    grant: SessionGrantValidationMetadata,
 }
 
 /// Record this request's single authoritative result. Called from the one place
@@ -347,7 +347,7 @@ pub(crate) async fn take_request_authoritative_grant(
     req: &mut Request,
     grant_jwt: &str,
     force_fresh: bool,
-) -> Result<SessionGrantIntrospectGrant, AuthError> {
+) -> Result<SessionGrantValidationMetadata, AuthError> {
     if let Some(grant) = memoized_grant(req, grant_jwt, force_fresh) {
         return Ok(grant);
     }
@@ -367,7 +367,7 @@ async fn request_authoritative_grant(
     req: &Request,
     grant_jwt: &str,
     force_fresh: bool,
-) -> Result<SessionGrantIntrospectGrant, AuthError> {
+) -> Result<SessionGrantValidationMetadata, AuthError> {
     if let Some(grant) = memoized_grant(req, grant_jwt, force_fresh) {
         return Ok(grant);
     }
@@ -378,7 +378,7 @@ fn memoized_grant(
     req: &Request,
     grant_jwt: &str,
     force_fresh: bool,
-) -> Option<SessionGrantIntrospectGrant> {
+) -> Option<SessionGrantValidationMetadata> {
     let memo = req.extensions().get::<RequestAuthoritativeGrant>()?;
     // The memo belongs to the exact token it was taken for. A request that
     // somehow presents a different credential gets its own authoritative read.
@@ -393,7 +393,7 @@ fn memoized_grant(
 async fn introspect_session_grant_remote(
     state: &AppState,
     grant_jwt: &str,
-) -> Result<SessionGrantIntrospectGrant, AuthError> {
+) -> Result<SessionGrantValidationMetadata, AuthError> {
     let Some(introspection_url) = state.config().session_grant_introspection_url.as_deref() else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -408,7 +408,7 @@ async fn introspect_session_grant_remote(
             "session grant introspection internal channel is not configured",
         ));
     };
-    let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
+    let request = SessionGrantValidationInput::ByJwt(SessionGrantValidationByJwt {
         grant_jwt: grant_jwt.to_owned(),
         audience_id: Some(configured_service_audience(state)?),
         // The Account Authority returns non-secret grant metadata over this
@@ -436,11 +436,9 @@ async fn introspect_session_grant_remote(
                     )
                 },
             )?;
-        match crate::routing::with_arkret_operation(
-            client.post(validated_url),
-            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
-        )
-        .bearer_auth(channel.credential())
+        match client
+            .post(validated_url)
+            .bearer_auth(channel.credential())
         .json(&request)
         .send()
         .await
@@ -471,7 +469,7 @@ async fn introspect_session_grant_remote(
     ))?;
     require_successful_introspection(response.status().as_u16())?;
     let outcome = response
-        .json::<SessionGrantIntrospectOutcome>()
+        .json::<SessionGrantValidationResult>()
         .await
         .map_err(|_| {
             (
@@ -589,7 +587,7 @@ pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
 }
 
 fn session_binding_from_introspection(
-    grant: &SessionGrantIntrospectGrant,
+    grant: &SessionGrantValidationMetadata,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
     let authority = grant.account_id();
     if authority.station_id != grant.audience_id {
@@ -673,7 +671,7 @@ fn session_binding_from_introspection(
 pub(crate) fn session_record_from_introspected_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
-    grant: &SessionGrantIntrospectGrant,
+    grant: &SessionGrantValidationMetadata,
 ) -> Result<SessionRecord, AuthError> {
     if grant.audience_id.as_str() != state.service_id() {
         return Err(unauthenticated(
@@ -831,7 +829,7 @@ pub(crate) async fn grant_dpop_session(
 pub(crate) fn session_from_verified_grant(
     state: &AppState,
     grant_jwt: &str,
-    grant: SessionGrantIntrospectGrant,
+    grant: SessionGrantValidationMetadata,
     device_id: String,
     agent_session: Option<AgentSessionRecord>,
 ) -> SessionRecord {
@@ -911,7 +909,7 @@ pub(crate) async fn authenticated_session_account_id(
 /// The §6a/§6b session binding of an introspected grant, exposed for the
 /// WebSocket binding which validates its holder proof out of band.
 pub(crate) fn grant_session_binding(
-    grant: &SessionGrantIntrospectGrant,
+    grant: &SessionGrantValidationMetadata,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
     session_binding_from_introspection(grant)
 }
@@ -962,7 +960,7 @@ mod tests {
     }
 
     async fn spawn_counting_introspection_mock(
-        outcome: SessionGrantIntrospectOutcome,
+        outcome: SessionGrantValidationResult,
     ) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1099,7 +1097,7 @@ mod tests {
     #[tokio::test]
     async fn request_memo_cache_and_force_fresh_count_real_http_round_trips() {
         let grant = test_introspection_grant();
-        let outcome = SessionGrantIntrospectOutcome {
+        let outcome = SessionGrantValidationResult {
             active: true,
             status: SessionGrantAdminIntrospectionStatus::Active,
             proof_required: false,
@@ -1228,8 +1226,8 @@ mod tests {
         INTROSPECTION_HTTP_CLIENTS.lock().remove(&cache_key);
     }
 
-    fn test_introspection_grant() -> SessionGrantIntrospectGrant {
-        SessionGrantIntrospectGrant {
+    fn test_introspection_grant() -> SessionGrantValidationMetadata {
+        SessionGrantValidationMetadata {
             id: SessionGrantId::new(
                 "ak:session_grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
             )
@@ -1259,7 +1257,7 @@ mod tests {
                     &arkret_wire::Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
                 )
                 .unwrap(),
-            scopes: vec!["ak.self.events.read.scan.v1".to_owned()],
+            scopes: vec!["ak.self.committed_event.read.scan.v1".to_owned()],
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,
             revocation_ref: "ak:session:grant-1".to_owned(),
@@ -1340,7 +1338,7 @@ mod tests {
             DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
             grant.audience_id.clone(),
         );
-        grant.scopes = vec!["ak.self.events.read.scan.v1".to_owned()];
+        grant.scopes = vec!["ak.self.committed_event.read.scan.v1".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
             device_id: DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
@@ -1358,7 +1356,7 @@ mod tests {
         let agent_session = agent_session.unwrap();
         assert_eq!(
             agent_session.granted_scope,
-            vec!["ak.self.events.read.scan.v1"]
+            vec!["ak.self.committed_event.read.scan.v1"]
         );
         assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
         assert_eq!(

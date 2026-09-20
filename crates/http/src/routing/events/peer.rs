@@ -19,7 +19,7 @@ use arkret_models_collaboration::http_bodies::{
     PeerEventsSiblingPositionsOutcome, PeerEventsSiblingPositionsRequestBody,
 };
 use arkret_models_collaboration::principal_operations::{
-    PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
+    PcrGenesisAdmissionInput, PcrGenesisAdmissionResult,
 };
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
 use arkret_wire::{DirectorySourceRefAccess, SignalRelayOutcome, SignalRelayRequest};
@@ -168,8 +168,6 @@ async fn retained_federation_submission(
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("events").post(peer_events_submit))
-        .push(Router::with_path("events/sibling-positions").query(peer_events_sibling_positions))
-        .push(Router::with_path("events/frontier").query(peer_events_frontier))
         .push(Router::with_path("seals/frontier").query(peer_seals_frontier))
         .push(Router::with_path("account-status").post(peer_account_status_submit))
         .push(Router::with_path("signal").post(peer_signal_relay))
@@ -190,8 +188,7 @@ pub(super) fn router() -> Router {
 /// A disclosed set is exhaustive, never a page: an empty vector positively says
 /// this Station holds nothing at that position, which is exactly what alignment
 /// with a `void_all` verdict looks like.
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.sibling_positions", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.sibling_positions.v1"))]
+#[allow(dead_code)]
 async fn peer_events_sibling_positions(
     depot: &mut Depot,
     req: &mut Request,
@@ -201,7 +198,7 @@ async fn peer_events_sibling_positions(
     let source_id = source_id_from_request(req)?;
     let request = parse_json_body::<PeerEventsSiblingPositionsRequestBody>(
         req,
-        "invalid ak.peer.events.read.sibling_positions.v1 request body",
+        "invalid retired peer sibling-position request body",
     )
     .await?;
     request
@@ -370,11 +367,11 @@ async fn adjudicated_position_siblings(
 pub(super) async fn admit_private_principal_genesis(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PcrGenesisSubmitOutcome> {
+) -> JsonResult<PcrGenesisAdmissionResult> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     authenticate_account_authority_private_request(state, req)?;
     let header_idempotency_key = required_header(req, "idempotency-key")?;
-    let request = parse_json_body::<PcrGenesisSubmitRequestBody>(
+    let request = parse_json_body::<PcrGenesisAdmissionInput>(
         req,
         "invalid private principal genesis admission body",
     )
@@ -1134,8 +1131,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan.v1"))]
+#[allow(dead_code)]
 async fn peer_events_read_body(
     depot: &mut Depot,
     req: &mut Request,
@@ -1144,7 +1140,7 @@ async fn peer_events_read_body(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<EventsQueryPostRequestBody>(
         req,
-        "invalid ak.peer.events.read.scan.v1 request body",
+        "invalid retired peer Event query request body",
     )
     .await?;
     let source_id = source_id_from_request(req)?;
@@ -1152,8 +1148,7 @@ async fn peer_events_read_body(
     peer_events_query_response(state, source_id, parts).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.resolve.v1"))]
+#[allow(dead_code)]
 async fn peer_events_resolve(
     depot: &mut Depot,
     req: &mut Request,
@@ -1162,7 +1157,7 @@ async fn peer_events_resolve(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<PeerEventsResolveRequestBody>(
         req,
-        "invalid ak.peer.events.read.resolve.v1 request body",
+        "invalid retired peer Event resolve request body",
     )
     .await?;
     request
@@ -1563,8 +1558,7 @@ fn discovery_payload_resource_key(
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.frontier.v1"))]
+#[allow(dead_code)]
 async fn peer_events_frontier(
     depot: &mut Depot,
     req: &mut Request,
@@ -1576,7 +1570,7 @@ async fn peer_events_frontier(
     let (realm_id, frontier_actor_id) = if has_body {
         let body = parse_json_body::<PeerEventsFrontierRequestBody>(
             req,
-            "invalid ak.peer.events.read.frontier.v1 request body",
+            "invalid retired peer Event frontier request body",
         )
         .await?;
         (body.realm_id.into_string(), body.actor_id)
@@ -1810,7 +1804,7 @@ impl PeerEventsQueryParts {
     fn validate(&self) -> Result<(), AppError> {
         if self.realms.is_empty() && self.actors.is_empty() {
             return Err(AppError::param_missing(
-                "ak.peer.events.read.scan.v1 requires at least one of realms[] / actors[]",
+                "retired peer Event query requires at least one of realms[] / actors[]",
             ));
         }
         if self.after.is_some() && self.before.is_some() {
@@ -2444,7 +2438,7 @@ fn peer_events_query_scope_digest(source_id: &str, parts: &PeerEventsQueryParts)
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN_V1,
+        "operation_id": arkret_wire::ServiceOperationId::PEER_COMMITTED_EVENT_READ_SCAN_V1,
         "source_id": source_id,
         "realms": realms,
         "actors": actors,

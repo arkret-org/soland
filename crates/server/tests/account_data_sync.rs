@@ -185,7 +185,7 @@ async fn signed_account_data_submission(
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1,
+            "retired-event-frontier",
             true,
         )
         .send(&app_from_state(state))
@@ -400,7 +400,7 @@ async fn submit_actor_private_event(
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1,
+            "retired-event-frontier",
             true,
         )
         .send(&app_from_state(state.clone()))

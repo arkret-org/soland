@@ -244,7 +244,7 @@ async fn signed_profile_event(
             .add_header("authorization", format!("Bearer {token}"), true)
             .add_header(
                 "Arkret-Operation",
-                arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1,
+                "retired-event-frontier",
                 true,
             )
             .send(&app_from_state(state.clone()))

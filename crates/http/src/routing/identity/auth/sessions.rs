@@ -365,10 +365,9 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
         ("GET", "/_arkret/root/identity/log") => {
             Some(ServiceOperationId::ROOT_IDENTITY_LOG_READ_LIST_V1)
         }
-        ("QUERY", "/_arkret/self/events/frontier") => {
-            Some(ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1)
+        ("POST", "/_arkret/self/streams/scan") => {
+            Some(ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1)
         }
-        ("QUERY", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_READ_SCAN_V1),
         ("GET", "/_arkret/self/keys/backups") => {
             Some(ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST_V1)
         }

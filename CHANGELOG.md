@@ -93,7 +93,7 @@ on the reducer / federation / state-machine surfaces. See
   as immutable Realm state. Subsequent mismatching events reject with
   `cross_domain_replay_rejected`.
 - **BREAKING** `ServiceDescribe` v2: `ak.server.read.describe.v1` /
-  `ak.self.account.read.describe.v1` / `ak.self.events.read.describe.v1` / `ak.edge.applet.read.describe.v1` all return
+  `ak.self.account.read.describe.v1` / `ak.edge.applet.read.describe.v1` both return
   the 17-field canonical envelope (including `trust_domain`,
   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`,
   `development_mode`); `development_mode=true` with non-empty

@@ -178,7 +178,7 @@ async fn select(
         // Addresses the history before the *whole* window, and is minted once
         // so every segment repeats the same token (5.2). It is bound to the
         // plain Realm-scoped scan digest, which is what an
-        // `ak.self.events.read.scan.v1` backfill of this Realm recomputes, so
+        // `ak.self.committed_event.read.scan.v1` backfill of this Realm recomputes, so
         // the token round-trips as that request's `before=`.
         cursor.prev_cursor = Some(
             super::cursor::sync_token_for_events_query(

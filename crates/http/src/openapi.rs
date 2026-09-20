@@ -51,8 +51,8 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
         "x-operation-aliases".to_owned(),
         json!({
             "events.submit": arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
-            "events.read": arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
-            "events.subscribe": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
+            "events.read": arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1,
+            "events.subscribe": arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_STREAM_SUBSCRIBE_V1,
             "account.subscribe": arkret_wire::ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE_V1,
         }),
     );

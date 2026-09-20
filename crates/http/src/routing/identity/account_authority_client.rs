@@ -1,15 +1,16 @@
 use arkret_models_collaboration::session_grants::{
-    AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SessionGrantIntrospectByJwt,
+    AuthSessionTerminationInput, AuthSessionTerminationReason, AuthSessionTerminationResult,
+    SessionGrantValidationByJwt,
 };
 use chrono::{DateTime, Utc};
 use soland_http::error::AppError;
 
 use crate::state::AppState;
-use crate::wire::{SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody};
+use crate::wire::{SessionGrantValidationInput, SessionGrantValidationResult};
 
 /// Typed deployment-internal boundary from the Station to its Account Authority process.
 ///
-/// Endpoint selection, S2S authentication, operation selectors, timeouts and
+/// Endpoint selection, S2S authentication, timeouts and
 /// transport error mapping live here so product handlers cannot couple sibling
 /// operations through URL string conventions.
 pub(crate) struct AccountAuthorityClient<'a> {
@@ -51,14 +52,14 @@ impl<'a> AccountAuthorityClient<'a> {
     pub(crate) async fn introspect_logout_grant(
         &self,
         grant_jwt: &str,
-    ) -> Result<SessionGrantIntrospectOutcome, AppError> {
+    ) -> Result<SessionGrantValidationResult, AppError> {
         let audience = arkret_identifiers::DidCoreId::new(self.state.service_id().clone())
             .map_err(|error| {
                 AppError::internal(format!(
                     "runtime principal service_id is not a core_id: {error}"
                 ))
             })?;
-        let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
+        let request = SessionGrantValidationInput::ByJwt(SessionGrantValidationByJwt {
             grant_jwt: grant_jwt.to_owned(),
             audience_id: Some(audience),
             proof: None,
@@ -66,7 +67,6 @@ impl<'a> AccountAuthorityClient<'a> {
         self.post_json(
             self.introspection_url,
             "session grant logout introspection",
-            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
             &request,
         )
         .await
@@ -76,19 +76,14 @@ impl<'a> AccountAuthorityClient<'a> {
         &self,
         grant_jwt: &str,
         validated_at: DateTime<Utc>,
-    ) -> Result<AuthSessionLogoutOutcome, AppError> {
-        let request = AuthSessionLogoutRequestBody {
+    ) -> Result<AuthSessionTerminationResult, AppError> {
+        let request = AuthSessionTerminationInput {
             grant_jwt: grant_jwt.to_owned(),
             logout_request_digest: None,
             validated_at: Some(validated_at),
-            reason_code: Some("account_logout".to_owned()),
+            reason_code: Some(AuthSessionTerminationReason::AccountLogout),
         };
-        self.post_json(
-            self.logout_url,
-            "Auth-side session logout",
-            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1,
-            &request,
-        )
+        self.post_json(self.logout_url, "Auth-side session logout", &request)
         .await
     }
 
@@ -96,7 +91,6 @@ impl<'a> AccountAuthorityClient<'a> {
         &self,
         endpoint: &str,
         operation: &str,
-        operation_id: &'static str,
         request: &Request,
     ) -> Result<Response, AppError>
     where
@@ -110,7 +104,8 @@ impl<'a> AccountAuthorityClient<'a> {
             std::time::Duration::from_secs(10),
         )
         .map_err(AppError::capability_denied)?;
-        let response = crate::routing::with_arkret_operation(client.post(endpoint), operation_id)
+        let response = client
+            .post(endpoint)
             .bearer_auth(self.bearer)
             .json(request)
             .send()

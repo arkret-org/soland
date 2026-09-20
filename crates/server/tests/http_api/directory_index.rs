@@ -192,47 +192,6 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
     // `directory_resolve_handle_invite_accepts_canonical_handles_without_contact`,
     // which registers an account with a canonical handle binding.
 
-    let describe: Value = TestClient::get("http://server/_arkret/find/directory/describe")
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(advertises_operation(
-        &describe,
-        "ak.find.directory.read.list_handles_for_subject.v1"
-    ));
-
-    let alice_account = directory_account(
-        "did:web:alice.example",
-        soland_test_support::fixture_station_id(),
-    );
-    let subject_handles: Value =
-        TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
-            .json(&serde_json::json!({
-                "account_id": alice_account,
-                "intent": "lookup",
-                "limit": 10
-            }))
-            .send(&app())
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(
-        subject_handles["account_id"],
-        serde_json::json!(alice_account)
-    );
-    assert_eq!(subject_handles["primary_handle"], "alice:server.test");
-    assert_eq!(subject_handles["has_more"], false);
-    let claims = subject_handles["claims"].as_array().unwrap();
-    assert_eq!(claims.len(), 1);
-    assert_eq!(
-        claims[0]["claim"]["subject_account_id"],
-        serde_json::json!(alice_account)
-    );
-    assert_eq!(claims[0]["claim"]["handle"], "alice:server.test");
-
     let invalid = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"limit": 0}))
         .send(&app())

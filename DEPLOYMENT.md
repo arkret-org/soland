@@ -114,8 +114,8 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
 SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
 SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example
-SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
-SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout
+SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_coauth/internal/session-grants/introspect
+SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_coauth/internal/auth-sessions/logout
 SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET=<shared-secret-configured-in-coauth>
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
 SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
@@ -289,8 +289,8 @@ docker run --name soland --restart=always -d \
   -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN=ak:trust_domain:coauth.example \
-  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
-  -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
+  -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_coauth/internal/session-grants/introspect \
+  -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_coauth/internal/auth-sessions/logout \
   -e SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
@@ -582,7 +582,7 @@ pre-upgrade backup if you need to roll back.
   domain. It is never inferred from the URL.
 - The Account Authority signs as this Station with a delegated assertion method, even when it runs at a separate origin.
 - `SOLAND_SESSION_GRANT_INTROSPECTION_URL` points at coauth's
-  `/_arkret/gate/account/session-grants/introspect`, and
+  `/_coauth/internal/session-grants/introspect`, and
   `SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET` matches the shared
   server-to-server secret configured there (coauth's
   `stations[].internal_authority_shared_secret` for this Station).
@@ -610,7 +610,7 @@ pre-upgrade backup if you need to roll back.
   `keyid` is exactly this Station DID's delegated `#account-authority`
   assertion method. The shared bearer does not authorize these routes.
 - `SOLAND_AUTH_SESSION_LOGOUT_URL` independently points at coauth's exact
-  `/_arkret/gate/account/auth-sessions/logout` S2S operation; it is never
+  `/_coauth/internal/auth-sessions/logout` private adapter; it is never
   inferred from the introspection URL.
 - `DATABASE_URL` uses `sslmode=verify-full` and a password kept out of source
   control (Vault / Kubernetes Secret / systemd `LoadCredential`).

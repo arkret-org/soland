@@ -153,7 +153,7 @@ pub(super) fn spawn_controller_gate_mock(listener: tokio::net::TcpListener, stat
                     .map(|index| index + 4)
                     .expect("controller gate request headers");
                 let request_body = serde_json::from_slice::<
-                    arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueRequestBody,
+                    arkret_models_identity::agent_signer_evidence::ControllerAccountGateIssuanceInput,
                 >(&request[body_start..])
                 .expect("typed controller gate request");
                 let issued_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
@@ -192,7 +192,7 @@ pub(super) fn spawn_controller_gate_mock(listener: tokio::net::TcpListener, stat
                 )
                 .expect("controller gate attestation signs");
                 let response_body = serde_json::to_vec(
-                    &arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueOutcome {
+                    &arkret_models_identity::agent_signer_evidence::ControllerAccountGateIssuanceResult {
                         request_id: request_body.request_id,
                         controller_account_gate_attestation: gate,
                     },
@@ -268,15 +268,14 @@ async fn seed_agent_grant_session_with_suite(
         slug,
         serde_json::json!({
             "actions": [
-                "ak.self.events.stream.subscribe.v1",
-                "ak.self.events.read.scan.v1",
-                "ak.self.events.read.frontier.v1",
+                "ak.self.committed_event.stream.subscribe.v1",
+                "ak.self.committed_event.read.scan.v1",
                 "ak.self.seals.read.frontier.v1",
                 "ak.self.events.command.submit.v1"
             ],
             "resources": [
-                {"kind": "operation", "operation": "ak.self.events.stream.subscribe.v1"},
-                {"kind": "operation", "operation": "ak.self.events.read.scan.v1"},
+                {"kind": "operation", "operation": "ak.self.committed_event.stream.subscribe.v1"},
+                {"kind": "operation", "operation": "ak.self.committed_event.read.scan.v1"},
                 {"kind": "operation", "operation": "ak.self.events.command.submit.v1"}
             ],
             "constraints": []
@@ -422,15 +421,14 @@ async fn seed_agent_grant_session_with_suite(
             accountable_principal_id: controller_core.clone(),
             agent_key_scope: serde_json::from_value(serde_json::json!({
                 "actions": [
-                    "ak.self.events.stream.subscribe.v1",
-                    "ak.self.events.read.scan.v1",
-                    "ak.self.events.read.frontier.v1",
+                    "ak.self.committed_event.stream.subscribe.v1",
+                    "ak.self.committed_event.read.scan.v1",
                     "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1"
                 ],
                 "resources": [
-                    {"kind": "operation", "operation": "ak.self.events.stream.subscribe.v1"},
-                    {"kind": "operation", "operation": "ak.self.events.read.scan.v1"},
+                    {"kind": "operation", "operation": "ak.self.committed_event.stream.subscribe.v1"},
+                    {"kind": "operation", "operation": "ak.self.committed_event.read.scan.v1"},
                     {"kind": "operation", "operation": "ak.self.events.command.submit.v1"}
                 ],
                 "constraints": []
@@ -871,7 +869,7 @@ async fn seed_agent_grant_session_with_suite(
         }
     });
     serde_json::from_value::<
-        arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectOutcome,
+        arkret_models_collaboration::session_grants::SessionGrantValidationResult,
     >(outcome_json.clone())
     .expect("mock outcome matches the SDK introspection DTO");
     let response_body = serde_json::to_vec(&outcome_json).expect("serialize introspection");
@@ -893,7 +891,7 @@ async fn seed_agent_grant_session_with_suite(
             tokio::spawn(async move {
                 let request = read_introspection_request(&mut stream).await;
                 let response_body = if request
-                    .starts_with(b"POST /_arkret/gate/account/controller-gate-attestations ")
+                    .starts_with(b"POST /_coauth/internal/controller-gate-attestations ")
                 {
                     let body_start = request
                         .windows(4)
@@ -901,7 +899,7 @@ async fn seed_agent_grant_session_with_suite(
                         .map(|index| index + 4)
                         .expect("controller gate request headers");
                     let request_body = serde_json::from_slice::<
-                        arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueRequestBody,
+                        arkret_models_identity::agent_signer_evidence::ControllerAccountGateIssuanceInput,
                     >(&request[body_start..])
                     .expect("typed controller gate request");
                     let issued_at =
@@ -941,7 +939,7 @@ async fn seed_agent_grant_session_with_suite(
                     )
                     .expect("controller gate attestation signs");
                     serde_json::to_vec(
-                        &arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueOutcome {
+                        &arkret_models_identity::agent_signer_evidence::ControllerAccountGateIssuanceResult {
                             request_id: request_body.request_id,
                             controller_account_gate_attestation: gate,
                         },
@@ -986,7 +984,7 @@ fn blake3_agent_pcr_authorize_successor_uses_the_selected_suite() {
 async fn blake3_agent_pcr_authorize_successor_uses_the_selected_suite_body() {
     let _ = seed_agent_grant_session_with_suite(
         "blake3-agent-pcr",
-        &["ak.self.events.read.scan.v1"],
+        &["ak.self.committed_event.read.scan.v1"],
         arkret_canonical::DigestSuite::Blake3,
     )
     .await;
@@ -1046,7 +1044,8 @@ fn agent_session_without_stream_scope_cannot_subscribe_events() {
 
 async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
     let (state, presentation) =
-        seed_agent_grant_session("scope-denied-stream", &["ak.self.events.read.scan.v1"]).await;
+        seed_agent_grant_session("scope-denied-stream", &["ak.self.committed_event.read.scan.v1"])
+            .await;
     let subscribe_url = format!(
         "http://server/_arkret/self/events/subscribe?realm_ids={}&catchup=false&max_duration_ms=100",
         demo_realm_id()
@@ -1079,7 +1078,7 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
-    assert_agent_scope_denied(&body, "ak.self.events.stream.subscribe.v1");
+    assert_agent_scope_denied(&body, "ak.self.committed_event.stream.subscribe.v1");
 }
 
 #[test]
@@ -1093,7 +1092,7 @@ fn agent_session_without_query_scope_cannot_scan_events() {
 async fn agent_session_without_query_scope_cannot_scan_events_body() {
     let (state, presentation) = seed_agent_grant_session(
         "scope-denied-query",
-        &["ak.self.events.stream.subscribe.v1"],
+        &["ak.self.committed_event.stream.subscribe.v1"],
     )
     .await;
 
@@ -1121,7 +1120,7 @@ async fn agent_session_without_query_scope_cannot_scan_events_body() {
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
-    assert_agent_scope_denied(&body, "ak.self.events.read.scan.v1");
+    assert_agent_scope_denied(&body, "ak.self.committed_event.read.scan.v1");
 }
 
 #[test]
@@ -1134,7 +1133,8 @@ fn agent_session_without_submit_scope_cannot_submit_events() {
 
 async fn agent_session_without_submit_scope_cannot_submit_events_body() {
     let (state, presentation) =
-        seed_agent_grant_session("scope-denied-submit", &["ak.self.events.read.scan.v1"]).await;
+        seed_agent_grant_session("scope-denied-submit", &["ak.self.committed_event.read.scan.v1"])
+            .await;
     let event = signed_event_envelope(
         "ak:event:AfepkcDJ52VnnpuZZLL_gaOAp8uRP2_whpmBukWi9roZ",
         0,
@@ -2193,7 +2193,7 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_bod
         state.service_core_id().clone(),
     ));
 
-    // ak.self.events.read.scan.v1 — `after` in canonical QUERY content.
+    // ak.self.committed_event.read.scan.v1 — `after` in canonical QUERY content.
     let mut rejected = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({

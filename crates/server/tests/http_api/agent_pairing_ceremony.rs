@@ -15,9 +15,8 @@
 use super::common::*;
 
 const CEREMONY_SCOPE_ACTIONS: [&str; 5] = [
-    "ak.self.events.stream.subscribe.v1",
-    "ak.self.events.read.scan.v1",
-    "ak.self.events.read.frontier.v1",
+    "ak.self.committed_event.stream.subscribe.v1",
+    "ak.self.committed_event.read.scan.v1",
     "ak.self.seals.read.frontier.v1",
     "ak.self.events.command.submit.v1",
 ];

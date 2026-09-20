@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::session_grants::{
-    SessionGrantIntrospectByJwt, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
+    SessionGrantValidationByJwt, SessionGrantValidationInput, SessionGrantValidationResult,
 };
 use arkret_models_identity::admin_grant::{
     SessionGrantAdminIntrospectionStatus, SessionGrantIntrospection,
@@ -117,7 +117,7 @@ fn session_grant_status_wire(status: SessionGrantAdminIntrospectionStatus) -> St
 }
 
 fn admin_grant_from_introspection_outcome(
-    outcome: SessionGrantIntrospectOutcome,
+    outcome: SessionGrantValidationResult,
 ) -> Result<SessionGrantIntrospection, AppError> {
     if !outcome.active || outcome.status != SessionGrantAdminIntrospectionStatus::Active {
         return Err(crate::app_error!(
@@ -149,7 +149,7 @@ fn admin_grant_from_introspection_outcome(
             .device_id
             .map(|device_id| device_id.as_str().to_owned()),
         audit_context: serde_json::json!({
-            "source": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
+            "source": "deployment_private_session_grant_validation",
             "grant_id": grant.id.as_str(),
             "audience": grant.audience_id,
         }),
@@ -239,7 +239,7 @@ pub(crate) async fn introspect_admin_scopes(
             "runtime principal service_id is not a core_id: {error}"
         ))
     })?;
-    let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
+    let request = SessionGrantValidationInput::ByJwt(SessionGrantValidationByJwt {
         grant_jwt: token,
         audience_id: Some(audience),
         proof: None,
@@ -265,11 +265,9 @@ pub(crate) async fn introspect_admin_scopes(
         Duration::from_secs(10),
     )
     .map_err(AppError::capability_denied)?;
-    let response = crate::routing::with_arkret_operation(
-        client.post(url),
-        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
-    )
-    .bearer_auth(channel.credential())
+    let response = client
+        .post(url)
+        .bearer_auth(channel.credential())
     .json(&request)
     .send()
     .await
@@ -289,7 +287,7 @@ pub(crate) async fn introspect_admin_scopes(
         ));
     }
     let outcome = response
-        .json::<SessionGrantIntrospectOutcome>()
+        .json::<SessionGrantValidationResult>()
         .await
         .map_err(|error| {
             crate::app_error!(

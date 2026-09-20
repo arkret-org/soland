@@ -13,7 +13,6 @@
 //! - `GET /_soland/gate/auth/bridge/describe`
 //! - `GET /_soland/self/integration/describe`
 //!
-//! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
 use arkret_identity::service_identity::DidCoreIdentityState;
@@ -539,25 +538,14 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         service_kind: "station".to_owned(),
         api_base_path: "/_arkret".to_owned(),
         describe_path: "/_soland/self/integration/describe".to_owned(),
-        dependencies: vec![
-            IntegrationDependencyDescriptor {
-                service: "coauth".to_owned(),
-                purpose: "session_grant_introspection".to_owned(),
-                required_contract:
-                    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1
-                        .to_owned(),
-                discovery_path: "/_arkret/gate/account/session-grants/introspect".to_owned(),
-                mode: "remote_service_contract".to_owned(),
-            },
-            IntegrationDependencyDescriptor {
+        dependencies: vec![IntegrationDependencyDescriptor {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
                 required_contract:
                     arkret_wire::ServiceOperationId::SERVER_READ_DESCRIBE_V1.to_owned(),
                 discovery_path: "/_arkret/describe".to_owned(),
                 mode: "canonical_service_describe".to_owned(),
-            },
-        ],
+            }],
         surfaces: vec![
             IntegrationSurfaceDescriptor {
                 name: "auth_bridge".to_owned(),

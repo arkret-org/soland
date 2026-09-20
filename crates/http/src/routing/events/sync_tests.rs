@@ -1227,14 +1227,14 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
     let state = test_state();
     let session = roster_session(&state, "ak:did_core:web:alice.example");
     let filter_a = sync_filter_digest(Some(&json!({
-        "operation_id": "ak.self.events.read.scan.v1",
+        "operation_id": "ak.self.committed_event.read.scan.v1",
         "realms": [ROSTER_REALM],
         "actors": [],
         "filters": {},
         "order": "default",
     })));
     let filter_b = sync_filter_digest(Some(&json!({
-        "operation_id": "ak.self.events.read.scan.v1",
+        "operation_id": "ak.self.committed_event.read.scan.v1",
         "realms": [ROSTER_REALM],
         "actors": [],
         "filters": {"kind": "ak.message.create"},
@@ -1298,7 +1298,7 @@ fn account_filter_digest_retains_explicit_empty_and_false() {
 #[test]
 fn sync_filter_digest_normalizes_events_query_scope_collections() {
     let scope_a = json!({
-        "operation_id": "ak.self.events.read.scan.v1",
+        "operation_id": "ak.self.committed_event.read.scan.v1",
         "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
         "actors": ["did:web:bob.example", "did:web:alice.example"],
         "filters": {
@@ -1308,7 +1308,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
         "order": "default"
     });
     let scope_b = json!({
-        "operation_id": "ak.self.events.read.scan.v1",
+        "operation_id": "ak.self.committed_event.read.scan.v1",
         "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
@@ -1323,7 +1323,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
     );
 
     let different_order = json!({
-        "operation_id": "ak.self.events.read.scan.v1",
+        "operation_id": "ak.self.committed_event.read.scan.v1",
         "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {

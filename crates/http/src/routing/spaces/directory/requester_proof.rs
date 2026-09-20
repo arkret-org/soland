@@ -28,7 +28,7 @@ const DIRECTORY_REQUESTER_PROOF_WINDOW_SECONDS: i64 = 300;
 ///
 /// `issuer` is the family's originator wire field projected to its DID core id
 /// (`requester_id` for `resolve_target` / `resolve_handle` /
-/// `resolve_agent_selector` / `list_handles_for_subject`).
+/// historical selector and handle enumeration surfaces).
 /// `resolve_organization` has no originator wire field, so it passes `None` and
 /// the signer identity is borne only by `verification_method`.
 ///

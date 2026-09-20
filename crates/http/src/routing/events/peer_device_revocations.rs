@@ -1,6 +1,6 @@
 use arkret_wire::{
     AcceptedDevicePossessionProof, AccountId, CommittedEventRef, DeviceId,
-    DeviceRevocationGateActionClass, EventId, Hash, RealmCommitId,
+    DeviceRevocationAdmissionAction, EventId, Hash, RealmCommitId,
 };
 use chrono::{DateTime, Utc};
 use salvo::prelude::*;
@@ -99,7 +99,7 @@ pub(super) struct CurrentDeviceCheckRequest {
     device_id: DeviceId,
     expected_device_authorize_event_id: Option<EventId>,
     expected_device_generation_ref: Option<u64>,
-    action_class: DeviceRevocationGateActionClass,
+    action_class: DeviceRevocationAdmissionAction,
     intent_digest: Hash,
     accepted_device_possession_proof: Option<AcceptedDevicePossessionProof>,
     requested_at: DateTime<Utc>,
@@ -122,7 +122,7 @@ pub(super) struct CurrentDeviceCheckOutcome {
     device_id: DeviceId,
     authorization_event_id: Option<EventId>,
     device_generation_ref: Option<u64>,
-    action_class: DeviceRevocationGateActionClass,
+    action_class: DeviceRevocationAdmissionAction,
     intent_digest: Hash,
     accepted_device_possession_proof_digest: Option<Hash>,
     decision: CurrentDeviceDecision,
@@ -162,10 +162,10 @@ pub(super) async fn check_private_current_device(
         .map_err(|_| AppError::json_invalid("invalid private current-device check request body"))?;
     if !matches!(
         request.action_class,
-        DeviceRevocationGateActionClass::SessionGrantIssue
-            | DeviceRevocationGateActionClass::ReturningSessionGrantIssue
-            | DeviceRevocationGateActionClass::SessionGrantRefresh
-            | DeviceRevocationGateActionClass::DevicePairingCodeClaim
+        DeviceRevocationAdmissionAction::SessionGrantIssue
+            | DeviceRevocationAdmissionAction::ReturningSessionGrantIssue
+            | DeviceRevocationAdmissionAction::SessionGrantRefresh
+            | DeviceRevocationAdmissionAction::DevicePairingCodeClaim
     ) {
         return Err(schema_violation(
             "peer device revocation check only admits session grant or device-pairing current-device actions",
@@ -285,16 +285,16 @@ pub(super) async fn check_private_current_device(
         ));
     }
     let action_class = match request.action_class {
-        DeviceRevocationGateActionClass::SessionGrantIssue => {
+        DeviceRevocationAdmissionAction::SessionGrantIssue => {
             soland_storage::DeviceRevocationGateAction::SessionGrantIssue
         }
-        DeviceRevocationGateActionClass::ReturningSessionGrantIssue => {
+        DeviceRevocationAdmissionAction::ReturningSessionGrantIssue => {
             soland_storage::DeviceRevocationGateAction::SessionGrantIssue
         }
-        DeviceRevocationGateActionClass::SessionGrantRefresh => {
+        DeviceRevocationAdmissionAction::SessionGrantRefresh => {
             soland_storage::DeviceRevocationGateAction::SessionGrantRefresh
         }
-        DeviceRevocationGateActionClass::DevicePairingCodeClaim => {
+        DeviceRevocationAdmissionAction::DevicePairingCodeClaim => {
             soland_storage::DeviceRevocationGateAction::DevicePairingCodeClaim
         }
         _ => unreachable!("unsupported current-device action rejected above"),
@@ -440,7 +440,7 @@ mod tests {
             device_id: arkret_wire::DeviceId::new(DEVICE).unwrap(),
             authorization_event_id: Some(arkret_wire::EventId::new(AUTHORIZE_EVENT).unwrap()),
             device_generation_ref: Some(1),
-            action_class: DeviceRevocationGateActionClass::SessionGrantRefresh,
+            action_class: DeviceRevocationAdmissionAction::SessionGrantRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             accepted_device_possession_proof_digest: Some(
                 Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),

@@ -17,11 +17,11 @@ use soland_storage::{
 use crate::common::*;
 
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-const RECOVERY_INTROSPECTION_PATH: &str = "/_arkret/gate/account/session-grants/introspect";
+const RECOVERY_INTROSPECTION_PATH: &str = "/_coauth/internal/session-grants/introspect";
 const RECOVERY_INTERNAL_AUTHORITY_SHARED_SECRET: &str = "recovery-policy-introspection-bearer";
 
 type IntrospectionOutcome =
-    arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectOutcome;
+    arkret_models_collaboration::session_grants::SessionGrantValidationResult;
 
 fn registered_recovery_policy_grants() -> &'static RwLock<BTreeMap<String, IntrospectionOutcome>> {
     static GRANTS: OnceLock<RwLock<BTreeMap<String, IntrospectionOutcome>>> = OnceLock::new();
@@ -253,7 +253,7 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
                 assert_eq!(
                     request_lines.next(),
                     Some(expected_request_line.as_str()),
-                    "introspection must use the canonical POST surface"
+                    "introspection must use the product-private POST surface"
                 );
                 let headers = request_lines
                     .filter_map(|line| line.split_once(':'))
@@ -268,12 +268,9 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
                     Some(expected_authorization.as_str()),
                     "introspection must authenticate as the configured Account Authority client"
                 );
-                assert_eq!(
-                    headers.get("arkret-operation").map(String::as_str),
-                    Some(
-                        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1
-                    ),
-                    "introspection must select its exact canonical Arkret operation"
+                assert!(
+                    !headers.contains_key("arkret-operation"),
+                    "private introspection must not claim an Arkret operation"
                 );
                 assert!(
                     headers
@@ -281,16 +278,16 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
                         .is_some_and(|value| value.eq_ignore_ascii_case("application/json")),
                     "introspection must carry the SDK JSON request"
                 );
-                let body: arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectRequestBody =
+                let body: arkret_models_collaboration::session_grants::SessionGrantValidationInput =
                     serde_json::from_slice(&request[body_start..])
                     .expect("introspection request JSON");
                 let grant_jwt = match body {
-                    arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectRequestBody::ByJwt(request) => {
+                    arkret_models_collaboration::session_grants::SessionGrantValidationInput::ByJwt(request) => {
                         assert_eq!(request.audience_id.as_ref(), Some(&audience));
                         assert!(request.proof.is_none());
                         request.grant_jwt
                     }
-                    arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectRequestBody::ById(_) => {
+                    arkret_models_collaboration::session_grants::SessionGrantValidationInput::ById(_) => {
                         panic!("recovery fixture requires exact JWT introspection")
                     }
                 };
