@@ -45,6 +45,21 @@ impl PersistenceHandle {
             .await
     }
 
+    /// Read the authoritative Relation current-result rows used by exact CAS.
+    ///
+    /// The returned records include both the complete materialized Relation
+    /// and its accepting RealmCommit revision.  Keeping this behind the
+    /// opaque application handle lets private read adapters observe the same
+    /// durable truth as admission without exposing the storage registry.
+    pub async fn relation_current_results(
+        &self,
+    ) -> PersistenceResult<Vec<soland_storage::RelationCurrentResultRecord>> {
+        self.persistence
+            .relation_current_results()
+            .snapshot_all()
+            .await
+    }
+
     /// Read the bounded Welcome discovery index without exposing its store.
     pub async fn discover_mls_welcome_refs(
         &self,

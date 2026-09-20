@@ -30,7 +30,7 @@
 //! default. Explicit `include_terminal=true` returns the full set for audit /
 //! debugging UIs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{MorphId, RealmId, RelationId, SpaceId, StrandId};
 use arkret_models_collaboration::http_bodies::{
@@ -1162,10 +1162,7 @@ struct RelationEdgeList {
     total: u64,
 }
 
-fn relation_edge_view(
-    relation: SolandRelationState,
-    current: Option<soland_domain::reducer::RelationCurrentResultProjection>,
-) -> RelationEdgeView {
+fn relation_edge_view(relation: SolandRelationState) -> RelationEdgeView {
     RelationEdgeView {
         relation_id: relation.relation_id,
         realm_id: relation.realm_id,
@@ -1178,11 +1175,58 @@ fn relation_edge_view(
         scope_circle_id: relation.scope_circle_id,
         created_at: relation.created_at,
         updated_at: relation.updated_at,
-        primary_conflict_domain: current
-            .as_ref()
-            .map(|current| current.primary_conflict_domain.clone()),
-        current_revision: current.map(|current| current.revision),
+        primary_conflict_domain: None,
+        current_revision: None,
     }
+}
+
+/// Convert one authoritative Relation current-result row into the private
+/// read model. Unlike the reducer projection, this record carries the exact
+/// accepting RealmCommit revision needed by the next CAS operation.
+fn relation_current_edge_view(
+    record: soland_storage::RelationCurrentResultRecord,
+) -> Result<RelationEdgeView, AppError> {
+    let relation = record.relation;
+    let relation_id = relation
+        .id
+        .ok_or_else(|| AppError::internal("durable Relation current result has no relation_id"))?;
+    let relation_state = relation
+        .state
+        .ok_or_else(|| AppError::internal("durable Relation current result has no state"))?;
+    let state = match relation_state {
+        arkret_wire::RelationState::Active => "active",
+        arkret_wire::RelationState::Tombstoned => "tombstoned",
+    };
+    Ok(RelationEdgeView {
+        relation_id: relation_id.to_string(),
+        realm_id: relation.realm_id.to_string(),
+        relation_kind: relation.relation_kind.as_str().to_owned(),
+        from_ref: Some(relation.from_ref),
+        to_ref: Some(relation.to_ref),
+        rank: relation.rank,
+        fields: relation.fields,
+        state: state.to_owned(),
+        scope_circle_id: relation
+            .scope_circle_id
+            .map(|circle_id| circle_id.to_string()),
+        created_at: relation.created_at,
+        updated_at: relation.updated_at.unwrap_or(relation.created_at),
+        primary_conflict_domain: Some(record.primary_conflict_domain),
+        current_revision: Some(record.revision),
+    })
+}
+
+fn relation_edge_matches_filters(
+    relation: &RelationEdgeView,
+    state_filter: &str,
+    from_ref: Option<&RelationEndpoint>,
+    to_ref: Option<&RelationEndpoint>,
+    relation_kind: Option<&str>,
+) -> bool {
+    (matches!(state_filter, "any" | "all") || relation.state == state_filter)
+        && from_ref.is_none_or(|value| relation.from_ref.as_ref() == Some(value))
+        && to_ref.is_none_or(|value| relation.to_ref.as_ref() == Some(value))
+        && relation_kind.is_none_or(|value| relation.relation_kind == value)
 }
 
 /// `GET /_soland/self/strands/{strand_id}` — return a single Strand's
@@ -1310,8 +1354,9 @@ mod relation_actor_endpoint_tests {
 
     #[test]
     fn current_relation_view_exposes_the_exact_authority_revision() {
-        let now = "2026-09-21T00:00:00Z".parse().unwrap();
-        let relation_id = "ak:relation:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz".to_owned();
+        let realm_id = "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru"
+            .parse()
+            .unwrap();
         let primary_conflict_domain = serde_json::from_value(serde_json::json!({
             "domain_kind":"tuple",
             "relation_kind":"references",
@@ -1323,28 +1368,36 @@ mod relation_actor_endpoint_tests {
             commit_id: arkret_wire::RealmCommitId::from_digest([0x44; 32]),
             stream_position: 7,
         };
-        let view = relation_edge_view(
-            SolandRelationState {
-                relation_id: relation_id.clone(),
-                realm_id: "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru".to_owned(),
-                relation_kind: "references".to_owned(),
-                scope_circle_id: None,
-                from_ref: Some("ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4".into()),
-                to_ref: Some("ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-".into()),
-                rank: None,
-                fields: BTreeMap::new(),
-                state: "active".to_owned(),
-                source_event_id: None,
-                source_event_digest: None,
-                created_at: now,
-                updated_at: now,
+        let relation = serde_json::from_value(serde_json::json!({
+            "schema":"ak.schema.relation.v1",
+            "id":"ak:relation:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz",
+            "realm_id":realm_id,
+            "effective_scope":{
+                "kind":"realm",
+                "realm_id":"ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru"
             },
-            Some(soland_domain::reducer::RelationCurrentResultProjection {
-                relation_id,
-                primary_conflict_domain,
-                revision: revision.clone(),
-            }),
-        );
+            "relation_kind":"references",
+            "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+            "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-",
+            "state":"active",
+            "created_by":{
+                "kind":"account",
+                "account_id":{
+                    "principal_id":"ak:did_core:web:relation-author.example",
+                    "station_id":"ak:did_core:web:relation-station.example"
+                }
+            },
+            "created_at":"2026-09-21T00:00:00.000Z"
+        }))
+        .unwrap();
+        let view = relation_current_edge_view(soland_storage::RelationCurrentResultRecord {
+            realm_id,
+            domain_key: arkret_canonical::canonical_json_string(&primary_conflict_domain).unwrap(),
+            primary_conflict_domain,
+            relation,
+            revision: revision.clone(),
+        })
+        .unwrap();
         let wire = serde_json::to_value(view).unwrap();
         assert_eq!(wire["current_revision"], serde_json::json!(revision));
         assert_eq!(
@@ -1628,14 +1681,44 @@ async fn list_relation_projections(
     let state_filter =
         soland_http::util::query_param(req, "state").unwrap_or_else(|| "active".to_owned());
 
+    let durable_current = state
+        .persistence()
+        .relation_current_results()
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "authoritative Relation current-result read failed: {error}"
+            ))
+        })?;
+    let durable_current_ids = durable_current
+        .iter()
+        .filter_map(|record| record.relation.id.as_ref().map(ToString::to_string))
+        .collect::<BTreeSet<_>>();
+
     let proj = state.projections().snapshot();
-    let candidates: Vec<(
-        SolandRelationState,
-        Option<soland_domain::reducer::RelationCurrentResultProjection>,
-    )> = {
-        let candidates = proj
-            .relations
+    let mut candidates = durable_current
+        .into_iter()
+        .map(relation_current_edge_view)
+        .collect::<Result<Vec<_>, _>>()?;
+    candidates.retain(|relation| {
+        relation_edge_matches_filters(
+            relation,
+            &state_filter,
+            from_ref.as_ref(),
+            to_ref.as_ref(),
+            relation_kind.as_deref(),
+        ) && relation.scope_circle_id.as_deref().is_none_or(|circle_id| {
+            proj.circle_scope_visible_to_actor_at(
+                circle_id,
+                &session_actor.to_string(),
+                relation.created_at,
+            )
+        })
+    });
+    candidates.extend(
+        proj.relations
             .values()
+            .filter(|relation| !durable_current_ids.contains(&relation.relation_id))
             .filter(|relation| match state_filter.as_str() {
                 "any" | "all" => true,
                 other => relation.state == other,
@@ -1664,24 +1747,16 @@ async fn list_relation_projections(
                     )
                 })
             })
-            .map(|relation| {
-                let current = proj
-                    .relation_current_metadata
-                    .values()
-                    .find(|current| current.relation_id == relation.relation_id)
-                    .cloned();
-                (relation.clone(), current)
-            })
-            .collect();
-        candidates
-    };
+            .cloned()
+            .map(relation_edge_view),
+    );
 
     let mut items = Vec::new();
-    for (relation, current) in candidates {
+    for relation in candidates {
         if !realm_id_accessible(state, &relation.realm_id, Some(&session)).await {
             continue;
         }
-        items.push(relation_edge_view(relation, current));
+        items.push(relation);
     }
     items.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     let total = total_count(items.len())?;
