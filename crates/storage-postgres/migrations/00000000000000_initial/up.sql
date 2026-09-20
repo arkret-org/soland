@@ -4188,6 +4188,22 @@ CREATE INDEX current_result_version_scan ON current_result_versions(realm_id,tar
 CREATE INDEX current_result_version_changes ON current_result_versions(realm_id,revision,selector_key);
 CREATE INDEX current_result_version_gc ON current_result_versions(valid_until) WHERE valid_until IS NOT NULL;
 
+-- Relation is a single current result per typed primary conflict domain.  The
+-- exact RealmCommit identity is the CAS revision; the materialized object is
+-- updated in the same transaction as that commit.
+CREATE TABLE relation_current_results (
+ realm_id TEXT NOT NULL, domain_key TEXT COLLATE "C" NOT NULL,
+ domain JSONB NOT NULL, relation_id TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('active','tombstoned')),
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,domain_key),
+ CHECK(value->>'id'=relation_id),
+ CHECK(value->>'state'=state)
+);
+CREATE INDEX relation_current_result_identity ON relation_current_results(realm_id,relation_id);
+
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.
 CREATE TABLE current_selector_origins (

@@ -805,6 +805,20 @@ struct LedgerCountRow {
     value: i64,
 }
 
+#[derive(diesel::QueryableByName)]
+struct RelationCurrentResultContractRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    relation_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    state: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    value: serde_json::Value,
+}
+
 async fn test_pool() -> PgPool {
     TEST_POOL
         .get_or_init(|| async {
@@ -1040,6 +1054,369 @@ fn franking_event_request(
         idempotency: None,
         outbox: Vec::new(),
     }
+}
+
+async fn assert_event_and_commit_absent(
+    pool: &PgPool,
+    event_id: arkret_wire::EventId,
+    commit_id: arkret_wire::RealmCommitId,
+) {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+    use soland_storage::EventStore;
+
+    assert!(
+        !PgEventStore { pool: pool.clone() }
+            .contains(event_id.as_str())
+            .await
+            .unwrap()
+    );
+    let mut conn = pool.get().await.unwrap();
+    let count =
+        diesel::sql_query("SELECT COUNT(*)::bigint AS value FROM realm_commits WHERE commit_id=$1")
+            .bind::<Text, _>(commit_id.as_str())
+            .get_result::<LedgerCountRow>(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(
+        count.value, 0,
+        "rejected CAS must roll back its RealmCommit"
+    );
+}
+
+#[tokio::test]
+async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
+    use diesel::sql_types::{Jsonb, Text};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{EventCommitUnitOfWork, PersistenceError};
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let namespace = format!("relation-current:{}", uuid::Uuid::now_v7());
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
+        .expect("fixture Realm id");
+    let station_id =
+        arkret_wire::DidCoreId::new("ak:did_core:web:relation-station.example").unwrap();
+    let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:relation-author.example").unwrap();
+    let mut stream = FixtureCommitStream::new(&realm_id, &station_id);
+    stream.install(&pool).await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let now =
+        chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+    let domain = serde_json::json!({
+        "domain_kind":"tuple",
+        "relation_kind":"references",
+        "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+        "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-"
+    });
+    let definition = serde_json::json!({
+        "relation_kind":"references",
+        "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+        "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-",
+        "rank":"A1",
+        "fields":{"note":"initial"}
+    });
+    let request = |stream: &mut FixtureCommitStream,
+                   settlement: FixtureCommitSettlement,
+                   kind: arkret_wire::EventKind,
+                   payload: serde_json::Value,
+                   at: chrono::DateTime<chrono::Utc>| {
+        franking_event_request(
+            stream,
+            settlement,
+            &realm_id,
+            actor_id.clone(),
+            &station_id,
+            kind.as_str(),
+            payload,
+            at,
+        )
+    };
+    let load = || async {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "SELECT relation_id,state,current_commit_id,current_stream_position,value \
+             FROM relation_current_results WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<RelationCurrentResultContractRow>(&mut *conn)
+        .await
+        .unwrap()
+    };
+    let mut create = request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
+        arkret_wire::EventKind::RelationCreate,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":null,
+            "relation":definition
+        }),
+        now,
+    );
+    let create_lifecycle_time = now + chrono::TimeDelta::seconds(1);
+    create.authority_commit.commit.committed_at = create_lifecycle_time;
+    let create_replay = create.clone();
+    let create_commit = create.authority_commit.commit.clone();
+    let first_relation_id =
+        arkret_wire::RelationId::from_event_id(&create.authority_commit.event.event_id);
+    assert!(uow.commit_event(create).await.unwrap().event_inserted);
+    let row = load().await;
+    assert_eq!(row.relation_id, first_relation_id.as_str());
+    assert_eq!(row.state, "active");
+    assert_eq!(row.current_commit_id, create_commit.commit_id.as_str());
+    assert_eq!(row.current_stream_position, 0);
+    assert_eq!(
+        row.value["created_at"],
+        serde_json::to_value(create_lifecycle_time).unwrap()
+    );
+
+    // A lost response may replay the byte-identical authority transaction.
+    // Duplicate skips Relation CAS and therefore returns successfully instead
+    // of treating the already-installed revision as stale.
+    assert!(
+        !uow.commit_event(create_replay)
+            .await
+            .unwrap()
+            .event_inserted
+    );
+    assert_eq!(
+        load().await.current_commit_id,
+        create_commit.commit_id.as_str()
+    );
+
+    let active_create = request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        arkret_wire::EventKind::RelationCreate,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":{
+                "commit_id":create_commit.commit_id,
+                "stream_position":create_commit.stream_position
+            },
+            "relation":definition
+        }),
+        now + chrono::TimeDelta::seconds(1),
+    );
+    let rejected_event_id = active_create.authority_commit.event.event_id.clone();
+    let rejected_commit_id = active_create.authority_commit.commit.commit_id.clone();
+    assert!(matches!(
+        uow.commit_event(active_create).await,
+        Err(PersistenceError::Conflict(reason)) if reason.starts_with("failed_precondition:")
+    ));
+    assert_event_and_commit_absent(&pool, rejected_event_id, rejected_commit_id).await;
+    assert_eq!(load().await.relation_id, first_relation_id.as_str());
+
+    let stale_update = request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        arkret_wire::EventKind::RelationUpdate,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":{
+                "commit_id":arkret_wire::RealmCommitId::from_digest([0x55;32]),
+                "stream_position":create_commit.stream_position
+            },
+            "patch":{"fields.note":"stale"},
+            "relation_id":first_relation_id
+        }),
+        now + chrono::TimeDelta::seconds(2),
+    );
+    let rejected_event_id = stale_update.authority_commit.event.event_id.clone();
+    let rejected_commit_id = stale_update.authority_commit.commit.commit_id.clone();
+    assert!(matches!(
+        uow.commit_event(stale_update).await,
+        Err(PersistenceError::Conflict(reason)) if reason.starts_with("failed_precondition:")
+    ));
+    assert_event_and_commit_absent(&pool, rejected_event_id, rejected_commit_id).await;
+    assert_eq!(load().await.value["fields"]["note"], "initial");
+
+    let missing_domain = serde_json::json!({
+        "domain_kind":"tuple",
+        "relation_kind":"references",
+        "from_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-",
+        "to_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4"
+    });
+    let missing_update = request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        arkret_wire::EventKind::RelationUpdate,
+        serde_json::json!({
+            "primary_conflict_domain":missing_domain,
+            "expected_revision":{
+                "commit_id":create_commit.commit_id,
+                "stream_position":create_commit.stream_position
+            },
+            "patch":{"fields.note":"missing"},
+            "relation_id":first_relation_id
+        }),
+        now + chrono::TimeDelta::seconds(3),
+    );
+    let rejected_event_id = missing_update.authority_commit.event.event_id.clone();
+    let rejected_commit_id = missing_update.authority_commit.commit.commit_id.clone();
+    assert!(matches!(
+        uow.commit_event(missing_update).await,
+        Err(PersistenceError::Conflict(reason)) if reason.starts_with("failed_precondition:")
+    ));
+    assert_event_and_commit_absent(&pool, rejected_event_id, rejected_commit_id).await;
+
+    let update = request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
+        arkret_wire::EventKind::RelationUpdate,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":{
+                "commit_id":create_commit.commit_id,
+                "stream_position":create_commit.stream_position
+            },
+            "patch":{"fields.note":"updated"},
+            "relation_id":first_relation_id
+        }),
+        now + chrono::TimeDelta::seconds(4),
+    );
+    let update_commit = update.authority_commit.commit.clone();
+    assert!(uow.commit_event(update).await.unwrap().event_inserted);
+    assert_eq!(load().await.value["fields"]["note"], "updated");
+
+    let mut tombstone = request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
+        arkret_wire::EventKind::RelationTombstone,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":{
+                "commit_id":update_commit.commit_id,
+                "stream_position":update_commit.stream_position
+            },
+            "relation_id":first_relation_id,
+            "reason":"superseded"
+        }),
+        now + chrono::TimeDelta::seconds(5),
+    );
+    let tombstone_lifecycle_time = now + chrono::TimeDelta::seconds(6);
+    tombstone.authority_commit.commit.committed_at = tombstone_lifecycle_time;
+    let tombstone_commit = tombstone.authority_commit.commit.clone();
+    assert!(uow.commit_event(tombstone).await.unwrap().event_inserted);
+    let row = load().await;
+    assert_eq!(row.state, "tombstoned");
+    assert_eq!(
+        row.value["state_changed_at"],
+        serde_json::to_value(tombstone_lifecycle_time).unwrap()
+    );
+    assert_eq!(
+        row.value["updated_at"],
+        serde_json::to_value(tombstone_lifecycle_time).unwrap()
+    );
+
+    let replacement = request(
+        &mut stream,
+        FixtureCommitSettlement::Accepted,
+        arkret_wire::EventKind::RelationCreate,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":{
+                "commit_id":tombstone_commit.commit_id,
+                "stream_position":tombstone_commit.stream_position
+            },
+            "relation":definition
+        }),
+        now + chrono::TimeDelta::seconds(7),
+    );
+    let replacement_id =
+        arkret_wire::RelationId::from_event_id(&replacement.authority_commit.event.event_id);
+    assert_ne!(replacement_id, first_relation_id);
+    assert!(uow.commit_event(replacement).await.unwrap().event_inserted);
+    let row = load().await;
+    assert_eq!(row.relation_id, replacement_id.as_str());
+    assert_eq!(row.state, "active");
+
+    // The selected row and its materialized Relation must describe the same
+    // signed domain. Corrupting only the value reaches schema_violation, not
+    // the absent-domain CAS branch exercised above.
+    let healthy_value = row.value.clone();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE relation_current_results \
+         SET value=jsonb_set(value,'{from_ref}',to_jsonb($2::text),false) WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>("ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-")
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let domain_mismatch = request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        arkret_wire::EventKind::RelationUpdate,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":{
+                "commit_id":row.current_commit_id,
+                "stream_position":row.current_stream_position
+            },
+            "patch":{"fields.note":"must-not-land"},
+            "relation_id":replacement_id
+        }),
+        now + chrono::TimeDelta::seconds(8),
+    );
+    let rejected_event_id = domain_mismatch.authority_commit.event.event_id.clone();
+    let rejected_commit_id = domain_mismatch.authority_commit.commit.commit_id.clone();
+    assert!(matches!(
+        uow.commit_event(domain_mismatch).await,
+        Err(PersistenceError::SchemaViolation(reason))
+            if reason.contains("primary conflict domain does not match current value")
+    ));
+    assert_event_and_commit_absent(&pool, rejected_event_id, rejected_commit_id).await;
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE relation_current_results SET value=$2 WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Jsonb, _>(&healthy_value)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+
+    // A corrupted legacy value without lifecycle state must not be healed to
+    // active by a subsequent update. The failed admission also rolls back its
+    // queued Event and RealmCommit.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE relation_current_results SET value=value-'state' WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    let row = load().await;
+    let invalid_state_update = request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        arkret_wire::EventKind::RelationUpdate,
+        serde_json::json!({
+            "primary_conflict_domain":domain,
+            "expected_revision":{
+                "commit_id":row.current_commit_id,
+                "stream_position":row.current_stream_position
+            },
+            "patch":{"fields.note":"must-not-heal"},
+            "relation_id":replacement_id
+        }),
+        now + chrono::TimeDelta::seconds(9),
+    );
+    let rejected_event_id = invalid_state_update.authority_commit.event.event_id.clone();
+    let rejected_commit_id = invalid_state_update
+        .authority_commit
+        .commit
+        .commit_id
+        .clone();
+    assert!(matches!(
+        uow.commit_event(invalid_state_update).await,
+        Err(PersistenceError::Conflict(reason)) if reason.starts_with("failed_precondition:")
+    ));
+    assert_event_and_commit_absent(&pool, rejected_event_id, rejected_commit_id).await;
+    assert!(load().await.value.get("state").is_none());
 }
 
 #[tokio::test]

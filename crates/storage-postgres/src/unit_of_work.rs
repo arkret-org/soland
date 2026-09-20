@@ -76,8 +76,339 @@ struct AppletAdmissionRecordRow {
     record: serde_json::Value,
 }
 
+#[derive(diesel::QueryableByName)]
+struct RelationCurrentResultRow {
+    #[diesel(sql_type = Text)]
+    relation_id: String,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+enum RelationCurrentResultMutation {
+    Create(arkret_models_collaboration::events_payloads::RelationCreatePayload),
+    Update(arkret_models_collaboration::events_payloads::RelationUpdatePayload),
+    Tombstone(arkret_models_collaboration::events_payloads::RelationTombstonePayload),
+}
+
 fn conflict(detail: impl Into<String>) -> PersistenceError {
     PersistenceError::Conflict(detail.into())
+}
+
+fn relation_current_result_mutation(
+    event: &arkret_wire::Event,
+) -> PersistenceResult<Option<RelationCurrentResultMutation>> {
+    let payload = serde_json::to_value(&event.payload).map_err(|error| {
+        PersistenceError::Internal(format!("Relation payload serialization failed: {error}"))
+    })?;
+    let invalid = |error: serde_json::Error| {
+        PersistenceError::SchemaViolation(format!(
+            "Relation payload violates its typed SDK contract: {error}"
+        ))
+    };
+    match event.kind {
+        arkret_wire::EventKind::RelationCreate => serde_json::from_value(payload)
+            .map(RelationCurrentResultMutation::Create)
+            .map(Some)
+            .map_err(invalid),
+        arkret_wire::EventKind::RelationUpdate => serde_json::from_value(payload)
+            .map(RelationCurrentResultMutation::Update)
+            .map(Some)
+            .map_err(invalid),
+        arkret_wire::EventKind::RelationTombstone => serde_json::from_value(payload)
+            .map(RelationCurrentResultMutation::Tombstone)
+            .map(Some)
+            .map_err(invalid),
+        _ => Ok(None),
+    }
+}
+
+fn relation_domain_matches_value(
+    domain: &arkret_models_collaboration::objects::relation::RelationPrimaryConflictDomain,
+    relation: &arkret_models_collaboration::objects::relation::Relation,
+) -> bool {
+    domain.relation_kind == relation.relation_kind
+        && domain.from_ref == relation.from_ref
+        && match domain.domain_kind {
+            arkret_models_collaboration::objects::relation::RelationPrimaryConflictDomainKind::Tuple => {
+                domain.to_ref.as_ref() == Some(&relation.to_ref)
+            }
+            arkret_models_collaboration::objects::relation::RelationPrimaryConflictDomainKind::From => {
+                domain.to_ref.is_none()
+            }
+        }
+}
+
+fn relation_revision_matches(
+    row: &RelationCurrentResultRow,
+    expected: &arkret_wire::CurrentRevision,
+) -> bool {
+    row.current_commit_id == expected.commit_id.as_str()
+        && u64::try_from(row.current_stream_position).ok() == Some(expected.stream_position)
+}
+
+fn relation_current_value_for_create(
+    event: &arkret_wire::Event,
+    payload: arkret_models_collaboration::events_payloads::RelationCreatePayload,
+    lifecycle_time: chrono::DateTime<chrono::Utc>,
+) -> arkret_models_collaboration::objects::relation::Relation {
+    arkret_models_collaboration::objects::relation::Relation {
+        schema: arkret_models_collaboration::objects::relation::Relation::SCHEMA.to_owned(),
+        id: Some(arkret_wire::RelationId::from_event_id(&event.event_id)),
+        realm_id: event.realm_id.clone(),
+        scope_circle_id: payload.relation.scope_circle_id,
+        effective_scope: Some(event.scope_ref.clone()),
+        relation_kind: payload.relation.relation_kind,
+        from_ref: payload.relation.from_ref,
+        to_ref: payload.relation.to_ref,
+        rank: payload.relation.rank,
+        fields: payload.relation.fields,
+        state: Some(arkret_wire::RelationState::Active),
+        state_changed_at: None,
+        created_by: event.actor_id.clone(),
+        created_at: lifecycle_time,
+        updated_by: None,
+        updated_at: None,
+    }
+}
+
+async fn commit_relation_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let Some(mutation) = relation_current_result_mutation(event)? else {
+        return Ok(());
+    };
+    let lifecycle_time = std::cmp::max(event.created_at, commit.committed_at);
+    let (domain, expected_revision) = match &mutation {
+        RelationCurrentResultMutation::Create(payload) => (
+            payload.primary_conflict_domain.clone(),
+            payload.expected_revision.clone(),
+        ),
+        RelationCurrentResultMutation::Update(payload) => (
+            payload.primary_conflict_domain.clone(),
+            Some(payload.expected_revision.clone()),
+        ),
+        RelationCurrentResultMutation::Tombstone(payload) => (
+            payload.primary_conflict_domain.clone(),
+            Some(payload.expected_revision.clone()),
+        ),
+    };
+    let domain_key = arkret_canonical::canonical_json_string(&domain).map_err(|error| {
+        PersistenceError::Internal(format!(
+            "Relation primary conflict domain canonicalization failed: {error}"
+        ))
+    })?;
+    let domain_json = serde_json::to_value(&domain).map_err(|error| {
+        PersistenceError::Internal(format!(
+            "Relation primary conflict domain serialization failed: {error}"
+        ))
+    })?;
+    let lock_key = format!("relation\u{0}{}\u{0}{domain_key}", event.realm_id);
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0)) IS NULL AS accepted")
+        .bind::<Text, _>(&lock_key)
+        .get_result::<DevicePairingCasRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+
+    let current = sql_query(
+        "SELECT relation_id,state,current_commit_id,current_stream_position,value \
+         FROM relation_current_results WHERE realm_id=$1 AND domain_key=$2 FOR UPDATE",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(&domain_key)
+    .get_result::<RelationCurrentResultRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+
+    let value = match (mutation, current.as_ref()) {
+        (RelationCurrentResultMutation::Create(payload), None) => {
+            if expected_revision.is_some() {
+                return Err(conflict(
+                    "failed_precondition: Relation current revision is absent",
+                ));
+            }
+            relation_current_value_for_create(event, payload, lifecycle_time)
+        }
+        (RelationCurrentResultMutation::Create(payload), Some(row)) => {
+            if row.state != "tombstoned"
+                || expected_revision
+                    .as_ref()
+                    .is_none_or(|expected| !relation_revision_matches(row, expected))
+            {
+                return Err(conflict(
+                    "failed_precondition: Relation create requires the exact tombstoned current revision",
+                ));
+            }
+            let current: arkret_models_collaboration::objects::relation::Relation =
+                serde_json::from_value(row.value.clone()).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored Relation current value is invalid: {error}"
+                    ))
+                })?;
+            if current.id.as_ref().map(|id| id.as_str()) != Some(row.relation_id.as_str())
+                || current.state.as_ref() != Some(&arkret_wire::RelationState::Tombstoned)
+            {
+                return Err(conflict(
+                    "failed_precondition: stored Relation tombstone is inconsistent",
+                ));
+            }
+            if !relation_domain_matches_value(&payload.primary_conflict_domain, &current) {
+                return Err(PersistenceError::SchemaViolation(
+                    "Relation create primary conflict domain does not match current value"
+                        .to_owned(),
+                ));
+            }
+            relation_current_value_for_create(event, payload, lifecycle_time)
+        }
+        (RelationCurrentResultMutation::Update(payload), Some(row)) => {
+            if row.state != "active"
+                || row.relation_id != payload.relation_id.as_str()
+                || !relation_revision_matches(row, &payload.expected_revision)
+            {
+                return Err(conflict(
+                    "failed_precondition: Relation update current value does not match",
+                ));
+            }
+            let current: arkret_models_collaboration::objects::relation::Relation =
+                serde_json::from_value(row.value.clone()).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored Relation current value is invalid: {error}"
+                    ))
+                })?;
+            if current.id.as_ref().map(|id| id.as_str()) != Some(row.relation_id.as_str())
+                || current.state.as_ref() != Some(&arkret_wire::RelationState::Active)
+            {
+                return Err(conflict(
+                    "failed_precondition: stored Relation current value is inconsistent",
+                ));
+            }
+            if !relation_domain_matches_value(&payload.primary_conflict_domain, &current) {
+                return Err(PersistenceError::SchemaViolation(
+                    "Relation update primary conflict domain does not match current value"
+                        .to_owned(),
+                ));
+            }
+            let mut post = payload.patch.apply(&row.value).map_err(|error| {
+                PersistenceError::SchemaViolation(format!("Relation update patch failed: {error}"))
+            })?;
+            let object = post.as_object_mut().ok_or_else(|| {
+                PersistenceError::Internal(
+                    "stored Relation current value is not an object".to_owned(),
+                )
+            })?;
+            object.insert(
+                "updated_by".to_owned(),
+                serde_json::to_value(&event.actor_id).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "Relation actor serialization failed: {error}"
+                    ))
+                })?,
+            );
+            object.insert(
+                "updated_at".to_owned(),
+                serde_json::to_value(lifecycle_time).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "Relation timestamp serialization failed: {error}"
+                    ))
+                })?,
+            );
+            serde_json::from_value(post).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "Relation update produced an invalid current value: {error}"
+                ))
+            })?
+        }
+        (RelationCurrentResultMutation::Tombstone(payload), Some(row)) => {
+            if row.state != "active"
+                || row.relation_id != payload.relation_id.as_str()
+                || !relation_revision_matches(row, &payload.expected_revision)
+            {
+                return Err(conflict(
+                    "failed_precondition: Relation tombstone current value does not match",
+                ));
+            }
+            let mut current: arkret_models_collaboration::objects::relation::Relation =
+                serde_json::from_value(row.value.clone()).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored Relation current value is invalid: {error}"
+                    ))
+                })?;
+            if current.id.as_ref().map(|id| id.as_str()) != Some(row.relation_id.as_str())
+                || current.state.as_ref() != Some(&arkret_wire::RelationState::Active)
+            {
+                return Err(conflict(
+                    "failed_precondition: stored Relation current value is inconsistent",
+                ));
+            }
+            if !relation_domain_matches_value(&payload.primary_conflict_domain, &current) {
+                return Err(PersistenceError::SchemaViolation(
+                    "Relation tombstone primary conflict domain does not match current value"
+                        .to_owned(),
+                ));
+            }
+            current.state = Some(arkret_wire::RelationState::Tombstoned);
+            current.state_changed_at = Some(lifecycle_time);
+            current.updated_by = Some(event.actor_id.clone());
+            current.updated_at = Some(lifecycle_time);
+            current
+        }
+        (RelationCurrentResultMutation::Update(_), None)
+        | (RelationCurrentResultMutation::Tombstone(_), None) => {
+            return Err(conflict(
+                "failed_precondition: Relation current value does not exist",
+            ));
+        }
+    };
+    let relation_id = value.id.clone().ok_or_else(|| {
+        PersistenceError::Internal("Relation current value has no derived id".to_owned())
+    })?;
+    let state = match value.state.as_ref() {
+        Some(arkret_wire::RelationState::Active) => "active",
+        Some(arkret_wire::RelationState::Tombstoned) => "tombstoned",
+        None => {
+            return Err(conflict(
+                "failed_precondition: stored Relation current value has no lifecycle state",
+            ));
+        }
+    };
+    let value_json = serde_json::to_value(&value).map_err(|error| {
+        PersistenceError::Internal(format!(
+            "Relation current value serialization failed: {error}"
+        ))
+    })?;
+    let stream_position = i64::try_from(commit.stream_position).map_err(|_| {
+        PersistenceError::Internal("Relation stream position exceeds PostgreSQL BIGINT".to_owned())
+    })?;
+    sql_query(
+        "INSERT INTO relation_current_results \
+         (realm_id,domain_key,domain,relation_id,state,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+         ON CONFLICT(realm_id,domain_key) DO UPDATE SET \
+           domain=EXCLUDED.domain,relation_id=EXCLUDED.relation_id,state=EXCLUDED.state, \
+           current_commit_id=EXCLUDED.current_commit_id, \
+           current_stream_position=EXCLUDED.current_stream_position,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(&domain_key)
+    .bind::<Jsonb, _>(&domain_json)
+    .bind::<Text, _>(relation_id.as_str())
+    .bind::<Text, _>(state)
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<BigInt, _>(stream_position)
+    .bind::<Jsonb, _>(&value_json)
+    .bind::<Timestamptz, _>(lifecycle_time)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
 }
 
 /// Refuse an Applet-authored Event once its installation or managed identity is
@@ -1216,7 +1547,8 @@ async fn commit_one_in_connection(
     ensure_applet_admission_in_transaction(conn, event, applet_record).await?;
 
     queue_event_in_connection(conn, event, request.event.received_at).await?;
-    match commit_transaction_in_connection(conn, &request.authority_commit).await? {
+    let authority_write = commit_transaction_in_connection(conn, &request.authority_commit).await?;
+    match authority_write {
         AuthorityCommitWriteOutcome::Committed => outcome.event_inserted = true,
         AuthorityCommitWriteOutcome::Duplicate => {}
         AuthorityCommitWriteOutcome::StaleAuthority(current) => {
@@ -1229,6 +1561,9 @@ async fn commit_one_in_connection(
     }
 
     let commit = &request.authority_commit.commit;
+    if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
+        commit_relation_current_result_in_connection(conn, event, commit).await?;
+    }
     let committed_ref = arkret_wire::CommittedEventRef {
         event_id: event.event_id.clone(),
         commit_id: commit.commit_id.clone(),
