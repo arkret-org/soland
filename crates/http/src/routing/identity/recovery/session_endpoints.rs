@@ -1,4 +1,3 @@
-use sha2::{Digest as _, Sha256};
 use soland_services::identity::RecoverySessionState as RecoverySessionServiceState;
 
 use super::*;
@@ -187,11 +186,7 @@ fn recovery_proof_summary_transcript(
             serde_json::to_value(transcript).ok()
         }
         "recovery_unlock" => {
-            let proof = serde_json::from_value::<arkret_models_crypto::RecoverySessionUnlockProof>(
-                Value::Object(proof.clone()),
-            )
-            .ok()?;
-            let proof_body = proof.signature_independent_proof_body().ok()?;
+            let proof_body = recovery_unlock_proof_body(proof).ok()?;
             let transcript = generic_recovery_proof_transcript(
                 record,
                 GenericRecoveryProofBody::RecoveryUnlock(proof_body),
@@ -1349,19 +1344,13 @@ pub(super) async fn verify_trusted_recovery_service_proof(
 /// The 24-word Recovery Key (§3.3) unlock factor. Trust root is the principal's
 /// own published `recovery_policy.methods[kind=recovery_unlock].keys[]` (not the DID document):
 ///
-/// (a) `recovery_secret_ref` MUST resolve to a `methods[kind=recovery_unlock].keys[]` entry that
-/// was     authoritative at the session `created_at` (not_before/expires_at window,
-///     not revoked), and `verification_method` MUST equal that entry's
-///     verification_method;
+/// (a) `verification_method` MUST select exactly one
+///     `methods[kind=recovery_unlock].keys[]` entry that was authoritative at
+///     the session `created_at` (not_before/expires_at window, not revoked);
 /// (b) `signature` (under the entry's `signature_algorithm`, Ed25519) MUST verify over the
 ///     generic recovery transcript whose proof_body is this proof object with
-///     `signature` and `unlock_commitment` removed, using the public key
-///     decoded from the entry's `public_key_multibase`;
-/// (c) `unlock_commitment` MUST equal
-///     SHA-256(utf8("ak.recovery-session-unlock-binding-v1\n")
-///       || utf8(recovery_secret_ref) || unlock_binding_input_bytes),
-///     where unlock_binding_input_bytes is the same canonical transcript bytes
-///     verified in (b).
+///     `signature` removed, using the public key decoded from the entry's
+///     `public_key_multibase`.
 pub(super) async fn verify_recovery_unlock_proof(
     _state: &AppState,
     record: &RecoverySessionServiceState,
@@ -1373,21 +1362,19 @@ pub(super) async fn verify_recovery_unlock_proof(
             "proof.signature_algorithm `{signature_algorithm}` must be `Ed25519` for recovery_unlock",
         )));
     }
-    let recovery_secret_ref = required_proof_string(proof, "recovery_secret_ref")?;
     let verification_method = required_proof_string(proof, "verification_method")?;
-    let unlock_commitment = required_proof_string(proof, "unlock_commitment")?;
 
     // (a) Resolve the recovery key entry from the bound recovery policy.
     let entry = resolve_recovery_key_entry(
         &record.policy_payload,
-        recovery_secret_ref,
+        verification_method,
         record.created_at,
     )?;
     let entry_method = entry
         .get("verification_method")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if entry_method != recovery_secret_ref || entry_method != verification_method {
+    if entry_method != verification_method {
         return Err(recovery_evidence_unbound_error(
             "recovery_unlock verification_method does not match the resolved recovery key entry",
         ));
@@ -1403,17 +1390,10 @@ pub(super) async fn verify_recovery_unlock_proof(
     }
     let recovery_key = decode_recovery_key_public_key(&entry)?;
 
-    // (b)/(c) Build the SDK-owned signature-independent binding transcript
-    // once; both the signature and the commitment cover it.
-    let typed_proof = serde_json::from_value::<arkret_models_crypto::RecoverySessionUnlockProof>(
-        Value::Object(proof.clone()),
-    )
-    .map_err(|error| AppError::param_invalid(format!("invalid recovery_unlock proof: {error}")))?;
-    let proof_body = typed_proof
-        .signature_independent_proof_body()
-        .map_err(|error| {
-            AppError::param_invalid(format!("invalid recovery_unlock proof: {error}"))
-        })?;
+    // Build the SDK-owned signature-independent binding transcript once. The
+    // exact frozen policy method and every session coordinate are covered by
+    // this one possession signature; there is no second public commitment.
+    let proof_body = recovery_unlock_proof_body(proof)?;
     let transcript = generic_recovery_proof_transcript(
         record,
         GenericRecoveryProofBody::RecoveryUnlock(proof_body),
@@ -1423,20 +1403,7 @@ pub(super) async fn verify_recovery_unlock_proof(
             AppError::internal(format!("recovery_unlock transcript failed: {error}"))
         })?;
 
-    // (c) unlock_commitment integrity.
-    let mut hasher = Sha256::new();
-    hasher.update(b"ak.recovery-session-unlock-binding-v1\n");
-    hasher.update(recovery_secret_ref.as_bytes());
-    hasher.update(&transcript_bytes);
-    let expected_commitment = format!("sha256:{}", hex::encode(hasher.finalize()));
-    if !constant_time_str_eq(unlock_commitment, &expected_commitment) {
-        crate::metrics::record_digest_mismatch("recovery_unlock_commitment");
-        return Err(recovery_evidence_unbound_error(
-            "recovery_unlock unlock_commitment does not match the recomputed binding",
-        ));
-    }
-
-    // (b) signature possession proof.
+    // Signature possession proof.
     let signature_b64 = required_proof_string(proof, "signature")?;
     let raw = URL_SAFE_NO_PAD
         .decode(signature_b64.as_bytes())
@@ -1452,12 +1419,30 @@ pub(super) async fn verify_recovery_unlock_proof(
         })
 }
 
-/// Resolve a non-revoked, in-window `methods[kind=recovery_unlock].keys[]` entry whose
-/// `verification_method` equals `recovery_secret_ref`, evaluated at `as_of`
-/// (the recovery session `created_at`).
+fn recovery_unlock_proof_body(
+    proof: &Map<String, Value>,
+) -> Result<arkret_models_crypto::RecoveryUnlockProofBody, AppError> {
+    let proof =
+        serde_json::from_value::<arkret_models_crypto::RecoveryUnlockProofBodyWithSignature>(
+            Value::Object(proof.clone()),
+        )
+        .map_err(|error| {
+            AppError::param_invalid(format!("invalid recovery_unlock proof: {error}"))
+        })?;
+    Ok(arkret_models_crypto::RecoveryUnlockProofBody {
+        kind: proof.kind,
+        challenge: proof.challenge,
+        verification_method: proof.verification_method,
+        signature_algorithm: proof.signature_algorithm,
+    })
+}
+
+/// Resolve a non-revoked, in-window `methods[kind=recovery_unlock].keys[]`
+/// entry whose `verification_method` equals the signed proof method, evaluated
+/// at `as_of` (the recovery session `created_at`).
 pub(super) fn resolve_recovery_key_entry(
     policy_payload: &Value,
-    recovery_secret_ref: &str,
+    verification_method: &str,
     as_of: chrono::DateTime<chrono::Utc>,
 ) -> Result<Map<String, Value>, AppError> {
     let entries = policy_payload
@@ -1479,7 +1464,7 @@ pub(super) fn resolve_recovery_key_entry(
         let Some(object) = entry.as_object() else {
             continue;
         };
-        if object.get("verification_method").and_then(Value::as_str) != Some(recovery_secret_ref) {
+        if object.get("verification_method").and_then(Value::as_str) != Some(verification_method) {
             continue;
         }
         if !recovery_key_entry_authoritative_at(object, as_of) {
@@ -1490,7 +1475,7 @@ pub(super) fn resolve_recovery_key_entry(
         return Ok(object.clone());
     }
     Err(recovery_evidence_unbound_error(
-        "recovery_secret_ref does not resolve to a recovery_unlock method key",
+        "verification_method does not resolve to a recovery_unlock method key",
     ))
 }
 
