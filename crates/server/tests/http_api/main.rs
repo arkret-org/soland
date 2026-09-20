@@ -37,5 +37,6 @@ mod projection;
 mod push_keys;
 mod read_receipts;
 mod recovery;
+mod retired_seal_mls_routes;
 mod seal_frontier;
 mod stage_axis;

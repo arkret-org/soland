@@ -471,6 +471,9 @@ measurement, not a current route. Decision 0055 and the formal
 `governance/history-visibility.md` §3.1 retire this independent Seal/CellRef
 history oracle. Current history discovery, stream scan and readable-floor
 authorization remain separate registered surfaces.
+The two `seals/mls-*` read rows are historical as well: the current
+`sync/client-sync.md` §10.0 retires those Seal queries while retaining the
+producer-signed Welcome recipient queue, retry, account delivery and ACK.
 
 Meanwhile `routing/authority_commit.rs` — which declares `self/events`,
 `self/streams/scan`, `peer/streams/resolve`, `peer/realm-authority/handoff` and

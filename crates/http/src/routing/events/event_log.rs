@@ -42,7 +42,7 @@ use arkret_models_collaboration::http_bodies::{
 use arkret_wire::{
     CommittedEventFullView, CommittedEventView, CommittedEventWithheldView, Event, EventDisclosure,
     EventDisclosureStatus, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_RESOLVE,
-    MAX_EVENT_SUBMIT_BATCH, MAX_SEMANTIC_REFS, Seal, proof_kind,
+    MAX_EVENT_SUBMIT_BATCH, MAX_SEMANTIC_REFS, Seal,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -169,8 +169,6 @@ use admission::{policy_bundle_value_from_state_payload, validate_federation_serv
 
 pub(crate) mod endpoints;
 pub(crate) mod governance_proof;
-mod mls_accepted_artifact;
-mod mls_welcome_refs;
 pub(in crate::routing::events) use endpoints::router;
 
 mod inception;

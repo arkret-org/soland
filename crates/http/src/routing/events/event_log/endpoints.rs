@@ -230,11 +230,6 @@ pub(in crate::routing::events) fn router() -> Router {
         )
         .push(Router::with_path("events").post(submit_event))
         .push(Router::with_path("seals/pending-control").query(pcr_pending_control))
-        .push(
-            Router::with_path("seals/mls-accepted-artifact")
-                .post(super::mls_accepted_artifact::read),
-        )
-        .push(Router::with_path("seals/mls-welcome-refs").post(super::mls_welcome_refs::read))
         .push(Router::with_path("committed-events/{event_id}").get(get_committed_event))
 }
 
