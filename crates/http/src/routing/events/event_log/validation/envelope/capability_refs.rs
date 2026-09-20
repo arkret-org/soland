@@ -568,22 +568,22 @@ async fn validate_open_data_basis(
     ))
 }
 
-/// `refs[]` entries carrying `role=authorized_by`.
+/// `semantic_refs[]` entries carrying `role=authorized_by`.
 ///
-/// `refs[]` is optional; when present, it is a non-empty array of `SemanticRef`
+/// `semantic_refs[]` is optional; when present, it is a non-empty array of `SemanticRef`
 /// objects. A malformed entry is a schema violation rather than a silently
 /// skipped ref.
 fn ordinary_event_authorized_by_refs(
     object: &serde_json::Map<String, Value>,
 ) -> Result<Vec<String>, EventValidationError> {
-    let Some(refs) = object.get("refs") else {
+    let Some(refs) = object.get("semantic_refs") else {
         return Ok(Vec::new());
     };
     let refs = refs.as_array().ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "refs must be an array of SemanticRef objects",
+            "semantic_refs must be an array of SemanticRef objects",
         )
     })?;
     let mut authorized_by = Vec::new();
@@ -592,11 +592,11 @@ fn ordinary_event_authorized_by_refs(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "refs[] entries must be SemanticRef objects",
+                "semantic_refs[] entries must be SemanticRef objects",
             )
         })?;
         if reference.get("role").and_then(Value::as_str)
-            != Some(arkret_wire::event_envelope::EVENT_REF_ROLE_AUTHORIZED_BY)
+            != Some(arkret_wire::event_envelope::SEMANTIC_REF_ROLE_AUTHORIZED_BY)
         {
             continue;
         }
@@ -604,7 +604,7 @@ fn ordinary_event_authorized_by_refs(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "refs[] entries require id",
+                "semantic_refs[] entries require id",
             )
         })?;
         authorized_by.push(id.to_owned());

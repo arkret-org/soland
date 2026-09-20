@@ -42,8 +42,8 @@ use arkret_models_collaboration::http_bodies::{
 };
 use arkret_wire::{
     CommittedEventFullView, CommittedEventView, CommittedEventWithheldView, Event, EventDisclosure,
-    EventDisclosureStatus, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS,
-    MAX_EVENT_RESOLVE, MAX_EVENT_SUBMIT_BATCH, Seal, proof_kind,
+    EventDisclosureStatus, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_RESOLVE,
+    MAX_EVENT_SUBMIT_BATCH, MAX_SEMANTIC_REFS, Seal, proof_kind,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

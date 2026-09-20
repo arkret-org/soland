@@ -30,8 +30,8 @@ pub use arkret_models_identity::admin_grant::SessionGrantAdminIntrospectionStatu
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
 pub use arkret_models_integration::OkOutcome;
 use arkret_wire::{
-    MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_REFS,
-    MAX_EVENT_SUBMIT_BATCH, ProfileId,
+    MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES,
+    MAX_EVENT_SUBMIT_BATCH, MAX_SEMANTIC_REFS, ProfileId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -780,7 +780,7 @@ pub fn describe(
                 "max_event_bytes": MAX_EVENT_ENVELOPE_BYTES,
                 "max_events_batch_submit": MAX_EVENT_SUBMIT_BATCH,
                 "max_page_items": 100,
-                "max_refs": MAX_EVENT_REFS,
+                "max_semantic_refs": MAX_SEMANTIC_REFS,
                 "max_auth_refs": MAX_AUTHORIZED_BY_REFS,
                 "max_relation_expansion_depth": 32,
                 "max_authority_depth": MAX_AUTHORITY_CHAIN_DEPTH,
@@ -1010,7 +1010,7 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_refs"],
-            json!(arkret_wire::event_envelope::MAX_EVENT_REFS)
+            json!(arkret_wire::event_envelope::MAX_SEMANTIC_REFS)
         );
         assert_eq!(
             value["limits"]["search"]["directory"]["returns_message_hits"],

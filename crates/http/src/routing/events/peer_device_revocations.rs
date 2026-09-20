@@ -45,8 +45,8 @@ struct GateDecisionProjection {
     derived_binding: Option<CommittedEventRef>,
 }
 
-/// `service-http-binding.md` §`ak.peer.device_revocations.command.check.v1` —
-/// only `allow` carries the origin-derived selector. Every other decision,
+/// The product-private current-device admission adapter projects only `allow`
+/// with the origin-derived selector. Every other decision,
 /// `authority_mismatch` included, MUST return no `derived_binding` so the
 /// receipt cannot be read as an oracle for "does this device exist".
 fn project_gate_decision(

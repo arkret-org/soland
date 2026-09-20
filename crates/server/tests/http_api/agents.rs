@@ -348,7 +348,7 @@ pub(crate) async fn seed_active_controller_device_generation(
                 "ak:trust_domain:soland.local".to_owned(),
             )
             .unwrap(),
-            did_inception_ref: arkret_wire::EventRef::new(
+            did_inception_ref: arkret_wire::SemanticRef::new(
                 verified_inception.did_version_id,
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
@@ -962,7 +962,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         vec![arkret_wire::ProfileRef::new(arkret_wire::SchemaId::REALM_V1).unwrap()];
     pcr_genesis.executed_by = Some(controller_actor);
     pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone().into());
-    pcr_genesis.refs.clear();
+    pcr_genesis.semantic_refs.clear();
     pcr_genesis
         .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
         .unwrap();

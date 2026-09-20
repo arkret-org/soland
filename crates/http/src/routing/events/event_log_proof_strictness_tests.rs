@@ -1742,7 +1742,7 @@ fn ordinary_event_derived_cells() -> Vec<String> {
     )]
 }
 
-/// A ordinary Event citing `grants` through `refs[role=authorized_by]`, which is
+/// A ordinary Event citing `grants` through `semantic_refs[role=authorized_by]`, which is
 /// where v1 puts a capability citation — `auth_context` is closed over
 /// `{authority_refs}`.
 fn ordinary_event_object_with_refs(
@@ -1752,7 +1752,7 @@ fn ordinary_event_object_with_refs(
     json!({
         "actor_id": ordinary_event_account(ORDINARY_EVENT_ACTOR),
         "created_at": "2026-05-08T00:02:00.000Z",
-        "refs": grants
+        "semantic_refs": grants
             .into_iter()
             .map(|grant_id| json!({"id": grant_id, "role": "authorized_by", "critical": true}))
             .collect::<Vec<Value>>(),

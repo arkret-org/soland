@@ -2722,7 +2722,7 @@ pub(crate) async fn seed_signal_sender_device(
         "principal_control"
     );
     assert!(
-        genesis.envelope["refs"]
+        genesis.envelope["semantic_refs"]
             .as_array()
             .unwrap()
             .iter()
@@ -3184,7 +3184,7 @@ fn optional_space_id(payload: &Value, field: &str) -> Option<arkret_identifiers:
     })
 }
 
-fn optional_event_ref(payload: &Value, field: &str) -> Option<arkret_wire::EventRef> {
+fn optional_event_ref(payload: &Value, field: &str) -> Option<arkret_wire::SemanticRef> {
     payload
         .get(field)
         .map(|value| serde_json::from_value(value.clone()).expect("valid optional event ref"))

@@ -789,9 +789,9 @@ async fn verify_owned_agent_direct_founding(
     let founding_ref = evidence.founding_ref();
     let sign = |mut event: arkret_wire::Event| {
         event
-            .refs
+            .semantic_refs
             .retain(|reference| reference.role != founding_ref.role);
-        event.refs.push(founding_ref.clone());
+        event.semantic_refs.push(founding_ref.clone());
         event.producer_proof = None;
         sign_fixture_event(
             event,

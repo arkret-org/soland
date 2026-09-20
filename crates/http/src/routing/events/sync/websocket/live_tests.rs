@@ -254,7 +254,7 @@ async fn install_alice_device_authority(
         created_at,
     )
     .unwrap();
-    genesis.refs = vec![arkret_wire::EventRef::new(
+    genesis.semantic_refs = vec![arkret_wire::SemanticRef::new(
         format!("sha256:{}", "1".repeat(64)),
         "did_inception",
     )];

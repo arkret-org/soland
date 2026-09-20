@@ -261,14 +261,19 @@ fn validate_registration_epoch_proof_method(
 
 fn exact_role_ref(event: &Event, role: &str, event_id: &EventId) -> bool {
     event
-        .refs
+        .semantic_refs
         .iter()
         .filter(|reference| reference.role == role)
         .collect::<Vec<_>>()
         .as_slice()
         .first()
         .is_some_and(|reference| {
-            event.refs.iter().filter(|item| item.role == role).count() == 1
+            event
+                .semantic_refs
+                .iter()
+                .filter(|item| item.role == role)
+                .count()
+                == 1
                 && reference.critical
                 && reference.id == event_id.as_str()
         })
@@ -832,13 +837,13 @@ mod tests {
     fn stored_fixed_role_ref_rejects_extra_or_noncritical_refs() {
         let mut event = structural_only_fixture_event();
         let target = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x52; 32]);
-        event.refs = vec![arkret_wire::EventRef::new(
+        event.semantic_refs = vec![arkret_wire::SemanticRef::new(
             target.as_str(),
             "accountability",
         )];
         assert!(exact_role_ref(&event, "accountability", &target));
 
-        event.refs.push(arkret_wire::EventRef::new(
+        event.semantic_refs.push(arkret_wire::SemanticRef::new(
             EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x53; 32]).as_str(),
             "accountability",
         ));

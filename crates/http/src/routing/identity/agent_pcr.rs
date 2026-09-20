@@ -819,7 +819,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
 
 fn agent_envelope_uses_root_anchor(envelope: &serde_json::Map<String, Value>) -> bool {
     envelope
-        .get("refs")
+        .get("semantic_refs")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -847,7 +847,7 @@ fn validate_agent_pcr_genesis_effect(
     // performed before this validator: its declared PCR id must equal
     // retype(this EventId).  A provision ref here would make EventId
     // derivation cyclic.
-    if !event.refs.is_empty() {
+    if !event.semantic_refs.is_empty() {
         return Err(failed_precondition(
             "Agent PCR genesis must not carry semantic references",
             "agent_pcr_genesis_ref_forbidden",
@@ -1374,7 +1374,7 @@ mod tests {
             json!({"object": pcr_genesis()}),
         )
         .unwrap();
-        event.refs.clear();
+        event.semantic_refs.clear();
         event
             .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
@@ -1410,7 +1410,7 @@ mod tests {
     fn agent_envelope_rejects_self_principal_root_anchor_roles() {
         for role in ["did_inception", "did_recovery_anchor", "bootstrap_binding"] {
             let envelope = serde_json::json!({
-                "refs": [{
+                "semantic_refs": [{
                     "event_id": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                     "role": role,
                     "critical": true

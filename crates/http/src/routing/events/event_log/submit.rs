@@ -1568,7 +1568,11 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         })?;
     let trust_domain_id = state.config().trust_domain.clone();
     let expected_ref = founding_authority_evidence.founding_ref();
-    if !submission.events[0].event.refs.contains(&expected_ref) {
+    if !submission.events[0]
+        .event
+        .semantic_refs
+        .contains(&expected_ref)
+    {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "direct_conversation_founding_unit_invalid",

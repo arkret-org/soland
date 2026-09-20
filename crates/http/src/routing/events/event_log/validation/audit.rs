@@ -250,7 +250,7 @@ fn event_refs_with_role(
     object: &serde_json::Map<String, Value>,
     role: &str,
 ) -> Result<Vec<RoleRef>, EventValidationError> {
-    let Some(values) = object.get("refs").and_then(Value::as_array) else {
+    let Some(values) = object.get("semantic_refs").and_then(Value::as_array) else {
         return Ok(Vec::new());
     };
     let mut refs = Vec::new();
@@ -366,7 +366,7 @@ mod tests {
             "event_id": "ak:event:ARYFDQjhXHE479tnu9g71RR9SxducTw_bWQIMigD_pYL",
             "kind": arkret_wire::EventKind::AuditAccessed,
             "actor_id": actor(WRITER),
-            "refs": [{"id": WRITE_ID, "role": "audit_pair", "critical": true}],
+            "semantic_refs": [{"id": WRITE_ID, "role": "audit_pair", "critical": true}],
             "payload": {
                 "access_kind": "watch_set_others",
                 "writer_actor_id": actor(WRITER),
@@ -466,12 +466,13 @@ mod tests {
     #[test]
     fn the_audit_pair_edge_must_be_present_and_critical() {
         let mut no_edge = paired_audit();
-        no_edge["refs"] = json!([]);
+        no_edge["semantic_refs"] = json!([]);
         check(&[others_watch_write(), no_edge])
             .expect_err("an audit without refs[role=audit_pair] does not pair");
 
         let mut not_critical = paired_audit();
-        not_critical["refs"] = json!([{"id": WRITE_ID, "role": "audit_pair", "critical": false}]);
+        not_critical["semantic_refs"] =
+            json!([{"id": WRITE_ID, "role": "audit_pair", "critical": false}]);
         check(&[others_watch_write(), not_critical])
             .expect_err("a non-critical audit_pair edge does not pair");
     }
@@ -491,7 +492,7 @@ mod tests {
     #[test]
     fn a_cross_actor_write_must_not_reference_its_audit() {
         let mut old_direction = others_watch_write();
-        old_direction["refs"] = json!([{
+        old_direction["semantic_refs"] = json!([{
             "id": "ak:event:ARYFDQjhXHE479tnu9g71RR9SxducTw_bWQIMigD_pYL",
             "role": "audit_pair",
             "critical": true

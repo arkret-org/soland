@@ -537,7 +537,7 @@ impl<'a> CanonicalCausalGraph<'a> {
             &mut predecessors,
             &mut complete,
         );
-        if let Some(refs) = record.envelope.get("refs") {
+        if let Some(refs) = record.envelope.get("semantic_refs") {
             let Some(refs) = refs.as_array() else {
                 return (predecessors, false);
             };

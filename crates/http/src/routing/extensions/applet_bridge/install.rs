@@ -372,7 +372,7 @@ fn validate_bot_managed_actor_unit(
     .map_err(|error| AppError::internal(error.to_string()))?;
     validate_hosted_applet_pcr_notary(&genesis_object.notary, &expected_host_notary)?;
     let provision_ref_count = genesis
-        .refs
+        .semantic_refs
         .iter()
         .filter(|reference| {
             reference.role == "applet_managed_actor_provision"
@@ -381,7 +381,7 @@ fn validate_bot_managed_actor_unit(
         })
         .count();
     let provision_role_count = genesis
-        .refs
+        .semantic_refs
         .iter()
         .filter(|reference| reference.role == "applet_managed_actor_provision")
         .count();
@@ -406,7 +406,7 @@ fn validate_bot_managed_actor_unit(
     let profile = &bundle.profile_event;
     let registration_verification_method = package.webhook_auth.key_ref.as_str();
     let profile_accountability_ref_count = profile
-        .refs
+        .semantic_refs
         .iter()
         .filter(|reference| {
             reference.role == "accountability"
@@ -415,7 +415,7 @@ fn validate_bot_managed_actor_unit(
         })
         .count();
     let profile_accountability_role_count = profile
-        .refs
+        .semantic_refs
         .iter()
         .filter(|reference| reference.role == "accountability")
         .count();

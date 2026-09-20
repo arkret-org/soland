@@ -6,22 +6,22 @@ fn initial_batch_context_separates_portable_realm_bootstrap_from_native_units() 
         serde_json::json!({
             "kind": arkret_wire::EventKind::RealmCreate.as_str(),
             "payload": {"object": {"purpose": "collaboration"}},
-            "refs": [],
+            "semantic_refs": [],
         }),
         serde_json::json!({
             "kind": arkret_wire::EventKind::RealmCreate.as_str(),
             "payload": {"object": {"purpose": "direct_conversation"}},
-            "refs": [],
+            "semantic_refs": [],
         }),
         serde_json::json!({
             "kind": arkret_wire::EventKind::RealmCreate.as_str(),
             "payload": {"object": {"purpose": "agent_control"}},
-            "refs": [],
+            "semantic_refs": [],
         }),
         serde_json::json!({
             "kind": arkret_wire::EventKind::RealmCreate.as_str(),
             "payload": {"object": {"purpose": "applet_managed_control"}},
-            "refs": [],
+            "semantic_refs": [],
         }),
     ] {
         assert_eq!(
@@ -32,7 +32,7 @@ fn initial_batch_context_separates_portable_realm_bootstrap_from_native_units() 
 
     let human_pcr_create = serde_json::json!({
         "kind": arkret_wire::EventKind::RealmCreate.as_str(),
-        "refs": [{
+        "semantic_refs": [{
             "role": "did_inception",
             "id": "fixture",
             "critical": true,
@@ -45,7 +45,7 @@ fn initial_batch_context_separates_portable_realm_bootstrap_from_native_units() 
 
     let recovery_reanchor = serde_json::json!({
         "kind": arkret_wire::EventKind::DeviceReanchor.as_str(),
-        "refs": [],
+        "semantic_refs": [],
     });
     assert_eq!(
         initial_batch_submit_context(&[recovery_reanchor]),
@@ -55,7 +55,7 @@ fn initial_batch_context_separates_portable_realm_bootstrap_from_native_units() 
     assert_eq!(
         initial_batch_submit_context(&[serde_json::json!({
             "kind": arkret_wire::EventKind::RealmProfile.as_str(),
-            "refs": [],
+            "semantic_refs": [],
         })]),
         arkret_wire::EventSubmitContext::Standard,
     );
@@ -604,7 +604,7 @@ mod agent_pcr_batch_tests {
         event.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );
-        event.refs.clear();
+        event.semantic_refs.clear();
         // v1 carries no producer `effects[]`: the router recognises a managed
         // Agent PCR create by whether the registered contract materializes its
         // control material, so the fixture is the bare signed Event.

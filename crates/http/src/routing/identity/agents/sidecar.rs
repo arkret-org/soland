@@ -718,13 +718,17 @@ fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
     prev_refs: Vec<EventId>,
-    refs: Vec<arkret_wire::EventRef>,
+    semantic_refs: Vec<arkret_wire::SemanticRef>,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: K::Payload,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<arkret_wire::AuthoredEvent, AppError> {
     TypedEventDraft::<K>::new(scope_ref, actor_id, payload)
-        .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
+        .map(|draft| {
+            draft
+                .with_prev_refs(prev_refs)
+                .with_semantic_refs(semantic_refs)
+        })
         .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
         .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
 }
@@ -937,7 +941,7 @@ async fn prepare_sidecar(
         create_event
             .as_ref()
             .map(|event| {
-                vec![arkret_wire::EventRef::new(
+                vec![arkret_wire::SemanticRef::new(
                     event.event_id.to_string(),
                     "after",
                 )]

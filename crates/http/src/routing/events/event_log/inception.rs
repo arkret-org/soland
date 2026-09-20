@@ -53,7 +53,7 @@ pub(super) fn event_ref_list(
     let count_error = if key == "prev_refs" {
         arkret_wire::event_envelope::validate_event_prev_ref_count(values.len()).is_err()
     } else {
-        arkret_wire::event_envelope::validate_event_ref_count(values.len()).is_err()
+        arkret_wire::event_envelope::validate_semantic_ref_count(values.len()).is_err()
     };
     if values.len() > max_len || count_error {
         return Err(event_validation_error(
@@ -112,7 +112,7 @@ pub(super) fn principal_control_genesis_shape(
 
 fn anchor_refs(object: &serde_json::Map<String, Value>) -> Vec<(&str, &str, bool)> {
     object
-        .get("refs")
+        .get("semantic_refs")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()

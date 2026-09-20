@@ -1487,7 +1487,12 @@ async fn verify_directory_source_ref_access(
     }
     let accepted_frontier = std::iter::once(event.event_id.as_str())
         .chain(event.prev_refs.iter().map(|event_id| event_id.as_str()))
-        .chain(event.refs.iter().map(|event_ref| event_ref.id.as_str()))
+        .chain(
+            event
+                .semantic_refs
+                .iter()
+                .map(|event_ref| event_ref.id.as_str()),
+        )
         .collect::<BTreeSet<_>>();
     if access
         .source_refs

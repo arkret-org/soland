@@ -260,7 +260,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         ));
     }
     let accountability_refs = profile
-        .refs
+        .semantic_refs
         .iter()
         .filter(|event_ref| event_ref.role == "accountability")
         .collect::<Vec<_>>();
@@ -473,7 +473,7 @@ async fn validate_ghost_managed_actor_unit(
         &expected_host_notary,
     )?;
     let provision_ref_count = genesis
-        .refs
+        .semantic_refs
         .iter()
         .filter(|reference| {
             reference.role == "applet_managed_actor_provision"
@@ -482,7 +482,7 @@ async fn validate_ghost_managed_actor_unit(
         })
         .count();
     let provision_role_count = genesis
-        .refs
+        .semantic_refs
         .iter()
         .filter(|reference| reference.role == "applet_managed_actor_provision")
         .count();

@@ -428,7 +428,7 @@ pub(crate) async fn validate_direct_message_participant(
         return Err("Direct Conversation is not writable");
     }
     let refs = object
-        .get("refs")
+        .get("semantic_refs")
         .and_then(Value::as_array)
         .ok_or("missing Direct Conversation binding reference")?;
     let binding_refs: Vec<_> = refs

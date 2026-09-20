@@ -709,7 +709,7 @@ async fn validate_event_envelope_with_ingress(
                 )
             })?;
         let refs: Vec<_> = object
-            .get("refs")
+            .get("semantic_refs")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
@@ -1113,7 +1113,7 @@ async fn finalize_validated_event_envelope(
         })
         .collect::<Result<Vec<_>, _>>()?;
     validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
-    event_semantic_refs(object, MAX_EVENT_REFS)?;
+    event_semantic_refs(object, MAX_SEMANTIC_REFS)?;
     validate_strand_watch_manage_others_levels(&core.kind, object, &core.actor)?;
     let producer_signing_key = validate_event_proofs(
         object,
@@ -1248,7 +1248,7 @@ async fn enforce_device_generation_fence(
     internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<(), EventValidationError> {
     let root_anchor = object
-        .get("refs")
+        .get("semantic_refs")
         .and_then(Value::as_array)
         .is_some_and(|refs| {
             refs.iter().any(|reference| {

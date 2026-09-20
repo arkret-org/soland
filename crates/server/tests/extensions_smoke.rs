@@ -851,7 +851,7 @@ fn applet_managed_pcr_genesis_event(
     event.executed_by = Some(arkret_wire::ActorId::service(package.service_id.clone()));
     event.authorization_ref = Some(applet_authority_ref.into());
     event.applet_id = Some(package.applet_id.clone());
-    event.refs = vec![arkret_wire::EventRef::new(
+    event.semantic_refs = vec![arkret_wire::SemanticRef::new(
         provision_ref.to_string(),
         "applet_managed_actor_provision",
     )];
@@ -1061,7 +1061,7 @@ async fn signed_ghost_provision_body(
     profile_event.executed_by = Some(arkret_wire::ActorId::service(package.service_id.clone()));
     profile_event.applet_id = Some(applet_id.clone());
     profile_event.authorization_ref = Some(delegation.authorization_ref.clone());
-    profile_event.refs = vec![arkret_wire::EventRef::new(
+    profile_event.semantic_refs = vec![arkret_wire::SemanticRef::new(
         accountability_event.event_id.as_str(),
         "accountability",
     )];
@@ -3234,7 +3234,7 @@ async fn signed_install_events(
     bot_profile_event.executed_by = Some(arkret_wire::ActorId::service(package.service_id.clone()));
     bot_profile_event.authorization_ref = Some(applet_authority_ref.into());
     bot_profile_event.applet_id = Some(package.applet_id.clone());
-    bot_profile_event.refs = vec![arkret_wire::EventRef::new(
+    bot_profile_event.semantic_refs = vec![arkret_wire::SemanticRef::new(
         bot_accountability_grant_event.event_id.as_str(),
         "accountability",
     )];

@@ -19,24 +19,24 @@ pub(in crate::routing) fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
     max_len: usize,
 ) -> Result<Vec<String>, EventValidationError> {
-    let Some(value) = object.get("refs") else {
+    let Some(value) = object.get("semantic_refs") else {
         return Ok(Vec::new());
     };
     let Some(values) = value.as_array() else {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "param_invalid",
-            "refs must be an array",
+            "semantic_refs must be an array",
         ));
     };
-    // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.
+    // scalability-constraints.md §2 — total semantic_refs[] across all roles ≤ 128.
     if values.len() > max_len
-        || arkret_wire::event_envelope::validate_event_ref_count(values.len()).is_err()
+        || arkret_wire::event_envelope::validate_semantic_ref_count(values.len()).is_err()
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "refs_too_large",
-            "refs[] exceeds the v1 maximum of 128 entries",
+            "semantic_refs_too_large",
+            "semantic_refs[] exceeds the v1 maximum of 128 entries",
         ));
     }
     let mut authorized_refs = Vec::new();
@@ -45,21 +45,21 @@ pub(in crate::routing) fn event_semantic_refs(
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "param_invalid",
-                "refs entries must be objects",
+                "semantic_refs entries must be objects",
             ));
         };
         let id = event_string_field(reference, &["id"]).ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "param_invalid",
-                "refs entries require id",
+                "semantic_refs entries require id",
             )
         })?;
         let role = event_string_field(reference, &["role"]).ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "param_invalid",
-                "refs entries require role",
+                "semantic_refs entries require role",
             )
         })?;
         if role == "authorized_by" {
@@ -67,7 +67,7 @@ pub(in crate::routing) fn event_semantic_refs(
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "param_invalid",
-                    "authorized_by refs must use the ak:grant: typed prefix",
+                    "authorized_by semantic refs must use the ak:grant: typed prefix",
                 ));
             }
             authorized_refs.push(id);
@@ -80,8 +80,8 @@ pub(in crate::routing) fn event_semantic_refs(
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "refs_too_large",
-            "authorized_by refs exceed the v1 maximum of 64 entries",
+            "semantic_refs_too_large",
+            "authorized_by semantic refs exceed the v1 maximum of 64 entries",
         ));
     }
     Ok(authorized_refs)
@@ -773,8 +773,11 @@ mod refs_limit_tests {
         assert!(!circle_event_visible_to_session(&state, &record, &session));
     }
 
-    fn refs_object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
-        json!({ "refs": refs }).as_object().unwrap().clone()
+    fn semantic_refs_object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
+        json!({ "semantic_refs": refs })
+            .as_object()
+            .unwrap()
+            .clone()
     }
 
     fn visibility_record(kind: &str, envelope: Value) -> AcceptedEvent {
@@ -887,11 +890,12 @@ mod refs_limit_tests {
     // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.
     #[test]
     fn total_refs_over_max_rejected_as_refs_too_large() {
-        let refs: Vec<Value> = (0..(MAX_EVENT_REFS + 1))
+        let refs: Vec<Value> = (0..(MAX_SEMANTIC_REFS + 1))
             .map(|_| json!({"id": "ak:event:e", "role": "after"}))
             .collect();
-        let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();
-        assert_eq!(err.code, "refs_too_large");
+        let err =
+            event_semantic_refs(&semantic_refs_object(json!(refs)), MAX_SEMANTIC_REFS).unwrap_err();
+        assert_eq!(err.code, "semantic_refs_too_large");
     }
 
     // §2 — `authorized_by` role ≤ 64 within the 128 total.
@@ -910,8 +914,9 @@ mod refs_limit_tests {
                 })
             })
             .collect();
-        let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();
-        assert_eq!(err.code, "refs_too_large");
+        let err =
+            event_semantic_refs(&semantic_refs_object(json!(refs)), MAX_SEMANTIC_REFS).unwrap_err();
+        assert_eq!(err.code, "semantic_refs_too_large");
     }
 
     #[test]
@@ -923,7 +928,7 @@ mod refs_limit_tests {
             },
             {"id": "ak:event:e2", "role": "after"}
         ]);
-        let out = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap();
+        let out = event_semantic_refs(&semantic_refs_object(refs), MAX_SEMANTIC_REFS).unwrap();
         assert_eq!(
             out,
             vec!["ak:grant:Aews9kH_oZbsLC9YX_XMJSaKOrsppWb0OKlspPS-1a6p".to_owned()]
@@ -936,7 +941,7 @@ mod refs_limit_tests {
             "id": "ak:event:Aews9kH_oZbsLC9YX_XMJSaKOrsppWb0OKlspPS-1a6p",
             "role": "authorized_by"
         }]);
-        let err = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap_err();
+        let err = event_semantic_refs(&semantic_refs_object(refs), MAX_SEMANTIC_REFS).unwrap_err();
         assert_eq!(err.code, "param_invalid");
     }
 }

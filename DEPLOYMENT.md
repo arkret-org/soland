@@ -593,14 +593,13 @@ pre-upgrade backup if you need to roll back.
   fragment are forbidden. The controller-gate target is derived as its exact
   path on that same origin. Any conflict aborts startup before the bearer can be
   sent.
-- Setting that bearer together with the Authority URL/trust domain registers the
-  `service-http-binding.md` §2.2.3 deployment-internal authenticated channel
-  between this Station and that Account Authority. The channel carries exactly
-  four registered operations: exact-token introspection, Auth-side logout and
-  controller-gate attestation issue outbound, plus
-  `ak.peer.device_revocations.command.check.v1` inbound. Nothing else on
-  `/_arkret/peer/*` accepts it; every other peer operation keeps its RFC 9421
-  service signature.
+- Setting that bearer together with the Authority URL/trust domain registers a
+  deployment-internal authenticated channel between this Station and that
+  Account Authority. Current-device admission enters Soland only through the
+  product-private `POST /_soland/account-authority/current-device/check`
+  adapter. It is not an Arkret Operation and is never advertised through
+  Service Describe. Nothing on `/_arkret/peer/*` accepts this bearer; every
+  peer operation keeps its RFC 9421 service signature.
   Every plaintext proxy on this internal link is a trusted member of the same
   deployment TCB; Soland does not model or inspect the proxy chain.
 - Account Authority calls to `GET /_arkret/self/agents/{id}` and

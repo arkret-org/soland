@@ -879,7 +879,7 @@ async fn events_describe(
             json!(MAX_EVENT_ENVELOPE_BYTES),
         );
         limits.insert("max_prev_refs".to_owned(), json!(MAX_EVENT_PREV_REFS));
-        limits.insert("max_refs".to_owned(), json!(MAX_EVENT_REFS));
+        limits.insert("max_semantic_refs".to_owned(), json!(MAX_SEMANTIC_REFS));
         limits.insert(
             "max_batch_item_count".to_owned(),
             json!(MAX_EVENT_SUBMIT_BATCH),

@@ -11,7 +11,7 @@ pub(super) struct PcrGenesisPins {
 pub(super) fn batch_contains_identity_anchor(envelopes: &[Value]) -> bool {
     envelopes.iter().any(|envelope| {
         envelope
-            .get("refs")
+            .get("semantic_refs")
             .and_then(Value::as_array)
             .is_some_and(|refs| {
                 refs.iter().any(|reference| {
@@ -1971,7 +1971,7 @@ mod tests {
                     "ak:trust_domain:example.net".to_owned(),
                 )
                 .unwrap(),
-                did_inception_ref: arkret_wire::EventRef::new(
+                did_inception_ref: arkret_wire::SemanticRef::new(
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     arkret_bootstrap::DID_INCEPTION_REF_ROLE,
                 ),
@@ -2223,7 +2223,7 @@ mod tests {
         assert!(batch_contains_identity_anchor(&[json!({
             "event_id": event_id("000000000003"),
             "kind": "ak.realm.create",
-            "refs": [{"role": "did_inception"}]
+            "semantic_refs": [{"role": "did_inception"}]
         })]));
     }
 
