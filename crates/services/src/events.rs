@@ -2259,7 +2259,7 @@ mod tests {
                 applet_id: None,
                 external_ref: None,
                 created_at: now,
-                refs: Vec::new(),
+                semantic_refs: Vec::new(),
                 payload: BTreeMap::new(),
                 producer_proof: None,
             },
