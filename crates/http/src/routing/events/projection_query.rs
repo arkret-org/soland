@@ -1829,7 +1829,7 @@ async fn get_document_projection(
         relations,
         comments,
         cursor_presence_entries: Vec::new(),
-        frontier: None,
+        checkpoint: None,
     })
 }
 
