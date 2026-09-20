@@ -154,15 +154,39 @@ pub(crate) async fn sync_token_for_account_positions(
         "detail_positions":detail_positions,"detail_turn":detail_turn,"detail_next_realm":detail_next_realm
     })).expect("account position binding is JSON");
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
-    let global_deadline = global_baseline.as_ref().and_then(|progress| {
-        let completed = progress.get("completed")?.as_array()?;
-        (completed.len() < 4)
-            .then(|| progress.get("snapshot_expires_at_ms")?.as_i64())
-            .flatten()
-    });
+    let global_deadline = match global_baseline.as_ref() {
+        Some(progress) => {
+            let completed = progress.get("completed").ok_or(SyncCursorError::Integrity(
+                "account baseline completion absent",
+            ))?;
+            let completed: BTreeSet<String> = serde_json::from_value(completed.clone())
+                .map_err(|_| SyncCursorError::Integrity("account baseline completion invalid"))?;
+            let pending_allowed = session.is_some_and(|session| {
+                super::global_channels::pending_intents_allowed(
+                    session.agent_session.is_some(),
+                    session.account_pk.is_some(),
+                )
+            });
+            if super::global_channels::global_baseline_complete_channels(
+                &completed,
+                pending_allowed,
+            ) {
+                None
+            } else {
+                Some(
+                    progress
+                        .get("snapshot_expires_at_ms")
+                        .and_then(Value::as_i64)
+                        .ok_or(SyncCursorError::Integrity(
+                            "account baseline expiry invalid",
+                        ))?,
+                )
+            }
+        }
+        None => None,
+    };
     let deadline = detail_positions
         .values()
-        .filter(|progress| progress.phase != soland_storage::CurrentDetailPhase::Live)
         .map(|progress| progress.expires_at_ms)
         .chain(global_deadline)
         .min();

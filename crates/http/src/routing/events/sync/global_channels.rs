@@ -36,11 +36,18 @@ pub(crate) struct GlobalDelta {
     pub agent_draft_pending_intents: Option<AgentDraftPendingIntentContainer>,
 }
 
-fn pending_intents_allowed(has_agent_session: bool, has_account_binding: bool) -> bool {
+pub(super) fn pending_intents_allowed(has_agent_session: bool, has_account_binding: bool) -> bool {
     !has_agent_session && has_account_binding
 }
 
 fn global_baseline_complete(progress: &GlobalProgress, pending_allowed: bool) -> bool {
+    global_baseline_complete_channels(&progress.completed, pending_allowed)
+}
+
+pub(super) fn global_baseline_complete_channels(
+    completed: &BTreeSet<String>,
+    pending_allowed: bool,
+) -> bool {
     let mut required = vec![
         "account_data_events",
         "station_cas",
@@ -52,7 +59,7 @@ fn global_baseline_complete(progress: &GlobalProgress, pending_allowed: bool) ->
     }
     required
         .into_iter()
-        .all(|channel| progress.completed.contains(channel))
+        .all(|channel| completed.contains(channel))
 }
 
 pub(crate) async fn read(
@@ -349,7 +356,7 @@ pub(crate) async fn read(
         account_data.station_cas = Some(cas);
     }
     let baseline = (!channels.is_empty()).then(|| AccountBaselineSegment {
-        snapshot_cursor: progress.snapshot_cursor.clone(),
+        snapshot_cursor: progress.snapshot_cursor.to_string(),
         channels,
         completed_channels,
     });

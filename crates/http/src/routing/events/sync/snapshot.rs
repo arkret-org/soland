@@ -215,7 +215,6 @@ pub(crate) async fn build_sync_snapshot(
             lost: to_device_lost,
             limited: to_device_limited.then_some(true),
             next_cursor: to_device_next_cursor,
-            extra: BTreeMap::new(),
         }),
         device_lists: Some(global.device_lists),
         account_data: Some(global.account_data),
