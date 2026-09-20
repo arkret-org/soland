@@ -208,6 +208,69 @@ impl std::str::FromStr for CapabilityGrantCurrentStatus {
     }
 }
 
+/// Join one atomic durable current-result snapshot with the current
+/// authorization projection. Rows absent from either side, terminal rows, and
+/// rows for another exact ActorId are omitted uniformly.
+pub fn effective_capability_grant_rows(
+    snapshot: Vec<CapabilityGrantCurrentResultRecord>,
+    effective_grant_ids: &std::collections::BTreeSet<String>,
+    subject_actor: &arkret_wire::ActorId,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<
+    Vec<arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow>,
+> {
+    use arkret_models_collaboration::governance::grant_constraint::{
+        CapabilityGrant, CapabilityGrantStatus, CapabilitySubject,
+    };
+
+    let mut rows = Vec::new();
+    for record in snapshot {
+        if record.status != CapabilityGrantCurrentStatus::Active {
+            continue;
+        }
+        let grant = serde_json::from_value::<CapabilityGrant>(record.value).map_err(|error| {
+            PersistenceError::Database(format!(
+                "stored active Capability Grant is invalid: {error}"
+            ))
+        })?;
+        if grant.id != record.grant_id
+            || grant.realm_id.as_ref() != Some(realm_id)
+            || grant.status != CapabilityGrantStatus::Active
+        {
+            return Err(PersistenceError::Database(
+                "stored active Capability Grant disagrees with its current-result row".to_owned(),
+            ));
+        }
+        let subject_matches = match &grant.subject {
+            CapabilitySubject::Actor(actor) => actor == subject_actor,
+            // The authorization projection evaluated the selector for this exact
+            // actor. Its effective-id set is therefore the subject proof for a
+            // condition grant; do not try to evaluate the selector a second time.
+            CapabilitySubject::Condition(_) => true,
+        };
+        if !subject_matches || !effective_grant_ids.contains(grant.id.as_str()) {
+            continue;
+        }
+        rows.push(
+            arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow {
+                grant,
+                revision: record.revision,
+            },
+        );
+    }
+    Ok(rows)
+}
+
+/// Canonical digest of the complete effective-list rows. This binds the list
+/// snapshot only; it is deliberately not a per-grant revision.
+pub fn effective_capability_grant_state_digest(
+    rows: &[arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow],
+) -> PersistenceResult<arkret_wire::Hash> {
+    let bytes = arkret_canonical::canonical_json_bytes(rows).map_err(PersistenceError::database)?;
+    arkret_wire::Hash::new(arkret_canonical::sha256_digest(&bytes))
+        .map_err(PersistenceError::database)
+}
+
 #[async_trait]
 pub trait CapabilityGrantCurrentResultStore: Send + Sync {
     async fn get(
@@ -263,6 +326,33 @@ mod capability_grant_current_result_tests {
         )
     }
 
+    fn subject() -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:reader.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ))
+    }
+
+    fn complete_record(status: CapabilityGrantCurrentStatus) -> CapabilityGrantCurrentResultRecord {
+        let mut record = record(status).unwrap();
+        record.value = serde_json::json!({
+            "id": GRANT_ID,
+            "schema": "ak.schema.capability.v1",
+            "realm_id": REALM_ID,
+            "issuer_id": subject(),
+            "subject": subject(),
+            "actions": ["ak.message.create"],
+            "resources": [{"kind":"realm", "realm_id":REALM_ID}],
+            "issuer_authority_refs": [{
+                "kind":"grant",
+                "grant_id":"ak:grant:AU1_A5a8MMz_OdxEleQlWPFn-ljdJteaJv3ZZ9APkcrZ"
+            }],
+            "issued_at": "2026-09-21T00:00:00.000Z",
+            "status": status.as_str()
+        });
+        record
+    }
+
     #[test]
     fn value_and_exact_commit_revision_remain_one_record() {
         let record = record(CapabilityGrantCurrentStatus::Active).unwrap();
@@ -286,6 +376,60 @@ mod capability_grant_current_result_tests {
             ),
             Err(PersistenceError::Database(_))
         ));
+    }
+
+    #[test]
+    fn effective_rows_pair_active_value_with_its_exact_revision() {
+        let active = complete_record(CapabilityGrantCurrentStatus::Active);
+        let terminal = complete_record(CapabilityGrantCurrentStatus::Revoked);
+        let effective = std::collections::BTreeSet::from([GRANT_ID.to_owned()]);
+        let realm_id = REALM_ID.parse().unwrap();
+
+        let rows = effective_capability_grant_rows(
+            vec![active.clone(), terminal],
+            &effective,
+            &subject(),
+            &realm_id,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].grant.id, active.grant_id);
+        assert_eq!(rows[0].revision, active.revision);
+        assert_ne!(
+            effective_capability_grant_state_digest(&rows)
+                .unwrap()
+                .as_str(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn absent_effective_projection_and_foreign_subject_are_non_enumerating() {
+        let active = complete_record(CapabilityGrantCurrentStatus::Active);
+        let realm_id = REALM_ID.parse().unwrap();
+        assert!(
+            effective_capability_grant_rows(
+                vec![active.clone()],
+                &std::collections::BTreeSet::new(),
+                &subject(),
+                &realm_id,
+            )
+            .unwrap()
+            .is_empty()
+        );
+        let foreign = arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap(),
+        );
+        assert!(
+            effective_capability_grant_rows(
+                vec![active],
+                &std::collections::BTreeSet::from([GRANT_ID.to_owned()]),
+                &foreign,
+                &realm_id,
+            )
+            .unwrap()
+            .is_empty()
+        );
     }
 }
 /// Wire / persistence record for a Space-container projection. Mirrors fields on

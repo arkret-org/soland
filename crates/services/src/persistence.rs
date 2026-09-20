@@ -60,6 +60,19 @@ impl PersistenceHandle {
             .await
     }
 
+    /// Read one Realm's authoritative Capability Grant current-result rows in
+    /// a single storage snapshot. The HTTP effective-grants read derives both
+    /// each canonical grant and its exact CAS revision from these same rows.
+    pub async fn capability_grant_current_results(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Vec<soland_storage::CapabilityGrantCurrentResultRecord>> {
+        self.persistence
+            .capability_grant_current_results()
+            .snapshot_for_realm(realm_id)
+            .await
+    }
+
     /// Read the bounded Welcome discovery index without exposing its store.
     pub async fn discover_mls_welcome_refs(
         &self,

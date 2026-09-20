@@ -9,19 +9,13 @@
 //! `state.authorization()` field is shared). This surface is a local preflight/read
 //! projection; canonical Event admission remains authoritative.
 
-use arkret_identifiers::{GrantId, Hash, InviteId, RealmId};
+use std::collections::BTreeSet;
+
+use arkret_identifiers::{Hash, InviteId, RealmId};
 use arkret_models_collaboration::governance::authorization::{AuthzInviteList, GrantList};
-use arkret_models_collaboration::governance::grant_constraint::{
-    CapabilityGrant, CapabilitySubject, GrantConstraint as WireGrantConstraint,
-    GrantConstraintEffect as WireGrantConstraintEffect, GrantConstraintExtensionKey,
-    GrantConstraintKind as WireGrantConstraintKind,
-    GrantConstraintSubkind as WireGrantConstraintSubkind,
-};
 use arkret_models_collaboration::governance::invite_addressing::InviteDelivery;
 use arkret_models_collaboration::governance::operation_wire::Invite;
-use arkret_wire::{
-    AccountDataKey, AccountId, ActorId, AuthzDecision, DidCoreId, Facet, InviteState,
-};
+use arkret_wire::{AccountDataKey, AccountId, ActorId, AuthzDecision, DidCoreId, InviteState};
 use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
@@ -31,7 +25,6 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
-use crate::authz::{GrantConstraint, GrantDecisionVerdict};
 use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -522,18 +515,29 @@ async fn effective_grants(
             "effective-grants subject requires self or realm owner scope",
         ));
     }
-    let grants = state
+    let effective_grant_ids = state
         .authorization()
         .grants_for_subject_at(&subject_actor, realm_id.as_str(), evaluated_at)
         .into_iter()
-        .map(capability_grant_from_authz_grant)
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|grant| grant.grant_id)
+        .collect::<BTreeSet<_>>();
+    let snapshot = state
+        .persistence()
+        .capability_grant_current_results(&realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("effective grant snapshot failed: {error}")))?;
+    let grants = soland_storage::effective_capability_grant_rows(
+        snapshot,
+        &effective_grant_ids,
+        &subject_actor,
+        &realm_id,
+    )
+    .map_err(|error| AppError::internal(format!("effective grant projection failed: {error}")))?;
+    let state_digest = soland_storage::effective_capability_grant_state_digest(&grants)
+        .map_err(|error| AppError::internal(format!("effective grant digest failed: {error}")))?;
     soland_http::result::json_ok(GrantList {
         grants,
-        state_digest: Some(
-            Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
-                .map_err(|error| AppError::internal(error.to_string()))?,
-        ),
+        state_digest,
         evaluated_at,
     })
 }
@@ -561,239 +565,6 @@ fn effective_grants_subject_allowed(
     session_owns_realm: bool,
 ) -> bool {
     subject == session_actor || session_owns_realm
-}
-
-fn capability_grant_from_authz_grant(
-    grant: crate::authz::Grant,
-) -> Result<CapabilityGrant, AppError> {
-    let realm_id = RealmId::new(grant.realm_id.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let issuer = grant.issuer_id.clone();
-    let subject = CapabilitySubject::Actor(grant.subject_id.clone());
-    let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource)?;
-    let constraints = grant
-        .constraints
-        .into_iter()
-        .map(wire_constraint_from_authz_constraint)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(CapabilityGrant {
-        id: GrantId::new(grant.grant_id.clone())
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
-        realm_id: Some(realm_id),
-        issuer_id: issuer,
-        subject,
-        actions: grant.actions,
-        resources: vec![resource_selector],
-        constraints,
-        issuer_authority_refs: grant
-            .issuer_authority_refs
-            .iter()
-            .filter_map(arkret_policy::authz::authority::IssuerAuthorityRef::grant_id)
-            .map(|id| {
-                GrantId::new(id).map(|grant_id| {
-                    arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        issued_at: grant.created_at,
-        updated_by: None,
-        updated_at: None,
-        revoked_by: None,
-        revoked_at: grant.revoked.then_some(now()),
-    })
-}
-
-fn wire_constraint_from_authz_constraint(
-    constraint: GrantConstraint,
-) -> Result<WireGrantConstraint, AppError> {
-    match constraint {
-        GrantConstraint::Decision { decision } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::ScopeLimitation,
-                wire_effect_from_decision(decision),
-            );
-            insert_constraint_extension(
-                &mut wire,
-                "x_soland_decision",
-                serde_json::to_value(decision)
-                    .map_err(|error| AppError::internal(error.to_string()))?,
-            )?;
-            Ok(wire)
-        }
-        GrantConstraint::Temporal {
-            expires_at,
-            constraint_subkind,
-            message_edit_window,
-            message_redact_window,
-            redact_after_window_allowed,
-        } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::Temporal,
-                WireGrantConstraintEffect::Allow,
-            );
-            wire.expires_at = expires_at;
-            if let Some(constraint_subkind) = constraint_subkind {
-                match constraint_subkind.as_str() {
-                    "edit_window" => {
-                        wire.constraint_subkind = Some(WireGrantConstraintSubkind::EditWindow)
-                    }
-                    "redact_window" => {
-                        wire.constraint_subkind = Some(WireGrantConstraintSubkind::RedactWindow)
-                    }
-                    "window" => wire.constraint_subkind = Some(WireGrantConstraintSubkind::Window),
-                    _ => insert_constraint_extension(
-                        &mut wire,
-                        "x_soland_temporal_subtype",
-                        Value::String(constraint_subkind),
-                    )?,
-                }
-            }
-            wire.message_edit_window =
-                message_edit_window.map(|duration| format!("{}{}", duration.value, duration.unit));
-            wire.message_redact_window = message_redact_window
-                .map(|duration| format!("{}{}", duration.value, duration.unit));
-            wire.redact_after_window_allowed = Some(redact_after_window_allowed);
-            Ok(wire)
-        }
-        GrantConstraint::AllowedCircleIds { allowed_circle_ids } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::ScopeLimitation,
-                WireGrantConstraintEffect::Allow,
-            );
-            wire.allowed_circle_ids = allowed_circle_ids.into_iter().collect();
-            Ok(wire)
-        }
-        GrantConstraint::AllowedSessionIds {
-            allowed_session_ids,
-        } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::ScopeLimitation,
-                WireGrantConstraintEffect::Allow,
-            );
-            wire.constraint_subkind = Some(WireGrantConstraintSubkind::Session);
-            wire.allowed_session_ids = allowed_session_ids.into_iter().collect();
-            Ok(wire)
-        }
-        GrantConstraint::AllowedObjectFacets { facets } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::KindRestriction,
-                WireGrantConstraintEffect::Allow,
-            );
-            let mut unparsed = Vec::new();
-            for facet in facets {
-                match serde_json::from_value::<Facet>(Value::String(facet.clone())) {
-                    Ok(facet) => wire.allowed_facets.push(facet),
-                    Err(_) => unparsed.push(Value::String(facet)),
-                }
-            }
-            if !unparsed.is_empty() {
-                insert_constraint_extension(
-                    &mut wire,
-                    "x_soland_allowed_object_facets",
-                    Value::Array(unparsed),
-                )?;
-            }
-            Ok(wire)
-        }
-        GrantConstraint::RateLimiting {
-            max_operations,
-            period,
-        } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::Quota,
-                WireGrantConstraintEffect::Allow,
-            );
-            wire.constraint_subkind = Some(WireGrantConstraintSubkind::Rate);
-            wire.max_operations = Some(max_operations);
-            wire.period = Some(period);
-            Ok(wire)
-        }
-        GrantConstraint::FieldAccess {
-            effect,
-            allowed_write_fields,
-            denied_write_fields,
-            allowed_read_fields,
-            denied_read_fields,
-            condition,
-        } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::FieldAccess,
-                wire_effect_from_decision(effect),
-            );
-            wire.allowed_write_fields = allowed_write_fields;
-            wire.denied_write_fields = denied_write_fields;
-            wire.allowed_read_fields = allowed_read_fields;
-            wire.denied_read_fields = denied_read_fields;
-            wire.condition = condition
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            Ok(wire)
-        }
-        GrantConstraint::ScopeLimitation {
-            effect,
-            allowed_strand_ids,
-            denied_strand_ids,
-            allowed_tracks,
-            denied_tracks,
-            allowed_circle_ids,
-            allowed_session_ids,
-        } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::ScopeLimitation,
-                wire_effect_from_decision(effect),
-            );
-            wire.allowed_strand_ids = allowed_strand_ids;
-            wire.denied_strand_ids = denied_strand_ids;
-            wire.allowed_tracks = allowed_tracks;
-            wire.denied_tracks = denied_tracks;
-            wire.allowed_circle_ids = allowed_circle_ids.into_iter().collect();
-            wire.allowed_session_ids = allowed_session_ids.into_iter().collect();
-            Ok(wire)
-        }
-        GrantConstraint::AuthorityControl {
-            max_authority_depth,
-            authority_regrant_allowed,
-            constraint_subkind,
-            applet_id,
-            executed_by,
-            registration_epoch,
-        } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::AuthorityControl,
-                WireGrantConstraintEffect::Allow,
-            );
-            wire.max_authority_depth = max_authority_depth.map(u64::from);
-            wire.authority_regrant_allowed = Some(authority_regrant_allowed);
-            wire.constraint_subkind = constraint_subkind;
-            wire.applet_id = applet_id;
-            wire.executed_by = executed_by;
-            wire.registration_epoch = registration_epoch;
-            Ok(wire)
-        }
-    }
-}
-
-fn wire_effect_from_decision(decision: GrantDecisionVerdict) -> WireGrantConstraintEffect {
-    match decision {
-        GrantDecisionVerdict::Allow => WireGrantConstraintEffect::Allow,
-        GrantDecisionVerdict::Deny => WireGrantConstraintEffect::Deny,
-        GrantDecisionVerdict::Quarantine => WireGrantConstraintEffect::Quarantine,
-        GrantDecisionVerdict::RequireReview => WireGrantConstraintEffect::RequireReview,
-    }
-}
-
-fn insert_constraint_extension(
-    constraint: &mut WireGrantConstraint,
-    key: &'static str,
-    value: Value,
-) -> Result<(), AppError> {
-    let key = GrantConstraintExtensionKey::new(key)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let _ = constraint.extensions.insert(key.into_string(), value);
-    Ok(())
 }
 
 async fn session_owns_realm(state: &AppState, actor: &ActorId, realm_id: &str) -> bool {
