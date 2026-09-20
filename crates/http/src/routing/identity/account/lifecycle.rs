@@ -142,24 +142,6 @@ pub(crate) async fn set_account_lifecycle_state(
             capability_cache_invalidated,
         )
         .await;
-        if next_state == "deactivated" {
-            append_account_deactivation_propagation_state(
-                state,
-                principal_id_value,
-                changed_by_id_value,
-                reason.clone(),
-                changed_at,
-                sessions_revoked,
-                devices_revoked,
-                applet_delegated_sessions_revoked,
-                keypackages_retired,
-                push_routes_revoked,
-                to_device_messages_dropped,
-                identity_link_cache_invalidated,
-                capability_cache_invalidated,
-            )
-            .await;
-        }
     }
 
     Ok(AccountLifecycleChange {
@@ -352,97 +334,46 @@ async fn append_account_state_change_audit(
     }
 }
 
-async fn append_account_deactivation_propagation_state(
+/// Persist operator evidence only when the durable propagation state machine
+/// actually crosses the timeout or completion boundary. Target discovery by
+/// itself is not an incomplete propagation and must never produce this audit.
+pub(crate) async fn audit_account_status_propagation_transition(
     state: &AppState,
-    principal_id: &str,
-    changed_by: &str,
-    reason: Option<String>,
-    changed_at: chrono::DateTime<chrono::Utc>,
-    sessions_revoked: usize,
-    devices_revoked: usize,
-    applet_delegated_sessions_revoked: usize,
-    keypackages_retired: usize,
-    push_routes_revoked: usize,
-    to_device_messages_dropped: usize,
-    identity_link_cache_invalidated: usize,
-    capability_cache_invalidated: usize,
+    transition: &soland_storage::AccountStatusPropagationProjectionTransition,
+    deactivation: bool,
 ) {
-    let peer_targets = arkret_wire::DidCoreId::new(principal_id.to_owned())
-        .ok()
-        .zip(arkret_wire::DidCoreId::new(state.service_id().to_owned()).ok())
-        .map(|(principal_id, station_id)| {
-            let account_id = arkret_wire::AccountId::new(principal_id, station_id);
-            deactivation_peer_service_targets_for_account(state, &account_id)
-        })
-        .unwrap_or_default();
-    let target_ids = peer_targets
-        .iter()
-        .filter_map(|target| target.get("service_id").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    let federation_incomplete = !peer_targets.is_empty();
-    let payload = json!({
-        "schema": "org.arkret.soland.account.deactivation_propagation.v1",
-        "principal_id": principal_id,
-        "status": "deactivated",
-        "reason_code": if federation_incomplete {
-            Some("deactivation_federation_incomplete")
-        } else {
-            None
-        },
-        "reason": reason,
-        "effective_at": changed_at,
-        "deactivation_federation_incomplete": federation_incomplete,
-        "fanout": {
-            "sessions_revoked": sessions_revoked,
-            "devices_revoked": devices_revoked,
-            "applet_delegated_sessions_revoked": applet_delegated_sessions_revoked,
-            "keypackages_retired": keypackages_retired,
-            "push_routes_revoked": push_routes_revoked,
-            "to_device_messages_dropped": to_device_messages_dropped,
-            "identity_link_cache_invalidated": identity_link_cache_invalidated,
-            "capability_cache_invalidated": capability_cache_invalidated,
-            "domains": [
-                "bearer_sessions",
-                "applet_delegated_sessions",
-                "device_records",
-                "keypackages",
-                "push_routes",
-                "to_device_queue",
-                "identity_link_cache",
-                "capability_cache"
-            ],
-        },
-        "propagation": {
-            "mode": "eager",
-            "requires_peer_ack": true,
-            "target_ids": target_ids,
-            "targets": peer_targets,
-        },
-    });
-    append_audit_log(
-        state,
-        Some(principal_id),
-        "org.arkret.soland.account.deactivation_propagation",
-        payload.clone(),
-        if federation_incomplete {
-            "pending_peer_ack"
-        } else {
-            "accepted"
-        },
-    )
-    .await;
-    if changed_by != principal_id {
+    if !deactivation || (!transition.became_incomplete && !transition.became_complete) {
+        return;
+    }
+    let projection = &transition.projection;
+    for (transition_name, incomplete, outcome) in [
+        (
+            "incomplete",
+            transition.became_incomplete,
+            "pending_peer_ack",
+        ),
+        ("complete", transition.became_complete, "accepted"),
+    ] {
+        if !incomplete {
+            continue;
+        }
         append_audit_log(
             state,
-            Some(changed_by),
+            Some(projection.account_id.principal_id.as_str()),
             "org.arkret.soland.account.deactivation_propagation",
-            payload,
-            if federation_incomplete {
-                "pending_peer_ack"
-            } else {
-                "accepted"
-            },
+            json!({
+                "schema": "org.arkret.soland.account.deactivation_propagation.v1",
+                "account_authority_id": projection.account_authority_id,
+                "account_id": projection.account_id,
+                "account_status_record_id": projection.account_status_record_id,
+                "status_seq": projection.status_seq,
+                "propagation_state": transition_name,
+                "pending_destination_count": projection.pending_destination_count,
+                "deadline_at": projection.deadline_at,
+                "updated_at": projection.updated_at,
+                "deactivation_federation_incomplete": transition_name == "incomplete",
+            }),
+            outcome,
         )
         .await;
     }
@@ -546,10 +477,11 @@ pub(crate) async fn durable_deactivation_peer_service_targets_for_account(
     let mut targets = projected
         .into_iter()
         .filter_map(|target| {
-            target
+            let service_id = target
                 .get("service_id")
                 .and_then(Value::as_str)
-                .map(|service_id| (service_id.to_owned(), target))
+                .map(ToOwned::to_owned)?;
+            Some((service_id, target))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     for service_id in durable {

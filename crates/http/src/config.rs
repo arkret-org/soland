@@ -465,6 +465,11 @@ pub struct AppConfig {
     /// that don't want background HTTP traffic (the in-process `enqueue`
     /// path still writes outbox rows so cotest can observe the boundary).
     pub federation_outbound_enabled: bool,
+    /// Maximum time the source Station waits for every affected Station to
+    /// acknowledge an exact deactivation record before the mutable
+    /// propagation projection becomes `incomplete`.
+    /// Env: `SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS` (default 86_400_000).
+    pub deactivation_propagation_window_ms: u64,
     /// Operator-triggered federation frontier diagnostic cadence in seconds.
     /// Zero disables the full-history worker, which is the production
     /// default until its probe and fallback paths are incrementally bounded.
@@ -970,6 +975,7 @@ impl AppConfig {
             // Off so test binaries never spawn background federation HTTP
             // traffic; the in-process enqueue path still writes outbox rows.
             federation_outbound_enabled: false,
+            deactivation_propagation_window_ms: 86_400_000,
             federation_frontier_interval_seconds: 0,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
@@ -1239,6 +1245,25 @@ impl AppConfig {
         // unsolicited HTTP traffic set `SOLAND_FEDERATION_OUTBOUND=0`.
         let federation_outbound_enabled =
             env_bool(values, "SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
+        let deactivation_propagation_window_ms = match lookup(
+            values,
+            "SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS",
+        ) {
+            Ok(value) => value.trim().parse::<u64>().map_err(|error| {
+                anyhow::anyhow!(
+                    "SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS must be a positive integer: {error}"
+                )
+            })?,
+            Err(_) => 86_400_000,
+        };
+        if deactivation_propagation_window_ms == 0
+            || deactivation_propagation_window_ms > i64::MAX as u64
+        {
+            anyhow::bail!(
+                "SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS must be in 1..={} milliseconds",
+                i64::MAX
+            );
+        }
         let federation_frontier_interval_seconds =
             lookup(values, "SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS")
                 .ok()
@@ -1431,6 +1456,7 @@ impl AppConfig {
             federation_fanout_topology,
             federation_peers,
             federation_outbound_enabled,
+            deactivation_propagation_window_ms,
             federation_frontier_interval_seconds,
             admin_default_page_limit,
             admin_max_page_limit,
@@ -2295,6 +2321,30 @@ mod tests {
                 .as_ref()
                 .map(TrustDomainId::as_str),
             Some("ak:trust_domain:auth.example")
+        );
+    }
+
+    #[test]
+    fn deactivation_propagation_window_is_explicit_and_positive() {
+        let mut values = registered_internal_channel_values();
+        values.insert(
+            "SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS".to_owned(),
+            "1234".to_owned(),
+        );
+        let config =
+            AppConfig::from_values(&values, StartupOverrides::default()).expect("valid window");
+        assert_eq!(config.deactivation_propagation_window_ms, 1234);
+
+        values.insert(
+            "SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS".to_owned(),
+            "0".to_owned(),
+        );
+        let error = AppConfig::from_values(&values, StartupOverrides::default())
+            .expect_err("zero disables the normative timeout and must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS")
         );
     }
 

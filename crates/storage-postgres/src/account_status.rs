@@ -702,10 +702,18 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
                 updated_at: acknowledged_at,
                 ..previous.clone()
             };
+            // If the final ack is the first observer after the deadline, the
+            // durable state can settle directly on `complete`, but the timeout
+            // boundary still occurred and must remain auditable. Report both
+            // transitions so callers append incomplete then clear evidence.
+            let crossed_deadline = previous.pending_destination_count > 0
+                && previous.state == AccountStatusPropagationProjectionState::Scheduled
+                && acknowledged_at >= previous.deadline_at;
             Ok(Some(AccountStatusPropagationProjectionTransition {
                 became_incomplete: previous.state
                     != AccountStatusPropagationProjectionState::Incomplete
-                    && state == AccountStatusPropagationProjectionState::Incomplete,
+                    && (state == AccountStatusPropagationProjectionState::Incomplete
+                        || crossed_deadline),
                 became_complete: previous.state
                     != AccountStatusPropagationProjectionState::Complete
                     && state == AccountStatusPropagationProjectionState::Complete,
@@ -1195,5 +1203,32 @@ mod tests {
             AccountStatusPropagationProjectionState::Complete
         );
         assert!(!durable.became_complete);
+
+        let direct_record = propagation_record(&unique_namespace());
+        let direct_deadline = direct_record.effective_at + chrono::Duration::minutes(10);
+        store
+            .begin_propagation(
+                &direct_record,
+                std::slice::from_ref(&destination_a),
+                direct_deadline,
+                direct_record.effective_at,
+            )
+            .await
+            .expect("freeze direct-late-ack target");
+        let direct_late_ack = store
+            .acknowledge_propagation_destination(
+                &direct_record.account_status_record_id,
+                &destination_a,
+                direct_deadline + chrono::Duration::seconds(1),
+            )
+            .await
+            .expect("persist direct late ack")
+            .expect("direct target exists");
+        assert!(direct_late_ack.became_incomplete);
+        assert!(direct_late_ack.became_complete);
+        assert_eq!(
+            direct_late_ack.projection.state,
+            AccountStatusPropagationProjectionState::Complete
+        );
     }
 }

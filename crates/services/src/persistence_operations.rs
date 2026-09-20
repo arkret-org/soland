@@ -32,17 +32,25 @@ fn federation_delivery_record(
             binding,
             created_at: record.created_at,
         }),
-        None => FederationOutboxRecord::pending(
-            record.id,
-            record.peer_id,
-            record
-                .peer_url
-                .expect("generic federation delivery requires a route"),
-            record.endpoint,
-            record.idempotency_key,
-            record.payload_json,
-            record.created_at,
-        ),
+        None => match record.peer_url {
+            Some(peer_url) => FederationOutboxRecord::pending(
+                record.id,
+                record.peer_id,
+                peer_url,
+                record.endpoint,
+                record.idempotency_key,
+                record.payload_json,
+                record.created_at,
+            ),
+            None => FederationOutboxRecord::pending_without_locator(
+                record.id,
+                record.peer_id,
+                record.endpoint,
+                record.idempotency_key,
+                record.payload_json,
+                record.created_at,
+            ),
+        },
     };
     persisted.coalescing_key = coalescing_key;
     persisted.coalescing_position = coalescing_position;

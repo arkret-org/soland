@@ -692,8 +692,9 @@ pub struct FederationOutboxRecord {
     pub id: String,
     /// Peer service identifier discovered from the configured federation endpoint.
     pub peer_id: DidCoreId,
-    /// Fully-qualified peer base URL (no trailing slash) the dispatcher
-    /// concatenates with `endpoint` to form the POST target.
+    /// Historical candidate peer base URL. The dispatcher resolves the stable
+    /// `peer_id` through the verified route store before every send; `None`
+    /// means no deployment candidate was available at enqueue time.
     pub peer_url: Option<String>,
     /// Endpoint path on the peer, e.g. `/_arkret/peer/events`.
     pub endpoint: String,
@@ -800,9 +801,6 @@ impl FederationOutboxRecord {
                 }
             }
             None => {
-                if self.peer_url.is_none() {
-                    return Err("generic federation row is missing its peer URL".to_owned());
-                }
                 if matches!(
                     self.state,
                     FederationOutboxState::PendingRoute
@@ -865,6 +863,30 @@ impl FederationOutboxRecord {
             created_at,
             completed_at: None,
         }
+    }
+
+    /// Fresh generic delivery whose stable service identity is known but no
+    /// deployment locator is configured. The worker keeps resolving that
+    /// identity and applies the normal bounded retry policy.
+    pub fn pending_without_locator(
+        id: String,
+        peer_id: DidCoreId,
+        endpoint: String,
+        idempotency_key: String,
+        payload_json: String,
+        created_at: i64,
+    ) -> Self {
+        let mut record = Self::pending(
+            id,
+            peer_id,
+            String::new(),
+            endpoint,
+            idempotency_key,
+            payload_json,
+            created_at,
+        );
+        record.peer_url = None;
+        record
     }
 
     pub fn realm_fanout(input: RealmFanoutOutboxInput) -> Self {

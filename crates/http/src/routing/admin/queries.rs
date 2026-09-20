@@ -122,6 +122,7 @@ pub(super) fn admin_actor_row(
     account: &soland_services::identity::AccountProfileState,
     device_counts: &BTreeMap<String, u64>,
     realm_counts: &BTreeMap<String, u64>,
+    propagation_state: Option<soland_storage::AccountStatusPropagationProjectionState>,
 ) -> Option<AdminActor> {
     if account.account_id.station_id != state.service_core_id() {
         return None;
@@ -129,13 +130,13 @@ pub(super) fn admin_actor_row(
     let principal_id = account.principal_id.clone();
     let actor_key = arkret_wire::ActorId::account(account.account_id.clone()).to_string();
     let status = state.account_lifecycle_status(principal_id.as_str());
-    let deactivation_federation_incomplete = (status == AccountStatus::Deactivated).then(|| {
-        !crate::routing::identity::account::deactivation_peer_service_targets_for_account(
-            state,
-            &account.account_id,
-        )
-        .is_empty()
-    });
+    let deactivation_federation_incomplete = (status == AccountStatus::Deactivated)
+        .then(|| {
+            propagation_state.map(|state| {
+                state == soland_storage::AccountStatusPropagationProjectionState::Incomplete
+            })
+        })
+        .flatten();
     // `deactivation_partial` also applies to erasure_pending: erasure
     // execution runs the same deactivation fanout (including the
     // push-gateway leg) before erasing.
@@ -165,6 +166,35 @@ pub(super) fn admin_actor_row(
             .or(Some(0)),
         realm_count: realm_counts.get(&actor_key).copied().or(Some(0)),
     })
+}
+
+pub(super) async fn account_status_propagation_state_for_admin(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+    deactivated: bool,
+) -> Result<Option<soland_storage::AccountStatusPropagationProjectionState>, AppError> {
+    if !deactivated {
+        return Ok(None);
+    }
+    let transition = state
+        .persistence()
+        .current_account_status_propagation_projection(account_id, chrono::Utc::now())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "account-status propagation projection unavailable: {error}"
+            ))
+        })?;
+    let Some(transition) = transition else {
+        return Ok(None);
+    };
+    crate::routing::identity::account::lifecycle::audit_account_status_propagation_transition(
+        state,
+        &transition,
+        true,
+    )
+    .await;
+    Ok(Some(transition.projection.state))
 }
 
 pub(super) async fn actor_count_maps(
@@ -235,17 +265,29 @@ pub(super) async fn admin_list_actors(
     };
 
     let (device_counts, realm_counts) = actor_count_maps(state).await;
-    let mut rows: Vec<AdminActor> = state
-        .identities()
-        .accounts()
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "failed to list accounts");
-            AppError::internal("account store unavailable")
-        })?
-        .iter()
-        .filter_map(|account| admin_actor_row(state, account, &device_counts, &realm_counts))
-        .collect();
+    let accounts = state.identities().accounts().await.map_err(|error| {
+        tracing::error!(%error, "failed to list accounts");
+        AppError::internal("account store unavailable")
+    })?;
+    let mut rows: Vec<AdminActor> = Vec::with_capacity(accounts.len());
+    for account in &accounts {
+        let status = state.account_lifecycle_status(account.principal_id.as_str());
+        let propagation_state = account_status_propagation_state_for_admin(
+            state,
+            &account.account_id,
+            status == AccountStatus::Deactivated,
+        )
+        .await?;
+        if let Some(row) = admin_actor_row(
+            state,
+            account,
+            &device_counts,
+            &realm_counts,
+            propagation_state,
+        ) {
+            rows.push(row);
+        }
+    }
     if let Some(search) = &search {
         let needle = search.to_lowercase();
         rows.retain(|actor| {
@@ -729,14 +771,14 @@ mod tests {
             );
         }
         let realm_counts = realm_membership_counts(&projection);
-        let row = admin_actor_row(&state, &account, &device_counts, &realm_counts).unwrap();
+        let row = admin_actor_row(&state, &account, &device_counts, &realm_counts, None).unwrap();
         assert_eq!(row.id, principal_id.to_string());
         assert_eq!(row.account_id, Some(local_account.to_string()));
         assert_eq!(row.device_count, Some(1));
         assert_eq!(row.realm_count, Some(2));
 
         account.account_id = foreign_account;
-        assert!(admin_actor_row(&state, &account, &device_counts, &realm_counts).is_none());
+        assert!(admin_actor_row(&state, &account, &device_counts, &realm_counts, None).is_none());
     }
 
     #[test]

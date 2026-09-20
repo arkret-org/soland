@@ -884,8 +884,46 @@ async fn enqueue_account_status_fanout(
             "account-status affected Station set exceeds 256",
         ));
     }
-    if targets.is_empty() {
-        return Ok((AccountStatusPropagationState::Complete, Some(0)));
+    let target_ids = targets
+        .iter()
+        .map(|target| {
+            target
+                .get("service_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AppError::internal(
+                        "account-status affected-service projection has no service_id",
+                    )
+                })
+                .and_then(|service_id| {
+                    arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(|error| {
+                        AppError::internal(format!("affected service id is invalid: {error}"))
+                    })
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let now = Utc::now();
+    let window_ms = i64::try_from(state.config().deactivation_propagation_window_ms)
+        .map_err(|_| AppError::internal("deactivation propagation window exceeds i64"))?;
+    let projection = state
+        .persistence()
+        .begin_account_status_propagation(
+            record,
+            &target_ids,
+            now + Duration::milliseconds(window_ms),
+            now,
+        )
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "account-status propagation initialization: {error}"
+            ))
+        })?;
+    if target_ids.is_empty() {
+        return Ok((
+            account_status_propagation_state(projection.state),
+            Some(projection.pending_destination_count),
+        ));
     }
     let configured = crate::routing::federation::configured_peer_targets(state)
         .into_iter()
@@ -899,31 +937,24 @@ async fn enqueue_account_status_fanout(
     };
     let payload = arkret_canonical::canonical_json_string(&body)
         .map_err(|error| AppError::internal(format!("account-status fanout encode: {error}")))?;
-    let mut unresolved = false;
-    for target in &targets {
-        let Some(service_id) = target.get("service_id").and_then(Value::as_str) else {
-            return Err(AppError::internal(
-                "account-status affected-service projection has no service_id",
-            ));
-        };
-        let Some(peer) =
-            configured.get(&arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(
-                |error| AppError::internal(format!("affected service id is invalid: {error}")),
-            )?)
-        else {
-            unresolved = true;
-            continue;
-        };
+    for service_id in &target_ids {
+        // The worker resolves the current verified Service route from the
+        // stable service id before every send. `peer_url` is historical
+        // diagnostics only; an absent configured locator must not suppress
+        // the durable intent.
+        let peer_url = configured
+            .get(service_id)
+            .map(|peer| peer.url.as_str());
         crate::routing::federation::outbox::enqueue_coalesced_outbound(
             state,
-            &peer.url,
-            peer.service_id.as_str(),
+            peer_url,
+            service_id.as_str(),
             "/_arkret/peer/account-status",
             &format!(
                 "account-status:{}:{}:{}:{}",
                 record.account_authority_id,
                 record.account_id,
-                peer.service_id,
+                service_id,
                 record.account_status_record_id,
             ),
             &payload,
@@ -939,13 +970,25 @@ async fn enqueue_account_status_fanout(
         .map_err(|error| AppError::internal(format!("account-status fanout enqueue: {error}")))?;
     }
     Ok((
-        if unresolved {
-            AccountStatusPropagationState::Incomplete
-        } else {
-            AccountStatusPropagationState::Scheduled
-        },
-        Some(targets.len() as u64),
+        account_status_propagation_state(projection.state),
+        Some(projection.pending_destination_count),
     ))
+}
+
+fn account_status_propagation_state(
+    state: soland_storage::AccountStatusPropagationProjectionState,
+) -> AccountStatusPropagationState {
+    match state {
+        soland_storage::AccountStatusPropagationProjectionState::Scheduled => {
+            AccountStatusPropagationState::Scheduled
+        }
+        soland_storage::AccountStatusPropagationProjectionState::Complete => {
+            AccountStatusPropagationState::Complete
+        }
+        soland_storage::AccountStatusPropagationProjectionState::Incomplete => {
+            AccountStatusPropagationState::Incomplete
+        }
+    }
 }
 
 fn publication_outcome(

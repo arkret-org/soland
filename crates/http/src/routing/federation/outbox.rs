@@ -130,7 +130,7 @@ pub async fn enqueue_outbound(
 ) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord> {
     enqueue_outbound_with_lane(
         state,
-        peer_url,
+        Some(peer_url),
         peer_id,
         endpoint,
         idempotency_key,
@@ -145,7 +145,7 @@ pub async fn enqueue_outbound(
 /// older row; a stale/equal enqueue is a no-op.
 pub async fn enqueue_coalesced_outbound(
     state: &AppState,
-    peer_url: &str,
+    peer_url: Option<&str>,
     peer_id: &str,
     endpoint: &str,
     idempotency_key: &str,
@@ -168,7 +168,7 @@ pub async fn enqueue_coalesced_outbound(
 #[allow(clippy::too_many_arguments)]
 async fn enqueue_outbound_with_lane(
     state: &AppState,
-    peer_url: &str,
+    peer_url: Option<&str>,
     peer_id: &str,
     endpoint: &str,
     idempotency_key: &str,
@@ -189,7 +189,7 @@ async fn enqueue_outbound_with_lane(
                 delivery: soland_services::federation::FederationDeliveryRecord {
                     id: Uuid::new_v4().to_string(),
                     peer_id,
-                    peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
+                    peer_url: peer_url.map(|url| url.trim_end_matches('/').to_owned()),
                     endpoint: endpoint.to_owned(),
                     idempotency_key: idempotency_key.to_owned(),
                     payload_json: payload_json.to_owned(),
@@ -407,20 +407,26 @@ fn peer_event_application_failure(
     response_body: &str,
 ) -> Option<&'static str> {
     if endpoint == "/_arkret/peer/account-status" {
-        return match serde_json::from_str::<
-            arkret_models_collaboration::account_lifecycle::AccountStatusPublicationOutcome,
-        >(response_body)
-        .ok()
-        .map(|outcome| outcome.status)
-        {
-            Some(
-                arkret_models_collaboration::account_lifecycle::AccountStatusPublicationStatus::Accepted
-                | arkret_models_collaboration::account_lifecycle::AccountStatusPublicationStatus::Duplicate,
-            ) => None,
-            Some(
-                arkret_models_collaboration::account_lifecycle::AccountStatusPublicationStatus::DependencyMissing,
-            ) => Some(error_code::DEPENDENCY_MISSING),
-            None => Some("invalid_account_status_outcome"),
+        use arkret_models_collaboration::account_lifecycle::{
+            AccountStatusPublicationOutcome, AccountStatusPublicationRequestBody,
+            AccountStatusPublicationStatus,
+        };
+        let Some((request, outcome)) =
+            serde_json::from_str::<AccountStatusPublicationRequestBody>(request_body)
+                .ok()
+                .zip(serde_json::from_str::<AccountStatusPublicationOutcome>(response_body).ok())
+        else {
+            return Some("invalid_account_status_outcome");
+        };
+        if outcome.validate_for_request(&request).is_err() {
+            return Some("invalid_account_status_outcome");
+        }
+        return match outcome.status {
+            AccountStatusPublicationStatus::Accepted
+            | AccountStatusPublicationStatus::Duplicate => None,
+            AccountStatusPublicationStatus::DependencyMissing => {
+                Some(error_code::DEPENDENCY_MISSING)
+            }
         };
     }
     if endpoint == "/_soland/peer/federation/operations" {
@@ -1218,6 +1224,19 @@ impl FederationDispatcher {
                         None,
                         now,
                     )
+                } else if (200..300).contains(&status)
+                    && let Err(error) = self.capture_account_status_ack(&row, &body_text, now).await
+                {
+                    self.transport_retry(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        Some(status),
+                        error_code::TRANSPORT_ERROR,
+                        excerpt(&format!("account_status_ack_persistence: {error}")),
+                        None,
+                        now,
+                    )
                 } else if let Err(error) = &account_status_resubmission {
                     self.transport_retry(
                         &row,
@@ -1378,6 +1397,60 @@ impl FederationDispatcher {
         }
     }
 
+    async fn capture_account_status_ack(
+        &self,
+        row: &PendingFederationDelivery,
+        response_body: &str,
+        acknowledged_at: i64,
+    ) -> Result<(), String> {
+        use arkret_models_collaboration::account_lifecycle::{
+            AccountStatusPublicationOutcome, AccountStatusPublicationRequestBody,
+            AccountStatusPublicationStatus,
+        };
+
+        if row.delivery.endpoint != "/_arkret/peer/account-status" {
+            return Ok(());
+        }
+        let request: AccountStatusPublicationRequestBody =
+            serde_json::from_str(&row.delivery.payload_json)
+                .map_err(|error| format!("account-status request decode failed: {error}"))?;
+        let outcome: AccountStatusPublicationOutcome = serde_json::from_str(response_body)
+            .map_err(|error| format!("account-status outcome decode failed: {error}"))?;
+        outcome
+            .validate_for_request(&request)
+            .map_err(|error| format!("account-status outcome binding failed: {error}"))?;
+        if !matches!(
+            outcome.status,
+            AccountStatusPublicationStatus::Accepted | AccountStatusPublicationStatus::Duplicate
+        ) {
+            return Ok(());
+        }
+        let record = request.publication.record();
+        let acknowledged_at = chrono::DateTime::from_timestamp(acknowledged_at, 0)
+            .ok_or_else(|| "account-status ack timestamp is out of range".to_owned())?;
+        if let Some(transition) = self
+            .state
+            .persistence()
+            .acknowledge_account_status_propagation_destination(
+                &record.account_status_record_id,
+                &row.delivery.peer_id,
+                acknowledged_at,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            crate::routing::identity::account::lifecycle::
+                audit_account_status_propagation_transition(
+                    &self.state,
+                    &transition,
+                    record.status
+                        == arkret_models_collaboration::objects::account_status::AccountStatus::Deactivated,
+                )
+                .await;
+        }
+        Ok(())
+    }
+
     async fn capture_keypackage_claim_outcome(
         &self,
         row: &PendingFederationDelivery,
@@ -1423,6 +1496,9 @@ impl FederationDispatcher {
         let request: AccountStatusPublicationRequestBody =
             serde_json::from_str(&row.delivery.payload_json)
                 .map_err(|error| format!("account-status request decode failed: {error}"))?;
+        outcome
+            .validate_for_request(&request)
+            .map_err(|error| format!("account-status outcome binding failed: {error}"))?;
         let submitted = request.publication.record();
         if matches!(
             outcome.status,

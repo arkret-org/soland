@@ -49,8 +49,22 @@ async fn get_actor(
         })?
         .ok_or_else(|| soland_http::error::AppError::not_found("actor not found"))?;
     let (device_counts, realm_counts) = queries::actor_count_maps(state).await;
-    let actor = queries::admin_actor_row(state, &account, &device_counts, &realm_counts)
-        .ok_or_else(|| soland_http::error::AppError::not_found("actor not found"))?;
+    let deactivated = state.account_lifecycle_status(account.principal_id.as_str())
+        == arkret_models_collaboration::objects::account_status::AccountStatus::Deactivated;
+    let propagation_state = queries::account_status_propagation_state_for_admin(
+        state,
+        &account.account_id,
+        deactivated,
+    )
+    .await?;
+    let actor = queries::admin_actor_row(
+        state,
+        &account,
+        &device_counts,
+        &realm_counts,
+        propagation_state,
+    )
+    .ok_or_else(|| soland_http::error::AppError::not_found("actor not found"))?;
 
     append_audit_log(
         state,

@@ -201,6 +201,7 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS` | deadpool default | Positive database-pool acquisition timeout; unset means no explicit wait timeout. |
 | `SOLAND_DB_POOL_MAX_SIZE` | CPU count × 4 | Positive database-pool size override. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
+| `SOLAND_DEACTIVATION_PROPAGATION_WINDOW_MS` | `86400000` | Positive acknowledgement window for exact account-deactivation propagation; expiry with pending destinations sets the durable admin projection to incomplete while retries continue. |
 | `SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS` | development mode | Authoritative override for private/link-local outbound destinations. Keep `false` in production unless the network path has been explicitly reviewed. |
 | `SOLAND_EGRESS_ALLOWED_HOSTS` | empty | Optional comma-separated exact/wildcard outbound host allowlist. |
 | `SOLAND_EGRESS_DENYLIST` | empty | Comma-separated outbound host denylist; evaluated in addition to the private-network guard. |
