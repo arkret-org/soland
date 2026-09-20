@@ -139,6 +139,19 @@ pub trait AuthorityCommitStore: Send + Sync {
         event_id: &arkret_wire::EventId,
     ) -> PersistenceResult<Option<QueuedEventRecord>>;
 
+    /// Atomically queues a producer Event and installs its authority Commit.
+    ///
+    /// Unlike calling [`Self::queue_event`] followed by
+    /// [`Self::commit_transaction`], this boundary guarantees that any
+    /// authority, predecessor, or persistence failure leaves no queued Event
+    /// behind. Product-private Account Authority admission uses this method so
+    /// it cannot expose a half-admitted Event after a failed request.
+    async fn admit_event_transaction(
+        &self,
+        transaction: &AuthorityCommitTransaction,
+        queued_at: DateTime<Utc>,
+    ) -> PersistenceResult<AuthorityCommitWriteOutcome>;
+
     /// Atomically checks current authority, appends the per-stream commit,
     /// changes the Event from queued to committed, and enqueues every Welcome.
     async fn commit_transaction(

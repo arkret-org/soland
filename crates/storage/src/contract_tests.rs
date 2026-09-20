@@ -21,9 +21,9 @@ use super::{
     AccountDataStore, AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
     AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
     AppletIdentityCommit, AppletRecordCommit, AppletStore, AuthorityCommitStore,
-    AuthorityCommitTransaction, CanonicalEventRecord, ConsentGrantDot, ConsentGrantRecord,
-    ConsentGrantStore, ConsentProjectionCommit, ContactProjectionCommit, ContactRecord,
-    ContactStore, CurrentRealmAuthority, DeviceInventoryStore, DeviceKeyStore,
+    AuthorityCommitTransaction, AuthorityCommitWriteOutcome, CanonicalEventRecord, ConsentGrantDot,
+    ConsentGrantRecord, ConsentGrantStore, ConsentProjectionCommit, ContactProjectionCommit,
+    ContactRecord, ContactStore, CurrentRealmAuthority, DeviceInventoryStore, DeviceKeyStore,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
     DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
     DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
@@ -2397,6 +2397,72 @@ pub async fn assert_applet_formal_commit_transaction_contract(
             .and_then(serde_json::Value::as_str)
             .is_some(),
         "the identity winner must carry the terminal global fence"
+    );
+}
+
+pub async fn assert_atomic_event_admission_contract(
+    authority: &dyn AuthorityCommitStore,
+    namespace: &str,
+) {
+    let now = database_timestamp_now();
+    let event_uuid = uuid::Uuid::now_v7();
+    let atomic_realm_id = contract_realm_id(&format!(
+        "atomic-authority-admission:{namespace}:{event_uuid}"
+    ));
+    let atomic_principal_id = format!("ak:did_core:web:atomic-{namespace}.example");
+    let mut atomic_stream = ContractCommitStream::new(&atomic_realm_id);
+    atomic_stream.install(authority).await;
+    let atomic_event =
+        canonical_wire_event_record("", &atomic_principal_id, &atomic_realm_id, 0, now);
+    let atomic_event_id = arkret_wire::EventId::new(atomic_event.event_id.clone()).unwrap();
+    let atomic_transaction = atomic_stream.accept(&atomic_event);
+    assert_eq!(
+        authority
+            .admit_event_transaction(&atomic_transaction, now)
+            .await
+            .expect("atomically admit producer Event"),
+        AuthorityCommitWriteOutcome::Committed
+    );
+    assert_eq!(
+        authority
+            .admit_event_transaction(&atomic_transaction, now)
+            .await
+            .expect("exact atomic admission retry"),
+        AuthorityCommitWriteOutcome::Duplicate,
+        "an exact retry replays the unique committed Event"
+    );
+    let failed_event = canonical_wire_event_record(
+        "",
+        &atomic_principal_id,
+        &atomic_realm_id,
+        1,
+        now + Duration::milliseconds(1),
+    );
+    let failed_event_id = arkret_wire::EventId::new(failed_event.event_id.clone()).unwrap();
+    let mut broken_transaction = atomic_stream.order(&failed_event);
+    broken_transaction.commit.previous_commit_ref =
+        Some(arkret_wire::RealmCommitId::from_digest([0xfe; 32]));
+    assert!(
+        authority
+            .admit_event_transaction(&broken_transaction, now)
+            .await
+            .is_err(),
+        "a wrong predecessor must reject the whole atomic admission"
+    );
+    assert!(
+        authority
+            .queued_event(&failed_event_id)
+            .await
+            .expect("inspect failed atomic admission")
+            .is_none(),
+        "a failed authority commit must roll back its newly queued Event"
+    );
+    assert!(
+        authority
+            .committed_event(&atomic_event_id)
+            .await
+            .expect("read exact atomic admission replay")
+            .is_some()
     );
 }
 

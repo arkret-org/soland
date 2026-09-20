@@ -406,6 +406,19 @@ pub(crate) async fn commit_transaction_in_connection(
     Ok(AuthorityCommitWriteOutcome::Committed)
 }
 
+fn require_atomic_admission_outcome(
+    outcome: AuthorityCommitWriteOutcome,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    match outcome {
+        AuthorityCommitWriteOutcome::Committed => Ok(AuthorityCommitWriteOutcome::Committed),
+        AuthorityCommitWriteOutcome::Duplicate => Ok(AuthorityCommitWriteOutcome::Duplicate),
+        AuthorityCommitWriteOutcome::StaleAuthority(_) => Err(PersistenceError::Conflict(
+            "stale Realm authority during atomic Event admission".into(),
+        )
+        .into()),
+    }
+}
+
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn install_genesis_authority(
@@ -520,6 +533,23 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             })
         })
         .transpose()
+    }
+
+    async fn admit_event_transaction(
+        &self,
+        transaction: &AuthorityCommitTransaction,
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<AuthorityCommitWriteOutcome> {
+        transaction.validate().map_err(invalid)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            queue_event_in_connection(conn, &transaction.event, queued_at).await?;
+            require_atomic_admission_outcome(
+                commit_transaction_in_connection(conn, transaction).await?,
+            )
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn commit_transaction(
@@ -829,5 +859,46 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PersistenceError::database)?;
         row.map(|row| decode_json(row.snapshot_json, "RealmStateSnapshot"))
             .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_authority_is_an_atomic_admission_rollback_error() {
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x61; 32],
+        ));
+        let authority = CurrentRealmAuthority {
+            realm_id,
+            generation: 2,
+            service_id: arkret_wire::DidCoreId::new("ak:did_core:web:station.example".to_owned())
+                .unwrap(),
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0x62; 32],
+                ),
+            ),
+            last_handoff_ref: None,
+        };
+        assert!(
+            require_atomic_admission_outcome(AuthorityCommitWriteOutcome::StaleAuthority(
+                authority
+            ))
+            .is_err(),
+            "returning Ok(StaleAuthority) would commit the preceding queue insert"
+        );
+        assert!(matches!(
+            require_atomic_admission_outcome(AuthorityCommitWriteOutcome::Committed),
+            Ok(AuthorityCommitWriteOutcome::Committed)
+        ));
+        assert!(matches!(
+            require_atomic_admission_outcome(AuthorityCommitWriteOutcome::Duplicate),
+            Ok(AuthorityCommitWriteOutcome::Duplicate)
+        ));
     }
 }

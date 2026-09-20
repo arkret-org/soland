@@ -31,6 +31,10 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub(crate) fn authority_commit_store(&self) -> &dyn soland_storage::AuthorityCommitStore {
+        self.persistence.authority_commits()
+    }
+
     pub async fn committed_event(
         &self,
         event_id: &arkret_wire::EventId,

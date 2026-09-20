@@ -260,11 +260,10 @@ impl DeviceHistoryFixture {
                 .verifying_key()
                 .to_bytes(),
         );
-        let mut inception = EventRef::new(
+        let inception = SemanticRef::new(
             verified_root.did_version_id.clone(),
             arkret_bootstrap::DID_INCEPTION_REF_ROLE,
         );
-        inception.critical = true;
         let create = arkret_bootstrap::build_self_principal_pcr_create(
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: account.principal_id.clone(),

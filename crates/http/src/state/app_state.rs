@@ -21,6 +21,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use soland_domain::reducer::ProjectionState;
+use soland_services::authority_commit::AuthorityCommitApplication;
 use soland_services::authorization::{
     AuthorizationCheck, AuthorizationDecision, AuthorizationPort, AuthorizationService,
 };
@@ -105,6 +106,7 @@ pub struct AppState {
     settings: Arc<ArcSwap<crate::runtime_settings::RuntimeSettings>>,
     storage_mode: &'static str,
     persistence: PersistenceHandle,
+    authority_commits: AuthorityCommitApplication,
     events: EventService,
     event_queries: EventQueryService,
     mls_commits: MlsCommitQueryService,
@@ -1137,6 +1139,7 @@ impl AppState {
         ));
 
         let authorization = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
+        let authority_commits = AuthorityCommitApplication::new(persistence.clone());
         let PersistenceEventServices {
             events,
             queries: event_queries,
@@ -1198,6 +1201,7 @@ impl AppState {
             authorization,
             storage_mode,
             persistence,
+            authority_commits,
             events,
             event_queries,
             mls_commits,
@@ -1274,6 +1278,10 @@ impl AppState {
 
     pub(crate) fn events(&self) -> &EventService {
         &self.events
+    }
+
+    pub(crate) fn authority_commits(&self) -> &AuthorityCommitApplication {
+        &self.authority_commits
     }
 
     pub(crate) fn event_queries(&self) -> &EventQueryService {

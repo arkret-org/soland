@@ -5,15 +5,17 @@ use arkret_wire::{
 use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::ServiceErrorKind;
+use soland_services::authority_commit::AuthorityEventAdmissionOutcome;
 
 use crate::state::AppState;
 
 /// Admit a single Event delivered by this deployment's Account Authority.
 ///
-/// The private adapter can already close exact duplicate retries from the
-/// committed store. A new Event is rejected retryably until the authority
-/// transaction/signing application is wired into `AppState`; it must never be
-/// acknowledged without a durable `RealmCommit`.
+/// The adapter delegates to the injected authority application, whose
+/// queue+commit persistence call is one transaction. It therefore returns an
+/// accepted result only after the exact `Event` and its signed `RealmCommit`
+/// are durably visible together.
 #[tracing::instrument(skip_all, fields(op = "soland.account_authority.events.admit"))]
 pub(super) async fn admit_event(
     depot: &mut Depot,
@@ -40,31 +42,54 @@ pub(super) async fn admit_event(
         ));
     }
 
-    if let Some(record) = state
-        .persistence()
-        .committed_event(&submission.event.event_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        if record.event != submission.event {
-            return Err(AppError::conflict(
-                "event_id is already committed with different canonical content",
-            ));
-        }
-        let outcome = AuthoritySubmitOutcome::Accepted {
+    let verification_method = state
+        .service_verification_method("notary-key")
+        .map_err(AppError::internal)?;
+    let admission = state
+        .authority_commits()
+        .admit_event(
+            &submission.event,
+            &state.service_core_id(),
+            verification_method,
+            state.notary_signing_key().as_ref(),
+            chrono::Utc::now(),
+        )
+        .await;
+    let outcome = match admission {
+        Ok(AuthorityEventAdmissionOutcome::Committed(commit)) => AuthoritySubmitOutcome::Accepted {
+            status: AuthorityCommitStatus::Committed,
+            commit,
+        },
+        Ok(AuthorityEventAdmissionOutcome::Duplicate(commit)) => AuthoritySubmitOutcome::Accepted {
             status: AuthorityCommitStatus::Duplicate,
-            commit: record.commit,
-        };
-        outcome
-            .validate_for_request(&AuthoritySubmitRequest::Event(submission))
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        return json_ok(outcome);
-    }
-
-    json_ok(AuthoritySubmitOutcome::Rejected {
-        status: AuthorityRejectionStatus::RetryableUnavailable,
-        reason_code: "authority_transaction_unavailable".to_owned(),
-    })
+            commit,
+        },
+        Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority) => {
+            AuthoritySubmitOutcome::Rejected {
+                status: AuthorityRejectionStatus::Rejected,
+                reason_code: "authority_mismatch".to_owned(),
+            }
+        }
+        Err(error) => match error.kind() {
+            ServiceErrorKind::Conflict => return Err(AppError::conflict(error.detail())),
+            ServiceErrorKind::SchemaViolation => {
+                return Err(AppError::param_invalid(error.detail()));
+            }
+            ServiceErrorKind::NotFound
+            | ServiceErrorKind::Database
+            | ServiceErrorKind::Internal => {
+                tracing::warn!(error = %error, "atomic Account Authority Event admission unavailable");
+                AuthoritySubmitOutcome::Rejected {
+                    status: AuthorityRejectionStatus::RetryableUnavailable,
+                    reason_code: "authority_transaction_unavailable".to_owned(),
+                }
+            }
+        },
+    };
+    outcome
+        .validate_for_request(&AuthoritySubmitRequest::Event(submission))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(outcome)
 }
 
 #[cfg(test)]
@@ -76,6 +101,7 @@ mod tests {
         let source = include_str!("account_authority_private.rs");
         assert!(!source.contains("oapi::endpoint"));
         assert!(!source.contains("Arkret-Operation"));
+        assert!(source.contains("authority_commits().admit_event"));
         assert!(source.contains("authority_transaction_unavailable"));
     }
 }
