@@ -10,7 +10,7 @@ pub(crate) struct AccountSummaryDelta {
     pub initial_global_snapshot: Option<(i64, i64)>,
 }
 
-fn visible_item(row: &soland_storage::AccountSummaryVersion) -> Option<RealmRow> {
+fn visible_item(row: &soland_storage::AccountSummaryVersion) -> Option<RealmListRow> {
     if !row.current_available {
         return None;
     }
@@ -21,7 +21,7 @@ fn visible_item(row: &soland_storage::AccountSummaryVersion) -> Option<RealmRow>
         }
         _ => return None,
     };
-    Some(RealmRow {
+    Some(RealmListRow {
         realm_id: arkret_wire::RealmId::new(row.key.realm_id.clone()).ok()?,
         revision: u64::try_from(row.key.revision).ok()?,
         activity_position: u64::try_from(row.key.activity_position).ok()?,
@@ -52,6 +52,7 @@ pub(crate) async fn read(
     let mut initial_global_snapshot = None;
     if initial || body.realm_list.is_some() {
         let request = body.realm_list.clone().unwrap_or_default();
+        request.validate().map_err(|e| e.to_string())?;
         let frozen = if let Some(token) = &request.after {
             cursor::parse_realm_list_cursor(state, session, token.as_str())
                 .await
@@ -85,37 +86,38 @@ pub(crate) async fn read(
         )
         .await
         .map_err(|e| format!("{e:?}"))?;
-        let rows = state
-            .sync()
-            .account_summary_page(&actor_key, frozen.watermark, frozen.after.as_ref(), 200)
-            .await
-            .map_err(|e| e.to_string())?;
         let mut scanned = frozen.after.clone();
-        let mut consumed = 0;
         let mut items = Vec::new();
         let limit = request.limit.unwrap_or(20) as usize;
-        let mut bytes = 8192; // Includes both bounded cursor strings and container fields.
-        for row in &rows {
-            let item = (row.key.revision <= frozen.watermark
-                && row.valid_until.is_none_or(|end| end > frozen.watermark))
-            .then(|| visible_item(row))
-            .flatten();
-            if let Some(item) = item {
-                let size = arkret_canonical::canonical_json_bytes(&item)
-                    .map_err(|e| e.to_string())?
-                    .len()
-                    + 1;
-                if items.len() >= limit || bytes + size > ACCOUNT_SYNC_MAX_LIST_BYTES {
-                    break;
+        let complete = loop {
+            let rows = state
+                .sync()
+                .account_summary_page(&actor_key, frozen.watermark, scanned.as_ref(), 200)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut consumed = 0;
+            for row in &rows {
+                let item = (row.key.revision <= frozen.watermark
+                    && row.valid_until.is_none_or(|end| end > frozen.watermark))
+                .then(|| visible_item(row))
+                .flatten();
+                if let Some(item) = item {
+                    if items.len() >= limit {
+                        break;
+                    }
+                    item.validate().map_err(|e| e.to_string())?;
+                    items.push(item);
                 }
-                item.validate().map_err(|e| e.to_string())?;
-                items.push(item);
-                bytes += size;
+                consumed += 1;
+                scanned = Some(row.key.clone());
             }
-            consumed += 1;
-            scanned = Some(row.key.clone());
-        }
-        let complete = consumed == rows.len() && rows.len() < 200;
+            let complete = consumed == rows.len() && rows.len() < 200;
+            // A page with next_cursor must have at least one visible item.
+            // Keep scanning frozen rows when a whole storage batch is hidden.
+            if complete || !items.is_empty() {
+                break complete;
+            }
+        };
         let next_cursor = if complete {
             None
         } else {
@@ -135,11 +137,10 @@ pub(crate) async fn read(
             )
         };
         page = Some(RealmListPage {
-            snapshot_cursor,
+            snapshot_cursor: snapshot_cursor.to_string(),
             snapshot_revision: frozen.watermark as u64,
             items,
-            next_cursor,
-            complete,
+            next_cursor: next_cursor.map(|cursor| cursor.to_string()),
         });
     }
     // Read a lower bound before scanning. When the bounded scan is exhausted,
