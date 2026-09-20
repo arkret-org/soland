@@ -18,7 +18,7 @@
 use super::common::*;
 
 const CALENDAR_STRAND_ID: &str = "ak:strand:AeaMAB1tbnRV_V7aACq1aVvmkpnJS-PtriS9iX7aeg3I";
-const BASIS: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const BASIS: &str = "ak:event:Aaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
 
 fn rsvp_event(event_id: &str, step: u64) -> Value {
     signed_strand_event(

@@ -1,7 +1,7 @@
 use super::*;
 
 const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-const STRAND_ID: &str = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD";
+const STRAND_ID: &str = "ak:strand:AWZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm";
 
 fn encrypted_payload() -> Value {
     serde_json::json!({
@@ -70,11 +70,8 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
             }
         }),
     );
-    // The schedule revision the RSVP entry names as its basis is a committed
-    // Event of this Realm's stream, so the fixture stamps the Strand create
-    // with the exact canonical digest `schedule_basis_ref` names.
-    create.context.canonical_event_digest =
-        arkret_identifiers::Hash::new(SCHEDULE_BASIS_DIGEST).unwrap();
+    // The schedule revision the RSVP entry names is this exact Event ID.
+    set_event_identity(&mut create, SCHEDULE_BASIS_DIGEST);
     let strand = state.apply(&create, hlc);
     assert!(
         !matches!(strand, ProjectionEffect::Rejected { .. }),
@@ -97,26 +94,13 @@ const SCHEDULE_BASIS_DIGEST: &str =
 const RSVP_EVENT_DIGEST: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-/// The committed Realm-stream position of the calendar revision the responder
-/// observed.
-///
-/// `RsvpEntry::schedule_basis_refs` is a list of closed `CommittedEventRef`s --
-/// `(event_id, commit_id, stream_ref, stream_position)` -- not bare digests, so
-/// the fixture is built through the SDK type and names the same Event identity
-/// `seed_pin_target` stamps onto the calendar Strand create.
+/// The exact Event ID of the calendar revision the responder observed.
+/// This is the same Event identity `seed_pin_target` stamps on Strand create.
 fn schedule_basis_ref() -> Value {
     let digest = arkret_identifiers::Hash::new(SCHEDULE_BASIS_DIGEST).expect("basis digest parses");
     let event_id = arkret_identifiers::EventId::from_event_digest(&digest)
         .expect("basis digest is an EventId");
-    serde_json::to_value(arkret_wire::CommittedEventRef {
-        event_id,
-        commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
-        stream_ref: arkret_wire::CommitStreamRef::Realm {
-            realm_id: arkret_identifiers::RealmId::new(REALM_ID).expect("fixture realm id"),
-        },
-        stream_position: 0,
-    })
-    .expect("committed event ref serializes")
+    serde_json::to_value(event_id).expect("event id serializes")
 }
 
 fn rsvp_payload(encrypted_response: Value) -> Value {
