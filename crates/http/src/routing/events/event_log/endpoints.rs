@@ -223,25 +223,13 @@ pub(crate) async fn frontier_control_governance_health(
 
 pub(in crate::routing::events) fn router() -> Router {
     Router::new()
-        .push(
-            Router::with_path("authorization-leases")
-                .post(super::lease_issue::issue_authorization_leases),
-        )
         .push(Router::with_path("events/delivery-status").query(event_delivery_status))
         .push(
             Router::with_path("committed-events/subscribe")
                 .get(super::super::sync::events_subscribe),
         )
         .push(Router::with_path("events").post(submit_event))
-        .push(Router::with_path("seals/frontier").query(seals_frontier))
         .push(Router::with_path("seals/pending-control").query(pcr_pending_control))
-        .push(Router::with_path("seals/prepare").post(prepare_pcr_seal))
-        .push(Router::with_path("seals/prepare-fence-result").post(prepare_pcr_seal_fence_result))
-        .push(Router::with_path("seals").post(submit_event_seal))
-        .push(
-            Router::with_path("seals/mls-governance-proof")
-                .post(super::governance_proof::mls_governance_proof),
-        )
         .push(
             Router::with_path("seals/mls-accepted-artifact")
                 .post(super::mls_accepted_artifact::read),
@@ -453,11 +441,7 @@ fn recover_seal_prepare_fence_outcome(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.seals.read.prepare_fence_result",
-    tags("events")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.prepare_fence_result.v1"))]
+#[allow(dead_code)]
 async fn prepare_pcr_seal_fence_result(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -537,8 +521,7 @@ async fn prepare_pcr_seal_fence_result(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.prepare", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.command.prepare.v1"))]
+#[allow(dead_code)]
 async fn prepare_pcr_seal(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -743,8 +726,7 @@ async fn prepare_pcr_seal(
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.command.submit.v1"))]
+#[allow(dead_code)]
 async fn submit_event_seal(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1637,8 +1619,7 @@ async fn resolve_events(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.frontier.v1"))]
+#[allow(dead_code)]
 async fn seals_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -1651,9 +1632,7 @@ async fn seals_frontier(
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::SealFrontierRequestBody>()
         .await
-        .map_err(|_| {
-            AppError::json_invalid("invalid ak.self.seals.read.frontier.v1 request body")
-        })?;
+        .map_err(|_| AppError::json_invalid("invalid retired Seal frontier request body"))?;
     let realm_id = query_body.realm_id;
     let own_pcr = durable_account_owns_pcr(state, &session_actor, &realm_id).await?;
     let agent_pcr = if let Some(account_id) = session_actor.as_account_id() {
@@ -1746,9 +1725,7 @@ async fn events_frontier(
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
         .await
-        .map_err(|_| {
-            AppError::json_invalid("invalid retired Event frontier request body")
-        })?;
+        .map_err(|_| AppError::json_invalid("invalid retired Event frontier request body"))?;
     let selected_actor_id = query_body.actor_id.clone();
     let is_session_actor = selected_actor_id == session_actor;
     let is_local_account = selected_actor_id

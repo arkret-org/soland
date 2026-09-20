@@ -16,11 +16,7 @@ use super::*;
 
 const LEASE_TTL_MINUTES: i64 = 10;
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.authorization_leases.command.issue",
-    tags("events")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.authorization_leases.command.issue.v1"))]
+#[allow(dead_code)]
 pub(super) async fn issue_authorization_leases(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -64,7 +60,7 @@ pub(super) async fn issue_authorization_leases(
         .jobs()
         .scoped_idempotency_record(
             &authenticated_actor,
-            "ak.self.authorization_leases.command.issue",
+            "retired-authorization-lease-issue",
             idempotency_key,
         )
         .await
@@ -125,7 +121,7 @@ pub(super) async fn issue_authorization_leases(
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
             authenticated_actor,
-            operation_id: "ak.self.authorization_leases.command.issue".to_owned(),
+            operation_id: "retired-authorization-lease-issue".to_owned(),
             idempotency_key: idempotency_key.to_owned(),
             request_hash,
             response_status: StatusCode::OK.as_u16() as i32,

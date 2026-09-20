@@ -397,40 +397,6 @@ mod requested_scope_tests {
     }
 
     #[test]
-    fn runtime_scope_assessment_uses_registered_layer_reasons() {
-        let interactive = [
-            "ak.self.committed_event.stream.subscribe.v1",
-            "ak.self.committed_event.read.scan.v1",
-            "ak.self.seals.read.frontier.v1",
-            "ak.self.events.command.submit.v1",
-        ];
-        let provision_without_seal = scope(&[
-            interactive[0],
-            interactive[1],
-            interactive[2],
-            interactive[4],
-        ]);
-        let error = validate_agent_runtime_provision_scope(&provision_without_seal).unwrap_err();
-        assert_eq!(
-            error.reason_code.as_deref(),
-            Some(arkret_wire::ReasonCode::AGENT_PROVISION_SCOPE_MIGRATION_REQUIRED)
-        );
-
-        let provision = scope(&interactive);
-        let key_without_seal = scope(&[
-            interactive[0],
-            interactive[1],
-            interactive[2],
-            interactive[4],
-        ]);
-        let error = validate_agent_runtime_key_scopes(&provision, &key_without_seal).unwrap_err();
-        assert_eq!(
-            error.reason_code.as_deref(),
-            Some(arkret_wire::ReasonCode::AGENT_KEY_SCOPE_REAUTHORIZATION_REQUIRED)
-        );
-    }
-
-    #[test]
     fn unknown_scope_action_fails_closed_before_admission() {
         let error = validate_agent_runtime_provision_scope(&scope(&[
             "ak.self.events.read.future_unregistered.v1",

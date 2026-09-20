@@ -1609,7 +1609,6 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
                 "actions": [
                     "ak.self.committed_event.stream.subscribe.v1",
                     "ak.self.committed_event.read.scan.v1",
-                    "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1",
                     "ak.event.read",
                     "ak.message.create"
@@ -1735,7 +1734,6 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
             "actions": [
                 "ak.self.committed_event.stream.subscribe.v1",
                 "ak.self.committed_event.read.scan.v1",
-                "ak.self.seals.read.frontier.v1",
                 "ak.self.events.command.submit.v1",
                 "ak.event.read",
                 "ak.message.create"
@@ -1899,7 +1897,6 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
         "actions": [
             "ak.self.committed_event.stream.subscribe.v1",
             "ak.self.committed_event.read.scan.v1",
-            "ak.self.seals.read.frontier.v1",
             "ak.self.events.command.submit.v1"
         ],
         "resources": [{
@@ -1997,7 +1994,6 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
         "actions": [
             "ak.self.committed_event.stream.subscribe.v1",
             "ak.self.committed_event.read.scan.v1",
-            "ak.self.seals.read.frontier.v1",
             "ak.self.events.command.submit.v1"
         ],
         "resources": [
@@ -2179,7 +2175,6 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation_b
                 "actions": [
                     "ak.self.committed_event.stream.subscribe.v1",
                     "ak.self.committed_event.read.scan.v1",
-                    "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1"
                 ],
                 "resources": [{

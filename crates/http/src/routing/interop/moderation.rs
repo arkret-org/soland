@@ -27,12 +27,7 @@ use crate::state::AppState;
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
 
 pub(super) fn protocol_router() -> Router {
-    Router::new()
-        .push(Router::with_path("moderation/report").post(moderation_report))
-        .push(
-            Router::with_path("moderation/franking/seal-observation")
-                .post(moderation_franking_seal_observation),
-        )
+    Router::new().push(Router::with_path("moderation/report").post(moderation_report))
 }
 
 fn authored_event_wire_value(
@@ -752,15 +747,7 @@ const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
     "epoch",
 ];
 
-#[endpoint(
-    operation_id = "ak.self.moderation.read.franking_seal_observation",
-    summary = "Read a durable franking proof Seal observation",
-    tags("moderation")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "ak.self.moderation.read.franking_seal_observation.v1")
-)]
+#[allow(dead_code)]
 async fn moderation_franking_seal_observation(
     aa: AuthArgs,
     body: JsonBody<FrankingSealObservationRequest>,

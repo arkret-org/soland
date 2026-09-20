@@ -270,7 +270,6 @@ async fn seed_agent_grant_session_with_suite(
             "actions": [
                 "ak.self.committed_event.stream.subscribe.v1",
                 "ak.self.committed_event.read.scan.v1",
-                "ak.self.seals.read.frontier.v1",
                 "ak.self.events.command.submit.v1"
             ],
             "resources": [
@@ -423,7 +422,6 @@ async fn seed_agent_grant_session_with_suite(
                 "actions": [
                     "ak.self.committed_event.stream.subscribe.v1",
                     "ak.self.committed_event.read.scan.v1",
-                    "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1"
                 ],
                 "resources": [
@@ -1043,9 +1041,11 @@ fn agent_session_without_stream_scope_cannot_subscribe_events() {
 }
 
 async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
-    let (state, presentation) =
-        seed_agent_grant_session("scope-denied-stream", &["ak.self.committed_event.read.scan.v1"])
-            .await;
+    let (state, presentation) = seed_agent_grant_session(
+        "scope-denied-stream",
+        &["ak.self.committed_event.read.scan.v1"],
+    )
+    .await;
     let subscribe_url = format!(
         "http://server/_arkret/self/events/subscribe?realm_ids={}&catchup=false&max_duration_ms=100",
         demo_realm_id()
@@ -1132,9 +1132,11 @@ fn agent_session_without_submit_scope_cannot_submit_events() {
 }
 
 async fn agent_session_without_submit_scope_cannot_submit_events_body() {
-    let (state, presentation) =
-        seed_agent_grant_session("scope-denied-submit", &["ak.self.committed_event.read.scan.v1"])
-            .await;
+    let (state, presentation) = seed_agent_grant_session(
+        "scope-denied-submit",
+        &["ak.self.committed_event.read.scan.v1"],
+    )
+    .await;
     let event = signed_event_envelope(
         "ak:event:AfepkcDJ52VnnpuZZLL_gaOAp8uRP2_whpmBukWi9roZ",
         0,

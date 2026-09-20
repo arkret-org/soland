@@ -168,7 +168,6 @@ async fn retained_federation_submission(
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("events").post(peer_events_submit))
-        .push(Router::with_path("seals/frontier").query(peer_seals_frontier))
         .push(Router::with_path("account-status").post(peer_account_status_submit))
         .push(Router::with_path("signal").post(peer_signal_relay))
 }
@@ -1697,8 +1696,7 @@ struct PeerSealFrontierProofBinding<'a> {
     created_at: DateTime<Utc>,
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.frontier.v1"))]
+#[allow(dead_code)]
 async fn peer_seals_frontier(
     depot: &mut Depot,
     req: &mut Request,
@@ -1708,7 +1706,7 @@ async fn peer_seals_frontier(
     let source_id = source_id_from_request(req)?;
     let request = parse_json_body::<SealFrontierRequestBody>(
         req,
-        "invalid ak.peer.seals.read.frontier.v1 request body",
+        "invalid retired peer Seal frontier request body",
     )
     .await?;
     if is_realm_deleted(state, request.realm_id.as_str()).await

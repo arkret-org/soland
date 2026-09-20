@@ -141,7 +141,7 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
         .collect::<std::collections::BTreeSet<_>>();
     for attempt in 0..50 {
         let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
-            .add_header("Arkret-Operation", "ak.self.seals.read.frontier.v1", true)
+            .add_header("Arkret-Operation", "retired-seal-frontier", true)
             .json(&serde_json::json!({"realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state))

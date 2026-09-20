@@ -181,7 +181,6 @@ fn requested_agent_scope() -> Value {
         "actions": [
             "ak.self.committed_event.stream.subscribe.v1",
             "ak.self.committed_event.read.scan.v1",
-            "ak.self.seals.read.frontier.v1",
             "ak.self.events.command.submit.v1",
             "ak.event.read",
             "ak.message.create"

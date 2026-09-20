@@ -1,7 +1,6 @@
 //! Reusable current signer evidence proxy and peer authority endpoint.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use arkret_models_collaboration::{
     CompactAgentSignerResolutionEvidence, CurrentSignerEvidence, CurrentSignerEvidenceQueryOutcome,
@@ -14,7 +13,6 @@ use arkret_models_identity::{
     SignerKeysQueryOutcome, SignerKeysQueryRequestBody, UnavailableSignerKeyOutcome,
 };
 use arkret_wire::DidCoreId;
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -24,14 +22,8 @@ use super::AuthArgs;
 use super::agents::evidence::AgentSignerEvidenceQuerySelector;
 use crate::state::AppState;
 
-const PEER_PATH: &str = "/_arkret/peer/current-signer-evidence/query";
-
 pub(crate) fn self_router() -> Router {
     Router::with_path("signer-keys/query").post(self_query)
-}
-
-pub(crate) fn peer_router() -> Router {
-    Router::with_path("current-signer-evidence/query").post(peer_query)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.signer_keys.read.resolve", tags("identity"))]
@@ -462,10 +454,7 @@ pub(super) fn verify_current_device_projection(
     .map_err(|error| error.to_string())
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.peer.current_signer_evidence.read.resolve",
-    tags("identity")
-)]
+#[allow(dead_code)]
 async fn peer_query(
     depot: &mut Depot,
     req: &mut Request,
@@ -646,90 +635,13 @@ async fn issue_selector(
 }
 
 async fn proxy_peer_query(
-    state: &AppState,
-    request: &CurrentSignerEvidenceQueryRequestBody,
-    target_id: &DidCoreId,
+    _state: &AppState,
+    _request: &CurrentSignerEvidenceQueryRequestBody,
+    _target_id: &DidCoreId,
 ) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
-    let route = crate::routing::federation::resolved_peer_target(
-        state,
-        target_id.as_str(),
-        "station",
-        false,
-    )
-    .await
-    .map_err(|_| AppError::not_found("current signer evidence is unavailable"))?;
-    let target = format!("{}{}", route.base_url.trim_end_matches('/'), PEER_PATH);
-    let body = arkret_canonical::canonical_json_bytes(request)
-        .map_err(|error| AppError::internal(format!("canonical evidence request: {error}")))?;
-    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
-        &target,
-        "current signer evidence peer query",
-        state.config().development_mode,
-        Duration::from_secs(10),
-    )
-    .map_err(|_| AppError::not_found("current signer evidence is unavailable"))?;
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "content-digest",
-        &crate::routing::federation::outbox::content_digest_header_value(&body),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "source-service-id",
-        state.service_id(),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "destination-service-id",
-        target_id.as_str(),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "source-trust-domain",
-        state.config().trust_domain.as_str(),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "destination-trust-domain",
-        &route.trust_domain,
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "arkret-operation",
-        "ak.peer.current_signer_evidence.read.resolve.v1",
-    );
-    let headers = crate::routing::federation::outbox::rfc9421_sign(state, headers, "POST", &target);
-    let response = client
-        .post(url)
-        .headers(headers)
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| AppError::not_found("current signer evidence is unavailable"))?;
-    if !response.status().is_success() {
-        return Err(AppError::not_found(
-            "current signer evidence is unavailable",
-        ));
-    }
-    let mut response = response;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| AppError::not_found("current signer evidence unavailable"))?
-    {
-        if bytes.len().saturating_add(chunk.len()) > 1024 * 1024 {
-            return Err(AppError::from_rejection(
-                arkret_wire::ErrorCode::LimitExceeded,
-                "peer signer response exceeds budget",
-            ));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&bytes)
-        .map_err(|_| AppError::not_found("current signer evidence is unavailable"))
+    Err(AppError::not_found(
+        "cross-Station signer evidence resolution is unavailable",
+    ))
 }
 
 #[cfg(test)]

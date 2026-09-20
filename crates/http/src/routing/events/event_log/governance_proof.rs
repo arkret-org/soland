@@ -23,11 +23,7 @@ use salvo::oapi::extract::JsonBody;
 
 use super::*;
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.seals.read.mls_governance_proof",
-    tags("seals")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.mls_governance_proof.v1"))]
+#[allow(dead_code)]
 pub(super) async fn mls_governance_proof(
     aa: AuthArgs,
     depot: &mut Depot,

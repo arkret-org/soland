@@ -122,23 +122,6 @@ fn assert_required_migrated_operations(root: &Value) {
 }
 
 fn assert_event_read_query_bindings(root: &Value) {
-    for (path, operation_id) in [
-        (
-            "/_arkret/self/seals/frontier",
-            "ak.self.seals.read.frontier",
-        ),
-        (
-            "/_arkret/peer/seals/frontier",
-            "ak.peer.seals.read.frontier",
-        ),
-    ] {
-        let query = &root["paths"][path]["query"];
-        assert_eq!(query["operationId"], operation_id);
-        assert!(
-            query["requestBody"]["content"]["application/json"].is_object(),
-            "canonical QUERY binding {operation_id} must expose JSON content"
-        );
-    }
     for retired in [
         "/_arkret/self/events/describe",
         "/_arkret/self/events/frontier",
@@ -146,28 +129,20 @@ fn assert_event_read_query_bindings(root: &Value) {
         "/_arkret/peer/events/frontier",
         "/_arkret/peer/events/resolve",
         "/_arkret/peer/events/sibling-positions",
+        "/_arkret/self/seals/frontier",
+        "/_arkret/peer/seals/frontier",
+        "/_arkret/self/seals/mls-governance-proof",
+        "/_arkret/peer/seals/mls-governance-proof",
     ] {
-        assert!(root["paths"].get(retired).is_none(), "retired path leaked: {retired}");
+        assert!(
+            root["paths"].get(retired).is_none(),
+            "retired path leaked: {retired}"
+        );
     }
-    let proof = &root["paths"]["/_arkret/self/seals/mls-governance-proof"]["post"];
-    assert_eq!(
-        proof["operationId"],
-        "ak.self.seals.read.mls_governance_proof"
-    );
-    assert!(
-        proof["requestBody"]["content"]["application/json"].is_object(),
-        "canonical POST proof binding must expose JSON content"
-    );
-    for (path, operation_id) in [
-        (
-            "/_arkret/peer/seals/mls-governance-proof",
-            "ak.peer.seals.read.mls_governance_proof",
-        ),
-        (
-            "/_arkret/peer/mls/group-state-material",
-            "ak.peer.mls.read.group_state_material",
-        ),
-    ] {
+    for (path, operation_id) in [(
+        "/_arkret/peer/mls/group-state-material",
+        "ak.peer.mls.read.group_state_material",
+    )] {
         let operation = &root["paths"][path]["post"];
         assert_eq!(operation["operationId"], operation_id);
         assert!(
