@@ -3,8 +3,6 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use soland_domain::reducer::{CircleLifecycleState, CircleProjection};
-use soland_storage::RealmMetaRecord;
 
 use super::common::*;
 
@@ -557,7 +555,6 @@ const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
 fn test_realm_id() -> &'static str {
     demo_realm_id()
 }
-const TEST_CIRCLE_ID: &str = "ak:circle:ATOTi3sw4NO_6LjlHGedSYTeT3Leu2J3Tb49M1gn9cFN";
 
 fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     resign_federation_event(super::common::signed_event_envelope(
@@ -623,155 +620,35 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
 }
 
 #[test]
-fn peer_events_query_and_retired_frontier_use_peer_surface() {
+fn retired_peer_event_query_routes_are_404_but_submit_is_mounted() {
     run_on_deep_stack(
-        "peer_events_query_and_retired_frontier_use_peer_surface",
-        peer_events_query_and_retired_frontier_use_peer_surface_body,
+        "retired_peer_event_query_routes_are_404_but_submit_is_mounted",
+        retired_peer_event_query_routes_are_404_but_submit_is_mounted_body,
     );
 }
 
-async fn peer_events_query_and_retired_frontier_use_peer_surface_body() {
-    let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
-    let mut event = signed_event_envelope(
-        "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD",
-        1,
-        Vec::new(),
-    );
-    let created_at = Utc::now();
-    event["created_at"] =
-        serde_json::json!(arkret_canonical::format_timestamp_canonical(created_at));
-    event = resign_federation_event(event);
-    let expected_event_id = authored_event_id(&event).to_owned();
-    put_event_record(&state, event, created_at).await;
-
-    let read_body = serde_json::json!({
-        "filters": {"kind": "ak.message.create"},
-        "realm_ids": [test_realm_id()]
-    });
-    let query_target = "https://server.test/_arkret/peer/events";
-    let mut query = TestClient::query(query_target).json(&read_body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        query_target,
-        &read_body,
-    ) {
-        query = query.add_header(name, value, true);
+async fn retired_peer_event_query_routes_are_404_but_submit_is_mounted_body() {
+    let service = app_from_state(soland_test_support::app_state(test_config()));
+    for path in [
+        "http://server/_arkret/peer/events",
+        "http://server/_arkret/peer/events/resolve",
+        "http://server/_arkret/peer/events/sibling-positions",
+    ] {
+        let response = TestClient::query(path)
+            .json(&serde_json::json!({}))
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
     }
-    let page: Value = query
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(
-        page["events"]
-            .as_array()
-            .unwrap_or_else(|| panic!("peer query response has no events array: {page:?}"))
-            .len(),
-        1,
-        "{page:?}"
+    let response = TestClient::post("http://server/_arkret/peer/events")
+        .json(&serde_json::json!({}))
+        .send(&service)
+        .await;
+    assert_ne!(
+        response.status_code,
+        Some(StatusCode::NOT_FOUND),
+        "current peer Event submit route must remain mounted"
     );
-    let returned_event_id = page["events"][0]["event_id"]
-        .as_str()
-        .or_else(|| page["events"][0]["event"]["event_id"].as_str());
-    assert_eq!(
-        returned_event_id,
-        Some(expected_event_id.as_str()),
-        "{page:?}"
-    );
-    assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
-
-    let resolve_target = "https://server.test/_arkret/peer/events/resolve";
-    let resolve_body = serde_json::json!({
-        "realm_id": test_realm_id(),
-        "event_ids": [expected_event_id],
-        "include_payload": true
-    });
-    let mut resolve = TestClient::query(resolve_target).json(&resolve_body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        resolve_target,
-        &resolve_body,
-    ) {
-        resolve = resolve.add_header(name, value, true);
-    }
-    let resolved: Value = resolve
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(
-        resolved["events"][0]["event"]["event_id"], expected_event_id,
-        "peer resolve must return EventFederationSubmission: {resolved:?}"
-    );
-    assert_eq!(
-        resolved["events"][0]["ingress_receipts"],
-        serde_json::json!([]),
-        "ordinary online acceptance has an explicit empty receipt set: {resolved:?}"
-    );
-    assert!(
-        resolved["events"][0].get("authorization_lease").is_none(),
-        "ordinary online acceptance must not synthesize delayed evidence: {resolved:?}"
-    );
-
-    let frontier_target = "https://server.test/_arkret/peer/events/frontier";
-    let frontier_body = serde_json::json!({"realm_id": test_realm_id()});
-    let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        frontier_target,
-        &frontier_body,
-    ) {
-        frontier = frontier.add_header(name, value, true);
-    }
-    let frontier_response = frontier.send(&app_from_state(state)).await;
-    assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
-}
-
-#[test]
-fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason() {
-    run_on_deep_stack(
-        "peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason",
-        peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_body,
-    );
-}
-
-async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_body() {
-    // encoding.md §8.3 closed set on the federation read path
-    // (`ak.peer.committed_event.read.scan.v1`): an `ak:cursor:`-prefixed token that fails
-    // base64url/JSON/schema decoding MUST return top-level `param_invalid`
-    // with reason `invalid_cursor`.
-    let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
-
-    let read_body = serde_json::json!({
-        "realm_ids": [test_realm_id()],
-        "after": "ak:cursor:!!!not-base64url"
-    });
-    let query_target = "https://server.test/_arkret/peer/events";
-    let mut query = TestClient::query(query_target).json(&read_body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        query_target,
-        &read_body,
-    ) {
-        query = query.add_header(name, value, true);
-    }
-    let mut rejected = query.send(&app_from_state(state)).await;
-    assert_eq!(rejected.status_code.unwrap(), StatusCode::BAD_REQUEST);
-    let body: Value = rejected.take_json().await.unwrap();
-    assert_eq!(problem_code(&body), "param_invalid", "{body}");
-    assert_eq!(body["reason_code"], "invalid_cursor", "{body}");
 }
 
 #[test]
@@ -1226,117 +1103,6 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
 }
 
 #[test]
-fn peer_events_query_clips_circle_event_outside_source_did_member_scope() {
-    run_on_deep_stack(
-        "peer_events_query_clips_circle_event_outside_source_did_member_scope",
-        peer_events_query_clips_circle_event_outside_source_did_member_scope_body,
-    );
-}
-
-async fn peer_events_query_clips_circle_event_outside_source_did_member_scope_body() {
-    let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:bob.example").await;
-    install_test_circle(&state, TEST_CIRCLE_ID, &["did:web:alice.example"]);
-    let now = Utc::now();
-    put_event_record(
-        &state,
-        circle_member_event(
-            "ak:event:Ad7f3cOvc0wjqfwCNqjzg1buJv4mBMlocci9EX51zRIJ",
-            "did:web:alice.example",
-            "did:web:admin.example",
-            31,
-        ),
-        now - ChronoDuration::seconds(20),
-    )
-    .await;
-    let hidden_event_id = "ak:event:ATq9Ua5Klw2I-KCZo-6gt8LNi-Z31nyaZaZVZI1sMp5X";
-    let mut event = signed_event_envelope(hidden_event_id, 32, Vec::new());
-    event["actor_id"] = serde_json::json!(account_actor("did:web:alice.example", PEER_SOURCE_ID));
-    // The Circle security scope of a message is the producer-SIGNED
-    // `scope_ref` (`conformance/encoding.md` §6, and the spec's
-    // `circle-scope-fixture.json`: message payloads carry no `scope_circle_id`
-    // fragment and "still sign Event.scope_ref"). The reducer-managed
-    // `effective_scope` this fixture used to stamp on the envelope is not an
-    // Event member at all in v1 — it exists only on object read projections.
-    event["scope_ref"] = serde_json::json!({
-        "kind": "circle",
-        "realm_id": test_realm_id(),
-        "circle_id": TEST_CIRCLE_ID
-    });
-    event["created_at"] = serde_json::json!(arkret_canonical::format_timestamp_canonical(
-        now - ChronoDuration::seconds(5)
-    ));
-    event = resign_federation_event(event);
-    put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
-
-    let query_target = "https://server.test/_arkret/peer/events";
-    let query_body = serde_json::json!({
-        "filters": {"kind": "ak.message.create"},
-        "realm_ids": [test_realm_id()]
-    });
-    let mut query = TestClient::query(query_target).json(&query_body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        query_target,
-        &query_body,
-    ) {
-        query = query.add_header(name, value, true);
-    }
-    let page: Value = query
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(
-        page["events"].as_array().unwrap().len(),
-        0,
-        "source service represents Bob only, so Alice's Circle event is outside its read scope: {page:?}"
-    );
-
-    let resolve_target = "https://server.test/_arkret/peer/events/resolve";
-    // `PeerEventsResolveRequestBody` requires `realm_id`: every selector is
-    // scoped to exactly one Realm, so a body without it is not a resolve
-    // request at all.
-    let resolve_body = serde_json::json!({
-        "realm_id": test_realm_id(),
-        "event_ids": [hidden_event_id],
-        "include_payload": true
-    });
-    let mut resolve = TestClient::query(resolve_target).json(&resolve_body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        resolve_target,
-        &resolve_body,
-    ) {
-        resolve = resolve.add_header(name, value, true);
-    }
-    let resolved: Value = resolve
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(
-        resolved["events"].as_array().map(Vec::len),
-        Some(0),
-        "{resolved:?}"
-    );
-    // `PeerEventsResolveOutcome` keeps typed missing buckets: a nonexistent
-    // and an undisclosable selector share `missing_event_ids` so the two stay
-    // externally indistinguishable.
-    assert_eq!(
-        resolved["missing_event_ids"],
-        serde_json::json!([hidden_event_id]),
-        "{resolved:?}"
-    );
-}
-
-#[test]
 fn self_events_reject_federation_wire() {
     run_on_deep_stack(
         "self_events_reject_federation_wire",
@@ -1635,83 +1401,11 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
         .unwrap()
 }
 
-async fn seed_peer_read_authorization(state: &AppState, source_id: &str, member_did: &str) {
-    let now = Utc::now() - ChronoDuration::seconds(60);
-    let mut meta = state
-        .test_persistence()
-        .realm_meta()
-        .get(test_realm_id())
-        .await
-        .unwrap()
-        .unwrap_or_else(|| RealmMetaRecord {
-            owner: "did:web:alice.example".to_owned(),
-            deleted: false,
-            discoverability: "public".to_owned(),
-            history_access: "all_history_for_current_members".to_owned(),
-            preview_policy: None,
-            preview_policy_digest: None,
-            asset_privacy_policy: None,
-            asset_privacy_policy_digest: None,
-            encryption_profile: None,
-            plaintext_visible_services: BTreeSet::new(),
-            plaintext_visible_service_classes: Default::default(),
-            minimal_metadata_realm: false,
-            created_at: now,
-            updated_at: now,
-        });
-    meta.plaintext_visible_services.insert(source_id.to_owned());
-    meta.plaintext_visible_service_classes
-        .entry(source_id.to_owned())
-        .or_default()
-        .insert(arkret_wire::PlaintextDataClassKind::MessageContent);
-    meta.updated_at = now;
-    state
-        .test_persistence()
-        .realm_meta()
-        .put(test_realm_id(), &meta)
-        .await
-        .unwrap();
-    put_event_record(
-        state,
-        member_account_event(
-            "ak:event:AWOy3SEshibYHuXWgX09nbOW8yvqtRV769ZsokfmH7Ao",
-            member_did,
-            source_id,
-            21,
-        ),
-        now + ChronoDuration::seconds(1),
-    )
-    .await;
-}
-
 fn account_actor(principal_did: &str, station_id: &str) -> arkret_wire::ActorId {
     arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         fixture_actor_core_id(principal_did),
         arkret_identifiers::DidCoreId::new(station_id.to_owned()).unwrap(),
     ))
-}
-
-fn member_account_event(event_id: &str, member_did: &str, source_id: &str, seq: u64) -> Value {
-    let payload = serde_json::json!({
-        "member_id": account_actor(member_did, source_id),
-        "membership": "join"
-    });
-    event_envelope(
-        event_id,
-        "ak.member.state",
-        "did:web:admin.example",
-        seq,
-        payload,
-    )
-}
-
-fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64) -> Value {
-    let payload = serde_json::json!({
-        "circle_id": TEST_CIRCLE_ID,
-        "member_id": account_actor(member_did, PEER_SOURCE_ID),
-        "membership": "join"
-    });
-    event_envelope(event_id, "ak.circle.member.state", sender, seq, payload)
 }
 
 fn mls_welcome_payload() -> Value {
@@ -1781,38 +1475,4 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
             "accepted peer membership must project: {effect:?}"
         );
     }
-}
-
-fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
-    let members = members
-        .iter()
-        .map(|member| account_actor(member, PEER_SOURCE_ID).to_string())
-        .collect::<BTreeSet<_>>();
-    state.test_projection().lock().circles.insert(
-        circle_id.to_owned(),
-        CircleProjection {
-            circle_id: circle_id.to_owned(),
-            realm_id: test_realm_id().to_owned(),
-            profile_ref: None,
-            title: "Need to know".to_owned(),
-            summary: None,
-            display: serde_json::json!({"short_name":"Need","color_token":"slate","symbol":{"glyph":"ring"}}),
-            directory_visibility: "members".to_owned(),
-            join_rule: "invite".to_owned(),
-            history_access: "since_join".to_owned(),
-            content_encryption_floor: None,
-            metadata_encryption_floor: None,
-            encryption_profile: "none".to_owned(),
-            content_scheme: None,
-            durability_policy: None,
-            mls_group_ref: None,
-            state: CircleLifecycleState::Active,
-            state_changed_at: None,
-            created_by: account_actor("did:web:admin.example", PEER_SOURCE_ID).to_string(),
-            created_at: Utc::now() - ChronoDuration::seconds(30),
-            updated_by: None,
-            updated_at: None,
-            members,
-        },
-    );
 }
