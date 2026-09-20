@@ -137,6 +137,7 @@ impl Fixture {
             series_seq: 0,
             supersedes_id: None,
             supersedes_digest: None,
+            recovery_policy_ref: None,
             source_commit_ref: Some(crypto::KeyBackupSourceCommitRef {
                 realm_commit_id: wire::RealmCommitId::from_digest([79u8; 32]),
                 device_generation_ref: 1,
