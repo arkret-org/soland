@@ -23,6 +23,7 @@ mod apply_key_backup;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
+mod apply_policy_current;
 mod apply_realm_lifecycle;
 mod apply_realm_organization;
 mod apply_realm_policy;

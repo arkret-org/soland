@@ -338,6 +338,20 @@ pub enum ProjectionEffect {
         decision_id: String,
         realm_id: String,
     },
+    /// `ak.policy.set` replaced the complete Policy document selected by
+    /// `policy_id` in the governing Station's current-result projection.
+    PolicyProjected {
+        policy_id: String,
+        realm_id: String,
+    },
+    /// `ak.policy.action` replaced one approval configuration. The selector
+    /// branch stays explicit so a Policy id can never collide with an opaque
+    /// Realm-local action id.
+    PolicyActionProjected {
+        selector_kind: &'static str,
+        selector: String,
+        realm_id: String,
+    },
     /// State-machine rejected the operation per
     /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412
     /// `failed_precondition` with the canonical reason_code.

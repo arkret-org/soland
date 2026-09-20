@@ -809,6 +809,22 @@ fn apply_capability_relinquish_dispatch(
     s.apply_capability_relinquish(op, op.created_at)
 }
 
+fn apply_policy_set_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_policy_set(op)
+}
+
+fn apply_policy_action_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_policy_action(op)
+}
+
 /// P2 — dispatch for `ak.moderation.decision`. Projects the decision snapshot
 /// as an or_set add into the `ak.component.moderation_state.v1` cell keyed by
 /// `payload.target_ref`.
@@ -1231,6 +1247,14 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::CapabilityRelinquish,
         apply_capability_relinquish_dispatch,
+    );
+    // Policy documents and approval configurations are two registered typed
+    // current-result families. Policy-action keeps its policy-ref and
+    // Realm-local selector namespaces disjoint in the reducer.
+    m.insert(arkret_wire::EventKind::PolicySet, apply_policy_set_dispatch);
+    m.insert(
+        arkret_wire::EventKind::PolicyAction,
+        apply_policy_action_dispatch,
     );
     // Agent runtime key authorization + revocation. Authorize records the
     // key; revoke removes it. Neither operation changes Realm grants.

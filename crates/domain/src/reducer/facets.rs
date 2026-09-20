@@ -42,6 +42,11 @@ pub mod facet {
     pub const MEMBER_STATE: &str = "member.state";
     pub const MLS_EPOCH: &str = "mls.epoch";
     pub const MODERATION_STATE: &str = "moderation.state";
+    pub const POLICY: &str = "policy";
+    /// Policy-attached approval configuration keyed by `(policy_id, action)`.
+    pub const POLICY_ACTION_POLICY_REF: &str = "policy_action.policy_ref";
+    /// Realm-local approval configuration keyed by opaque `action_id`.
+    pub const POLICY_ACTION_REALM_ACTION: &str = "policy_action.realm_action";
     pub const REALM_ALIAS: &str = "realm.alias";
     pub const REALM_ARCHIVE: &str = "realm.archive";
     pub const REALM_AUTHORITY_ROOT: &str = "realm.authority_root";
