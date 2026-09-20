@@ -268,15 +268,15 @@ pub(crate) async fn introspect_admin_scopes(
     let response = client
         .post(url)
         .bearer_auth(channel.credential())
-    .json(&request)
-    .send()
-    .await
-    .map_err(|error| {
-        crate::app_error!(
-            TemporarilyUnavailable,
-            format!("admin scope introspection request failed: {error}"),
-        )
-    })?;
+        .json(&request)
+        .send()
+        .await
+        .map_err(|error| {
+            crate::app_error!(
+                TemporarilyUnavailable,
+                format!("admin scope introspection request failed: {error}"),
+            )
+        })?;
     if !response.status().is_success() {
         return Err(crate::app_error!(
             CapabilityDenied,

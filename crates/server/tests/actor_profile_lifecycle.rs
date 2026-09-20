@@ -242,11 +242,7 @@ async fn signed_profile_event(
                 "realm_id": realm_id,
             }))
             .add_header("authorization", format!("Bearer {token}"), true)
-            .add_header(
-                "Arkret-Operation",
-                "retired-event-frontier",
-                true,
-            )
+            .add_header("Arkret-Operation", "retired-event-frontier", true)
             .send(&app_from_state(state.clone()))
             .await
             .take_json()

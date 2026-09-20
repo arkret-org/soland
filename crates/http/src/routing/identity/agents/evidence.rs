@@ -16,8 +16,7 @@ use arkret_models_identity::agent_signer_evidence::{
     AgentAuthorizationStateWitness, AgentAuthorizationStatus, AgentDetachedJws, AgentKeyCellEntry,
     AgentLifecycleProvenance, AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence,
     ControllerAccountGateAttestation, ControllerAccountGateIssuanceInput,
-    ControllerAccountGateIssuanceResult, CurrentAgentSignerEvidence,
-    StationSigningKey,
+    ControllerAccountGateIssuanceResult, CurrentAgentSignerEvidence, StationSigningKey,
 };
 use arkret_signatures::proof::PublicKeyMaterial;
 use arkret_wire::{
@@ -1050,9 +1049,8 @@ async fn preflight_controller_gate(
     if response.len() > 1024 * 1024 {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
-    let outcome: ControllerAccountGateIssuanceResult =
-        serde_json::from_slice(&response)
-            .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
+    let outcome: ControllerAccountGateIssuanceResult = serde_json::from_slice(&response)
+        .map_err(|_| AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing)?;
     if outcome.request_id != request_id
         || outcome.controller_account_gate_attestation.principal_id != principal_id
         || outcome.controller_account_gate_attestation.authority_id != destination_id

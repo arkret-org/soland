@@ -84,7 +84,7 @@ impl<'a> AccountAuthorityClient<'a> {
             reason_code: Some(AuthSessionTerminationReason::AccountLogout),
         };
         self.post_json(self.logout_url, "Auth-side session logout", &request)
-        .await
+            .await
     }
 
     async fn post_json<Request, Response>(

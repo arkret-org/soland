@@ -280,7 +280,7 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
                 );
                 let body: arkret_models_collaboration::session_grants::SessionGrantValidationInput =
                     serde_json::from_slice(&request[body_start..])
-                    .expect("introspection request JSON");
+                        .expect("introspection request JSON");
                 let grant_jwt = match body {
                     arkret_models_collaboration::session_grants::SessionGrantValidationInput::ByJwt(request) => {
                         assert_eq!(request.audience_id.as_ref(), Some(&audience));

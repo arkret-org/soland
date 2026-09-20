@@ -183,11 +183,7 @@ async fn signed_account_data_submission(
     let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(&serde_json::json!({"actor_id": actor_id, "realm_id": realm_id}))
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header(
-            "Arkret-Operation",
-            "retired-event-frontier",
-            true,
-        )
+        .add_header("Arkret-Operation", "retired-event-frontier", true)
         .send(&app_from_state(state))
         .await;
     let status = response.status_code;
@@ -398,11 +394,7 @@ async fn submit_actor_private_event(
     let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(&serde_json::json!({"actor_id": actor_id, "realm_id": realm_id}))
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header(
-            "Arkret-Operation",
-            "retired-event-frontier",
-            true,
-        )
+        .add_header("Arkret-Operation", "retired-event-frontier", true)
         .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code;

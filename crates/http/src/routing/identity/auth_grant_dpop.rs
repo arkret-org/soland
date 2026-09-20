@@ -439,9 +439,9 @@ async fn introspect_session_grant_remote(
         match client
             .post(validated_url)
             .bearer_auth(channel.credential())
-        .json(&request)
-        .send()
-        .await
+            .json(&request)
+            .send()
+            .await
         {
             Ok(value) => {
                 response = Some(value);
