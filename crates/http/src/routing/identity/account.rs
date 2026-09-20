@@ -22,10 +22,11 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
 use arkret_models_collaboration::contact_operations::{
-    ContactAcceptRequestBody, ContactContinuityCheckpointOutcome,
-    ContactContinuityCheckpointRequestBody, ContactNextPrepareInput, ContactOperationOutcome,
-    ContactOperationRequestBody, ContactPeer, ContactRejectRequestBody,
-    ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
+    ContactAcceptRequestBody, ContactAgentProjection, ContactContinuityCheckpointOutcome,
+    ContactContinuityCheckpointRequestBody, ContactList, ContactListRow, ContactNextPrepareInput,
+    ContactOperationOutcome, ContactOperationRequestBody, ContactPeer, ContactRejectRequestBody,
+    ContactScopeUpdateRequestBody, ContactState, ContactTombstoneRequestBody,
+    DirectConversationSummary, DirectConversationSummaryState,
 };
 use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationCoordinates, DirectConversationFoundingAuthorityEvidence,
@@ -34,10 +35,6 @@ use arkret_models_collaboration::direct_conversation_ops::{
 };
 use arkret_models_collaboration::events_payloads::ActorProfileCreatePayload;
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
-use arkret_models_collaboration::http_bodies::{
-    ContactAgentProjection, ContactList, ContactListRow, ContactState, DirectConversationSummary,
-    DirectConversationSummaryState,
-};
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::account::{
     AccountDeviceSummary, AccountRegistrationAudit, AccountRegistrationAuditOutcome,
