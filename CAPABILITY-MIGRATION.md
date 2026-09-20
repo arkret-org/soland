@@ -466,6 +466,12 @@ root. The Seal surface is still **served**. `router_build.rs:335`
 | `QUERY /_arkret/peer/seals/frontier` | `peer.rs:179 peer_seals_frontier` |
 | `QUERY /_arkret/self/events/frontier` | `events_frontier` |
 
+2026-09-21 update: the `seals/history-authority` row above is a historical
+measurement, not a current route. Decision 0055 and the formal
+`governance/history-visibility.md` §3.1 retire this independent Seal/CellRef
+history oracle. Current history discovery, stream scan and readable-floor
+authorization remain separate registered surfaces.
+
 Meanwhile `routing/authority_commit.rs` — which declares `self/events`,
 `self/streams/scan`, `peer/streams/resolve`, `peer/realm-authority/handoff` and
 `open/realm-authority/bundle` — has no `mod` declaration anywhere and is not

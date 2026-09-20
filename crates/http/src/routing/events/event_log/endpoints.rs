@@ -235,7 +235,6 @@ pub(in crate::routing::events) fn router() -> Router {
                 .post(super::mls_accepted_artifact::read),
         )
         .push(Router::with_path("seals/mls-welcome-refs").post(super::mls_welcome_refs::read))
-        .push(Router::with_path("seals/history-authority").post(super::history_authority::read))
         .push(Router::with_path("committed-events/{event_id}").get(get_committed_event))
 }
 
