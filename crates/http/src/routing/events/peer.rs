@@ -8,13 +8,8 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountStatusResolveRequestBody,
 };
 use arkret_models_collaboration::account_status::UnsignedAccountStatusReceipt;
-use arkret_models_collaboration::event_query::{
-    EventsQueryPostRequestBody, PeerEventsFrontierRequestBody, SealFrontierRequestBody,
-};
-use arkret_models_collaboration::event_sync::{
-    EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, PeerSealFrontierState,
-    RealmSealFrontierView,
-};
+use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
+use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
 use arkret_models_collaboration::http_bodies::{
     PeerEventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
     PeerEventsSiblingPosition, PeerEventsSiblingPositionDisclosure,
@@ -28,7 +23,6 @@ use arkret_wire::{DirectorySourceRefAccess, SignalRelayOutcome, SignalRelayReque
 use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
-use serde::Serialize;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
@@ -36,10 +30,7 @@ use soland_services::events::{
     AcceptedEvent, PeerEventsPageQuery, RealmMetadata as RealmMetaRecord,
 };
 
-use super::{
-    is_realm_deleted, is_valid_hash_digest, now, query_param, render_error, sha256_hex,
-    validate_did,
-};
+use super::{is_realm_deleted, is_valid_hash_digest, now, query_param, render_error, validate_did};
 use crate::state::AppState;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
@@ -942,9 +933,7 @@ async fn enqueue_account_status_fanout(
         // stable service id before every send. `peer_url` is historical
         // diagnostics only; an absent configured locator must not suppress
         // the durable intent.
-        let peer_url = configured
-            .get(service_id)
-            .map(|peer| peer.url.as_str());
+        let peer_url = configured.get(service_id).map(|peer| peer.url.as_str());
         crate::routing::federation::outbox::enqueue_coalesced_outbound(
             state,
             peer_url,
@@ -1751,205 +1740,6 @@ fn discovery_payload_resource_key(
             .and_then(|value| arkret_canonical::canonical_json_string(value).ok()),
         _ => None,
     }
-}
-
-#[allow(dead_code)]
-async fn peer_events_frontier(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<EventsFrontierFederationPeerState> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let has_body = req.method().as_str() == "QUERY";
-    validate_peer_request(state, req, has_body).await?;
-    let source_id = source_id_from_request(req)?;
-    let (realm_id, frontier_actor_id) = if has_body {
-        let body = parse_json_body::<PeerEventsFrontierRequestBody>(
-            req,
-            "invalid retired peer Event frontier request body",
-        )
-        .await?;
-        (body.realm_id.into_string(), body.actor_id)
-    } else {
-        (
-            query_param(req, "realm_id")
-                .ok_or_else(|| AppError::param_missing("realm_id is required"))?,
-            None,
-        )
-    };
-    let realm_id =
-        RealmId::new(realm_id).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
-    if is_realm_deleted(state, realm_id.as_str()).await {
-        return Err(AppError::not_found("not found"));
-    }
-    let records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| AppError::internal(format!("peer frontier: {error}")))?;
-    let authz = PeerReadAuthz::build(state, &source_id, &records).await?;
-    if !authz.frontier_visible_for_realm(realm_id.as_str()) {
-        return Err(AppError::not_found("not found"));
-    }
-    let visible_realm_records = records
-        .iter()
-        .filter(|record| {
-            super::event_log::canonical_realm_id_for_record(record).as_deref()
-                == Some(realm_id.as_str())
-                && authz.record_visible(record)
-        })
-        .collect::<Vec<_>>();
-    let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
-    let mut max_hlc: Option<String> = None;
-    for record in &visible_realm_records {
-        actor_frontier
-            .entry(record.actor_id.clone())
-            .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
-            .or_insert(record.actor_seq);
-        if let Some(hlc) = record.envelope.get("hlc").and_then(Value::as_str) {
-            max_hlc = match max_hlc {
-                Some(current) if current.as_str() >= hlc => Some(current),
-                _ => Some(hlc.to_owned()),
-            };
-        }
-    }
-    let mut heads = visible_realm_records
-        .iter()
-        .filter(|record| {
-            actor_frontier
-                .get(record.actor_id.as_str())
-                .is_some_and(|seq| *seq == record.actor_seq)
-        })
-        .map(|record| record.event_id.clone())
-        .collect::<Vec<_>>();
-    heads.sort();
-    heads.dedup();
-    let typed_heads = heads
-        .iter()
-        .map(|event_id| {
-            EventId::new(event_id.clone())
-                .map_err(|_| AppError::internal("stored frontier event_id is invalid"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let typed_actor_frontier =
-        super::frontier::typed_actor_upper_bounds(actor_frontier).map_err(AppError::internal)?;
-    let typed_realm_frontier =
-        super::frontier::typed_realm_frontier([(realm_id.as_str().to_owned(), heads.clone())]);
-    let frontier_root =
-        super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_frontier)
-            .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
-    let projection = state.projections().snapshot();
-    let (auth_state_root, policy_frontier_root, membership_frontier_root) =
-        if let Some(actor_id) = frontier_actor_id.as_ref() {
-            let policy = projection
-                .realm_policy_frontier_digest(realm_id.as_str())
-                .ok_or_else(|| AppError::internal("policy frontier state root failed"))?;
-            let membership = projection
-                .realm_membership_frontier_digest(realm_id.as_str(), &actor_id.to_string())
-                .ok_or_else(|| AppError::not_found("not found"))?;
-            let authorization = projection
-                .realm_authorization_state_digest(realm_id.as_str(), &actor_id.to_string())
-                .ok_or_else(|| AppError::internal("authorization state root failed"))?;
-            (Some(authorization), Some(policy), Some(membership))
-        } else {
-            (None, None, None)
-        };
-    let service_id = DidCoreId::new(state.service_id().clone())
-        .map_err(|_| AppError::internal("service_id is invalid"))?;
-    let observed_at = now();
-    let mut response = EventsFrontierFederationPeerState {
-        realm_id,
-        head_ids: typed_heads,
-        frontier_root,
-        auth_state_root,
-        policy_frontier_root,
-        membership_frontier_root,
-        actor_seq_upper_bounds: typed_actor_frontier,
-        witness_receipts: Vec::new(),
-        observed_at: arkret_canonical::format_timestamp_canonical(observed_at),
-        issuer_id: service_id,
-        signature: BTreeMap::new(),
-        max_hlc,
-    };
-    let (_, verification_method) = state
-        .current_service_receipt_binding()
-        .await
-        .map_err(|error| AppError::internal(format!("frontier signer: {error}")))?;
-    response.signature = super::frontier::sign_frontier_root(
-        &response,
-        &verification_method,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?;
-    json_ok(response)
-}
-
-#[derive(Serialize)]
-struct PeerSealFrontierProofBinding<'a> {
-    context: &'static str,
-    frontier: &'a RealmSealFrontierView,
-    verification_method: &'a arkret_wire::DidUrl,
-    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
-    created_at: DateTime<Utc>,
-}
-
-#[allow(dead_code)]
-async fn peer_seals_frontier(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<PeerSealFrontierState> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, true).await?;
-    let source_id = source_id_from_request(req)?;
-    let request = parse_json_body::<SealFrontierRequestBody>(
-        req,
-        "invalid retired peer Seal frontier request body",
-    )
-    .await?;
-    if is_realm_deleted(state, request.realm_id.as_str()).await
-        || !peer_realm_visibility(state, &source_id, request.realm_id.as_str()).await?
-    {
-        return Err(AppError::not_found("not found"));
-    }
-    let frontier =
-        super::event_log::endpoints::load_realm_seal_frontier(state, &request.realm_id).await?;
-    let created_at = frontier.observation_coordinate.observed_at;
-    let verification_method = state
-        .service_verification_method("notary-key")
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let frontier_bytes = arkret_canonical::canonical_json_bytes(&frontier)
-        .map_err(|error| AppError::internal(format!("peer Seal frontier: {error}")))?;
-    let payload_digest = arkret_wire::Hash::new(format!("sha256:{}", sha256_hex(&frontier_bytes)))
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let binding = PeerSealFrontierProofBinding {
-        context: arkret_wire::ProofContextId::PEER_SEAL_FRONTIER_PROOF_V1,
-        frontier: &frontier,
-        verification_method: &verification_method,
-        created_at,
-    };
-    let binding_bytes = arkret_canonical::canonical_json_bytes(&binding)
-        .map_err(|error| AppError::internal(format!("peer Seal frontier proof: {error}")))?;
-    let jws = arkret_signatures::jws::sign_jws_ed25519(
-        &binding_bytes,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| AppError::internal(format!("peer Seal frontier signing failed: {error}")))?;
-    let service_proof = arkret_wire::PayloadProof {
-        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        verification_method,
-        payload_digest,
-        created_at,
-        domain: None,
-        audience: None,
-        proof_purpose: None,
-        jws,
-    };
-    service_proof
-        .validate_production()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(PeerSealFrontierState {
-        frontier,
-        service_proof,
-    })
 }
 
 #[derive(Debug)]

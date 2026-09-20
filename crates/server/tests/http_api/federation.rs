@@ -623,14 +623,14 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
 }
 
 #[test]
-fn peer_events_query_and_frontier_use_peer_surface() {
+fn peer_events_query_and_retired_frontier_use_peer_surface() {
     run_on_deep_stack(
-        "peer_events_query_and_frontier_use_peer_surface",
-        peer_events_query_and_frontier_use_peer_surface_body,
+        "peer_events_query_and_retired_frontier_use_peer_surface",
+        peer_events_query_and_retired_frontier_use_peer_surface_body,
     );
 }
 
-async fn peer_events_query_and_frontier_use_peer_surface_body() {
+async fn peer_events_query_and_retired_frontier_use_peer_surface_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
     let mut event = signed_event_envelope(
@@ -732,34 +732,8 @@ async fn peer_events_query_and_frontier_use_peer_surface_body() {
     ) {
         frontier = frontier.add_header(name, value, true);
     }
-    let mut frontier_response = frontier.send(&app_from_state(state)).await;
-    let frontier_status = frontier_response.status_code;
-    let frontier: Value = frontier_response.take_json().await.unwrap();
-    assert_eq!(
-        frontier_status,
-        Some(StatusCode::OK),
-        "peer frontier response: {frontier}"
-    );
-    assert_eq!(frontier["realm_id"], test_realm_id(), "{frontier}");
-    assert!(
-        frontier["head_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|head| head == expected_event_id.as_str())
-    );
-    assert!(
-        frontier["frontier_root"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:")
-    );
-    assert_eq!(frontier["issuer_id"], service_id());
-    assert_eq!(frontier["signature"]["scheme"], "ed25519-detached-jws");
-    assert_eq!(
-        frontier["signature"]["signed_payload"]["frontier_root"],
-        frontier["frontier_root"]
-    );
+    let frontier_response = frontier.send(&app_from_state(state)).await;
+    assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
 }
 
 #[test]
@@ -962,107 +936,36 @@ async fn peer_events_submit_accepts_online_event_without_offline_evidence_body()
 }
 
 #[test]
-fn peer_events_frontier_exposes_current_sibling_heads() {
+fn retired_peer_frontiers_are_unreachable_and_not_advertised() {
     run_on_deep_stack(
-        "peer_events_frontier_exposes_current_sibling_heads",
-        peer_events_frontier_exposes_current_sibling_heads_body,
+        "retired_peer_frontiers_are_unreachable_and_not_advertised",
+        retired_peer_frontiers_are_unreachable_and_not_advertised_body,
     );
 }
 
-async fn peer_events_frontier_exposes_current_sibling_heads_body() {
+async fn retired_peer_frontiers_are_unreachable_and_not_advertised_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
-    let now = Utc::now();
-    let mut expected_heads = Vec::new();
-    for (idx, event_id) in [
-        "ak:event:AZTNb6kCXn_8MiH9ew5d3ugUByYbTtI5RHFLWIvmeYK0",
-        "ak:event:AXGDvPdO4b3s6WgtLTBVjuLATST_xdBnM02TPZ_YJfhf",
-    ]
-    .iter()
-    .enumerate()
-    {
-        let event = signed_event_envelope(event_id, 42, Vec::new());
-        expected_heads.push(authored_event_id(&event).to_owned());
-        put_event_record(&state, event, now + ChronoDuration::seconds(idx as i64)).await;
+    let service = app_from_state(state);
+    for path in [
+        "http://server/_arkret/peer/events/frontier",
+        "http://server/_arkret/peer/seals/frontier",
+    ] {
+        let response = TestClient::query(path)
+            .json(&serde_json::json!({"realm_id": test_realm_id()}))
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
     }
-
-    let frontier_target = "https://server.test/_arkret/peer/events/frontier";
-    let frontier_body = serde_json::json!({"realm_id": test_realm_id()});
-    let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        frontier_target,
-        &frontier_body,
-    ) {
-        frontier = frontier.add_header(name, value, true);
-    }
-    let frontier: Value = frontier
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let heads = frontier["head_ids"].as_array().unwrap();
-    for expected_head in expected_heads {
-        assert!(
-            heads.iter().any(|head| head == expected_head.as_str()),
-            "{frontier:?}"
-        );
-    }
-    assert_eq!(
-        frontier["actor_seq_upper_bounds"]
-            [account_actor("did:web:alice.example", PEER_SOURCE_ID).to_string()],
-        42
-    );
-}
-
-#[test]
-fn peer_seal_frontier_returns_typed_frontier_with_service_proof() {
-    run_on_deep_stack(
-        "peer_seal_frontier_returns_typed_frontier_with_service_proof",
-        peer_seal_frontier_returns_typed_frontier_with_service_proof_body,
-    );
-}
-
-async fn peer_seal_frontier_returns_typed_frontier_with_service_proof_body() {
-    let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
-    seed_test_realm_basis_seal(&state, test_realm_id(), "did:web:alice.example").await;
-
-    let target = "https://server.test/_arkret/peer/seals/frontier";
-    let body = serde_json::json!({"realm_id": test_realm_id()});
-    let mut request = TestClient::query(target).json(&body);
-    for (name, value) in signed_federation_query_headers(
-        PEER_SOURCE_DID,
-        service_id(),
-        DESTINATION_TRUST_DOMAIN,
-        target,
-        &body,
-    ) {
-        request = request.add_header(name, value, true);
-    }
-    let mut response = request.send(&app_from_state(state)).await;
+    let mut response = TestClient::get("http://server/.well-known/arkret")
+        .send(&service)
+        .await;
     assert_eq!(response.status_code, Some(StatusCode::OK));
-    let value: Value = response.take_json().await.unwrap();
-    let typed: arkret_models_collaboration::event_sync::PeerSealFrontierState =
-        serde_json::from_value(value.clone())
-            .unwrap_or_else(|error| panic!("typed peer Seal frontier: {error}; {value}"));
-    assert_eq!(typed.frontier.realm_id.as_str(), test_realm_id());
-    assert!(typed.frontier.sole_leaf().is_ok());
-    assert_eq!(
-        typed.service_proof.kind,
-        arkret_wire::proof_kind::DETACHED_JWS
-    );
+    let advertised: Value = response.take_json().await.unwrap();
     assert!(
-        typed
-            .service_proof
-            .payload_digest
-            .as_str()
-            .starts_with("sha256:")
+        advertised["endpoints"]
+            .get("peer_events_frontier")
+            .is_none()
     );
-    typed.service_proof.validate_production().unwrap();
 }
 
 /// SOL-02-007 - the federation submit path MUST bind the envelope actor to
