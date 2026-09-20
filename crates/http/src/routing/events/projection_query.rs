@@ -33,15 +33,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{MorphId, RealmId, RelationId, SpaceId, StrandId};
-use arkret_models_collaboration::http_bodies::{
-    ProjectionAssignedToRelation, ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState,
-    ProjectionSpaceList, ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList,
-    ProjectionStrandRow,
-};
 use arkret_models_collaboration::objects::query_projection::{
-    DocumentMorphProjectionOutcome, ReferenceProjectionState,
+    DocumentMorphProjectionOutcome, ProjectionAssignedToRelation, ProjectionMorphList,
+    ProjectionMorphRow, ProjectionSpaceList, ProjectionSpaceRow, ProjectionStrandList,
+    ProjectionStrandRow, ReferenceProjectionState,
 };
 use arkret_models_collaboration::objects::relation::RelationEndpoint;
+use arkret_wire::{ObjectState, SpaceState};
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
@@ -98,19 +96,19 @@ fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
     Ok(realm_id)
 }
 
-fn projection_space_state(state: SpaceContainerLifecycleState) -> ProjectionSpaceState {
+fn projection_space_state(state: SpaceContainerLifecycleState) -> SpaceState {
     match state {
-        SpaceContainerLifecycleState::Active => ProjectionSpaceState::Active,
-        SpaceContainerLifecycleState::Archived => ProjectionSpaceState::Archived,
-        SpaceContainerLifecycleState::Tombstoned => ProjectionSpaceState::Tombstoned,
+        SpaceContainerLifecycleState::Active => SpaceState::Active,
+        SpaceContainerLifecycleState::Archived => SpaceState::Archived,
+        SpaceContainerLifecycleState::Tombstoned => SpaceState::Tombstoned,
     }
 }
 
-fn projection_object_state(state: ObjectLifecycleState) -> ProjectionObjectState {
+fn projection_object_state(state: ObjectLifecycleState) -> ObjectState {
     match state {
-        ObjectLifecycleState::Active => ProjectionObjectState::Active,
-        ObjectLifecycleState::Archived => ProjectionObjectState::Archived,
-        ObjectLifecycleState::Redacted => ProjectionObjectState::Redacted,
+        ObjectLifecycleState::Active => ObjectState::Active,
+        ObjectLifecycleState::Archived => ObjectState::Archived,
+        ObjectLifecycleState::Redacted => ObjectState::Redacted,
     }
 }
 
@@ -1063,7 +1061,7 @@ async fn list_strand_projections(
 struct StrandProjectionView {
     strand_id: String,
     realm_id: String,
-    state: ProjectionObjectState,
+    state: ObjectState,
     #[serde(
         serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp"
     )]
