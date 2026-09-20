@@ -105,6 +105,17 @@ pub trait AccountStatusReplicaStore: Send + Sync {
         max_services: usize,
     ) -> PersistenceResult<Vec<arkret_wire::DidCoreId>>;
 
+    /// Rebuild observations from the closed set of locally persisted state
+    /// families. Implementations must match the complete AccountId and may
+    /// only derive peer services from typed service/Actor identities already
+    /// carried by those rows.
+    async fn discover_affected_services(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        holder_service_id: &arkret_wire::DidCoreId,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Vec<AccountStatusAffectedServiceObservation>>;
+
     async fn affected_services(
         &self,
         account_id: &arkret_wire::AccountId,

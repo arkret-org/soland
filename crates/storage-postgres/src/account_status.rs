@@ -31,6 +31,57 @@ struct AffectedServiceRow {
     service_id: String,
 }
 
+#[derive(QueryableByName)]
+struct AffectedSourceRow {
+    #[diesel(sql_type = Text)]
+    source: String,
+}
+
+#[derive(QueryableByName)]
+struct AffectedCandidateRow {
+    #[diesel(sql_type = Text)]
+    source: String,
+    #[diesel(sql_type = Text)]
+    candidate: String,
+}
+
+fn affected_source(
+    value: &str,
+) -> PersistenceResult<soland_storage::AccountStatusAffectedServiceSource> {
+    use soland_storage::AccountStatusAffectedServiceSource as Source;
+    match value {
+        "session" => Ok(Source::Session),
+        "device" => Ok(Source::Device),
+        "key_package" => Ok(Source::KeyPackage),
+        "to_device" => Ok(Source::ToDevice),
+        "push_route" => Ok(Source::PushRoute),
+        "principal_locator" => Ok(Source::PrincipalLocator),
+        "realm_membership" => Ok(Source::RealmMembership),
+        other => Err(PersistenceError::Internal(format!(
+            "stored affected-service source is invalid: {other}"
+        ))),
+    }
+}
+
+fn push_unique_observation(
+    observations: &mut Vec<AccountStatusAffectedServiceObservation>,
+    service_id: arkret_wire::DidCoreId,
+    source: soland_storage::AccountStatusAffectedServiceSource,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) {
+    if observations
+        .iter()
+        .any(|observation| observation.service_id == service_id && observation.source == source)
+    {
+        return;
+    }
+    observations.push(AccountStatusAffectedServiceObservation {
+        service_id,
+        source,
+        observed_at,
+    });
+}
+
 fn decode_record(row: &RecordRow) -> PersistenceResult<AccountStatusRecord> {
     serde_json::from_value(row.record.clone()).map_err(|error| {
         PersistenceError::Internal(format!("stored account-status record is invalid: {error}"))
@@ -289,6 +340,90 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn discover_affected_services(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        holder_service_id: &arkret_wire::DidCoreId,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Vec<AccountStatusAffectedServiceObservation>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let account_actor = arkret_wire::ActorId::account(account_id.clone()).to_string();
+        let account = encode_account_id(account_id)?;
+        let local_sources = sql_query(
+            "SELECT 'session'::text AS source WHERE EXISTS (SELECT 1 FROM sessions WHERE actor_id = $1) \
+             UNION ALL SELECT 'device'::text WHERE EXISTS (SELECT 1 FROM devices WHERE actor_id = $1) \
+             UNION ALL SELECT 'key_package'::text WHERE EXISTS (SELECT 1 FROM mls_key_packages WHERE actor_id = $1) \
+             UNION ALL SELECT 'to_device'::text WHERE EXISTS (SELECT 1 FROM device_messages WHERE sender = $1 OR recipient = $1) \
+             UNION ALL SELECT 'push_route'::text WHERE EXISTS (SELECT 1 FROM push_devices WHERE payload->'account_id' = $2) \
+             UNION ALL SELECT 'principal_locator'::text WHERE EXISTS (SELECT 1 FROM invite_locators WHERE subject_id = $1 OR recipient_id = $1)",
+        )
+        .bind::<Text, _>(&account_actor)
+        .bind::<Jsonb, _>(&account)
+        .load::<AffectedSourceRow>(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+
+        let mut observations = Vec::new();
+        for row in local_sources {
+            push_unique_observation(
+                &mut observations,
+                holder_service_id.clone(),
+                affected_source(&row.source)?,
+                observed_at,
+            );
+        }
+
+        // Session audiences are explicit service identities. They are not
+        // inferred from a URL or deployment config.
+        let session_candidates = sql_query(
+            "SELECT DISTINCT 'session'::text AS source, audience AS candidate \
+             FROM sessions WHERE actor_id = $1",
+        )
+        .bind::<Text, _>(&account_actor)
+        .load::<AffectedCandidateRow>(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        for row in session_candidates {
+            if let Ok(service_id) = arkret_wire::DidCoreId::new(row.candidate) {
+                push_unique_observation(
+                    &mut observations,
+                    service_id,
+                    affected_source(&row.source)?,
+                    observed_at,
+                );
+            }
+        }
+
+        // To-device and locator rows can name a peer only through the typed
+        // counterpart ActorId. Malformed or principal-only strings do not
+        // broaden the affected set.
+        let actor_candidates = sql_query(
+            "SELECT DISTINCT 'to_device'::text AS source, \
+                 CASE WHEN sender = $1 THEN recipient ELSE sender END AS candidate \
+             FROM device_messages WHERE sender = $1 OR recipient = $1 \
+             UNION ALL \
+             SELECT DISTINCT 'principal_locator'::text AS source, \
+                 CASE WHEN subject_id = $1 THEN recipient_id ELSE subject_id END AS candidate \
+             FROM invite_locators WHERE subject_id = $1 OR recipient_id = $1",
+        )
+        .bind::<Text, _>(&account_actor)
+        .load::<AffectedCandidateRow>(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        for row in actor_candidates {
+            let Ok(actor) = serde_json::from_str::<arkret_wire::ActorId>(&row.candidate) else {
+                continue;
+            };
+            push_unique_observation(
+                &mut observations,
+                actor.route_service_id().clone(),
+                affected_source(&row.source)?,
+                observed_at,
+            );
+        }
+        Ok(observations)
+    }
+
     async fn affected_services(
         &self,
         account_id: &arkret_wire::AccountId,
@@ -328,6 +463,12 @@ mod tests {
     };
 
     use super::*;
+
+    #[derive(QueryableByName)]
+    struct TestAccountPk {
+        #[diesel(sql_type = BigInt)]
+        pk: i64,
+    }
 
     /// The shared contract pool. `SOLAND_TEST_DATABASE_URL` or `DATABASE_URL`
     /// must name a reachable database; these contracts fail rather than skip.
@@ -416,5 +557,162 @@ mod tests {
                 .expect("durable index is readable after restart"),
             vec![service_a, service_b]
         );
+    }
+
+    #[tokio::test]
+    async fn postgres_discovers_the_closed_local_state_source_families_for_exact_account() {
+        let pool = test_pool().await;
+        let namespace = unique_namespace();
+        let account_id = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(format!("ak:did_core:web:{namespace}.example")).unwrap(),
+            arkret_wire::DidCoreId::new(format!("ak:did_core:web:origin-{namespace}.example"))
+                .unwrap(),
+        );
+        let account_actor = arkret_wire::ActorId::account(account_id.clone()).to_string();
+        let holder =
+            arkret_wire::DidCoreId::new(format!("ak:did_core:web:holder-{namespace}.example"))
+                .unwrap();
+        let peer = arkret_wire::DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+            .unwrap();
+        let peer_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(format!(
+                "ak:did_core:web:peer-principal-{namespace}.example"
+            ))
+            .unwrap(),
+            peer.clone(),
+        ))
+        .to_string();
+        let now = chrono::Utc::now();
+        let mut conn = pg_conn(&pool).await.expect("contract database connection");
+        let account_pk = sql_query(
+            "INSERT INTO accounts (principal_id, station_id, payload) VALUES ($1, $2, '{}'::jsonb) RETURNING pk",
+        )
+        .bind::<Text, _>(account_id.principal_id.as_str())
+        .bind::<Text, _>(account_id.station_id.as_str())
+        .get_result::<TestAccountPk>(&mut conn)
+        .await
+        .expect("insert exact account")
+        .pk;
+        sql_query(
+            "INSERT INTO sessions (id, account_pk, actor_id, device_id, audience, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind::<Text, _>(format!("session-{namespace}"))
+        .bind::<BigInt, _>(account_pk)
+        .bind::<Text, _>(&account_actor)
+        .bind::<Text, _>(format!("device-{namespace}"))
+        .bind::<Text, _>(peer.as_str())
+        .bind::<Timestamptz, _>(now + chrono::Duration::hours(1))
+        .execute(&mut conn)
+        .await
+        .expect("insert session source");
+        sql_query(
+            "INSERT INTO device_inventory_station (singleton, station_id) VALUES (TRUE, $1) \
+             ON CONFLICT (singleton) DO NOTHING",
+        )
+        .bind::<Text, _>(holder.as_str())
+        .execute(&mut conn)
+        .await
+        .expect("ensure device inventory owner");
+        sql_query(
+            "INSERT INTO devices (id, actor_id, device_id, payload) VALUES ($1, $2, $3, '{}'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::new_v4())
+        .bind::<Text, _>(&account_actor)
+        .bind::<Text, _>(format!("inventory-device-{namespace}"))
+        .execute(&mut conn)
+        .await
+        .expect("insert device source");
+        sql_query(
+            "INSERT INTO mls_key_packages \
+             (id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, \
+              key_package_bytes, capabilities, capabilities_digest, last_resort, \
+              lifetime_not_before, lifetime_not_after, device_authorize_event_id, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, '[]'::jsonb, $8, FALSE, 1, 2, $9, 1)",
+        )
+        .bind::<Text, _>(format!("key-package-{namespace}"))
+        .bind::<Text, _>(format!("key-package-ref-{namespace}"))
+        .bind::<Text, _>(format!("sha256:{:0<64}", namespace))
+        .bind::<BigInt, _>(account_pk)
+        .bind::<Text, _>(&account_actor)
+        .bind::<Text, _>(format!("inventory-device-{namespace}"))
+        .bind::<diesel::sql_types::Binary, _>(vec![1_u8])
+        .bind::<Text, _>(format!("sha256:{:1<64}", namespace))
+        .bind::<diesel::sql_types::Binary, _>(vec![0_u8; 33])
+        .execute(&mut conn)
+        .await
+        .expect("insert KeyPackage source");
+        sql_query(
+            "INSERT INTO device_messages \
+             (id, idempotency_key, sender, recipient, device_id, recipient_device_authorization, position, content) \
+             VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 1, '{}'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::new_v4())
+        .bind::<Text, _>(format!("message-{namespace}"))
+        .bind::<Text, _>(&account_actor)
+        .bind::<Text, _>(&peer_actor)
+        .bind::<Text, _>(format!("peer-device-{namespace}"))
+        .execute(&mut conn)
+        .await
+        .expect("insert to-device source");
+        sql_query(
+            "INSERT INTO push_devices \
+             (id, actor_id, device_id, device_authorization, push_gateway, push_key, payload) \
+             VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, $6)",
+        )
+        .bind::<Text, _>(format!("push-{namespace}"))
+        .bind::<Text, _>(&account_actor)
+        .bind::<Text, _>(format!("inventory-device-{namespace}"))
+        .bind::<Text, _>("https://push.invalid/")
+        .bind::<Text, _>(format!("push-key-{namespace}"))
+        .bind::<Jsonb, _>(serde_json::json!({
+            "account_id": account_id,
+            "push_route_id": format!("route-{namespace}"),
+            "push_target_id": format!("target-{namespace}")
+        }))
+        .execute(&mut conn)
+        .await
+        .expect("insert push-route source");
+        sql_query(
+            "INSERT INTO invite_locators \
+             (locator_id, token_digest, subject_id, recipient_id, issued_at, expires_at, record_payload) \
+             VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb)",
+        )
+        .bind::<Text, _>(format!("locator-{namespace}"))
+        .bind::<Text, _>(format!("token-{namespace}"))
+        .bind::<Text, _>(&account_actor)
+        .bind::<Text, _>(&peer_actor)
+        .bind::<Timestamptz, _>(now)
+        .bind::<Timestamptz, _>(now + chrono::Duration::hours(1))
+        .execute(&mut conn)
+        .await
+        .expect("insert principal-locator source");
+
+        let store = PgAccountStatusReplicaStore { pool };
+        let observations = store
+            .discover_affected_services(&account_id, &holder, now)
+            .await
+            .expect("discover closed source families");
+        for source in [
+            AccountStatusAffectedServiceSource::Session,
+            AccountStatusAffectedServiceSource::Device,
+            AccountStatusAffectedServiceSource::KeyPackage,
+            AccountStatusAffectedServiceSource::ToDevice,
+            AccountStatusAffectedServiceSource::PushRoute,
+            AccountStatusAffectedServiceSource::PrincipalLocator,
+        ] {
+            assert!(observations.iter().any(|observation| {
+                observation.source == source && observation.service_id == holder
+            }));
+        }
+        for source in [
+            AccountStatusAffectedServiceSource::Session,
+            AccountStatusAffectedServiceSource::ToDevice,
+            AccountStatusAffectedServiceSource::PrincipalLocator,
+        ] {
+            assert!(observations.iter().any(|observation| {
+                observation.source == source && observation.service_id == peer
+            }));
+        }
     }
 }

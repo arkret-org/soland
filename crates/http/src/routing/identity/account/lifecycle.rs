@@ -508,19 +508,34 @@ pub(crate) async fn durable_deactivation_peer_service_targets_for_account(
 ) -> Result<Vec<Value>, AppError> {
     let projected = deactivation_peer_service_targets_for_account(state, account_id);
     let observed_at = now();
-    let observations = projected
-        .iter()
-        .filter_map(|target| target.get("service_id").and_then(Value::as_str))
-        .map(|service_id| {
-            Ok(soland_storage::AccountStatusAffectedServiceObservation {
-                service_id: arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(
-                    |error| AppError::internal(format!("affected service id is invalid: {error}")),
-                )?,
-                source: soland_storage::AccountStatusAffectedServiceSource::RealmMembership,
-                observed_at,
+    let local_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("local service id is invalid: {error}")))?;
+    let mut observations = state
+        .persistence()
+        .discover_account_status_affected_services(account_id, &local_service_id, observed_at)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "affected-service source discovery unavailable: {error}"
+            ))
+        })?;
+    observations.extend(
+        projected
+            .iter()
+            .filter_map(|target| target.get("service_id").and_then(Value::as_str))
+            .map(|service_id| {
+                Ok(soland_storage::AccountStatusAffectedServiceObservation {
+                    service_id: arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(
+                        |error| {
+                            AppError::internal(format!("affected service id is invalid: {error}"))
+                        },
+                    )?,
+                    source: soland_storage::AccountStatusAffectedServiceSource::RealmMembership,
+                    observed_at,
+                })
             })
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
+            .collect::<Result<Vec<_>, AppError>>()?,
+    );
     let durable = state
         .persistence()
         .merge_account_status_affected_services(account_id, &observations, 256)

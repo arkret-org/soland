@@ -134,6 +134,19 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn discover_account_status_affected_services(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        holder_service_id: &arkret_wire::DidCoreId,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<Vec<soland_storage::AccountStatusAffectedServiceObservation>> {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .discover_affected_services(account_id, holder_service_id, observed_at)
+            .await?)
+    }
+
     pub async fn account_status_affected_services(
         &self,
         account_id: &arkret_wire::AccountId,
