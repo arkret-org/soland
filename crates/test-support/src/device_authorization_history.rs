@@ -53,6 +53,7 @@ pub fn possession(
             not_before: at(),
             expires_at: None,
             binding,
+            authorized_generation_ref: 1,
             applet_id: None,
         },
     )
@@ -67,6 +68,7 @@ pub struct DeviceAuthorizationSpec {
     pub not_before: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub binding: DeviceAuthorizationBindingKind,
+    pub authorized_generation_ref: u64,
     /// Present on exactly `applet_managed_delegation`
     /// (`device-lifecycle.md` 5.2.3); every other branch forbids it.
     pub applet_id: Option<AppletId>,
@@ -92,6 +94,7 @@ pub fn possession_with(
         not_before: spec.not_before,
         expires_at: spec.expires_at.map(Some),
         authorization_binding_kind: spec.binding,
+        authorized_generation_ref: spec.authorized_generation_ref,
         // The possession transcript excludes this field, so the placeholder is
         // replaced below by the real signature over that transcript.
         device_signature: SignatureMaterial::NonEmptyString(
@@ -250,6 +253,7 @@ impl DeviceHistoryFixture {
                 not_before: options.founding_not_before,
                 expires_at: options.founding_expires_at,
                 binding: DeviceAuthorizationBindingKind::RegistrationAnchor,
+                authorized_generation_ref: 1,
                 applet_id: None,
             },
         );

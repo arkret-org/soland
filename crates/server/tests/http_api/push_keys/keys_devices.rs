@@ -1354,6 +1354,7 @@ async fn keys_query_hides_revoked_device_body() {
                 not_before: confirmed_history_time(),
                 expires_at: None,
                 binding: DeviceAuthorizationBindingKind::AcceptedDevice,
+                authorized_generation_ref: 1,
                 applet_id: None,
             },
         ))
