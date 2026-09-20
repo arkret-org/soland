@@ -61,6 +61,7 @@ pub(super) async fn apply_projection_preflight(
         }
         preflight_moderation_dismiss(state, operation).await?;
         actor_private_account_data = preflight_account_data_cas(state, operation).await?;
+        preflight_actor_profile_state_guard(state, operation).await?;
         preflight_member_identity_state_guard(state, operation)?;
         // Holder-private consent is admission state, not a post-acceptance
         // cache: resolve the whole or_set mutation and its eager invalidation
