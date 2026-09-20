@@ -201,6 +201,53 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     } else {
         SyncCursor::default()
     };
+    if body.after.is_some() {
+        let actor = match crate::routing::identity::session_actor::session_actor_from_credential(
+            &state, &session,
+        ) {
+            Ok(actor) => actor.to_string(),
+            Err(error) => {
+                tracing::error!(%error, "authenticated account subscribe session has no actor");
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "authenticated session actor is unavailable",
+                );
+                return;
+            }
+        };
+        let position = u64::try_from(after_cursor.account_data_change_position)
+            .expect("validated account-data change position is non-negative");
+        match state
+            .account_data()
+            .change_position_is_replayable(&actor, position)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                // Reject before subscribing to broadcast or building any
+                // incremental snapshot: crossing a retained floor is a
+                // terminal resync condition, never a best-effort delta.
+                soland_http::error::render_error_code(
+                    soland_http::error::ErrorCode::StreamResyncRequired,
+                    res,
+                    "account-data changes are no longer retained; initial resync is required",
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::error!(%actor, %error, "failed to verify account-data cursor coverage");
+                render_error(
+                    res,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "temporarily_unavailable",
+                    "account-data cursor coverage is temporarily unavailable",
+                );
+                return;
+            }
+        }
+    }
     // A newer request does not prove older in-flight responses were installed.
     // Keep unexpired handles available for exact retry and filter replacement;
     // the durable TTL sweeper performs safe reclamation.

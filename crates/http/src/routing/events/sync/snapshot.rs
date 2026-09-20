@@ -18,6 +18,37 @@ pub(crate) async fn build_sync_snapshot(
         }
     }
     let filter_value = sync_filter_value(body.filter.as_ref());
+    // Capture the Station-CAS retention coordinate before reading the
+    // account-global projection. A later CAS may therefore cause a harmless
+    // conservative resync, but this cursor can never claim coverage for a
+    // change that was not yet eligible for this snapshot.
+    let account_data_change_position = if let Some(session) = session {
+        let Some(actor) = session_actor(state, session) else {
+            return serde_json::from_value(json!({"kind":"resync_required"}))
+                .expect("resync frame");
+        };
+        match state
+            .account_data()
+            .latest_change_position(&actor.to_string())
+            .await
+        {
+            Ok(position) => match i64::try_from(position) {
+                Ok(position) => position,
+                Err(_) => {
+                    tracing::error!(%actor, position, "account-data change position exceeds cursor range");
+                    return serde_json::from_value(json!({"kind":"resync_required"}))
+                        .expect("resync frame");
+                }
+            },
+            Err(error) => {
+                tracing::error!(%actor, %error, "account-data replay frontier unavailable");
+                return serde_json::from_value(json!({"kind":"resync_required"}))
+                    .expect("resync frame");
+            }
+        }
+    } else {
+        after_cursor.account_data_change_position
+    };
     let summary_delta = if let Some(session) = session {
         match demand_list::read(state, session, body, after_cursor).await {
             Ok(delta) => Some(delta),
@@ -150,6 +181,7 @@ pub(crate) async fn build_sync_snapshot(
             .map_or(after_cursor.account_summary_position, |delta| {
                 delta.position
             }),
+        account_data_change_position,
         Some(global.context),
         after_cursor.detail_positions.clone(),
         true,

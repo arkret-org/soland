@@ -18,6 +18,9 @@ pub struct SyncCursor {
     pub account_positions: BTreeMap<String, i64>,
     pub to_device_position: i64,
     pub account_summary_position: i64,
+    /// Retained Station-CAS change-log position used only to prove that an
+    /// account continuation still has complete replay coverage.
+    pub account_data_change_position: i64,
     pub global_baseline: Option<Value>,
     pub detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress>,
     pub detail_turn: bool,
@@ -94,6 +97,7 @@ pub async fn sync_token_for_client_sync(
         account_realms_positions,
         to_device_position,
         0,
+        0,
         None,
         BTreeMap::new(),
         false,
@@ -111,6 +115,7 @@ pub(crate) async fn sync_token_for_account_positions(
     account_realms_positions: BTreeMap<String, i64>,
     to_device_position: i64,
     account_summary_position: i64,
+    account_data_change_position: i64,
     global_baseline: Option<Value>,
     detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress>,
     detail_turn: bool,
@@ -125,6 +130,7 @@ pub(crate) async fn sync_token_for_account_positions(
         "account_realms": account_realms_positions,
         "to_device": to_device_position,
         "account_summary": account_summary_position,
+        "account_data_change": account_data_change_position,
         "global_baseline": global_baseline,
         "detail_positions": detail_positions,
         "detail_turn": detail_turn,
@@ -144,7 +150,7 @@ pub(crate) async fn sync_token_for_account_positions(
         to_device_position,
     );
     let binding = arkret_canonical::canonical_json_bytes(&json!({
-        "purpose": ACCOUNT_STREAM_CURSOR_PURPOSE, "account_positions": binding, "account_summary": account_summary_position, "global_baseline": global_baseline,
+        "purpose": ACCOUNT_STREAM_CURSOR_PURPOSE, "account_positions": binding, "account_summary": account_summary_position, "account_data_change": account_data_change_position, "global_baseline": global_baseline,
         "detail_positions":detail_positions,"detail_turn":detail_turn,"detail_next_realm":detail_next_realm
     })).expect("account position binding is JSON");
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
@@ -696,6 +702,10 @@ pub(crate) async fn parse_account_cursor(
             .get("account_summary")
             .and_then(Value::as_i64)
             .unwrap_or_default(),
+        account_data_change_position: positions_value
+            .get("account_data_change")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
         global_baseline: positions_value
             .get("global_baseline")
             .filter(|value| !value.is_null())
@@ -718,6 +728,7 @@ fn validate_account_positions_shape(value: &Value) -> Result<(), SyncCursorError
         "account_realms",
         "to_device",
         "account_summary",
+        "account_data_change",
         "global_baseline",
         "detail_filter",
         "detail_positions",
@@ -732,7 +743,7 @@ fn validate_account_positions_shape(value: &Value) -> Result<(), SyncCursorError
             "unsupported account positions layout",
         ));
     }
-    for key in ["to_device", "account_summary"] {
+    for key in ["to_device", "account_summary", "account_data_change"] {
         if object
             .get(key)
             .and_then(Value::as_i64)

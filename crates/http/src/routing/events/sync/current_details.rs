@@ -194,6 +194,7 @@ async fn frame_for_realm(
         after.account_positions.clone(),
         after.to_device_position,
         after.account_summary_position,
+        after.account_data_change_position,
         after.global_baseline.clone(),
         positions,
         false,

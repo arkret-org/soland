@@ -1393,6 +1393,39 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
 }
 
 #[tokio::test]
+async fn account_cursor_roundtrips_station_cas_replay_position() {
+    let state = test_state();
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
+    let token = sync_token_for_account_positions(
+        &state,
+        Some(&session),
+        None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        0,
+        0,
+        41,
+        None,
+        BTreeMap::new(),
+        false,
+        None,
+    )
+    .await
+    .expect("account cursor mints");
+
+    let parsed = parse_and_validate_sync_cursor(
+        &token,
+        &state,
+        Some(&session),
+        None,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("account cursor parses");
+    assert_eq!(parsed.account_data_change_position, 41);
+}
+
+#[tokio::test]
 async fn presenting_a_newer_cursor_preserves_older_retry_authority() {
     let state = test_state();
     let session = roster_session(&state, "ak:did_core:web:alice.example");
