@@ -60,19 +60,15 @@ pub(super) async fn verify_mimi_source_service_signature(
     let verification_method = mimi_validate_signature_input(&signature_input, &source_id)?;
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
-    let mut required_components = vec![
-        Component::Method,
-        Component::TargetUri,
-        Component::Authority,
-        Component::Header("content-digest".to_owned()),
-        Component::Header("source-service-id".to_owned()),
-        Component::Header("destination-service-id".to_owned()),
-        Component::Header("provider-id".to_owned()),
-    ];
-    if signed_room_uri.is_some() {
-        required_components.push(Component::Header("mimi-room-uri".to_owned()));
-    }
-    let policy = SignatureVerificationPolicy::new(required_components);
+    let applicable_conditionals = signed_room_uri
+        .as_ref()
+        .map(|_| &["mimi-room-uri"][..])
+        .unwrap_or_default();
+    let policy = SignatureVerificationPolicy::for_scenario(
+        HttpSignatureScenario::MimiProviderV1,
+        applicable_conditionals,
+    )
+    .map_err(|error| mimi_verification_error(HttpMessageVerificationError::Policy(error)))?;
     let verifying_key = mimi_resolve_verifying_key(state, &verification_method)?;
     http_signature::verify_signed_canonical_json_request(
         req,

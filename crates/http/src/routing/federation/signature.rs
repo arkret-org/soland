@@ -1,8 +1,8 @@
 use std::time::{Duration as StdDuration, Instant};
 
 use arkret_signatures::http_signature::{
-    Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
-    SignatureVerificationPolicy,
+    HttpMessageVerificationError, HttpSignatureScenario, SignatureError, SignatureInput,
+    SignaturePolicyError, SignatureVerificationPolicy,
 };
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use salvo::prelude::*;
@@ -139,31 +139,25 @@ async fn verify_inbound_peer_http_signature_inner(
         .filter(|value| !value.is_empty());
     let source_verifying_key =
         verifying_key_for_service_id(state, &source_id, &signature_input.key_id).await?;
-    let mut required_components = vec![
-        Component::Method,
-        Component::TargetUri,
-        Component::Authority,
-        Component::Header("source-service-id".to_owned()),
-        Component::Header("destination-service-id".to_owned()),
-        Component::Header("source-trust-domain".to_owned()),
-        Component::Header("destination-trust-domain".to_owned()),
-    ];
+    let scenario = if endpoint_digest.is_some() {
+        HttpSignatureScenario::SignalRelayV1
+    } else {
+        HttpSignatureScenario::ServiceToServiceV1
+    };
+    let mut applicable_conditionals = vec!["source-trust-domain", "destination-trust-domain"];
     if body_bytes.is_some() {
-        required_components.push(Component::Header("content-digest".to_owned()));
+        applicable_conditionals.push("content-digest");
     }
     if idempotency_key.is_some() {
-        required_components.push(Component::Header("idempotency-key".to_owned()));
-    }
-    if req.headers().contains_key("arkret-operation") {
-        required_components.push(Component::Header("arkret-operation".to_owned()));
+        applicable_conditionals.push("idempotency-key");
     }
     if endpoint_digest.is_some() {
-        required_components.push(Component::Header(
-            "destination-service-endpoint-digest".to_owned(),
-        ));
+        applicable_conditionals.push("destination-service-endpoint-digest");
     }
-    let policy = SignatureVerificationPolicy::new(required_components)
-        .require_content_digest(body_bytes.is_some());
+    let policy = SignatureVerificationPolicy::for_scenario(scenario, &applicable_conditionals)
+        .map_err(|error| {
+            federation_verification_error(HttpMessageVerificationError::Policy(error), "outer")
+        })?;
     let verification = match body_bytes {
         Some(body) => http_signature::verify_signed_canonical_json_request(
             req,

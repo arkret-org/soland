@@ -4,8 +4,8 @@
 use arkret_canonical as canonical;
 use arkret_models_integration::applet::HttpMessageSignatureAlgorithm;
 use arkret_signatures::http_signature::{
-    Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
-    SignatureVerificationPolicy,
+    HttpMessageVerificationError, HttpSignatureScenario, SignatureError, SignatureInput,
+    SignaturePolicyError, SignatureVerificationPolicy,
 };
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -233,15 +233,11 @@ async fn verify_inbound_applet_service_signature(
     // leaking whether this edge currently has an effective Applet install.
     let signature_input =
         http_signature::parse_signature_input_header(req).map_err(applet_verification_error)?;
-    let policy = SignatureVerificationPolicy::new(vec![
-        Component::Method,
-        Component::TargetUri,
-        Component::Authority,
-        Component::Header("content-digest".to_owned()),
-        Component::Header("source-service-id".to_owned()),
-        Component::Header("destination-service-id".to_owned()),
-        Component::Header("idempotency-key".to_owned()),
-    ]);
+    let policy =
+        SignatureVerificationPolicy::for_scenario(HttpSignatureScenario::AppletTransactionV1, &[])
+            .map_err(|error| {
+                applet_verification_error(HttpMessageVerificationError::Policy(error))
+            })?;
     let content_digest_header = applet_required_header(req, "content-digest")?;
     policy
         .validate(

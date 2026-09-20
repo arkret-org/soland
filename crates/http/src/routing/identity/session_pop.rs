@@ -23,7 +23,7 @@
 //! `AuthArgs::authenticated_session`; this hoop only adds the RFC 9421 layer.
 
 use arkret_signatures::http_signature::{
-    Component, ContentDigest, SignatureVerificationPolicy, public_key_from_bytes,
+    ContentDigest, HttpSignatureScenario, SignatureVerificationPolicy, public_key_from_bytes,
     verify_content_digest, verify_signed_http_message,
 };
 use base64::Engine as _;
@@ -36,12 +36,6 @@ use soland_http::util::{bearer_token, dpop_token};
 use crate::routing::federation::{signature_authority, signature_target_uri};
 use crate::routing::identity::auth::session_credential_hash;
 use crate::state::AppState;
-
-/// Maximum PoP signature validity window in seconds (federation.md §3.2 /
-/// api-conventions.md §3.2: `expires - created` MUST NOT exceed 300s).
-const MAX_SIGNATURE_WINDOW_SECONDS: i64 = 300;
-/// Accepted clock skew around `created` / `expires` (±30s, federation scale).
-const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 
 /// Hoop mounted on the `self` surface. Continues the chain on success, renders
 /// the canonical error envelope and stops on PoP failure.
@@ -153,30 +147,22 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
         })
         .collect();
 
-    // `content-digest` is mandatory only for body-bearing requests
-    // (service-http-binding.md §2.5); a body-less signed GET need not carry it.
-    let mut required_components = if body.is_empty() {
-        vec![
-            Component::Method,
-            Component::TargetUri,
-            Component::Authority,
-        ]
-    } else {
-        vec![
-            Component::Method,
-            Component::TargetUri,
-            Component::Authority,
-            Component::Header("content-digest".to_owned()),
-        ]
-    };
+    let mut applicable_conditionals = Vec::with_capacity(3);
+    if !body.is_empty() {
+        applicable_conditionals.push("content-digest");
+    }
     for header_name in ["idempotency-key", "x-arkret-wait-for"] {
         if req.headers().contains_key(header_name) {
-            required_components.push(Component::Header(header_name.to_owned()));
+            applicable_conditionals.push(header_name);
         }
     }
-    let policy = SignatureVerificationPolicy::new(required_components)
-        .require_content_digest(!body.is_empty())
-        .max_clock_skew_seconds(MAX_CLOCK_SKEW_SECONDS);
+    let policy = SignatureVerificationPolicy::for_scenario(
+        HttpSignatureScenario::ClientSessionPopV1,
+        &applicable_conditionals,
+    )
+    .map_err(|error| {
+        AppError::unauthenticated(format!("RFC 9421 PoP policy is invalid: {error}"))
+    })?;
 
     let verified = verify_signed_http_message(
         &method,
@@ -195,16 +181,8 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
         AppError::unauthenticated(format!("RFC 9421 PoP verification failed: {error}"))
     })?;
 
-    // SDK policy enforces created/expires sanity + skew; the 300s upper bound on
-    // the window is the protocol replay constant and is enforced here, in the
-    // same way as the federation inbound rail.
-    if verified.signature_input.expires - verified.signature_input.created
-        > MAX_SIGNATURE_WINDOW_SECONDS
-    {
-        return Err(AppError::unauthenticated(
-            "PoP signature validity window exceeds the 300s protocol maximum",
-        ));
-    }
+    // The generated scenario policy enforces the shared created/expires
+    // freshness profile as well as this request's conditional covered set.
     // keyid MUST point at the session's bound signing key (api-conventions.md
     // §3.2). The cryptographic binding is already enforced above by verifying
     // against the session key bytes; this rejects a mismatched selector.

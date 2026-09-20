@@ -35,8 +35,8 @@ use arkret_models_collaboration::objects::mimi::{
     MimiKeyPackage, MimiOpaquePayload,
 };
 use arkret_signatures::http_signature::{
-    Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
-    SignatureVerificationPolicy,
+    HttpMessageVerificationError, HttpSignatureScenario, SignatureError, SignatureInput,
+    SignaturePolicyError, SignatureVerificationPolicy,
 };
 use arkret_wire::{Audience, MimiRoomUri, MimiUri, MlsGroupId};
 use chrono::Duration;
