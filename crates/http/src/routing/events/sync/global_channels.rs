@@ -372,10 +372,8 @@ mod tests {
 
     fn progress(completed: &[&str]) -> GlobalProgress {
         GlobalProgress {
-            snapshot_cursor: arkret_wire::Cursor::new(
-                "ak:cursor:01964137000070008000000000000001",
-            )
-            .unwrap(),
+            snapshot_cursor: arkret_wire::Cursor::new("ak:cursor:01964137000070008000000000000001")
+                .unwrap(),
             snapshot_watermark: 7,
             snapshot_expires_at_ms: 9,
             offsets: BTreeMap::new(),
