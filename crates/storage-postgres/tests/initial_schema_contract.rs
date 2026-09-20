@@ -12,7 +12,10 @@ fn capability_authority_root_is_durable_and_distinct_from_station_tenure() {
         "current_commit_id TEXT NOT NULL",
         "current_stream_position BIGINT NOT NULL",
     ] {
-        assert!(INITIAL_UP.contains(column), "missing authority-root column {column}");
+        assert!(
+            INITIAL_UP.contains(column),
+            "missing authority-root column {column}"
+        );
     }
     assert!(INITIAL_UP.contains("CREATE TABLE public.realm_authorities"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS realm_authority_root_current_results"));

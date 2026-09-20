@@ -391,6 +391,9 @@ fn validate_ancestor_graph(
     child_id: &GrantId,
     current_id: &GrantId,
     rows: &BTreeMap<GrantId, CapabilityGrant>,
+    root: &RealmAuthorityRootCurrent,
+    realm_id: &RealmId,
+    accepted_at: chrono::DateTime<chrono::Utc>,
     visiting: &mut BTreeSet<GrantId>,
     depth: u64,
 ) -> PersistenceResult<()> {
@@ -400,9 +403,43 @@ fn validate_ancestor_graph(
     let parent = rows
         .get(current_id)
         .ok_or_else(|| conflict("grant_exceeds_issuer_authority"))?;
+    if parent.realm_id.as_ref() != Some(realm_id) || !grant_is_active_at(parent, accepted_at) {
+        return Err(conflict("grant_revoked_upstream"));
+    }
     for authority_ref in &parent.issuer_authority_refs {
-        if let IssuerAuthorityRef::Grant { grant_id } = authority_ref {
-            validate_ancestor_graph(child_id, grant_id, rows, visiting, depth + 1)?;
+        match authority_ref {
+            IssuerAuthorityRef::RealmRoot {
+                realm_id: root_realm_id,
+                authority_event_ref,
+                authority_generation,
+            } => {
+                if root_realm_id != realm_id
+                    || root.realm_id != *root_realm_id
+                    || root.authority_event_ref != *authority_event_ref
+                    || root.authority_generation != *authority_generation
+                {
+                    return Err(conflict("grant_revoked_upstream"));
+                }
+            }
+            IssuerAuthorityRef::Grant { grant_id } => {
+                let ancestor = rows
+                    .get(grant_id)
+                    .ok_or_else(|| conflict("grant_revoked_upstream"))?;
+                if !matches!(&ancestor.subject, CapabilitySubject::Actor(actor) if actor == &parent.issuer_id)
+                {
+                    return Err(conflict("grant_exceeds_issuer_authority"));
+                }
+                validate_ancestor_graph(
+                    child_id,
+                    grant_id,
+                    rows,
+                    root,
+                    realm_id,
+                    accepted_at,
+                    visiting,
+                    depth + 1,
+                )?;
+            }
         }
     }
     visiting.remove(current_id);
@@ -615,19 +652,9 @@ async fn materialize_capability_grant(
         }
     }
 
-    let needs_root = body
-        .issuer_authority_refs
-        .iter()
-        .any(|authority_ref| matches!(authority_ref, IssuerAuthorityRef::RealmRoot { .. }));
-    let root = if needs_root {
-        Some(
-            locked_authority_root(conn, &event.realm_id)
-                .await?
-                .ok_or_else(|| conflict("realm_authority_root_missing"))?,
-        )
-    } else {
-        None
-    };
+    let root = locked_authority_root(conn, &event.realm_id)
+        .await?
+        .ok_or_else(|| conflict("realm_authority_root_missing"))?;
 
     let mut seen_refs = BTreeSet::new();
     let mut parent_ids = Vec::new();
@@ -647,14 +674,13 @@ async fn materialize_capability_grant(
                 authority_event_ref,
                 authority_generation,
             } => {
-                let current = root.as_ref().expect("root row was loaded above");
                 if realm_id != &event.realm_id {
                     return Err(conflict("grant_exceeds_issuer_authority"));
                 }
-                if current.realm_id != *realm_id
-                    || current.controller_actor_id != body.issuer_id
-                    || current.authority_event_ref != *authority_event_ref
-                    || current.authority_generation != *authority_generation
+                if root.realm_id != *realm_id
+                    || root.controller_actor_id != body.issuer_id
+                    || root.authority_event_ref != *authority_event_ref
+                    || root.authority_generation != *authority_generation
                 {
                     return Err(conflict("realm_authority_controller_mismatch"));
                 }
@@ -685,7 +711,16 @@ async fn materialize_capability_grant(
     }
 
     for parent_id in &parent_ids {
-        validate_ancestor_graph(&grant_id, parent_id, &rows, &mut BTreeSet::new(), 1)?;
+        validate_ancestor_graph(
+            &grant_id,
+            parent_id,
+            &rows,
+            &root,
+            &event.realm_id,
+            commit.committed_at,
+            &mut BTreeSet::new(),
+            1,
+        )?;
     }
     let authority_depth = deepest
         .checked_add(1)

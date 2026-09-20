@@ -227,9 +227,9 @@ async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-09-21T00:00:00Z")
         .unwrap()
         .to_utc();
-    let root_commit_id = arkret_wire::RealmCommitId::from_digest(
-        arkret_canonical::sha256_bytes(b"capability-root-current"),
-    );
+    let root_commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        b"capability-root-current",
+    ));
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
         "INSERT INTO realm_authority_root_current_results \
