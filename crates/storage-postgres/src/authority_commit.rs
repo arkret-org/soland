@@ -102,6 +102,18 @@ fn invalid(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::SchemaViolation(detail.to_string())
 }
 
+fn require_exact_commit_replay(
+    existing_commit: &Value,
+    candidate_commit: &Value,
+) -> PersistenceResult<()> {
+    if existing_commit == candidate_commit {
+        return Ok(());
+    }
+    Err(PersistenceError::Conflict(
+        "duplicate_conflict: Event already has a different RealmCommit".into(),
+    ))
+}
+
 fn decode_json<T: DeserializeOwned>(value: Value, what: &str) -> PersistenceResult<T> {
     serde_json::from_value(value)
         .map_err(|error| PersistenceError::Internal(format!("stored {what} is invalid: {error}")))
@@ -289,7 +301,8 @@ pub(crate) async fn commit_transaction_in_connection(
         .get_result::<CommitRow>(&mut *conn)
         .await
         .optional()?;
-    if existing.is_some() {
+    if let Some(existing) = existing {
+        require_exact_commit_replay(&existing.commit_json, &commit_json)?;
         return Ok(AuthorityCommitWriteOutcome::Duplicate);
     }
     if event_row.state != "queued" {
@@ -899,6 +912,27 @@ mod tests {
         assert!(matches!(
             require_atomic_admission_outcome(AuthorityCommitWriteOutcome::Duplicate),
             Ok(AuthorityCommitWriteOutcome::Duplicate)
+        ));
+    }
+
+    #[test]
+    fn duplicate_event_accepts_only_the_exact_realm_commit() {
+        let existing = serde_json::json!({
+            "commit_id":"ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+            "stream_position":7,
+            "committed_at":"2026-09-21T00:00:00Z"
+        });
+        assert!(require_exact_commit_replay(&existing, &existing).is_ok());
+
+        let divergent = serde_json::json!({
+            "commit_id":"ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+            "stream_position":7,
+            "committed_at":"2026-09-21T00:00:01Z"
+        });
+        assert!(matches!(
+            require_exact_commit_replay(&existing, &divergent),
+            Err(PersistenceError::Conflict(reason))
+                if reason.starts_with("duplicate_conflict:")
         ));
     }
 }
