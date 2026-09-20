@@ -166,7 +166,7 @@ pub fn engine_grant_from_cell_body(
     let authority_depth = authority_projection
         .get("authority_depth")
         .or_else(|| body.get("authority_depth"))
-        .and_then(Value::as_u64);
+        .and_then(Value::as_u64)?;
     let authority_root_refs = authority_projection
         .get("authority_root_refs")
         .or_else(|| body.get("authority_root_refs"))
@@ -433,7 +433,7 @@ fn engine_authority_refs_from_body(body: &Value) -> Vec<crate::capability::Issue
                             grant_id: id.to_owned(),
                         }
                     }),
-                    Some("realm_authority") => serde_json::from_value(entry.clone()).ok(),
+                    Some("realm_root") => serde_json::from_value(entry.clone()).ok(),
                     _ => None,
                 })
                 .collect()
@@ -482,7 +482,7 @@ pub fn derive_authority_audit(
     let mut roots: Vec<Value> = Vec::new();
     for entry in refs {
         match entry.get("kind").and_then(Value::as_str) {
-            Some("realm_authority") => {
+            Some("realm_root") => {
                 if !roots.contains(entry) {
                     roots.push(entry.clone());
                 }
@@ -949,18 +949,15 @@ impl ProjectionState {
         let root_ref_valid = engine_authority_refs_from_body(body)
             .iter()
             .any(|authority_ref| match authority_ref {
-                crate::capability::IssuerAuthorityRef::RealmAuthority {
+                crate::capability::IssuerAuthorityRef::RealmRoot {
                     realm_id: root_realm_id,
-                    governance_station_id,
                     authority_generation,
                     ..
                 } => {
-                    root_realm_id == realm_id
+                    root_realm_id.as_str() == realm_id
                         && self.realm_authority_root(realm_id).is_some_and(|root| {
                             root.get("controller_actor_id")
                                 .is_some_and(|value| value == &issuer_value)
-                                && root.get("governance_station_id").and_then(Value::as_str)
-                                    == Some(governance_station_id.as_str())
                                 && root.get("authority_generation").and_then(Value::as_u64)
                                     == Some(*authority_generation)
                         })
@@ -1073,18 +1070,9 @@ impl ProjectionState {
                 .realm_id
                 .clone();
         }
-        // Sealed cells contain the registry-projected grant body. Authority
-        // depth/root audit fields are reducer-derived and therefore are not
-        // producer-authored members of that body. Re-derive them from the
-        // authoritative ref graph after a cell-store reload instead of
-        // treating their absence as an unresolved parent.
-        if (grant.authority_depth.is_none() || grant.authority_root_refs.is_empty())
-            && let Some((depth, roots)) = self.projected_authority_audit(grant_id)
-            && let Ok(authority_root_refs) = serde_json::from_value(Value::Array(roots))
-        {
-            grant.authority_depth = Some(depth);
-            grant.authority_root_refs = authority_root_refs;
-        }
+        // D3+: materialized grants carry required authority audit members.
+        // Missing fields fail closed during decoding; never synthesize them
+        // from the rebuildable in-memory graph.
         Some(grant)
     }
 
@@ -1128,13 +1116,13 @@ impl ProjectionState {
             .issuer_authority_refs
             .iter()
             .any(|authority_ref| match authority_ref {
-                crate::capability::IssuerAuthorityRef::RealmAuthority {
+                crate::capability::IssuerAuthorityRef::RealmRoot {
                     realm_id,
                     authority_generation,
                     ..
                 } => {
-                    !self.realm_is_in_terminal_state(realm_id)
-                        && self.realm_authority_root(realm_id).is_some_and(|root| {
+                    !self.realm_is_in_terminal_state(realm_id.as_str())
+                        && self.realm_authority_root(realm_id.as_str()).is_some_and(|root| {
                             root.get("authority_generation").and_then(Value::as_u64)
                                 == Some(*authority_generation)
                         })

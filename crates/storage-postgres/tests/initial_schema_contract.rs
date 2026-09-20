@@ -2,6 +2,23 @@ const INITIAL_UP: &str = include_str!("../migrations/00000000000000_initial/up.s
 const INITIAL_DOWN: &str = include_str!("../migrations/00000000000000_initial/down.sql");
 
 #[test]
+fn capability_authority_root_is_durable_and_distinct_from_station_tenure() {
+    assert!(INITIAL_UP.contains("CREATE TABLE realm_authority_root_current_results"));
+    for column in [
+        "controller_actor_id JSONB NOT NULL",
+        "controller_epoch BIGINT NOT NULL",
+        "authority_generation BIGINT NOT NULL",
+        "authority_event_ref TEXT NOT NULL",
+        "current_commit_id TEXT NOT NULL",
+        "current_stream_position BIGINT NOT NULL",
+    ] {
+        assert!(INITIAL_UP.contains(column), "missing authority-root column {column}");
+    }
+    assert!(INITIAL_UP.contains("CREATE TABLE public.realm_authorities"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS realm_authority_root_current_results"));
+}
+
+#[test]
 fn agent_draft_pending_intent_is_a_separate_private_state_machine() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.agent_draft_pending_intents"));
     assert!(

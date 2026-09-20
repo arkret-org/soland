@@ -227,6 +227,24 @@ async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-09-21T00:00:00Z")
         .unwrap()
         .to_utc();
+    let root_commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(b"capability-root-current"),
+    );
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO realm_authority_root_current_results \
+         (realm_id,controller_actor_id,controller_epoch,authority_generation,authority_event_ref,current_commit_id,current_stream_position,updated_at) \
+         VALUES($1,$2,0,0,$3,$4,0,$5)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Jsonb, _>(serde_json::to_value(&actor).unwrap())
+    .bind::<Text, _>(realm_event_id.as_str())
+    .bind::<Text, _>(root_commit_id.as_str())
+    .bind::<Timestamptz, _>(now)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
     let create = producer_event(
         arkret_wire::EventKind::CapabilityGrant,
         &realm_id,
@@ -240,7 +258,12 @@ async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
                 "subject": actor,
                 "actions": ["ak.message.create"],
                 "resources": [{"kind":"realm", "realm_id":realm_id.clone()}],
-                "issuer_authority_refs": [{"kind":"grant", "grant_id":GRANT_ID}],
+                "issuer_authority_refs": [{
+                    "kind":"realm_root",
+                    "realm_id":realm_id.clone(),
+                    "authority_event_ref":realm_event_id.clone(),
+                    "authority_generation":0
+                }],
                 "issued_at": "2026-09-21T00:00:00.000Z"
             }
         }),

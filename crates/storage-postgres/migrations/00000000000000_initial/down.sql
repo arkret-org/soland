@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS device_pairing_outcomes;
 DROP TABLE IF EXISTS governance_current_ready;
 DROP TABLE IF EXISTS current_selector_origins;
 DROP TABLE IF EXISTS capability_grant_current_results;
+DROP TABLE IF EXISTS realm_authority_root_current_results;
 DROP TABLE IF EXISTS relation_current_results;
 DROP TABLE IF EXISTS current_result_versions;
 DROP TABLE IF EXISTS current_result_heads;

@@ -24,6 +24,7 @@ arkret-event-draft.workspace = true
 arkret-identifiers = { workspace = true, features = ["diesel"] }
 arkret-identity.workspace = true
 arkret-mls.workspace = true
+arkret-policy.workspace = true
 arkret-models-collaboration.workspace = true
 arkret-models-crypto.workspace = true
 arkret-models-identity.workspace = true

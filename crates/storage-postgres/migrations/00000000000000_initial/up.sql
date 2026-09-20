@@ -4204,6 +4204,22 @@ CREATE TABLE relation_current_results (
 );
 CREATE INDEX relation_current_result_identity ON relation_current_results(realm_id,relation_id);
 
+-- Realm delegation authority is distinct from the governance Station tenure
+-- in realm_authorities. Capability issuance locks this row in the accepting
+-- transaction; it must never infer the controller or delegation generation
+-- from a process-local reducer projection.
+CREATE TABLE realm_authority_root_current_results (
+ realm_id TEXT PRIMARY KEY,
+ controller_actor_id JSONB NOT NULL,
+ controller_epoch BIGINT NOT NULL CHECK(controller_epoch BETWEEN 0 AND 9007199254740991),
+ authority_generation BIGINT NOT NULL CHECK(authority_generation BETWEEN 0 AND 9007199254740991),
+ authority_event_ref TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(controller_actor_id)='object')
+);
+
 -- Capability Grant lifecycle and its exact accepting RealmCommit are one
 -- authoritative typed current result.  The effective-list read path consumes
 -- this row atomically; process-local facet counters and list digests are not
