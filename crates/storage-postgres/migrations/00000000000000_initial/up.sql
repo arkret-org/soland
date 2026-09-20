@@ -4211,7 +4211,9 @@ CREATE INDEX relation_current_result_identity ON relation_current_results(realm_
 CREATE TABLE capability_grant_current_results (
  realm_id TEXT NOT NULL, grant_id TEXT NOT NULL,
  status TEXT NOT NULL CHECK(status IN ('active','revoked','relinquished')),
+ current_event_id TEXT NOT NULL,
  current_commit_id TEXT NOT NULL,
+ current_stream_ref JSONB NOT NULL,
  current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
  value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
  PRIMARY KEY(realm_id,grant_id),

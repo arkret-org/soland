@@ -22,6 +22,7 @@ use crate::agent_draft_pending_intents::{
     lock_agent_draft_consumption_source, mark_agent_draft_consumed,
 };
 use crate::authority_commit::{commit_transaction_in_connection, queue_event_in_connection};
+use crate::capability_grant_current_results::commit_capability_grant_current_result_in_connection;
 use crate::device_revocations::{
     commit_revocation_in_connection, ensure_gate_allowed_in_transaction,
 };
@@ -1563,6 +1564,7 @@ async fn commit_one_in_connection(
     let commit = &request.authority_commit.commit;
     if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
         commit_relation_current_result_in_connection(conn, event, commit).await?;
+        commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
     }
     let committed_ref = arkret_wire::CommittedEventRef {
         event_id: event.event_id.clone(),

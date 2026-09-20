@@ -10,6 +10,7 @@ use super::{
     PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
     Text, Timestamptz, Value, async_trait, ids, pg_conn, sql_query,
 };
+use crate::capability_grant_current_results::commit_capability_grant_current_result_in_connection;
 
 #[derive(Clone)]
 pub struct PgAuthorityCommitStore {
@@ -557,9 +558,18 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             queue_event_in_connection(conn, &transaction.event, queued_at).await?;
-            require_atomic_admission_outcome(
+            let outcome = require_atomic_admission_outcome(
                 commit_transaction_in_connection(conn, transaction).await?,
-            )
+            )?;
+            if matches!(outcome, AuthorityCommitWriteOutcome::Committed) {
+                commit_capability_grant_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+            }
+            Ok(outcome)
         })
         .await
         .map_err(PgTransactionError::into_persistence)
@@ -571,7 +581,16 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<AuthorityCommitWriteOutcome> {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            commit_transaction_in_connection(conn, transaction).await
+            let outcome = commit_transaction_in_connection(conn, transaction).await?;
+            if matches!(outcome, AuthorityCommitWriteOutcome::Committed) {
+                commit_capability_grant_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+            }
+            Ok(outcome)
         })
         .await
         .map_err(PgTransactionError::into_persistence)

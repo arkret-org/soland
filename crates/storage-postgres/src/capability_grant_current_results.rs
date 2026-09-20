@@ -1,11 +1,17 @@
 use std::str::FromStr;
 
-use arkret_wire::{CurrentRevision, GrantId, RealmCommitId, RealmId};
+use arkret_models_collaboration::governance::grant_constraint::{
+    CapabilityGrant, CapabilityGrantStatus,
+};
+use arkret_wire::{
+    CommitStreamRef, CommittedEventRef, CurrentRevision, EventId, GrantId, RealmCommitId, RealmId,
+};
 
 use super::{
-    BigInt, CapabilityGrantCurrentResultRecord, CapabilityGrantCurrentResultStore,
-    CapabilityGrantCurrentStatus, Jsonb, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, QueryableByName, RunQueryDsl, Text, async_trait, pg_conn, sql_query,
+    AsyncPgConnection, BigInt, Bool, CapabilityGrantCurrentResultRecord,
+    CapabilityGrantCurrentResultStore, CapabilityGrantCurrentStatus, Jsonb, OptionalExtension,
+    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    async_trait, pg_conn, sql_query,
 };
 
 pub struct PgCapabilityGrantCurrentResultStore {
@@ -21,7 +27,11 @@ struct CapabilityGrantCurrentResultReadRow {
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Text)]
+    current_event_id: String,
+    #[diesel(sql_type = Text)]
     current_commit_id: String,
+    #[diesel(sql_type = Jsonb)]
+    current_stream_ref: serde_json::Value,
     #[diesel(sql_type = BigInt)]
     current_stream_position: i64,
     #[diesel(sql_type = Jsonb)]
@@ -30,6 +40,14 @@ struct CapabilityGrantCurrentResultReadRow {
 
 fn corrupt(detail: impl Into<String>) -> PersistenceError {
     PersistenceError::Database(detail.into())
+}
+
+fn schema_violation(detail: impl Into<String>) -> PersistenceError {
+    PersistenceError::SchemaViolation(detail.into())
+}
+
+fn conflict(detail: impl Into<String>) -> PersistenceError {
+    PersistenceError::Conflict(detail.into())
 }
 
 fn decode_row(
@@ -50,16 +68,315 @@ fn decode_row(
             "stored Capability Grant Commit id is invalid: {error}"
         ))
     })?;
+    let event_id = EventId::from_str(&row.current_event_id).map_err(|error| {
+        corrupt(format!(
+            "stored Capability Grant source Event id is invalid: {error}"
+        ))
+    })?;
+    let stream_ref =
+        serde_json::from_value::<CommitStreamRef>(row.current_stream_ref).map_err(|error| {
+            corrupt(format!(
+                "stored Capability Grant stream ref is invalid: {error}"
+            ))
+        })?;
     CapabilityGrantCurrentResultRecord::try_new(
         realm_id,
         grant_id,
         status,
         row.value,
         CurrentRevision {
+            commit_id: commit_id.clone(),
+            stream_position,
+        },
+        CommittedEventRef {
+            event_id,
             commit_id,
+            stream_ref,
             stream_position,
         },
     )
+}
+
+enum CapabilityGrantCurrentMutation {
+    Create {
+        grant_id: GrantId,
+        value: serde_json::Value,
+    },
+    Close {
+        grant_id: GrantId,
+        expected_revision: CurrentRevision,
+        status: CapabilityGrantCurrentStatus,
+    },
+}
+
+fn mutation_for_event(
+    event: &arkret_wire::Event,
+) -> PersistenceResult<Option<CapabilityGrantCurrentMutation>> {
+    let invalid = |what: &str, error: serde_json::Error| {
+        schema_violation(format!(
+            "{what} payload violates its typed SDK contract: {error}"
+        ))
+    };
+    let payload_value = || serde_json::Value::Object(event.payload.clone().into_iter().collect());
+    match event.kind {
+        arkret_wire::EventKind::CapabilityGrant => {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::CapabilityGrantPayload,
+            >(payload_value())
+            .map_err(|error| invalid("Capability Grant", error))?;
+            if payload.grant.schema != arkret_wire::SchemaId::CAPABILITY_V1
+                || payload.grant.issuer_id != event.actor_id
+                || payload
+                    .grant
+                    .realm_id
+                    .as_ref()
+                    .is_some_and(|realm_id| realm_id != &event.realm_id)
+            {
+                return Err(schema_violation(
+                    "Capability Grant authoring body does not match its Event envelope",
+                ));
+            }
+            let grant_id = GrantId::from_event_id(&event.event_id);
+            let grant = CapabilityGrant {
+                id: grant_id.clone(),
+                schema: payload.grant.schema,
+                realm_id: Some(event.realm_id.clone()),
+                issuer_id: payload.grant.issuer_id,
+                subject: payload.grant.subject,
+                actions: payload.grant.actions,
+                resources: payload.grant.resources,
+                constraints: payload.grant.constraints,
+                issuer_authority_refs: payload.grant.issuer_authority_refs,
+                issued_at: payload.grant.issued_at,
+                status: CapabilityGrantStatus::Active,
+                updated_by: None,
+                updated_at: None,
+                revoked_by: None,
+                revoked_at: None,
+            };
+            let value = serde_json::to_value(grant).map_err(PersistenceError::database)?;
+            Ok(Some(CapabilityGrantCurrentMutation::Create {
+                grant_id,
+                value,
+            }))
+        }
+        arkret_wire::EventKind::CapabilityDerived => {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::governance::realm_governance::CapabilityDerived,
+            >(payload_value())
+            .map_err(|error| invalid("Capability Derived", error))?;
+            if payload.grant.id != payload.grant_id
+                || payload.grant.realm_id.as_ref() != Some(&event.realm_id)
+                || payload.grant.status != CapabilityGrantStatus::Active
+                || payload.grant.updated_by.is_some()
+                || payload.grant.updated_at.is_some()
+                || payload.grant.revoked_by.is_some()
+                || payload.grant.revoked_at.is_some()
+            {
+                return Err(schema_violation(
+                    "Capability Derived must carry one active target-Realm grant",
+                ));
+            }
+            let value = serde_json::to_value(&payload.grant).map_err(PersistenceError::database)?;
+            Ok(Some(CapabilityGrantCurrentMutation::Create {
+                grant_id: payload.grant_id,
+                value,
+            }))
+        }
+        arkret_wire::EventKind::CapabilityRevoke => {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::CapabilityRevokePayload,
+            >(payload_value())
+            .map_err(|error| invalid("Capability Revoke", error))?;
+            Ok(Some(CapabilityGrantCurrentMutation::Close {
+                grant_id: payload.grant_id,
+                expected_revision: payload.expected_revision,
+                status: CapabilityGrantCurrentStatus::Revoked,
+            }))
+        }
+        arkret_wire::EventKind::CapabilityRelinquish => {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::CapabilityRelinquishPayload,
+            >(payload_value())
+            .map_err(|error| invalid("Capability Relinquish", error))?;
+            Ok(Some(CapabilityGrantCurrentMutation::Close {
+                grant_id: payload.grant_id,
+                expected_revision: payload.expected_revision,
+                status: CapabilityGrantCurrentStatus::Relinquished,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn revision_matches(
+    current: &CapabilityGrantCurrentResultRecord,
+    expected: &CurrentRevision,
+) -> bool {
+    current.revision == *expected
+}
+
+/// Materialize one of the four registered `capability_grant` writers inside
+/// the same PostgreSQL transaction as its Event and RealmCommit.
+pub(crate) async fn commit_capability_grant_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let Some(mutation) = mutation_for_event(event)? else {
+        return Ok(());
+    };
+    let grant_id = match &mutation {
+        CapabilityGrantCurrentMutation::Create { grant_id, .. }
+        | CapabilityGrantCurrentMutation::Close { grant_id, .. } => grant_id.clone(),
+    };
+    let lock_key = format!("capability-grant\u{0}{}\u{0}{}", event.realm_id, grant_id);
+    #[derive(QueryableByName)]
+    struct AdvisoryLockRow {
+        #[diesel(sql_type = Bool)]
+        acquired: bool,
+    }
+    let lock =
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0)) IS NULL AS acquired")
+            .bind::<Text, _>(&lock_key)
+            .get_result::<AdvisoryLockRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+    if !lock.acquired {
+        return Err(PersistenceError::Internal(
+            "Capability Grant transaction lock was not acquired".to_owned(),
+        ));
+    }
+
+    let current = sql_query(
+        "SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,\
+         current_stream_position,value FROM capability_grant_current_results \
+         WHERE realm_id=$1 AND grant_id=$2 FOR UPDATE",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(grant_id.as_str())
+    .get_result::<CapabilityGrantCurrentResultReadRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(decode_row)
+    .transpose()?;
+
+    let (status, value) = match (mutation, current.as_ref()) {
+        (CapabilityGrantCurrentMutation::Create { value, .. }, None) => {
+            (CapabilityGrantCurrentStatus::Active, value)
+        }
+        (CapabilityGrantCurrentMutation::Create { .. }, Some(_)) => {
+            return Err(conflict(
+                "failed_precondition: Capability Grant current result already exists",
+            ));
+        }
+        (
+            CapabilityGrantCurrentMutation::Close {
+                grant_id,
+                expected_revision,
+                status,
+            },
+            Some(current),
+        ) => {
+            if current.status != CapabilityGrantCurrentStatus::Active
+                || !revision_matches(current, &expected_revision)
+            {
+                return Err(conflict(
+                    "cas_conflict: Capability Grant current revision does not match",
+                ));
+            }
+            let typed = serde_json::from_value::<CapabilityGrant>(current.value.clone()).map_err(
+                |error| {
+                    corrupt(format!(
+                        "stored Capability Grant current value is invalid: {error}"
+                    ))
+                },
+            )?;
+            if typed.id != grant_id
+                || typed.realm_id.as_ref() != Some(&event.realm_id)
+                || typed.status != CapabilityGrantStatus::Active
+            {
+                return Err(corrupt(
+                    "stored Capability Grant current value disagrees with its authoritative row",
+                ));
+            }
+            let mut value = current.value.clone();
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| corrupt("stored Capability Grant current value is not an object"))?;
+            object.insert(
+                "status".to_owned(),
+                serde_json::Value::String(status.as_str().to_owned()),
+            );
+            match status {
+                CapabilityGrantCurrentStatus::Revoked => {
+                    object.insert(
+                        "revoked_by".to_owned(),
+                        serde_json::to_value(&event.actor_id)
+                            .map_err(PersistenceError::database)?,
+                    );
+                    object.insert(
+                        "revoked_at".to_owned(),
+                        serde_json::to_value(event.created_at)
+                            .map_err(PersistenceError::database)?,
+                    );
+                }
+                CapabilityGrantCurrentStatus::Relinquished => {
+                    object.insert(
+                        "updated_by".to_owned(),
+                        serde_json::to_value(&event.actor_id)
+                            .map_err(PersistenceError::database)?,
+                    );
+                    object.insert(
+                        "updated_at".to_owned(),
+                        serde_json::to_value(event.created_at)
+                            .map_err(PersistenceError::database)?,
+                    );
+                }
+                CapabilityGrantCurrentStatus::Active => unreachable!("close cannot remain active"),
+            }
+            (status, value)
+        }
+        (CapabilityGrantCurrentMutation::Close { .. }, None) => {
+            return Err(conflict(
+                "failed_precondition: Capability Grant current result does not exist",
+            ));
+        }
+    };
+
+    let stream_position = i64::try_from(commit.stream_position).map_err(|_| {
+        PersistenceError::Internal(
+            "Capability Grant stream position exceeds PostgreSQL BIGINT".to_owned(),
+        )
+    })?;
+    let stream_ref =
+        serde_json::to_value(&commit.stream_ref).map_err(PersistenceError::database)?;
+    sql_query(
+        "INSERT INTO capability_grant_current_results \
+         (realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,\
+          current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+         ON CONFLICT(realm_id,grant_id) DO UPDATE SET \
+           status=EXCLUDED.status,current_event_id=EXCLUDED.current_event_id, \
+           current_commit_id=EXCLUDED.current_commit_id, \
+           current_stream_ref=EXCLUDED.current_stream_ref, \
+           current_stream_position=EXCLUDED.current_stream_position, \
+           value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(grant_id.as_str())
+    .bind::<Text, _>(status.as_str())
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<Jsonb, _>(&stream_ref)
+    .bind::<BigInt, _>(stream_position)
+    .bind::<Jsonb, _>(&value)
+    .bind::<Timestamptz, _>(commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
 }
 
 #[async_trait]
@@ -71,7 +388,7 @@ impl CapabilityGrantCurrentResultStore for PgCapabilityGrantCurrentResultStore {
     ) -> PersistenceResult<Option<CapabilityGrantCurrentResultRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT realm_id,grant_id,status,current_commit_id,current_stream_position,value \
+            "SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,current_stream_position,value \
              FROM capability_grant_current_results WHERE realm_id=$1 AND grant_id=$2",
         )
         .bind::<Text, _>(realm_id.as_str())
@@ -90,7 +407,7 @@ impl CapabilityGrantCurrentResultStore for PgCapabilityGrantCurrentResultStore {
     ) -> PersistenceResult<Vec<CapabilityGrantCurrentResultRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT realm_id,grant_id,status,current_commit_id,current_stream_position,value \
+            "SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,current_stream_position,value \
              FROM capability_grant_current_results WHERE realm_id=$1 ORDER BY grant_id ASC",
         )
         .bind::<Text, _>(realm_id.as_str())
@@ -116,7 +433,13 @@ mod tests {
             realm_id: REALM_ID.to_owned(),
             grant_id: GRANT_ID.to_owned(),
             status: status.to_owned(),
+            current_event_id: EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0x44; 32],
+            )
+            .to_string(),
             current_commit_id: COMMIT_ID.to_owned(),
+            current_stream_ref: serde_json::json!({"kind":"realm","realm_id":REALM_ID}),
             current_stream_position: 7,
             value: serde_json::json!({
                 "id": GRANT_ID,

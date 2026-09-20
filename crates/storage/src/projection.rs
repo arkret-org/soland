@@ -125,6 +125,7 @@ pub struct CapabilityGrantCurrentResultRecord {
     pub status: CapabilityGrantCurrentStatus,
     pub value: serde_json::Value,
     pub revision: arkret_wire::CurrentRevision,
+    pub source: arkret_wire::CommittedEventRef,
 }
 
 impl CapabilityGrantCurrentResultRecord {
@@ -136,6 +137,7 @@ impl CapabilityGrantCurrentResultRecord {
         status: CapabilityGrantCurrentStatus,
         value: serde_json::Value,
         revision: arkret_wire::CurrentRevision,
+        source: arkret_wire::CommittedEventRef,
     ) -> PersistenceResult<Self> {
         let object = value.as_object().ok_or_else(|| {
             PersistenceError::Database("stored Capability Grant value is not an object".to_owned())
@@ -153,12 +155,21 @@ impl CapabilityGrantCurrentResultRecord {
                 "stored Capability Grant value does not match its row identity".to_owned(),
             ));
         }
+        if source.commit_id != revision.commit_id
+            || source.stream_position != revision.stream_position
+            || source.stream_ref.realm_id() != &realm_id
+        {
+            return Err(PersistenceError::Database(
+                "stored Capability Grant source does not match its revision".to_owned(),
+            ));
+        }
         Ok(Self {
             realm_id,
             grant_id,
             status,
             value,
             revision,
+            source,
         })
     }
 }
@@ -238,6 +249,17 @@ mod capability_grant_current_result_tests {
                 commit_id: COMMIT_ID.parse().unwrap(),
                 stream_position: 41,
             },
+            arkret_wire::CommittedEventRef {
+                event_id: arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0x44; 32],
+                ),
+                commit_id: COMMIT_ID.parse().unwrap(),
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: REALM_ID.parse().unwrap(),
+                },
+                stream_position: 41,
+            },
         )
     }
 
@@ -260,6 +282,7 @@ mod capability_grant_current_result_tests {
                 record.status,
                 record.value,
                 record.revision,
+                record.source,
             ),
             Err(PersistenceError::Database(_))
         ));
