@@ -28,14 +28,15 @@ use arkret_models_collaboration::contact_operations::{
     ContactScopeUpdateRequestBody, ContactState, ContactTombstoneRequestBody,
     DirectConversationSummary, DirectConversationSummaryState,
 };
-use arkret_models_collaboration::direct_conversation_ops::{
-    DirectConversationCoordinates, DirectConversationFoundingAuthorityEvidence,
-    DirectConversationFoundingInput, DirectConversationResolveOutcome,
-    DirectConversationResolveRequestBody, DirectConversationSendBlocker,
+use arkret_models_collaboration::direct_conversation::{
+    DirectConversationCoordinates, DirectConversationFoundingInput,
+    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
+    DirectConversationSendBlocker,
 };
 use arkret_models_collaboration::events_payloads::ActorProfileCreatePayload;
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
+use arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence;
 use arkret_models_identity::account::{
     AccountDeviceSummary, AccountRegistrationAudit, AccountRegistrationAuditOutcome,
     AccountRegistrationEvidenceSummary, AccountRegistrationPolicy,
@@ -665,8 +666,7 @@ pub(crate) async fn current_direct_founding_evidence(
     state: &AppState,
     founder: &arkret_wire::ActorId,
     peer: &arkret_wire::ActorId,
-) -> Result<arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence, AppError>{
-    use arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence;
+) -> Result<DirectConversationFoundingAuthorityEvidence, AppError> {
     if let Some(basis) = agent_direct_authorization_basis(
         state,
         founder.signing_principal_id().as_str(),
