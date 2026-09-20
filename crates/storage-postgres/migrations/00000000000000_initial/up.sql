@@ -4204,6 +4204,26 @@ CREATE TABLE relation_current_results (
 );
 CREATE INDEX relation_current_result_identity ON relation_current_results(realm_id,relation_id);
 
+-- Capability Grant lifecycle and its exact accepting RealmCommit are one
+-- authoritative typed current result.  The effective-list read path consumes
+-- this row atomically; process-local facet counters and list digests are not
+-- revisions.
+CREATE TABLE capability_grant_current_results (
+ realm_id TEXT NOT NULL, grant_id TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('active','revoked','relinquished')),
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,grant_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value ? 'id' AND value->>'id'=grant_id),
+ CHECK(value ? 'schema' AND value->>'schema'='ak.schema.capability.v1'),
+ CHECK(value ? 'status' AND value->>'status'=status),
+ CHECK(NOT (value ? 'realm_id') OR value->>'realm_id'=realm_id)
+);
+CREATE INDEX capability_grant_current_result_status
+ ON capability_grant_current_results(realm_id,status,grant_id);
+
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.
 CREATE TABLE current_selector_origins (

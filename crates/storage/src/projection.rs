@@ -1,6 +1,6 @@
 use super::{
-    BTreeMap, PersistenceResult, ProjectedEventOperation, ProjectionEventRecord, RealmMetaRecord,
-    Value, async_trait,
+    BTreeMap, PersistenceError, PersistenceResult, ProjectedEventOperation, ProjectionEventRecord,
+    RealmMetaRecord, Value, async_trait,
 };
 /// Trait for Realm metadata storage operations.
 #[async_trait]
@@ -110,6 +110,160 @@ pub struct RelationCurrentResultRecord {
 #[async_trait]
 pub trait RelationCurrentResultStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RelationCurrentResultRecord>>;
+}
+
+/// Authoritative current Capability Grant value accepted by the governing
+/// Station.
+///
+/// `value` and `revision` are one durable row and therefore one read
+/// snapshot.  Consumers must never replace this revision with the in-memory
+/// facet counter, the effective-list digest, or an Event id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CapabilityGrantCurrentResultRecord {
+    pub realm_id: arkret_wire::RealmId,
+    pub grant_id: arkret_wire::GrantId,
+    pub status: CapabilityGrantCurrentStatus,
+    pub value: serde_json::Value,
+    pub revision: arkret_wire::CurrentRevision,
+}
+
+impl CapabilityGrantCurrentResultRecord {
+    /// Build one backend-neutral current row and fail closed if its canonical
+    /// value disagrees with the storage key or lifecycle columns.
+    pub fn try_new(
+        realm_id: arkret_wire::RealmId,
+        grant_id: arkret_wire::GrantId,
+        status: CapabilityGrantCurrentStatus,
+        value: serde_json::Value,
+        revision: arkret_wire::CurrentRevision,
+    ) -> PersistenceResult<Self> {
+        let object = value.as_object().ok_or_else(|| {
+            PersistenceError::Database("stored Capability Grant value is not an object".to_owned())
+        })?;
+        if object.get("schema").and_then(serde_json::Value::as_str)
+            != Some("ak.schema.capability.v1")
+            || object.get("id").and_then(serde_json::Value::as_str) != Some(grant_id.as_str())
+            || object.get("status").and_then(serde_json::Value::as_str) != Some(status.as_str())
+            || object
+                .get("realm_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value_realm| value_realm != realm_id.as_str())
+        {
+            return Err(PersistenceError::Database(
+                "stored Capability Grant value does not match its row identity".to_owned(),
+            ));
+        }
+        Ok(Self {
+            realm_id,
+            grant_id,
+            status,
+            value,
+            revision,
+        })
+    }
+}
+
+/// Closed lifecycle of the `capability_grant` typed current result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapabilityGrantCurrentStatus {
+    Active,
+    Revoked,
+    Relinquished,
+}
+
+impl CapabilityGrantCurrentStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Revoked => "revoked",
+            Self::Relinquished => "relinquished",
+        }
+    }
+}
+
+impl std::str::FromStr for CapabilityGrantCurrentStatus {
+    type Err = PersistenceError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "active" => Ok(Self::Active),
+            "revoked" => Ok(Self::Revoked),
+            "relinquished" => Ok(Self::Relinquished),
+            _ => Err(PersistenceError::Database(
+                "stored Capability Grant lifecycle is invalid".to_owned(),
+            )),
+        }
+    }
+}
+
+#[async_trait]
+pub trait CapabilityGrantCurrentResultStore: Send + Sync {
+    async fn get(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        grant_id: &arkret_wire::GrantId,
+    ) -> PersistenceResult<Option<CapabilityGrantCurrentResultRecord>>;
+
+    /// Return one statement-level snapshot of every current grant in a Realm.
+    /// Effective/subject filtering belongs above this persistence boundary.
+    async fn snapshot_for_realm(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Vec<CapabilityGrantCurrentResultRecord>>;
+}
+
+#[cfg(test)]
+mod capability_grant_current_result_tests {
+    use super::*;
+
+    const REALM_ID: &str = "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru";
+    const GRANT_ID: &str = "ak:grant:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz";
+    const COMMIT_ID: &str = "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4";
+
+    fn record(
+        status: CapabilityGrantCurrentStatus,
+    ) -> PersistenceResult<CapabilityGrantCurrentResultRecord> {
+        CapabilityGrantCurrentResultRecord::try_new(
+            REALM_ID.parse().unwrap(),
+            GRANT_ID.parse().unwrap(),
+            status,
+            serde_json::json!({
+                "id": GRANT_ID,
+                "schema": "ak.schema.capability.v1",
+                "realm_id": REALM_ID,
+                "status": status.as_str()
+            }),
+            arkret_wire::CurrentRevision {
+                commit_id: COMMIT_ID.parse().unwrap(),
+                stream_position: 41,
+            },
+        )
+    }
+
+    #[test]
+    fn value_and_exact_commit_revision_remain_one_record() {
+        let record = record(CapabilityGrantCurrentStatus::Active).unwrap();
+        assert_eq!(record.value["id"], GRANT_ID);
+        assert_eq!(record.revision.commit_id.as_str(), COMMIT_ID);
+        assert_eq!(record.revision.stream_position, 41);
+    }
+
+    #[test]
+    fn lifecycle_mismatch_fails_closed() {
+        let mut record = record(CapabilityGrantCurrentStatus::Active).unwrap();
+        record.value["status"] = serde_json::json!("revoked");
+        assert!(matches!(
+            CapabilityGrantCurrentResultRecord::try_new(
+                record.realm_id,
+                record.grant_id,
+                record.status,
+                record.value,
+                record.revision,
+            ),
+            Err(PersistenceError::Database(_))
+        ));
+    }
 }
 /// Wire / persistence record for a Space-container projection. Mirrors fields on
 /// `reducer::SpaceContainerProjection` (state stored as the canonical `&str` form
