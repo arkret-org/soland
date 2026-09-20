@@ -70,6 +70,18 @@ pub(crate) async fn ensure(
         expires_at: issued_at,
         updated_at: issued_at,
     };
+    let admitted_document: arkret_identity::DidDocument =
+        serde_json::from_value(document.did_document.clone()).map_err(|error| {
+            crate::app_error!(
+                SchemaViolation,
+                format!("service DID document is invalid: {error}"),
+            )
+        })?;
+    crate::test_material_admission::enforce_did_document_admission(
+        &admitted_document,
+        Some(&state.config().trust_domain),
+    )
+    .map_err(|error| crate::app_error!(SignatureInvalid, error))?;
     let event = DidLogEvent {
         event_digest,
         did: service_did,
@@ -80,7 +92,13 @@ pub(crate) async fn ensure(
 
     match state
         .dids()
-        .commit_service_registration(key, outcome, document.clone(), event)
+        .commit_formal_service_registration(
+            &state.config().trust_domain,
+            key,
+            outcome,
+            document.clone(),
+            event,
+        )
         .await
         .map_err(provider_unavailable)?
     {

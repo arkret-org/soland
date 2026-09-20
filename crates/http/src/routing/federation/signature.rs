@@ -109,7 +109,7 @@ async fn verify_inbound_peer_http_signature_inner(
 
     let source_id = required_header(req, "source-service-id")?;
     let destination_id = required_header(req, "destination-service-id")?;
-    let _source_trust_domain = required_header(req, "source-trust-domain")?;
+    let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
 
     if destination_id != *state.service_id() {
@@ -139,6 +139,23 @@ async fn verify_inbound_peer_http_signature_inner(
         .filter(|value| !value.is_empty());
     let source_verifying_key =
         verifying_key_for_service_id(state, &source_id, &signature_input.key_id).await?;
+    let source_did = arkret_identity::verification_method_did(&signature_input.key_id)
+        .map_err(|_| signature_error("source verification method is not a DID URL"))?;
+    let source_verification_method = arkret_wire::DidUrl::new(signature_input.key_id.clone())
+        .map_err(|_| signature_error("source verification method is not a DID URL"))?;
+    let source_trust_domain = arkret_wire::TrustDomainId::new(source_trust_domain)
+        .map_err(|_| signature_error("Source-Trust-Domain is invalid"))?;
+    if let Err(error) = crate::test_material_admission::enforce_ed25519_admission(
+        &source_verifying_key,
+        &source_did,
+        &source_verification_method,
+        Some(&source_trust_domain),
+    ) {
+        state.discard_federation_peer_verification_keys(&source_id, &signature_input.key_id);
+        state.dids().discard_cached_document(&source_did);
+        state.invalidate_did_bindings(&source_did);
+        return Err(signature_error(error));
+    }
     let scenario = if endpoint_digest.is_some() {
         HttpSignatureScenario::SignalRelayV1
     } else {

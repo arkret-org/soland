@@ -935,6 +935,19 @@ impl AppState {
         });
     }
 
+    pub fn discard_federation_peer_verification_keys(
+        &self,
+        service_id: &str,
+        verification_method: &str,
+    ) {
+        self.federation_peer_verifying_keys.rcu(|current| {
+            let mut next = (**current).clone();
+            next.remove(service_id);
+            next.remove(verification_method);
+            Arc::new(next)
+        });
+    }
+
     /// Atomically replace the endpoint-discovered signing keys for one peer.
     ///
     /// Exact verification-method entries from an older WebVH version must be
@@ -1338,6 +1351,17 @@ impl AppState {
         &self,
         document: soland_services::identity::DidDocumentState,
     ) -> Result<(), String> {
+        let decoded: arkret_identity::DidDocument =
+            serde_json::from_value(document.did_document.clone())
+                .map_err(|error| format!("peer DID document decode failed: {error}"))?;
+        if let Err(error) = crate::test_material_admission::enforce_did_document_admission(
+            &decoded,
+            Some(&self.config().trust_domain),
+        ) {
+            self.dids.discard_cached_document(&decoded.id);
+            self.invalidate_did_bindings(&decoded.id);
+            return Err(error);
+        }
         self.dids
             .cache_resolved_document_state(document)
             .map(|_| ())
@@ -1436,6 +1460,17 @@ impl AppState {
         &self,
         record: soland_services::identity::DidDocumentState,
     ) -> Result<arkret_identity::DidDocument, String> {
+        let decoded: arkret_identity::DidDocument =
+            serde_json::from_value(record.did_document.clone())
+                .map_err(|error| format!("resolved DID document decode failed: {error}"))?;
+        if let Err(error) = crate::test_material_admission::enforce_did_document_admission(
+            &decoded,
+            Some(&self.config().trust_domain),
+        ) {
+            self.dids.discard_cached_document(&decoded.id);
+            self.invalidate_did_bindings(&decoded.id);
+            return Err(error);
+        }
         let document = self.dids.cache_resolved_document_state(record)?;
         // Only a document that actually moved invalidates: re-caching the same
         // bytes (which the freshness gate does on every high-risk check) must

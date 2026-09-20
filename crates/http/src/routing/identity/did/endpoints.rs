@@ -302,9 +302,19 @@ pub(crate) async fn embedded_webvh_register(
         expires_at: now,
         updated_at: now,
     };
+    let admitted_document: arkret_identity::DidDocument = serde_json::from_value(did_document)
+        .map_err(|error| {
+            crate::app_error!(SchemaViolation, format!("DID document is invalid: {error}"),)
+        })?;
+    crate::test_material_admission::enforce_did_document_admission(
+        &admitted_document,
+        Some(&state.config().trust_domain),
+    )
+    .map_err(|error| crate::app_error!(SignatureInvalid, error))?;
     let commit = state
         .dids()
-        .commit_log_operation(
+        .commit_formal_log_operation(
+            &state.config().trust_domain,
             None,
             document_record.clone(),
             WebvhLogRecord {
@@ -828,9 +838,19 @@ pub(crate) async fn identity_submit_did_operation(
         expires_at: submitted_at,
         updated_at: submitted_at,
     };
+    let admitted_document: arkret_identity::DidDocument = serde_json::from_value(document)
+        .map_err(|error| {
+            crate::app_error!(SchemaViolation, format!("DID document is invalid: {error}"),)
+        })?;
+    crate::test_material_admission::enforce_did_document_admission(
+        &admitted_document,
+        Some(&state.config().trust_domain),
+    )
+    .map_err(|error| crate::app_error!(SignatureInvalid, error))?;
     let commit = state
         .dids()
-        .commit_log_operation(
+        .commit_formal_log_operation(
+            &state.config().trust_domain,
             current_head,
             document_record.clone(),
             WebvhLogRecord {

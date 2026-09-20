@@ -166,6 +166,12 @@ impl SolandDidResolver {
             ));
         }
         document.validate()?;
+        if let Err(error) =
+            crate::test_material_admission::enforce_did_document_admission(&document, None)
+        {
+            self.local_snapshot.write().remove(did);
+            return Err(IdentityError::Protocol(error));
+        }
         let mut snapshot = self.local_snapshot.write();
         if let Some(cached) = snapshot.get(did)
             && cached.seq > seq
@@ -387,6 +393,10 @@ impl DidResolver for SolandDidResolver {
 
 #[async_trait::async_trait]
 impl soland_services::identity::DidResolverPort for SolandDidResolver {
+    fn discard_cached_document(&self, did: &Did) {
+        self.local_snapshot.write().remove(did);
+    }
+
     async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, String> {
         SolandDidResolver::resolve_did_async(self, did)
             .await
@@ -896,6 +906,113 @@ mod tests {
             resolved.verification_methods[&verification_method],
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[2u8; 32])
         );
+    }
+
+    #[test]
+    fn formal_test_material_never_enters_the_resolution_snapshot() {
+        let resolver = build_soland_did_resolver(&base_config());
+        let did = Did::new("did:web:real-deployment.company".to_owned()).unwrap();
+        let verification_method = format!("{did}#renamed-production-key");
+        let safe_key = ed25519_dalek::SigningKey::from_bytes(&[91; 32]).verifying_key();
+        let safe_document = DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method.clone(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(safe_key.as_bytes()),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
+        };
+        let seed: [u8; 32] = std::array::from_fn(|index| index as u8);
+        let published_key = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+        let document = DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method,
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(published_key.as_bytes()),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
+        };
+        let now = chrono::Utc::now();
+
+        resolver
+            .cache_application_webvh_record(DidDocumentState {
+                did: did.to_string(),
+                did_document: serde_json::to_value(safe_document).unwrap(),
+                key_log_head: None,
+                seq: 1,
+                method_evidence: json!({"mode": "verified-production-resolution"}),
+                fetched_at: now,
+                expires_at: now,
+                updated_at: now,
+            })
+            .expect("unlisted material is admitted normally");
+        assert!(resolver.cached_document(&did).is_some());
+
+        let error = resolver
+            .cache_application_webvh_record(DidDocumentState {
+                did: did.to_string(),
+                did_document: serde_json::to_value(document).unwrap(),
+                key_log_head: None,
+                seq: 2,
+                method_evidence: json!({"mode": "verified-production-resolution"}),
+                fetched_at: now,
+                expires_at: now,
+                updated_at: now,
+            })
+            .expect_err("published signing material must be terminally refused");
+
+        assert_eq!(error.to_string(), "test_signing_material_denied");
+        assert!(resolver.local_snapshot.read().is_empty());
+        assert!(resolver.cached_document(&did).is_none());
+    }
+
+    #[test]
+    fn each_reserved_identifier_rule_blocks_snapshot_admission_independently() {
+        let resolver = build_soland_did_resolver(&base_config());
+        let now = chrono::Utc::now();
+        let cases = [
+            (
+                Did::new("did:webvh:z6mkfixture123:real.company".to_owned()).unwrap(),
+                "runtime-1",
+            ),
+            (
+                Did::new("did:webvh:z6mklive123:real.company".to_owned()).unwrap(),
+                "runtime-fixture",
+            ),
+        ];
+        let unlisted_key = ed25519_dalek::SigningKey::from_bytes(&[91; 32]).verifying_key();
+        for (did, fragment) in cases {
+            let verification_method = format!("{did}#{fragment}");
+            let document = DidDocument {
+                id: did.clone(),
+                verification_methods: BTreeMap::from([(
+                    verification_method,
+                    arkret_canonical::ed25519_pubkey_to_did_key_multibase(unlisted_key.as_bytes()),
+                )]),
+                also_known_as: Vec::new(),
+                updated_at: Some(now),
+                raw_properties: BTreeMap::new(),
+            };
+            let error = resolver
+                .cache_application_webvh_record(DidDocumentState {
+                    did: did.to_string(),
+                    did_document: serde_json::to_value(document).unwrap(),
+                    key_log_head: None,
+                    seq: 1,
+                    method_evidence: json!({"mode": "verified-production-resolution"}),
+                    fetched_at: now,
+                    expires_at: now,
+                    updated_at: now,
+                })
+                .expect_err("a reserved identifier must not enter the snapshot");
+            assert_eq!(error.to_string(), "test_signing_material_denied");
+            assert!(resolver.cached_document(&did).is_none());
+        }
+        assert!(resolver.local_snapshot.read().is_empty());
     }
 
     #[test]

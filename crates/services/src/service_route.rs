@@ -186,6 +186,13 @@ impl ServiceRouteResolver {
             .projection()
             .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
         let d = candidate.description;
+        arkret_identity::test_material::enforce_formal_test_material_policy(
+            None,
+            Some(&p.did),
+            None,
+            Some(&d.trust_domain),
+        )
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         if p.service_id != *service_id
             || p.service_kind != service_kind
             || d.service_id != *service_id
@@ -239,5 +246,184 @@ impl ServiceRouteResolver {
             },
         );
         Ok(entry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use arkret_models_identity::{
+        AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
+        ResolutionDidBindingEvidenceReceipt, ResolutionMethodEvidenceBoundary,
+        ResolutionMethodHistoryEvidence, ServiceMethodState,
+    };
+    use async_trait::async_trait;
+    use soland_storage::{PersistenceResult, ServiceRouteStoredKey};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingRouteStore {
+        publish_writes: AtomicUsize,
+        quarantine_writes: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ServiceRouteStore for RecordingRouteStore {
+        async fn list_stored_route_keys(
+            &self,
+            _after: Option<&ServiceRouteStoredKey>,
+            _limit: usize,
+        ) -> PersistenceResult<Vec<ServiceRouteStoredKey>> {
+            Ok(Vec::new())
+        }
+
+        async fn quarantine_evidence(
+            &self,
+            _service_id: &DidCoreId,
+            _service_kind: &str,
+            _limit: usize,
+        ) -> PersistenceResult<Vec<ServiceResolutionForkEvidence>> {
+            Ok(Vec::new())
+        }
+
+        async fn method_state(
+            &self,
+            _service_id: &DidCoreId,
+            _service_kind: &str,
+        ) -> PersistenceResult<Option<ServiceMethodState>> {
+            Ok(None)
+        }
+
+        async fn publish_route_cache(
+            &self,
+            _evidence: AuthenticatedServiceResolution,
+            _route: VerifiedServiceRoute,
+        ) -> PersistenceResult<MonotonicRouteWrite> {
+            self.publish_writes.fetch_add(1, Ordering::SeqCst);
+            Ok(MonotonicRouteWrite::Applied)
+        }
+
+        async fn quarantine_fork(
+            &self,
+            _evidence: ServiceResolutionForkEvidence,
+        ) -> PersistenceResult<()> {
+            self.quarantine_writes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn is_quarantined(
+            &self,
+            _service_id: &DidCoreId,
+            _service_kind: &str,
+        ) -> PersistenceResult<bool> {
+            Ok(false)
+        }
+
+        async fn route_cache(
+            &self,
+            _service_id: &DidCoreId,
+            _service_kind: &str,
+        ) -> PersistenceResult<Option<VerifiedServiceRoute>> {
+            Ok(None)
+        }
+
+        async fn evict_route_cache(
+            &self,
+            _service_id: &DidCoreId,
+            _service_kind: &str,
+        ) -> PersistenceResult<()> {
+            Ok(())
+        }
+    }
+
+    struct StaticFetcher(VerifiedRouteCandidate);
+
+    #[async_trait]
+    impl ServiceRouteFetcher for StaticFetcher {
+        async fn fetch_current(
+            &self,
+            _service_id: &DidCoreId,
+            _service_kind: &str,
+        ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    fn route_candidate(trust_domain: &str) -> (DidCoreId, VerifiedRouteCandidate) {
+        let did = arkret_wire::Did::new("did:web:peer.production.example".to_owned()).unwrap();
+        let service_id = arkret_wire::project_did_to_core_id(&did).unwrap();
+        let base_url = "https://peer.production.example/";
+        let document: DidDocument = serde_json::from_value(serde_json::json!({
+            "id": did,
+            "service": [{
+                "id": format!("{did}#station"),
+                "type": "ArkretService",
+                "serviceKind": "station",
+                "serviceEndpoint": base_url,
+            }],
+        }))
+        .unwrap();
+        let digest = arkret_identity::document_canonical_digest(&document).unwrap();
+        let head = digest.to_string();
+        let version = format!(
+            "synthetic-jcs-sha256:{}",
+            head.trim_start_matches("sha256:")
+        );
+        let evidence = AuthenticatedServiceResolution {
+            service_id: service_id.clone(),
+            service_kind: "station".to_owned(),
+            normalized_did_document: document,
+            method_history_evidence: ResolutionMethodHistoryEvidence::DidWebDocument {
+                boundary: ResolutionMethodEvidenceBoundary {
+                    from_method_history_head: head.clone(),
+                    to_method_history_head: head.clone(),
+                    from_version_id: version.clone(),
+                    to_version_id: version.clone(),
+                },
+                evidence: ResolutionDidBindingEvidenceReceipt {
+                    kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                    method: "web".to_owned(),
+                    document_digest: digest,
+                    method_proofs: Vec::new(),
+                },
+            },
+        };
+        (
+            service_id.clone(),
+            VerifiedRouteCandidate {
+                evidence,
+                description: VerifiedServiceDescribeMetadata {
+                    service_id,
+                    service_kind: "station".to_owned(),
+                    service_resolution: arkret_models_identity::ResolutionCommitment {
+                        did,
+                        method_history_head: head,
+                        version_id: version,
+                    },
+                    http_json_base_url: base_url.to_owned(),
+                    trust_domain: TrustDomainId::new(trust_domain.to_owned()).unwrap(),
+                    protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+                },
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn reserved_trust_domain_is_rejected_before_durable_or_runtime_route_cache_write() {
+        let (service_id, candidate) = route_candidate("ak:trust_domain:fixture.example");
+        let store = Arc::new(RecordingRouteStore::default());
+        let resolver = ServiceRouteResolver::new(store.clone(), Arc::new(StaticFetcher(candidate)));
+
+        let error = resolver
+            .resolve(&service_id, "station", Utc::now(), true)
+            .await
+            .expect_err("a formal route may not admit a reserved trust domain");
+
+        assert!(error.to_string().contains("test_signing_material_denied"));
+        assert_eq!(store.publish_writes.load(Ordering::SeqCst), 0);
+        assert_eq!(store.quarantine_writes.load(Ordering::SeqCst), 0);
+        assert!(resolver.resolved_routes.lock().is_empty());
     }
 }

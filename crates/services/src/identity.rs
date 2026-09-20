@@ -7,13 +7,15 @@ use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
-use arkret_wire::{AccountId, DidUrl, OpaqueLocalId};
+use arkret_wire::{AccountId, DidUrl, OpaqueLocalId, TrustDomainId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::Signer as _;
 use parking_lot::Mutex;
 use serde_json::Value;
 use soland_storage::{AccountPk, AgentRuntimeEnqueueOutcome, EnqueueAgentRuntimeMessage};
+
+use crate::ServiceError;
 
 /// Sign canonical payload bytes with the SDK-owned detached-JWS `kid` binding
 /// required by [`arkret_wire::PayloadSignature`].
@@ -2729,6 +2731,10 @@ pub trait DidDocumentPort: Send + Sync {
 #[async_trait]
 pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
     async fn resolve_did_async(&self, did: &Did) -> Result<arkret_identity::DidDocument, String>;
+    /// Remove any process-local resolution snapshot for a terminally refused
+    /// DID. Durable identity state, when present, remains the responsibility of
+    /// the trust-admission transaction that attempted to publish it.
+    fn discard_cached_document(&self, _did: &Did) {}
     async fn resolve_current_service_did(
         &self,
         _did: &Did,
@@ -2780,6 +2786,40 @@ fn verify_local_service_history(
 pub struct DidService {
     documents: Arc<dyn DidDocumentPort>,
     resolver: Arc<dyn DidResolverPort>,
+}
+
+/// Apply the SDK's canonical formal test-material policy to every selectable
+/// Ed25519 method in a decoded DID document. This is the application-layer
+/// trust boundary shared by durable DID commits and HTTP resolver adapters.
+pub fn enforce_formal_did_document_admission(
+    document: &arkret_identity::DidDocument,
+    trust_domain: Option<&TrustDomainId>,
+) -> Result<(), String> {
+    arkret_identity::test_material::enforce_formal_test_material_policy(
+        None,
+        Some(&document.id),
+        None,
+        trust_domain,
+    )
+    .map_err(|error| error.to_string())?;
+    for (method, public_key_multibase) in &document.verification_methods {
+        let verification_method = DidUrl::new(method.clone())
+            .map_err(|error| format!("DID verification method is invalid: {error}"))?;
+        let public_key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
+            .map_err(|error| format!("DID verification method key is invalid: {error}"))?;
+        arkret_identity::test_material::enforce_formal_test_material_policy(
+            Some(
+                &arkret_identity::test_material::PublicKeyFingerprintInput::Ed25519Rfc8032(
+                    &public_key,
+                ),
+            ),
+            Some(&document.id),
+            Some(&verification_method),
+            trust_domain,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 impl DidService {
@@ -2949,6 +2989,10 @@ impl DidService {
         self.resolver.cache_document_state(document)
     }
 
+    pub fn discard_cached_document(&self, did: &Did) {
+        self.resolver.discard_cached_document(did);
+    }
+
     pub async fn document(&self, did: &str) -> ServiceResult<Option<DidDocumentState>> {
         self.documents.document(did).await
     }
@@ -2991,6 +3035,24 @@ impl DidService {
             .await
     }
 
+    pub async fn commit_formal_service_registration(
+        &self,
+        trust_domain: &TrustDomainId,
+        key: ServiceRegistrationKey,
+        outcome: ServiceRegistrationOutcome,
+        document: DidDocumentState,
+        event: DidLogEvent,
+    ) -> ServiceResult<ServiceRegistrationCommitResult> {
+        let decoded: arkret_identity::DidDocument =
+            serde_json::from_value(document.did_document.clone()).map_err(|error| {
+                ServiceError::SchemaViolation(format!("service DID document is invalid: {error}"))
+            })?;
+        enforce_formal_did_document_admission(&decoded, Some(trust_domain))
+            .map_err(ServiceError::SchemaViolation)?;
+        self.commit_service_registration(key, outcome, document, event)
+            .await
+    }
+
     pub async fn commit_log_operation(
         &self,
         expected_current_head: Option<String>,
@@ -2999,6 +3061,23 @@ impl DidService {
     ) -> ServiceResult<DidLogCommitResult> {
         self.documents
             .commit_log_operation(expected_current_head, document, event)
+            .await
+    }
+
+    pub async fn commit_formal_log_operation(
+        &self,
+        trust_domain: &TrustDomainId,
+        expected_current_head: Option<String>,
+        document: DidDocumentState,
+        event: DidLogEvent,
+    ) -> ServiceResult<DidLogCommitResult> {
+        let decoded: arkret_identity::DidDocument =
+            serde_json::from_value(document.did_document.clone()).map_err(|error| {
+                ServiceError::SchemaViolation(format!("DID document is invalid: {error}"))
+            })?;
+        enforce_formal_did_document_admission(&decoded, Some(trust_domain))
+            .map_err(ServiceError::SchemaViolation)?;
+        self.commit_log_operation(expected_current_head, document, event)
             .await
     }
 }
@@ -3530,6 +3609,60 @@ mod tests {
             document.did_document,
             serde_json::json!({"id": document.did})
         );
+    }
+
+    #[tokio::test]
+    async fn formal_test_material_is_rejected_before_the_durable_did_ledger_port() {
+        let service = DidService::new(Arc::new(StaticDidDocuments), Arc::new(NoDidResolver));
+        let did = Did::new("did:web:real-deployment.company".to_owned()).unwrap();
+        let verification_method = format!("{did}#renamed-production-key");
+        let seed: [u8; 32] = std::array::from_fn(|index| index as u8);
+        let published_key = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+        let document = arkret_identity::DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method,
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(published_key.as_bytes()),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(Utc::now()),
+            raw_properties: BTreeMap::new(),
+        };
+        let now = Utc::now();
+        let document = DidDocumentState {
+            did: did.to_string(),
+            did_document: serde_json::to_value(document).unwrap(),
+            key_log_head: None,
+            seq: 1,
+            method_evidence: serde_json::json!({"mode": "verified-production-resolution"}),
+            fetched_at: now,
+            expires_at: now,
+            updated_at: now,
+        };
+        let event = DidLogEvent {
+            event_digest: arkret_canonical::sha256_digest(b"formal-test-material"),
+            did: did.to_string(),
+            seq: 1,
+            operation: serde_json::json!({"state": {"id": did}}),
+            created_at: now,
+        };
+        let trust_domain =
+            TrustDomainId::new("ak:trust_domain:production.company".to_owned()).unwrap();
+
+        let error = service
+            .commit_formal_log_operation(&trust_domain, None, document, event)
+            .await
+            .expect_err("published signing material must not reach durable commit");
+
+        assert_eq!(
+            error.to_string(),
+            "schema violation: test_signing_material_denied"
+        );
+        assert!(
+            service.document(did.as_str()).await.unwrap().is_none(),
+            "the rejected DID must leave no durable document row"
+        );
+        assert!(service.log_events(did.as_str()).await.unwrap().is_empty());
     }
 
     #[tokio::test]

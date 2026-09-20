@@ -124,6 +124,11 @@ pub fn verify_did_controlled_jws(
         .map_err(|error| error.to_string())?;
     validate_verification_method_controller(issuer, verification_method)?;
     let document = document_for_verification_sync(state, &did, verification_method)?;
+    enforce_selected_document_admission(
+        &document,
+        verification_method,
+        Some(&state.config().trust_domain),
+    )?;
     verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
 }
 
@@ -142,6 +147,11 @@ pub async fn verify_did_controlled_jws_async(
         .map_err(|error| error.to_string())?;
     validate_verification_method_controller(issuer, verification_method)?;
     let document = document_for_verification(state, &did, verification_method).await?;
+    enforce_selected_document_admission(
+        &document,
+        verification_method,
+        Some(&state.config().trust_domain),
+    )?;
     verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
 }
 
@@ -166,7 +176,15 @@ pub async fn verify_did_controlled_ed25519_signature_async(
         .ok_or_else(|| "verification method is absent from DID document".to_owned())?;
     let public_key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
         .map_err(|error| format!("verification method key is invalid: {error}"))?;
-    verify_ed25519_signature_with_public_key(payload, signature_b64url, &public_key)
+    let public_key = VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("verification method key is invalid: {error}"))?;
+    enforce_selected_key_admission(
+        &did,
+        verification_method,
+        &public_key,
+        Some(&state.config().trust_domain),
+    )?;
+    verify_ed25519_signature_with_public_key(payload, signature_b64url, public_key.as_bytes())
 }
 
 pub fn verify_ed25519_signature_with_public_key(
@@ -311,6 +329,7 @@ pub fn verify_jws_with_pinned_document(
     validate_verification_method_controller(issuer, verification_method.as_str())?;
     let issuer_did = arkret_identity::verification_method_did(verification_method.as_str())
         .map_err(|error| error.to_string())?;
+    enforce_selected_document_admission(document, verification_method.as_str(), None)?;
     let outcome = arkret_identity::verify_jws_with_document(
         canonical_bytes,
         jws,
@@ -532,7 +551,7 @@ async fn principal_authorized_device_binding_with_account_authority_async(
         raw_properties: BTreeMap::new(),
     };
     let accepted = principal_binding_acceptance(state, &method_did, verification_method, &document)
-        .ok_or_else(|| fail("principal device key cannot form an accepted binding".to_owned()))?;
+        .map_err(fail)?;
     let verification_method_id = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| fail(format!("principal verification method is invalid: {error}")))?;
     let authorization_event_id = arkret_wire::EventId::new(authorize_event_id)
@@ -891,9 +910,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         };
         let accepted =
             principal_binding_acceptance(state, &method_did, verification_method, &document)
-                .ok_or_else(|| {
-                    fail("principal device key cannot form an accepted binding".to_owned())
-                })?;
+                .map_err(fail)?;
         let outcome = arkret_identity::verify_event_proof_with_binding(
             proof,
             envelope_bytes,
@@ -926,12 +943,7 @@ pub async fn verify_registered_identity_resolution_event_proof_async(
     // verifier. It is not stored: every registered resolution update must
     // re-establish current DID authority and freshness.
     let accepted = principal_binding_acceptance(state, &method_did, verification_method, &document)
-        .ok_or_else(|| {
-            PrincipalAuthorizedJwsError::Verification(
-                "resolved DID document does not form an acceptable current authority binding"
-                    .to_owned(),
-            )
-        })?;
+        .map_err(PrincipalAuthorizedJwsError::Verification)?;
     let outcome = arkret_identity::verify_event_proof_with_binding(
         proof,
         envelope_bytes,
@@ -980,9 +992,20 @@ fn principal_binding_acceptance(
     did: &Did,
     verification_method: &str,
     document: &DidDocument,
-) -> Option<arkret_identity::AcceptedDidBinding> {
-    let key = principal_binding_key(state, did, verification_method)?;
-    let document_digest = arkret_identity::document_canonical_digest(document).ok()?;
+) -> Result<arkret_identity::AcceptedDidBinding, String> {
+    if let Err(error) = enforce_selected_document_admission(
+        document,
+        verification_method,
+        Some(&state.config().trust_domain),
+    ) {
+        state.dids().discard_cached_document(did);
+        state.invalidate_did_bindings(did);
+        return Err(error);
+    }
+    let key = principal_binding_key(state, did, verification_method)
+        .ok_or_else(|| "principal device key cannot form an accepted binding".to_owned())?;
+    let document_digest =
+        arkret_identity::document_canonical_digest(document).map_err(|error| error.to_string())?;
     let verified_at = chrono::Utc::now();
     // The acceptance inherits the high-risk freshness window that gated it, so
     // a binding can never outlive the evidence it rests on.
@@ -1012,16 +1035,20 @@ fn principal_binding_acceptance(
         // method that has no history from one whose history the resolver did not
         // surface, so both states are recorded rather than omitted.
         limited_trust: arkret_identity::LimitedTrust::for_proofless_method(None, None).record_for(),
-        evidence_digest: receipt.digest().ok()?,
-        evidence_dependencies: receipt.evidence_dependencies().ok()?,
+        evidence_digest: receipt.digest().map_err(|error| error.to_string())?,
+        evidence_dependencies: receipt
+            .evidence_dependencies()
+            .map_err(|error| error.to_string())?,
         policy_digest: key.policy_digest.clone(),
         verified_at,
         refresh_after: None,
         expires_at: Some(expires_at),
         status: arkret_identity::DidBindingStatus::Active,
     };
-    let binding = arkret_identity::VerifiedDidBinding::new(input).ok()?;
-    arkret_identity::AcceptedDidBinding::new(binding, document.clone(), receipt).ok()
+    let binding =
+        arkret_identity::VerifiedDidBinding::new(input).map_err(|error| error.to_string())?;
+    arkret_identity::AcceptedDidBinding::new(binding, document.clone(), receipt)
+        .map_err(|error| error.to_string())
 }
 
 pub fn is_local_service_notary_method(
@@ -1043,8 +1070,19 @@ pub fn resolve_ed25519_pubkey(
     state: &AppState,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    arkret_identity::jws::resolve_ed25519_pubkey(state.dids().resolver(), verification_method)
-        .map_err(|error| error.to_string())
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let document = document_for_verification_sync(state, &did, verification_method)?;
+    let public_key =
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+            .map_err(|error| error.to_string())?;
+    enforce_selected_key_admission(
+        &did,
+        verification_method,
+        &public_key,
+        Some(&state.config().trust_domain),
+    )?;
+    Ok(public_key)
 }
 
 pub async fn resolve_ed25519_pubkey_async(
@@ -1054,8 +1092,16 @@ pub async fn resolve_ed25519_pubkey_async(
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
     let document = document_for_verification(state, &did, verification_method).await?;
-    arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
-        .map_err(|error| error.to_string())
+    let public_key =
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+            .map_err(|error| error.to_string())?;
+    enforce_selected_key_admission(
+        &did,
+        verification_method,
+        &public_key,
+        Some(&state.config().trust_domain),
+    )?;
+    Ok(public_key)
 }
 
 /// Resolve the Ed25519 key that was effective at a signed historical instant.
@@ -1088,8 +1134,16 @@ pub async fn resolve_ed25519_pubkey_at(
             ));
         }
     };
-    arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
-        .map_err(|error| error.to_string())
+    let public_key =
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+            .map_err(|error| error.to_string())?;
+    enforce_selected_key_admission(
+        &did,
+        verification_method,
+        &public_key,
+        Some(&state.config().trust_domain),
+    )?;
+    Ok(public_key)
 }
 
 /// Resolve and validate a DID-scoped Ed25519 verification method.
@@ -1109,6 +1163,12 @@ pub async fn resolve_ed25519_verification_key_for_did(
     let public_key =
         arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
             .map_err(|error| error.to_string())?;
+    enforce_selected_key_admission(
+        did,
+        verification_method,
+        &public_key,
+        Some(&state.config().trust_domain),
+    )?;
     let key_log_head = did_document_key_log_head(state, did, &document).await?;
     Ok(ResolvedVerificationKey {
         verification_method: verification_method.to_owned(),
@@ -1117,6 +1177,33 @@ pub async fn resolve_ed25519_verification_key_for_did(
         did_document_ref: format!("{}#document", did),
         key_log_head,
     })
+}
+
+fn enforce_selected_document_admission(
+    document: &DidDocument,
+    verification_method: &str,
+    trust_domain: Option<&arkret_wire::TrustDomainId>,
+) -> Result<(), String> {
+    let public_key =
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(document, verification_method)
+            .map_err(|error| error.to_string())?;
+    enforce_selected_key_admission(&document.id, verification_method, &public_key, trust_domain)
+}
+
+fn enforce_selected_key_admission(
+    did: &Did,
+    verification_method: &str,
+    public_key: &VerifyingKey,
+    trust_domain: Option<&arkret_wire::TrustDomainId>,
+) -> Result<(), String> {
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
+    crate::test_material_admission::enforce_ed25519_admission(
+        public_key,
+        did,
+        &verification_method,
+        trust_domain,
+    )
 }
 
 pub fn validate_verification_method_controller(
@@ -1539,6 +1626,48 @@ mod did_binding_tests {
             &document,
         )
         .expect_err("a different Core controller cannot borrow the pinned method");
+    }
+
+    #[test]
+    fn valid_signature_from_published_material_is_denied_without_a_binding() {
+        let state = state_without_any_resolver();
+        let seed: [u8; 32] = std::array::from_fn(|index| index as u8);
+        let published_key = SigningKey::from_bytes(&seed);
+        let did = Did::new("did:web:real-deployment.company".to_owned()).unwrap();
+        let verification_method = format!("{did}#renamed-production-key");
+        let document = document_for(&did, &verification_method, &published_key);
+        let previously_safe = document_for(
+            &did,
+            &verification_method,
+            &SigningKey::from_bytes(&[91; 32]),
+        );
+        let accepted =
+            principal_binding_acceptance(&state, &did, &verification_method, &previously_safe)
+                .expect("unlisted material can form the previous accepted binding");
+        state.did_bindings().accept(accepted).unwrap();
+        assert_eq!(state.did_bindings().snapshot().len(), 1);
+        let payload = b"otherwise-valid-formal-trust-admission";
+        let jws = signed(&published_key, payload);
+        let typed_method = arkret_wire::DidUrl::new(verification_method.clone()).unwrap();
+
+        arkret_identity::verify_jws_with_document(payload, &jws, &typed_method, &did, &document)
+            .expect("the published fixture signature is cryptographically valid");
+        let binding_error =
+            principal_binding_acceptance(&state, &did, &verification_method, &document)
+                .expect_err("published material must not form an accepted binding");
+        assert_eq!(binding_error, "test_signing_material_denied");
+        assert!(state.did_bindings().snapshot().is_empty());
+        let error = verify_jws_with_pinned_document(
+            payload,
+            &jws,
+            &verification_method,
+            did.as_str(),
+            &document,
+        )
+        .expect_err("formal Soland verification must refuse the published key");
+
+        assert_eq!(error, "test_signing_material_denied");
+        assert!(state.did_bindings().snapshot().is_empty());
     }
 
     // ========================================================================

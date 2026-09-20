@@ -26,6 +26,7 @@ pub mod routing;
 pub mod runtime_settings;
 pub mod security;
 pub mod state;
+mod test_material_admission;
 pub mod util;
 pub mod verified_profiles;
 pub mod wire;
