@@ -880,6 +880,7 @@ pub struct SolandRelationState {
     pub scope_circle_id: Option<String>,
     pub from_ref: Option<arkret_models_collaboration::objects::relation::RelationEndpoint>,
     pub to_ref: Option<arkret_models_collaboration::objects::relation::RelationEndpoint>,
+    pub rank: Option<String>,
     pub fields: BTreeMap<String, Value>,
     pub state: String,
     pub source_event_id: Option<String>,

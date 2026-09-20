@@ -909,6 +909,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
             scope_circle_id: None,
             from_ref: Some(morph_id.into()),
             to_ref: Some(target_ref.into()),
+            rank: None,
             fields,
             state: "active".to_owned(),
             source_event_id: None,

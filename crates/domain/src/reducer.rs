@@ -46,7 +46,6 @@ mod projections;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use apply_capability::derive_authority_audit;
-pub use apply_relations::RelationConflictProjectionError;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::read_receipts::{

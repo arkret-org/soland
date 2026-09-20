@@ -41,9 +41,7 @@ use arkret_models_collaboration::http_bodies::{
 use arkret_models_collaboration::objects::query_projection::{
     DocumentMorphProjectionOutcome, ReferenceProjectionState,
 };
-use arkret_models_collaboration::objects::relation::{
-    RelationConflictDiagnostic, RelationEndpoint,
-};
+use arkret_models_collaboration::objects::relation::RelationEndpoint;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
@@ -1138,6 +1136,7 @@ struct RelationEdgeView {
     relation_kind: String,
     from_ref: Option<RelationEndpoint>,
     to_ref: Option<RelationEndpoint>,
+    rank: Option<String>,
     fields: BTreeMap<String, Value>,
     state: String,
     scope_circle_id: Option<String>,
@@ -1153,7 +1152,6 @@ struct RelationEdgeView {
 #[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
 struct RelationEdgeList {
     items: Vec<RelationEdgeView>,
-    diagnostics: Vec<RelationConflictDiagnostic>,
     total: u64,
 }
 
@@ -1488,6 +1486,7 @@ mod relation_actor_endpoint_tests {
                     scope_circle_id: None,
                     from_ref: Some(strand.into()),
                     to_ref: Some(actor.clone().into()),
+                    rank: None,
                     fields: BTreeMap::new(),
                     state: "active".to_owned(),
                     source_event_id: Some(event.to_string()),
@@ -1591,18 +1590,17 @@ async fn list_relation_projections(
     };
 
     let mut items = Vec::new();
-    let mut visible_relation_ids = std::collections::BTreeSet::new();
     for relation in candidates {
         if !realm_id_accessible(state, &relation.realm_id, Some(&session)).await {
             continue;
         }
-        visible_relation_ids.insert(relation.relation_id.clone());
         items.push(RelationEdgeView {
             relation_id: relation.relation_id,
             realm_id: relation.realm_id,
             relation_kind: relation.relation_kind,
             from_ref: relation.from_ref,
             to_ref: relation.to_ref,
+            rank: relation.rank,
             fields: relation.fields,
             state: relation.state,
             scope_circle_id: relation.scope_circle_id,
@@ -1611,26 +1609,8 @@ async fn list_relation_projections(
         });
     }
     items.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
-    let diagnostics = proj
-        .relation_conflict_diagnostics_visible_to(|relation| {
-            visible_relation_ids.contains(&relation.relation_id)
-        })
-        .map_err(|error| match error {
-            soland_domain::reducer::RelationConflictProjectionError::FanoutExceeded => {
-                crate::app_error!(
-                    FailedPrecondition,
-                    "relation conflict requires complete repair evidence"
-                )
-                .with_reason_code(arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED)
-            }
-            error => AppError::internal(error.to_string()),
-        })?;
     let total = total_count(items.len())?;
-    json_ok(RelationEdgeList {
-        items,
-        diagnostics,
-        total,
-    })
+    json_ok(RelationEdgeList { items, total })
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.morph.resource.get", tags("events"))]

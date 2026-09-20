@@ -2692,6 +2692,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 scope_circle_id: Some(circle_id.to_owned()),
                 from_ref: Some("ak:strand:AYmJuuenMIJ2dTgMqUL3AoeJJOHo5Iap70ImQUPzbJhY".into()),
                 to_ref: Some("ak:strand:AcTTTDFcIiz-Tmjh-sPdibSEwAhireChqYZJzVM0K1MY".into()),
+                rank: None,
                 fields: Default::default(),
                 state: "active".to_owned(),
                 source_event_id: Some(

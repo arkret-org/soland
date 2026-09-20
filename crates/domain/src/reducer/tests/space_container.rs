@@ -686,7 +686,7 @@ fn space_list_archive_restore_and_tombstone_protect_card_lifecycle_and_rank() {
         .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
     assert_eq!(
-        relation.fields.get("rank").and_then(Value::as_str),
+        relation.rank.as_deref(),
         Some("r007")
     );
 
@@ -705,7 +705,7 @@ fn space_list_archive_restore_and_tombstone_protect_card_lifecycle_and_rank() {
         .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
     assert_eq!(
-        relation.fields.get("rank").and_then(Value::as_str),
+        relation.rank.as_deref(),
         Some("r007")
     );
     state.apply(
@@ -871,10 +871,7 @@ fn board_archive_and_restore_preserve_child_lists_and_cards() {
         .values()
         .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
-    assert_eq!(
-        relation.fields.get("rank").and_then(Value::as_str),
-        Some("r007")
-    );
+    assert_eq!(relation.rank.as_deref(), Some("r007"));
 }
 
 #[test]

@@ -43,8 +43,13 @@ pub struct ProjectionState {
     /// Read markers keyed by (realm_id, actor, scope_id). Causal-first merge;
     /// HLC/device ordering applies only to causally concurrent positions.
     pub read_cursors: BTreeMap<(String, String, String), ReadMarkerOutcome>,
-    /// Relations keyed by relation_id. LWW by HLC.
+    /// Materialized Relation history keyed by event-derived relation_id.
     pub relations: BTreeMap<String, SolandRelationState>,
+    /// Current Relation identity for each canonical
+    /// `(realm_id, primary_conflict_domain)` subject. The durable authority
+    /// transaction is the CAS authority; this rebuildable index keeps reducer
+    /// replay on the same single-current-value model.
+    pub relation_current: BTreeMap<(String, String), String>,
     /// Per-(Strand, Actor) notification watch preferences.
     pub strand_watches: BTreeMap<(String, String), StrandWatchProjection>,
     /// Poll projections keyed by poll_id. Poll create is a message content
@@ -609,6 +614,7 @@ impl ProjectionState {
                 scope_circle_id: scope_circle_id.clone(),
                 from_ref: Some(list_space_id.into()),
                 to_ref: Some(strand_id.into()),
+                rank: rank.map(ToOwned::to_owned),
                 fields: BTreeMap::new(),
                 state: "active".to_owned(),
                 source_event_id: None,
@@ -621,6 +627,7 @@ impl ProjectionState {
         relation.scope_circle_id = scope_circle_id;
         relation.from_ref = Some(list_space_id.into());
         relation.to_ref = Some(strand_id.into());
+        relation.rank = rank.map(ToOwned::to_owned);
         relation.fields.insert(
             "board_space_id".to_owned(),
             Value::String(board_space_id.to_owned()),
@@ -629,11 +636,6 @@ impl ProjectionState {
             "list_space_id".to_owned(),
             Value::String(list_space_id.to_owned()),
         );
-        if let Some(rank) = rank {
-            relation
-                .fields
-                .insert("rank".to_owned(), Value::String(rank.to_owned()));
-        }
         relation.state = "active".to_owned();
         relation.updated_at = now;
     }

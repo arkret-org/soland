@@ -3,11 +3,8 @@ use super::*;
 const REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const SPACE: &str = "ak:space:ATu1E_hCvaxzpXDswPMlN3ypwETWAa7O994Etg387rA6";
 const STRAND: &str = "ak:strand:ATw_yJRaz2EEXAz-44u3FE2jGCVrpM3MQQZhKmxheDqW";
+const RELATION_TARGET: &str = "ak:realm:AaI4Pi7YjaMfo9_Oldm1_7Gl7z-mO6uU0oL8ZWvRl8uZ";
 const RELATION: &str = "ak:relation:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
-/// The Event a `ak.relation.create` for [`RELATION`] must carry: the id is
-/// `retype(event_id)` (`relation_create_payload` has no `relation_id` member),
-/// so the fixture pins the Event token instead of the object id.
-const RELATION_CREATE_EVENT: &str = "ak:event:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
 const EVENT: &str = "ak:event:AUiaY2u0jL7j0v1YowBxmn8e4QEpBDWA7QtOlNdhtZ1N";
 // `ak.message.revise` addresses the Message through its single registered
 // carrier `payload.message_id`, which retypes the same create-Event token.
@@ -102,38 +99,53 @@ fn relation_create_waits_for_unknown_endpoint() {
         arkret_wire::EventKind::RelationCreate,
         REALM,
         serde_json::json!({
-            "event_id": RELATION_CREATE_EVENT,
-            "relation": {
-                "kind": "references",
+            "primary_conflict_domain": {
+                "domain_kind": "tuple",
+                "relation_kind": "references",
                 "from_ref": STRAND,
-                "to_ref": { "kind": "account", "account_id": {
-                    "principal_id": "ak:did_core:web:bob.example",
-                    "station_id": "ak:did_core:web:fixture-station.example"
-                }}
+                "to_ref": RELATION_TARGET
+            },
+            "expected_revision": null,
+            "relation": {
+                "relation_kind": "references",
+                "from_ref": STRAND,
+                "to_ref": RELATION_TARGET
             }
         }),
     );
+    let relation_id =
+        arkret_identifiers::RelationId::from_event_id(&relation.context.event_id).to_string();
 
     assert!(matches!(
         state.apply(&relation, &hlc),
         ProjectionEffect::PendingReplayQueued { ref target_ref, .. } if target_ref == STRAND
     ));
-    assert!(!state.relations.contains_key(RELATION));
+    assert!(!state.relations.contains_key(&relation_id));
 
     state.apply(&strand_create(), &hlc);
 
     assert!(!state.pending_replay.contains_key(STRAND));
-    assert!(state.relations.contains_key(RELATION));
+    assert!(state.relations.contains_key(&relation_id));
 }
 
 #[test]
-fn relation_update_pending_replays_after_create() {
+fn relation_update_for_missing_current_value_is_not_queued_for_replay() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let update = make_operation(
         arkret_wire::EventKind::RelationUpdate,
         REALM,
         serde_json::json!({
+            "primary_conflict_domain": {
+                "domain_kind": "tuple",
+                "relation_kind": "references",
+                "from_ref": STRAND,
+                "to_ref": RELATION_TARGET
+            },
+            "expected_revision": {
+                "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+                "stream_position": 1
+            },
             "relation_id": RELATION,
             "patch": { "fields.label": "m" }
         }),
@@ -141,29 +153,11 @@ fn relation_update_pending_replays_after_create() {
 
     assert!(matches!(
         state.apply(&update, &hlc),
-        ProjectionEffect::PendingReplayQueued { ref target_ref, .. } if target_ref == RELATION
+        ProjectionEffect::Rejected { ref reason }
+            if reason == arkret_wire::ErrorCode::FAILED_PRECONDITION
     ));
-
-    state.apply(&strand_create(), &hlc);
-    let create = make_operation(
-        arkret_wire::EventKind::RelationCreate,
-        REALM,
-        serde_json::json!({
-            "event_id": RELATION_CREATE_EVENT,
-            "relation": {
-                "kind": "assigned_to",
-                "from_ref": STRAND,
-                "to_ref": { "kind": "account", "account_id": {
-                    "principal_id": "ak:did_core:web:bob.example",
-                    "station_id": "ak:did_core:web:fixture-station.example"
-                }}
-            }
-        }),
-    );
-    state.apply(&create, &hlc);
-
-    assert!(!state.pending_replay.contains_key(RELATION));
-    assert_eq!(state.relations[RELATION].fields["label"], "m");
+    assert!(state.pending_replay.is_empty());
+    assert!(state.relations.is_empty());
 }
 
 #[test]
