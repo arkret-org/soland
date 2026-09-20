@@ -247,12 +247,12 @@ mod tests {
     #[test]
     fn path_matcher_supports_registered_parameters_without_prefix_matches() {
         assert!(http_path_matches(
-            "/_arkret/self/events/{event_id}",
-            "/_arkret/self/events/ak:event:1"
+            "/_arkret/self/committed-events/{event_id}",
+            "/_arkret/self/committed-events/ak:event:1"
         ));
         assert!(!http_path_matches(
-            "/_arkret/self/events/{event_id}",
-            "/_arkret/self/events"
+            "/_arkret/self/committed-events/{event_id}",
+            "/_arkret/self/committed-events"
         ));
     }
 

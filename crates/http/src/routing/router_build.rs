@@ -437,6 +437,7 @@ fn soland_local_router() -> Router {
         .hoop(wait_for_sync_token)
         .push(system::local_router())
         .push(identity::local_router())
+        .push(events::account_authority_private_router())
         .push(
             Router::with_path("self")
                 .hoop(identity::session_pop::verify_session_pop)

@@ -704,7 +704,7 @@ mod tests {
         // the global no-op recorder (production installs it at startup via
         // `spawn_metrics_server`).
         let _ = prometheus_handle();
-        let op = "GET /_arkret/self/events/{event_id}";
+        let op = "GET /_arkret/self/committed-events/{event_id}";
         record_http_request(op, 200, Duration::from_millis(25));
         let rendered = render();
 

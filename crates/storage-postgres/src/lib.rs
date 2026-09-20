@@ -4,7 +4,6 @@ pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) use arkret_event_draft::ProjectedEventOperation;
 pub(crate) use arkret_identifiers::BlobRef;
-pub(crate) use arkret_wire::EventBatchReceipt;
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use diesel::sql_types::{

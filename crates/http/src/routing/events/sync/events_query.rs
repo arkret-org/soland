@@ -1374,10 +1374,9 @@ async fn projection_matches_actor_selectors(
     Ok(actors.contains(&canonical_record_actor_key(&record)?))
 }
 
-/// Enrich visible projection rows to the spec's closed `EventReadRow` union.
-/// Canonical rows return the complete signed Event. Redacted Message rows keep
-/// their timeline slot as a `RedactedEventView`, binding the durable Event id
-/// and digest without mutating or masquerading as the signed Event envelope.
+/// Enrich visible projection rows to the closed `CommittedEventView` union.
+/// Canonical rows return the complete signed Event and Commit. Content-hidden
+/// rows keep their stream slot with only the Commit and minimal withheld marker.
 /// Visibility and pagination are already applied to `projection_rows` by the
 /// caller. Every selected projection row must resolve to its canonical Event;
 /// returning a shorter successful page would hide an accepted Event while the
@@ -1385,8 +1384,7 @@ async fn projection_matches_actor_selectors(
 async fn full_events_from_projection_json(
     state: &AppState,
     projection_rows: &[Value],
-) -> Result<Vec<arkret_models_collaboration::http_bodies::EventReadRow>, soland_http::error::AppError>
-{
+) -> Result<Vec<arkret_wire::CommittedEventView>, soland_http::error::AppError> {
     let mut events = Vec::with_capacity(projection_rows.len());
     for row in projection_rows {
         events.push(event_read_row_from_projection_json(state, row).await?);
@@ -1397,9 +1395,7 @@ async fn full_events_from_projection_json(
 async fn event_read_row_from_projection_json(
     state: &AppState,
     row: &Value,
-) -> Result<arkret_models_collaboration::http_bodies::EventReadRow, soland_http::error::AppError> {
-    use arkret_models_collaboration::http_bodies::EventRedactionReason;
-
+) -> Result<arkret_wire::CommittedEventView, soland_http::error::AppError> {
     let event_id = row.get("event_id").and_then(Value::as_str).ok_or_else(|| {
         soland_http::error::AppError::internal(
             "projected Event row is missing its canonical event_id",
@@ -1419,26 +1415,15 @@ async fn event_read_row_from_projection_json(
                 "projected Event row {event_id} has no canonical Event record"
             ))
         })?;
-    let event = super::super::event_log::canonical_event_for_read(&record).map_err(|error| {
-        soland_http::error::AppError::internal(format!(
-            "canonical Event materialization failed for projected row {event_id}: {error}"
-        ))
-    })?;
+    let view = super::super::event_log::canonical_event_read_row(state, &record).await?;
     let retained = row["payload"]["retention_tombstone"].as_bool() == Some(true);
     let erased = row["sender"].as_str()
         == Some(soland_services::projection::tombstone::ERASED_USER_PLACEHOLDER);
     if !projection_row_is_redacted_message_tombstone(row) && !retained && !erased {
-        return Ok(event.into());
+        return Ok(view);
     }
-    Ok(super::super::event_log::redacted_event_read_row(
-        event,
-        if retained {
-            EventRedactionReason::RetentionPruned
-        } else if erased {
-            EventRedactionReason::PolicyHidden
-        } else {
-            EventRedactionReason::Redacted
-        },
+    Ok(super::super::event_log::withheld_event_read_row(
+        view.commit().clone(),
     ))
 }
 
@@ -2283,38 +2268,30 @@ mod tests {
         let events = full_events_from_projection_json(&state, &rows)
             .await
             .expect("projection rows resolve to canonical Events");
-        let redacted = events
+        let withheld = events
             .iter()
             .filter_map(|row| match row {
-                arkret_models_collaboration::http_bodies::EventReadRow::Redacted(view) => {
-                    Some(view)
-                }
+                arkret_wire::CommittedEventView::Withheld(view) => Some(view),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let message = redacted
+        let message = withheld
             .iter()
-            .find(|view| view.event_id.as_str() == message_event_id)
-            .expect("message Event slot retained as a closed redacted view");
+            .find(|view| view.commit.event_ref.as_str() == message_event_id)
+            .expect("message Event slot retained as a withheld committed view");
         assert_eq!(
-            message.redaction_reason,
-            arkret_models_collaboration::http_bodies::EventRedactionReason::Redacted
-        );
-        assert_eq!(
-            message.event_digest().as_str(),
-            message_event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .unwrap()
+            message.event_disclosure.status,
+            arkret_wire::EventDisclosureStatus::Withheld
         );
         assert!(
             !serde_json::to_string(message)
                 .unwrap()
                 .contains("secret that must not leak")
         );
-        let revise = redacted
+        let revise = withheld
             .iter()
-            .find(|view| view.event_id.as_str() == revise_event_id)
-            .expect("revision Event slot retained as a closed redacted view");
+            .find(|view| view.commit.event_ref.as_str() == revise_event_id)
+            .expect("revision Event slot retained as a withheld committed view");
         assert!(
             !serde_json::to_string(revise)
                 .unwrap()
@@ -2323,7 +2300,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .filter_map(|row| row.event())
+                .filter_map(arkret_wire::CommittedEventView::reducer_input)
                 .all(|event| event.event_id.as_str() != redaction_event_id)
         );
     }

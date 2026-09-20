@@ -31,6 +31,16 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn committed_event(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<soland_storage::CommittedEventRecord>> {
+        self.persistence
+            .authority_commits()
+            .committed_event(event_id)
+            .await
+    }
+
     /// Read the bounded Welcome discovery index without exposing its store.
     pub async fn discover_mls_welcome_refs(
         &self,

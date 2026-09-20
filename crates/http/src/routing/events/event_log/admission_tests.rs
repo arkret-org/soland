@@ -27,20 +27,6 @@ fn malformed_direct_conversation_unit_cannot_fall_through_to_ordinary_batch() {
 }
 
 #[test]
-fn receipt_object_kind_rejected_at_submit_entry() {
-    assert!(matches!(
-        events_submit_pre_admit_check("ak.event_batch_receipt"),
-        Some((ErrorCode::SchemaViolation, _))
-    ));
-}
-
-#[test]
-fn durable_kind_passes_submit_entry() {
-    assert!(events_submit_pre_admit_check("ak.message.create").is_none());
-    assert!(events_submit_pre_admit_check("ak.realm.create").is_none());
-}
-
-#[test]
 fn terminal_realm_blocks_non_audit_kind() {
     let blocked = terminal_realm_check(true, "ak.message.create");
     assert!(matches!(blocked, Some((ErrorCode::FailedPrecondition, _))));

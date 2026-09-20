@@ -1,11 +1,11 @@
 use diesel::sql_types::SmallInt;
 
 use super::{
-    BigInt, Binary, Bool, CanonicalEventRecord, DirectConversationFoundingSlotRecord,
-    EventBatchReceipt, EventStore, ExistsRow, FederationOutboxRecord, IdentityAnchorAccountSlot,
-    Jsonb, MessageRecord, MessageStore, Nullable, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RealmEventStats, RunQueryDsl, Text, Timestamptz,
-    Uuid, Value, async_trait, ids, pg_conn, sql_query, sql_types,
+    BigInt, Binary, Bool, CanonicalEventRecord, DirectConversationFoundingSlotRecord, EventStore,
+    ExistsRow, FederationOutboxRecord, IdentityAnchorAccountSlot, Jsonb, MessageRecord,
+    MessageStore, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    QueryableByName, RealmEventStats, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait,
+    ids, pg_conn, sql_query, sql_types,
 };
 use crate::federation::{FederationOutboxRow, qualified_outbox_columns};
 
@@ -139,46 +139,6 @@ impl TryFrom<DirectConversationFoundingSlotRow> for DirectConversationFoundingSl
     }
 }
 
-#[derive(QueryableByName)]
-struct EventBatchReceiptRow {
-    #[diesel(sql_type = Text)]
-    schema: String,
-    #[diesel(sql_type = sql_types::Uuid)]
-    id: Uuid,
-    #[diesel(sql_type = Text)]
-    issuer_id: arkret_wire::DidCoreId,
-    #[diesel(sql_type = Jsonb)]
-    scope: Value,
-    #[diesel(sql_type = Jsonb)]
-    events: Value,
-    #[diesel(sql_type = Timestamptz)]
-    created_at: chrono::DateTime<chrono::Utc>,
-    #[diesel(sql_type = Jsonb)]
-    proofs: Value,
-}
-
-impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
-    type Error = PersistenceError;
-
-    fn try_from(row: EventBatchReceiptRow) -> Result<Self, Self::Error> {
-        let invalid = |error: serde_json::Error| {
-            PersistenceError::Internal(format!("stored Event Batch Receipt is invalid: {error}"))
-        };
-        Ok(Self {
-            schema: row.schema,
-            receipt_id: serde_json::from_value(Value::String(ids::format_typed_uuid(
-                "receipt", &row.id,
-            )))
-            .map_err(invalid)?,
-            issuer_id: row.issuer_id,
-            scope: serde_json::from_value(row.scope).map_err(invalid)?,
-            events: serde_json::from_value(row.events).map_err(invalid)?,
-            created_at: row.created_at,
-            proofs: serde_json::from_value(row.proofs).map_err(invalid)?,
-        })
-    }
-}
-
 #[async_trait]
 impl EventStore for PgEventStore {
     async fn federation_outbox_for_event(
@@ -227,37 +187,6 @@ impl EventStore for PgEventStore {
         .map_err(PersistenceError::database)?
         .map(DirectConversationFoundingSlotRecord::try_from)
         .transpose()
-    }
-
-    async fn batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> PersistenceResult<Vec<EventBatchReceipt>> {
-        let mut conn = pg_conn(&self.pool).await?;
-        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
-            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
-        })?;
-        let Some(event_pk) =
-            sql_query("SELECT pk FROM canonical_events WHERE id = $1 AND state = 'committed'")
-                .bind::<Binary, _>(event_id.to_vec())
-                .get_result::<PkRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(PersistenceError::database)?
-        else {
-            return Ok(Vec::new());
-        };
-        let rows = sql_query(
-            "SELECT receipt.schema, receipt.id, receipt.issuer_id, receipt.scope, receipt.events, \
-                    receipt.created_at, receipt.proofs FROM event_batch_receipts receipt \
-             JOIN event_batch_receipt_events binding ON binding.receipt_pk = receipt.pk \
-             WHERE binding.event_pk = $1 ORDER BY receipt.created_at, receipt.pk",
-        )
-        .bind::<BigInt, _>(event_pk.pk)
-        .load::<EventBatchReceiptRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        rows.into_iter().map(EventBatchReceipt::try_from).collect()
     }
 
     async fn identity_anchor_account_slot(

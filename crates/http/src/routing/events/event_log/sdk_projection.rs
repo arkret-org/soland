@@ -322,28 +322,6 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     }
 }
 
-pub(crate) async fn event_view_for_state(
-    state: &AppState,
-    record: &AcceptedEvent,
-) -> JsonResult<EventView> {
-    let receipts = state
-        .event_queries()
-        .canonical_batch_receipts_for_event(&record.event_id)
-        .await
-        .map_err(|error| AppError::internal(format!("Event Batch Receipt lookup failed: {error}")))?
-        .into_iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            AppError::internal(format!("Event Batch Receipt encode failed: {error}"))
-        })?;
-    json_ok(EventView {
-        event: canonical_event_read_row(state, record).await?,
-        visibility: Some(event_visibility_metadata(state, record)),
-        receipts,
-    })
-}
-
 /// Strict accepted-envelope materialization for canonical scans. Privacy views
 /// are applied by the caller; signed payloads must never be rewritten in place.
 pub(crate) fn canonical_event_for_read(record: &AcceptedEvent) -> Result<Event, AppError> {
@@ -386,17 +364,16 @@ pub(crate) fn sdk_event_for_state(
     Ok(event)
 }
 
-/// Read surfaces with an EventReadRow union keep the slot without rewriting
+/// Committed-event read surfaces keep the stream slot without rewriting
 /// signed bytes. Derive Message redaction from accepted history even when no
-/// independent projection row exists.
+/// independent projection row exists, then emit the minimal withheld branch.
 pub(crate) async fn canonical_event_read_row(
     state: &AppState,
     record: &AcceptedEvent,
-) -> Result<arkret_models_collaboration::http_bodies::EventReadRow, AppError> {
-    use arkret_models_collaboration::http_bodies::EventRedactionReason;
+) -> Result<CommittedEventView, AppError> {
     let event = canonical_event_for_read(record)?;
-    let reason = if retention_tombstone_for_event(state, &record.event_id).is_some() {
-        Some(EventRedactionReason::RetentionPruned)
+    let withheld = if retention_tombstone_for_event(state, &record.event_id).is_some() {
+        true
     } else if matches!(
         event.kind,
         arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
@@ -437,41 +414,32 @@ pub(crate) async fn canonical_event_read_row(
                 redacted = true;
             }
         }
-        redacted.then_some(EventRedactionReason::Redacted)
+        redacted
     } else {
-        None
+        false
     };
-    Ok(match reason {
-        Some(reason) => redacted_event_read_row(event, reason),
-        None => event.into(),
+    let committed = state
+        .persistence()
+        .committed_event(&event.event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("committed Event lookup failed: {error}")))?
+        .ok_or_else(|| AppError::internal("accepted Event has no successful RealmCommit"))?;
+    Ok(if withheld {
+        withheld_event_read_row(committed.commit)
+    } else {
+        CommittedEventView::Full(CommittedEventFullView {
+            commit: committed.commit,
+            event,
+        })
     })
 }
 
-pub(crate) fn redacted_event_read_row(
-    event: Event,
-    reason: arkret_models_collaboration::http_bodies::EventRedactionReason,
-) -> arkret_models_collaboration::http_bodies::EventReadRow {
-    use arkret_models_collaboration::http_bodies::{
-        EventReadRow, HiddenEventField, HiddenEventFields, RedactedEventView,
-        RedactedEventViewKind, ReducerInputFalse,
-    };
-    EventReadRow::Redacted(RedactedEventView {
-        view_kind: RedactedEventViewKind::RedactedEventView,
-        event_id: event.event_id,
-        kind: event.kind,
-        realm_id: event.realm_id,
-        created_at: Some(event.created_at),
-        payload_digest: None,
-        redaction_reason: reason,
-        hidden_fields: HiddenEventFields::new(
-            ["payload", "proofs", "unsigned"]
-                .into_iter()
-                .map(|field| HiddenEventField::new(field).expect("registered hidden field"))
-                .collect(),
-        )
-        .expect("unique hidden fields"),
-        inclusion_proof: None,
-        reducer_input: ReducerInputFalse,
+pub(crate) fn withheld_event_read_row(commit: arkret_wire::RealmCommit) -> CommittedEventView {
+    CommittedEventView::Withheld(CommittedEventWithheldView {
+        commit,
+        event_disclosure: EventDisclosure {
+            status: EventDisclosureStatus::Withheld,
+        },
     })
 }
 

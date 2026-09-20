@@ -11,7 +11,7 @@ use arkret_models_collaboration::governance::accountability::{
 };
 use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
 use arkret_models_crypto::MlsGovernanceBindingPayload;
-use arkret_wire::{EventBatchReceipt, ScopeRef};
+use arkret_wire::ScopeRef;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 pub use soland_storage::PublicationEvidenceRecord;
@@ -85,6 +85,20 @@ pub struct RealmDirectoryEntry {
     pub as_of: DateTime<Utc>,
     pub source_refs: Vec<String>,
     pub policy_revision: String,
+    /// Caller-visible Directory data exists only after a verified direct
+    /// publication from the current governance Station. Realm reducer state,
+    /// membership, source references, and join policy never populate it.
+    pub public_metadata: Option<PublicRealmMetadataRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicRealmMetadataRecord {
+    pub display_name: String,
+    pub summary: Option<String>,
+    pub public_locator: Option<String>,
+    pub avatar_blob_ref: Option<arkret_wire::BlobRef>,
+    pub indexed_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 /// Where a directory entry's `source_refs` comes from.
@@ -137,6 +151,7 @@ impl RealmDirectoryEntry {
                 .expect("current time is representable at millisecond precision"),
             source_refs: provenance.source_refs(),
             policy_revision: "local".to_owned(),
+            public_metadata: None,
         }
     }
 }
@@ -823,11 +838,6 @@ pub struct CommitAcceptedEventResult {
     pub deliveries_inserted: usize,
 }
 
-#[derive(Clone, Debug)]
-pub struct AcceptedBatchReceipt {
-    pub value: Value,
-}
-
 #[async_trait::async_trait]
 pub trait EventReadPort: Send + Sync {
     async fn direct_conversation_founding_slot(
@@ -847,10 +857,6 @@ pub trait EventReadPort: Send + Sync {
         received_by: &arkret_identifiers::DidCoreId,
         target_event_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>>;
-    async fn canonical_batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Vec<EventBatchReceipt>>;
     async fn identity_anchor_account_slot(
         &self,
         account_id: &arkret_wire::AccountId,
@@ -881,10 +887,6 @@ pub trait EventReadPort: Send + Sync {
         event: ProjectedEvent,
     ) -> ServiceResult<ProjectedEventAppendResult>;
     async fn accepted_events_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AcceptedEvent>>;
-    async fn batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Vec<AcceptedBatchReceipt>>;
 }
 
 #[async_trait::async_trait]
@@ -1171,14 +1173,6 @@ impl EventQueryService {
             .franking_proofs_for_target(realm_id, received_by, target_event_id)
             .await
     }
-    pub async fn canonical_batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Vec<EventBatchReceipt>> {
-        self.events
-            .canonical_batch_receipts_for_event(event_id)
-            .await
-    }
     pub async fn identity_anchor_account_slot(
         &self,
         account_id: &arkret_wire::AccountId,
@@ -1294,13 +1288,6 @@ impl EventQueryService {
         actor_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.accepted_events_for_actor(actor_id).await
-    }
-
-    pub async fn batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Vec<AcceptedBatchReceipt>> {
-        self.events.batch_receipts_for_event(event_id).await
     }
 
     pub async fn message(&self, event_id: &str) -> ServiceResult<Option<MessageState>> {

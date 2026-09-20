@@ -351,16 +351,6 @@ async fn validate_event_envelope_with_ingress(
     let kind = event_string_field(object, &["kind"]).ok_or_else(|| {
         event_validation_error(StatusCode::BAD_REQUEST, "param_missing", "kind is required")
     })?;
-    // Receipt objects are not durable Event kinds. Plaintext transient kinds
-    // are absent from the active registry and fail the registry gate below;
-    // transient product payloads travel encrypted inside Signal.
-    if let Some((code, reason)) = events_submit_pre_admit_check(&kind) {
-        return Err(event_validation_error(
-            error_http_status(code),
-            code.as_str(),
-            reason,
-        ));
-    }
     if !artifacts::active_local_operation_event_kinds().contains(&kind) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,

@@ -9,8 +9,8 @@
 //! produced was therefore one the server could never reach, which makes a
 //! federation test assert against a value nothing computes.
 //!
-//! Removing `proofs` alone is deliberately not flagged: `EventBatchReceipt`,
-//! `PrincipalLocator`, range-completeness attestations and DID documents all
+//! Removing `proofs` alone is deliberately not flagged: `PrincipalLocator`,
+//! range-completeness attestations and DID documents all
 //! legally strip their own `proofs` before signing, and none of them carries an
 //! `event_id` to drop.
 

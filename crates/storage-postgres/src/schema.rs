@@ -628,26 +628,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    event_batch_receipts (pk) {
-        pk -> Int8,
-        schema -> Text,
-        id -> Uuid,
-        issuer_id -> Text,
-        scope -> Jsonb,
-        events -> Jsonb,
-        created_at -> Timestamptz,
-        proofs -> Jsonb,
-    }
-}
-
-diesel::table! {
-    event_batch_receipt_events (receipt_pk, event_pk) {
-        receipt_pk -> Int8,
-        event_pk -> Int8,
-    }
-}
-
-diesel::table! {
     federation_frontier_exchange (realm_id, peer_id) {
         realm_id -> Text,
         peer_id -> Text,
@@ -1970,13 +1950,11 @@ diesel::joinable!(invite_receive_policies -> accounts (account_pk));
 diesel::joinable!(agent_participation -> agent_principals (agent_id));
 diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_pk));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));
-diesel::joinable!(event_batch_receipt_events -> canonical_events (event_pk));
 diesel::joinable!(event_collision_variants -> canonical_events (event_pk));
 diesel::joinable!(event_federation_outbox -> canonical_events (event_pk));
 diesel::joinable!(canonical_events -> canonical_realms (realm_pk));
 diesel::joinable!(projection_events -> canonical_realms (realm_pk));
 diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
-diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
@@ -2021,8 +1999,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_revocation_targets,
     devices,
     device_keys,
-    event_batch_receipts,
-    event_batch_receipt_events,
     event_collision_variants,
     event_federation_outbox,
     federation_frontier_confirmed_evidence,

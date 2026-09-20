@@ -511,86 +511,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         )
         .await
         .unwrap();
-
-    let fixture_hash =
-        |byte: &str| arkret_wire::Hash::new(format!("sha256:{}", byte.repeat(64))).unwrap();
-    let mut receipt = arkret_wire::EventBatchReceipt {
-        schema: arkret_wire::EventBatchReceipt::SCHEMA.to_owned(),
-        receipt_id: arkret_identifiers::ReceiptId::new(
-            "ak:receipt:0196419b-0000-7000-8000-000000000004",
-        )
-        .unwrap(),
-        issuer_id: station_id.clone(),
-        scope: arkret_wire::EventBatchReceiptScope::PcrGenesis(
-            arkret_wire::event_receipt::PcrGenesisReceiptScope {
-                kind: arkret_wire::event_receipt::PcrGenesisReceiptScopeKind::PcrGenesisUnit,
-                principal_id,
-                realm_id: pcr_realm_id,
-                did_version_id: "1-fixture".to_owned(),
-                control_key_digest: fixture_hash("2"),
-                registration_evidence_digest: fixture_hash("3"),
-                accepted_device_id: descriptor.device_id.clone(),
-                device_key_digest: descriptor.device_key_digest().unwrap(),
-                hpke_key_digest: descriptor.hpke_key_digest().unwrap(),
-                accepted_at: genesis.created_at,
-                audience_id: station_id,
-            },
-        ),
-        events: vec![
-            arkret_wire::EventBatchReceiptRow {
-                event_id: genesis.event_id,
-                kind: arkret_wire::NonEmptyString::new(
-                    arkret_wire::EventKind::RealmCreate.as_str(),
-                )
-                .unwrap(),
-            },
-            arkret_wire::EventBatchReceiptRow {
-                event_id: authorize.event_id,
-                kind: arkret_wire::NonEmptyString::new(
-                    arkret_wire::EventKind::DeviceAuthorize.as_str(),
-                )
-                .unwrap(),
-            },
-        ],
-        created_at: genesis.created_at,
-        proofs: Vec::new(),
-    };
-    receipt.canonicalize_events().unwrap();
-    let unsigned = arkret_wire::UnsignedPayloadProof {
-        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        proof_purpose: None,
-        verification_method: state.service_verification_method("notary-key").unwrap(),
-        payload_digest: receipt.payload_digest().unwrap(),
-        created_at: receipt.created_at,
-        domain: None,
-        audience: None,
-    };
-    let signing_bytes = receipt.proof_signing_bytes(&unsigned).unwrap();
-    let jws = arkret_signatures::jws::sign_jws_ed25519(
-        &signing_bytes,
-        state.notary_signing_key().as_ref(),
-    )
-    .unwrap();
-    receipt.proofs.push(unsigned.finalize(jws).unwrap());
-    receipt.validate().unwrap();
-    state
-        .test_persistence()
-        .events()
-        .put_identity_anchor_batch_atomic(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Some(receipt),
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            None,
-        )
-        .await
-        .unwrap();
 }
 
 #[test]
@@ -728,9 +648,9 @@ async fn resolution_audit_returns_unified_event_receipt_and_seal_evidence_body()
     );
     let body: Value = response.take_json().await.unwrap();
     assert!(body.get("principal_genesis_event").is_some());
-    assert!(body.get("principal_genesis_receipt").is_some());
+    assert!(body.get("principal_genesis_commit").is_some());
     assert!(body.get("current_resolution_event").is_some());
-    assert!(body.get("accepted_seal").is_some());
+    assert!(body.get("current_resolution_commit").is_some());
     assert!(body.get("resolution_cell_proof").is_none());
 }
 

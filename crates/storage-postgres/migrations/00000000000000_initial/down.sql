@@ -95,8 +95,6 @@ DROP TABLE IF EXISTS membership_compensation_evidence CASCADE;
 DROP TABLE IF EXISTS canonical_events CASCADE;
 DROP TABLE IF EXISTS canonical_realms CASCADE;
 DROP TABLE IF EXISTS event_collision_variants CASCADE;
-DROP TABLE IF EXISTS event_batch_receipts CASCADE;
-DROP TABLE IF EXISTS event_batch_receipt_events CASCADE;
 DROP TABLE IF EXISTS identity_anchor_account_slots CASCADE;
 DROP TABLE IF EXISTS pending_rhrk_acquisitions CASCADE;
 DROP SEQUENCE IF EXISTS history_rhrk_archive_sequence CASCADE;

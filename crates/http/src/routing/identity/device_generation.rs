@@ -115,31 +115,30 @@ async fn accepted_bootstrap_device_binding(
             "accepted PCR founding authorization Event id is invalid: {error}"
         ))
     })?;
-    let receipts = state
-        .event_queries()
-        .canonical_batch_receipts_for_event(authorization_event_id.as_str())
+    let genesis_event_id = EventId::new(genesis.event_id.clone()).map_err(|error| {
+        ServiceError::Conflict(format!("accepted PCR genesis Event id is invalid: {error}"))
+    })?;
+    let genesis_commit = state
+        .persistence()
+        .committed_event(&genesis_event_id)
         .await?;
-    let receipt_matches = receipts.iter().any(|receipt| {
-        let Ok(scope) = receipt.pcr_genesis_scope() else {
-            return false;
-        };
-        scope.principal_id == account.principal_id
-            && scope.realm_id == binding.pcr_realm_id
-            && scope.accepted_device_id == device_id
-            && receipt.issuer_id == account.station_id
-            && receipt.events.len() == 2
-            && receipt.events.iter().any(|row| {
-                row.event_id == genesis.event_id
-                    && row.kind.as_str() == arkret_wire::EventKind::RealmCreate.as_str()
-            })
-            && receipt.events.iter().any(|row| {
-                row.event_id == authorization_event_id
-                    && row.kind.as_str() == arkret_wire::EventKind::DeviceAuthorize.as_str()
-            })
+    let authorization_commit = state
+        .persistence()
+        .committed_event(&authorization_event_id)
+        .await?;
+    let commit_pair_matches = genesis_commit.as_ref().is_some_and(|record| {
+        record.commit.realm_id == binding.pcr_realm_id
+            && record.commit.event_ref == genesis_event_id
+            && record.event.kind == arkret_wire::EventKind::RealmCreate
+    }) && authorization_commit.as_ref().is_some_and(|record| {
+        record.commit.realm_id == binding.pcr_realm_id
+            && record.commit.event_ref == authorization_event_id
+            && record.event.kind == arkret_wire::EventKind::DeviceAuthorize
     });
-    if !receipt_matches {
+    if !commit_pair_matches {
         return Err(ServiceError::Conflict(
-            "accepted PCR founding authorization has no matching durable batch receipt".to_owned(),
+            "accepted PCR founding authorization has no matching durable RealmCommit pair"
+                .to_owned(),
         ));
     }
     Ok(Some(AcceptedBootstrapDeviceBinding {
@@ -297,12 +296,23 @@ pub async fn active_device_revocation_gate_selector(
             "device authorization is outside the current generation".to_owned(),
         ));
     }
+    let accepted = state
+        .persistence()
+        .committed_event(&target_device_authorize_event_id)
+        .await?
+        .ok_or_else(|| {
+            ServiceError::Conflict("device authorization has no accepted RealmCommit".to_owned())
+        })?;
     Ok(soland_storage::DeviceRevocationGateSelector {
         principal_id,
         station_id,
         device_id: device_id.to_string(),
-        target_device_authorize_event_id: target_device_authorize_event_id.to_string(),
-        target_device_generation_ref,
+        authorization_ref: arkret_wire::CommittedEventRef {
+            event_id: target_device_authorize_event_id,
+            commit_id: accepted.commit.commit_id,
+            stream_ref: accepted.commit.stream_ref,
+            stream_position: accepted.commit.stream_position,
+        },
     })
 }
 

@@ -30,22 +30,6 @@ pub(super) fn validate_federation_service_binding(
     Ok(())
 }
 
-/// Reject receipt objects at the `ak.self.events.command.submit.v1` entrypoint.
-///
-/// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
-/// rejected; returns `None` when the kind is fine to forward to the
-/// existing durable-event validator pipeline.
-pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static str)> {
-    if arkret_wire::events::is_receipt_object_only(kind) {
-        return Some((
-            ErrorCode::SchemaViolation,
-            "ak.event_batch_receipt is a receipt object only; \
-             never accepted as Event.kind",
-        ));
-    }
-    None
-}
-
 /// Reject any non-audit-class write on a Realm whose lifecycle state is
 /// terminal (`ak.realm.tombstone` or `ak.realm.destroy` applied). Spec T07.
 ///

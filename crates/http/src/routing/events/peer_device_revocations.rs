@@ -1,9 +1,10 @@
 use arkret_wire::{
-    AcceptedDevicePossessionProof, DeviceRevocationGateActionClass,
-    DeviceRevocationGateCheckOutcome, DeviceRevocationGateCheckRequestBody,
-    DeviceRevocationGateDecision, DeviceRevocationGateDecisionReceipt, Hash, SealId,
+    AcceptedDevicePossessionProof, AccountId, CommittedEventRef, DeviceId,
+    DeviceRevocationGateActionClass, EventId, Hash, RealmCommitId,
 };
+use chrono::{DateTime, Utc};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceErrorKind;
@@ -40,10 +41,8 @@ fn admit_origin_current_selector(
 /// The receipt members a linearized gate status projects to, before typed-id
 /// parsing.
 struct GateDecisionProjection {
-    decision: DeviceRevocationGateDecision,
-    derived_binding: Option<(String, u64)>,
-    blocking_proposal_digest: Option<String>,
-    covering_seal_id: Option<String>,
+    decision: CurrentDeviceDecision,
+    derived_binding: Option<CommittedEventRef>,
 }
 
 /// `service-http-binding.md` §`ak.peer.device_revocations.command.check.v1` —
@@ -57,38 +56,21 @@ fn project_gate_decision(
     let plain = |decision| GateDecisionProjection {
         decision,
         derived_binding: None,
-        blocking_proposal_digest: None,
-        covering_seal_id: None,
     };
     match status {
         soland_storage::DeviceRevocationGateStatus::Active => GateDecisionProjection {
-            decision: DeviceRevocationGateDecision::Allow,
-            derived_binding: origin_current_selector.map(|selector| {
-                (
-                    selector.target_device_authorize_event_id.clone(),
-                    selector.target_device_generation_ref,
-                )
-            }),
-            blocking_proposal_digest: None,
-            covering_seal_id: None,
+            decision: CurrentDeviceDecision::Allow,
+            derived_binding: origin_current_selector
+                .map(|selector| selector.authorization_ref.clone()),
         },
-        soland_storage::DeviceRevocationGateStatus::Pending {
-            blocking_proposal_digest,
-        } => GateDecisionProjection {
-            blocking_proposal_digest: Some(blocking_proposal_digest),
-            ..plain(DeviceRevocationGateDecision::RevocationPending)
-        },
-        soland_storage::DeviceRevocationGateStatus::Revoked { covering_seal_id } => {
-            GateDecisionProjection {
-                covering_seal_id: Some(covering_seal_id),
-                ..plain(DeviceRevocationGateDecision::Revoked)
-            }
+        soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
+            plain(CurrentDeviceDecision::Revoked)
         }
         soland_storage::DeviceRevocationGateStatus::AuthorityMismatch => {
-            plain(DeviceRevocationGateDecision::AuthorityMismatch)
+            plain(CurrentDeviceDecision::AuthorityMismatch)
         }
         soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
-            plain(DeviceRevocationGateDecision::GenerationMismatch)
+            plain(CurrentDeviceDecision::GenerationMismatch)
         }
     }
 }
@@ -110,15 +92,51 @@ fn accepted_device_proof_requires_verification(
     origin_current_selector.is_some()
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.peer.device_revocations.command.check",
-    tags("events")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.device_revocations.command.check.v1"))]
-pub(super) async fn check_device_revocation_gate(
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CurrentDeviceCheckRequest {
+    account_id: AccountId,
+    device_id: DeviceId,
+    expected_device_authorize_event_id: Option<EventId>,
+    expected_device_generation_ref: Option<u64>,
+    action_class: DeviceRevocationGateActionClass,
+    intent_digest: Hash,
+    accepted_device_possession_proof: Option<AcceptedDevicePossessionProof>,
+    requested_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CurrentDeviceDecision {
+    Allow,
+    RevocationPending,
+    Revoked,
+    AuthorityMismatch,
+    GenerationMismatch,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CurrentDeviceCheckOutcome {
+    account_id: AccountId,
+    device_id: DeviceId,
+    authorization_event_id: Option<EventId>,
+    device_generation_ref: Option<u64>,
+    action_class: DeviceRevocationGateActionClass,
+    intent_digest: Hash,
+    accepted_device_possession_proof_digest: Option<Hash>,
+    decision: CurrentDeviceDecision,
+    linearization_seq: u64,
+    linearized_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    accepted_commit_id: Option<RealmCommitId>,
+}
+
+#[tracing::instrument(skip_all, fields(op = "soland.account_authority.current_device.check"))]
+pub(super) async fn check_private_current_device(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DeviceRevocationGateCheckOutcome> {
+) -> JsonResult<CurrentDeviceCheckOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
 
     // Authentication precedes every principal/device lookup. A caller must not
@@ -136,24 +154,12 @@ pub(super) async fn check_device_revocation_gate(
     // Every plaintext proxy on the channel is part of the trusted deployment
     // TCB, which is why the receipt below has no detached proof or
     // `verification_method` and neither direction signs the transport shell.
-    crate::routing::events::peer::authenticate_internal_channel_request(
-        state,
-        req,
-        arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
-    )
-    .await?;
+    crate::routing::events::peer::authenticate_account_authority_private_request(state, req)?;
 
     let request = req
-        .parse_json::<DeviceRevocationGateCheckRequestBody>()
+        .parse_json::<CurrentDeviceCheckRequest>()
         .await
-        .map_err(|_| {
-            AppError::json_invalid(
-                "invalid ak.peer.device_revocations.command.check.v1 request body",
-            )
-        })?;
-    request
-        .validate()
-        .map_err(|error| schema_violation(error.to_string()))?;
+        .map_err(|_| AppError::json_invalid("invalid private current-device check request body"))?;
     if !matches!(
         request.action_class,
         DeviceRevocationGateActionClass::SessionGrantIssue
@@ -193,6 +199,20 @@ pub(super) async fn check_device_revocation_gate(
         )
         .await,
     )?;
+    let current_generation_ref =
+        crate::routing::identity::device_generation::current_device_generation(
+            state,
+            request.account_id.principal_id.as_str(),
+        )
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("current device generation is unavailable: {error}"))
+        })?
+        .filter(|generation| {
+            generation.status
+                == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+        })
+        .map(|generation| generation.current_ref);
 
     // A handoff/session DPoP proves possession of the short-lived holder key,
     // not of the durable accepted-device key. Returning issue and human
@@ -256,9 +276,8 @@ pub(super) async fn check_device_revocation_gate(
     };
     if let Some(verified_binding) = verified_proof_binding
         && !origin_current_selector.as_ref().is_some_and(|selector| {
-            selector.target_device_authorize_event_id
-                == verified_binding.authorization_event_id.as_str()
-                && selector.target_device_generation_ref == verified_binding.generation_ref
+            selector.authorization_ref.event_id == verified_binding.authorization_event_id
+                && current_generation_ref == Some(verified_binding.generation_ref)
         })
     {
         return Err(schema_violation(
@@ -280,6 +299,20 @@ pub(super) async fn check_device_revocation_gate(
         }
         _ => unreachable!("unsupported current-device action rejected above"),
     };
+    let expected_authorization_ref = match request.expected_device_authorize_event_id.as_ref() {
+        Some(event_id) if request.expected_device_generation_ref == current_generation_ref => state
+            .persistence()
+            .committed_event(event_id)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .map(|record| CommittedEventRef {
+                event_id: event_id.clone(),
+                commit_id: record.commit.commit_id,
+                stream_ref: record.commit.stream_ref,
+                stream_position: record.commit.stream_position,
+            }),
+        _ => None,
+    };
     let linearization = state
         .persistence()
         .linearize_device_revocation_gate(
@@ -287,11 +320,7 @@ pub(super) async fn check_device_revocation_gate(
                 principal_id: request.account_id.principal_id.clone(),
                 station_id: request.account_id.station_id.clone(),
                 device_id: request.device_id.to_string(),
-                expected_device_authorize_event_id: request
-                    .expected_device_authorize_event_id
-                    .as_ref()
-                    .map(ToString::to_string),
-                expected_device_generation_ref: request.expected_device_generation_ref,
+                expected_authorization_ref,
                 origin_current_selector: origin_current_selector.clone(),
                 action_class,
                 intent_digest: request.intent_digest.to_string(),
@@ -333,55 +362,30 @@ pub(super) async fn check_device_revocation_gate(
     let GateDecisionProjection {
         decision,
         derived_binding,
-        blocking_proposal_digest,
-        covering_seal_id,
     } = project_gate_decision(
         linearization.status.clone(),
         origin_current_selector.as_ref(),
     );
-    let blocking_proposal_digest = blocking_proposal_digest
-        .map(|digest| {
-            Hash::new(digest).map_err(|error| {
-                AppError::internal(format!(
-                    "stored blocking proposal digest is invalid: {error}"
-                ))
-            })
-        })
-        .transpose()?;
-    let covering_seal_id = covering_seal_id
-        .map(|seal_id| {
-            SealId::new(seal_id).map_err(|error| {
-                AppError::internal(format!("stored covering Seal id is invalid: {error}"))
-            })
-        })
-        .transpose()?;
-    let (target_device_authorize_event_id, target_device_generation_ref) = match derived_binding {
-        Some((event_id, generation)) => (
-            Some(arkret_wire::EventId::new(event_id).map_err(|error| {
-                AppError::internal(format!(
-                    "derived device authorization Event id is invalid: {error}"
-                ))
-            })?),
-            Some(generation),
+    let (authorization_event_id, device_generation_ref, accepted_commit_id) = match derived_binding
+    {
+        Some(binding) => (
+            Some(binding.event_id),
+            current_generation_ref,
+            Some(binding.commit_id),
         ),
-        None => (None, None),
+        None => (None, None, None),
     };
-    // `device-lifecycle.md` §2.2 / `service-http-binding.md` §2.2.3: the receipt
-    // is delivered only on the registered deployment-internal channel between
-    // the Account Authority bound to this exact account and this origin Station,
-    // and that channel — not a detached signature — carries its authenticity and
-    // integrity. The receipt is therefore closed: it MUST NOT carry `proof` or
-    // `verification_method`, so nothing here reads a signing key or mints a JWS.
-    // The durable decision record written above is untouched: it still binds the
-    // immutable `intent_digest` for exact replay, and the receipt still carries
-    // the accepted-device possession proof digest, the 30s `expires_at` fence,
-    // the `linearization_seq`, the complete AccountId and the origin-derived
-    // selector under the closed decision rules.
-    let receipt = DeviceRevocationGateDecisionReceipt {
+    if decision == CurrentDeviceDecision::Allow && accepted_commit_id.is_none() {
+        return Err(AppError::internal(
+            "allowed current-device binding has no accepted RealmCommit",
+        ));
+    }
+
+    let outcome = CurrentDeviceCheckOutcome {
         account_id: request.account_id.clone(),
         device_id: request.device_id.clone(),
-        target_device_authorize_event_id,
-        target_device_generation_ref,
+        authorization_event_id,
+        device_generation_ref,
         action_class: request.action_class,
         intent_digest: request.intent_digest.clone(),
         accepted_device_possession_proof_digest,
@@ -389,15 +393,8 @@ pub(super) async fn check_device_revocation_gate(
         linearization_seq: linearization.linearization_seq,
         linearized_at: linearization.linearized_at,
         expires_at: linearization.expires_at,
-        blocking_proposal_digest,
-        covering_seal_id,
+        accepted_commit_id,
     };
-    let outcome = DeviceRevocationGateCheckOutcome {
-        decision_receipt: receipt,
-    };
-    outcome
-        .validate_for_request(&request)
-        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(outcome)
 }
 
@@ -414,38 +411,45 @@ mod tests {
     const AUTHORIZE_EVENT: &str = "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa";
 
     fn selector() -> DeviceRevocationGateSelector {
+        let event_id = arkret_wire::EventId::new(AUTHORIZE_EVENT).unwrap();
         DeviceRevocationGateSelector {
             principal_id: arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
             station_id: arkret_wire::DidCoreId::new(STATION).unwrap(),
             device_id: DEVICE.to_owned(),
-            target_device_authorize_event_id: AUTHORIZE_EVENT.to_owned(),
-            target_device_generation_ref: 1,
+            authorization_ref: arkret_wire::CommittedEventRef {
+                commit_id: RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                    event_id.as_str().as_bytes(),
+                )),
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: arkret_wire::RealmId::new(format!("ak:realm:A{}", "r".repeat(43)))
+                        .unwrap(),
+                },
+                stream_position: 1,
+                event_id,
+            },
         }
     }
 
-    fn allow_receipt() -> DeviceRevocationGateDecisionReceipt {
+    fn allow_outcome() -> CurrentDeviceCheckOutcome {
         let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-        DeviceRevocationGateDecisionReceipt {
+        CurrentDeviceCheckOutcome {
             account_id: arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
                 arkret_wire::DidCoreId::new(STATION).unwrap(),
             ),
             device_id: arkret_wire::DeviceId::new(DEVICE).unwrap(),
-            target_device_authorize_event_id: Some(
-                arkret_wire::EventId::new(AUTHORIZE_EVENT).unwrap(),
-            ),
-            target_device_generation_ref: Some(1),
+            authorization_event_id: Some(arkret_wire::EventId::new(AUTHORIZE_EVENT).unwrap()),
+            device_generation_ref: Some(1),
             action_class: DeviceRevocationGateActionClass::SessionGrantRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             accepted_device_possession_proof_digest: Some(
                 Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
             ),
-            decision: DeviceRevocationGateDecision::Allow,
+            decision: CurrentDeviceDecision::Allow,
             linearization_seq: 9,
             linearized_at: now,
             expires_at: now + chrono::Duration::seconds(30),
-            blocking_proposal_digest: None,
-            covering_seal_id: None,
+            accepted_commit_id: Some(RealmCommitId::from_digest([0xee; 32])),
         }
     }
 
@@ -455,12 +459,16 @@ mod tests {
     /// `verification_method`, and a receipt that presents either member is
     /// rejected whole rather than verified "if present".
     #[test]
-    fn decision_receipt_is_closed_against_detached_proof_members() {
-        let receipt = allow_receipt();
-        let encoded = serde_json::to_value(&receipt).expect("receipt serializes");
-        let members = encoded.as_object().expect("receipt is a JSON object");
+    fn current_device_outcome_is_closed_against_legacy_receipt_members() {
+        let outcome = allow_outcome();
+        let encoded = serde_json::to_value(&outcome).expect("outcome serializes");
+        let members = encoded.as_object().expect("outcome is a JSON object");
         assert!(!members.contains_key("proof"));
         assert!(!members.contains_key("verification_method"));
+        assert!(!members.contains_key("decision_receipt"));
+        assert!(!members.contains_key("target_device_authorize_event_id"));
+        assert!(!members.contains_key("blocking_proposal_digest"));
+        assert!(!members.contains_key("covering_seal_id"));
         // The intent binding, the accepted-device proof digest, the 30s fence
         // and the origin-derived selector are all still on the receipt: this
         // ruling pruned the detached signature, not the decision content.
@@ -468,7 +476,8 @@ mod tests {
         assert!(members.contains_key("accepted_device_possession_proof_digest"));
         assert!(members.contains_key("linearization_seq"));
         assert!(members.contains_key("expires_at"));
-        assert!(members.contains_key("target_device_authorize_event_id"));
+        assert!(members.contains_key("accepted_commit_id"));
+        assert!(members.contains_key("authorization_event_id"));
 
         for member in ["proof", "verification_method"] {
             let mut forged = encoded.clone();
@@ -477,8 +486,8 @@ mod tests {
                 "verification_method": "did:web:soland.example#notary-key",
             });
             assert!(
-                serde_json::from_value::<DeviceRevocationGateDecisionReceipt>(forged).is_err(),
-                "a receipt carrying `{member}` must be rejected whole"
+                serde_json::from_value::<CurrentDeviceCheckOutcome>(forged).is_err(),
+                "an outcome carrying `{member}` must be rejected whole"
             );
         }
     }
@@ -486,17 +495,17 @@ mod tests {
     #[test]
     fn optimistic_linearization_rejects_any_current_binding_change() {
         let before = selector();
-        let mut different_generation = before.clone();
-        different_generation.target_device_generation_ref += 1;
+        let mut different_commit = before.clone();
+        different_commit.authorization_ref.stream_position += 1;
         let mut different_authorization = before.clone();
-        different_authorization.target_device_authorize_event_id =
-            format!("ak:event:A{}", "b".repeat(43));
+        different_authorization.authorization_ref.event_id =
+            EventId::new(format!("ak:event:A{}", "b".repeat(43))).unwrap();
 
         assert!(current_binding_stable(Some(&before), Some(&before)));
         assert!(current_binding_stable(None, None));
         assert!(!current_binding_stable(
             Some(&before),
-            Some(&different_generation)
+            Some(&different_commit)
         ));
         assert!(!current_binding_stable(
             Some(&before),
@@ -515,10 +524,10 @@ mod tests {
 
         let projected =
             project_gate_decision(DeviceRevocationGateStatus::Active, admitted.as_ref());
-        assert_eq!(projected.decision, DeviceRevocationGateDecision::Allow);
+        assert_eq!(projected.decision, CurrentDeviceDecision::Allow);
         assert_eq!(
             projected.derived_binding,
-            Some((AUTHORIZE_EVENT.to_owned(), 1))
+            Some(selector().authorization_ref)
         );
         assert!(accepted_device_proof_requires_verification(
             admitted.as_ref()
@@ -542,13 +551,8 @@ mod tests {
             DeviceRevocationGateStatus::AuthorityMismatch,
             admitted.as_ref(),
         );
-        assert_eq!(
-            projected.decision,
-            DeviceRevocationGateDecision::AuthorityMismatch
-        );
+        assert_eq!(projected.decision, CurrentDeviceDecision::AuthorityMismatch);
         assert!(projected.derived_binding.is_none());
-        assert!(projected.blocking_proposal_digest.is_none());
-        assert!(projected.covering_seal_id.is_none());
         assert!(!accepted_device_proof_requires_verification(None));
     }
 
@@ -576,25 +580,19 @@ mod tests {
         let selector = selector();
         let cases = [
             (
-                DeviceRevocationGateStatus::Pending {
-                    blocking_proposal_digest: format!("sha256:{}", "a".repeat(64)),
-                },
-                DeviceRevocationGateDecision::RevocationPending,
-            ),
-            (
                 DeviceRevocationGateStatus::Revoked {
-                    covering_seal_id: "ak:seal:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
-                        .to_owned(),
+                    revoke_ref: selector.authorization_ref.clone(),
+                    committed_at: Utc::now(),
                 },
-                DeviceRevocationGateDecision::Revoked,
+                CurrentDeviceDecision::Revoked,
             ),
             (
                 DeviceRevocationGateStatus::GenerationMismatch,
-                DeviceRevocationGateDecision::GenerationMismatch,
+                CurrentDeviceDecision::GenerationMismatch,
             ),
             (
                 DeviceRevocationGateStatus::AuthorityMismatch,
-                DeviceRevocationGateDecision::AuthorityMismatch,
+                CurrentDeviceDecision::AuthorityMismatch,
             ),
         ];
         for (status, expected) in cases {

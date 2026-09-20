@@ -55,7 +55,7 @@ use soland_services::sync::SyncService;
 use super::member_identity::MemberIdentityRegistry;
 use super::notification::{EventBroadcast, EventNotification, Mutex};
 use super::{
-    AccountAuthorityDevicePairingPort, Rfc9421AccountAuthorityDevicePairing,
+    AccountAuthorityDevicePairingPort, PrivateAccountAuthorityDevicePairing,
     VerifiedBindingRouteFetcher, did_resolver_chain,
 };
 use crate::authz::SolandAuthzEngine;
@@ -120,8 +120,6 @@ pub struct AppState {
     agent_pairings: AgentPairingService,
     pub(crate) agent_evidence_cache: Arc<super::agent_evidence_cache::AgentEvidenceCache>,
     device_pairings: DevicePairingService,
-    /// Typed, fail-closed Station -> Account Authority device-pairing edge.
-    /// Public open handlers never read or write the local pairing service.
     account_authority_device_pairing: Arc<dyn AccountAuthorityDevicePairingPort>,
     agent_participations: AgentParticipationService,
     key_backups: KeyBackupService,
@@ -1217,7 +1215,7 @@ impl AppState {
                 super::agent_evidence_cache::AgentEvidenceCache::default(),
             ),
             device_pairings,
-            account_authority_device_pairing: Arc::new(Rfc9421AccountAuthorityDevicePairing),
+            account_authority_device_pairing: Arc::new(PrivateAccountAuthorityDevicePairing),
             agent_participations,
             key_backups,
             sessions,

@@ -8,14 +8,14 @@
 use std::collections::BTreeMap;
 
 use arkret_wire::{
-    CommitStreamHead, CommitStreamRef, Event, EventId, RealmStateSnapshot, StreamRow,
+    CommitStreamHead, CommitStreamRef, CommittedEventFullView, Event, EventId, RealmStateSnapshot,
     TypedCurrentResult,
 };
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CommitStreamProjection {
     stream_heads: BTreeMap<CommitStreamRef, CommitStreamHead>,
-    committed_items: BTreeMap<EventId, StreamRow>,
+    committed_items: BTreeMap<EventId, CommittedEventFullView>,
     current_state_entries: Vec<TypedCurrentResult>,
 }
 
@@ -33,7 +33,7 @@ impl CommitStreamProjection {
 
     pub fn apply_committed(
         &mut self,
-        item: StreamRow,
+        item: CommittedEventFullView,
     ) -> Result<CommitStreamEffect, arkret_wire::WireError> {
         item.validate_shape()?;
         if let Some(existing) = self.committed_items.get(&item.event.event_id) {
@@ -158,7 +158,7 @@ mod tests {
         }
     }
 
-    fn circle_item(realm_id: RealmId, circle_seed: u8, position: u64) -> StreamRow {
+    fn circle_item(realm_id: RealmId, circle_seed: u8, position: u64) -> CommittedEventFullView {
         let circle_id = CircleId::from_event_id(&EventId::from_digest(
             DigestSuite::Sha256,
             [circle_seed; 32],
@@ -177,7 +177,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        StreamRow {
+        CommittedEventFullView {
             commit: RealmCommit {
                 commit_id: RealmCommitId::from_digest(
                     [circle_seed.wrapping_add(position as u8); 32],

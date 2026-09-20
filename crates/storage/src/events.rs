@@ -1,6 +1,6 @@
 use super::{
-    CanonicalEventRecord, DirectConversationFoundingSlotRecord, EventBatchReceipt,
-    FederationOutboxRecord, MessageRecord, PersistenceResult, async_trait,
+    CanonicalEventRecord, DirectConversationFoundingSlotRecord, FederationOutboxRecord,
+    MessageRecord, PersistenceResult, async_trait,
 };
 
 /// Trait for message storage operations.
@@ -39,10 +39,6 @@ pub trait EventStore: Send + Sync {
         trust_domain_id: &str,
         pair_key: &str,
     ) -> PersistenceResult<Option<DirectConversationFoundingSlotRecord>>;
-    async fn batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> PersistenceResult<Vec<EventBatchReceipt>>;
     /// Accepted identity-anchor binding for one exact protocol Account.
     /// This is service-internal authority evidence and is never projected to
     /// holder sync as AccountData.

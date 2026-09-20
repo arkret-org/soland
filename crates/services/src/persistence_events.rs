@@ -206,12 +206,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .identity_anchor_account_slot(account_id)
             .await?)
     }
-    async fn canonical_batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> crate::ServiceResult<Vec<arkret_wire::EventBatchReceipt>> {
-        Ok(self.0.events().batch_receipts_for_event(event_id).await?)
-    }
     async fn realm_event_stats(
         &self,
         realm_id: &str,
@@ -318,28 +312,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         actor_id: &str,
     ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self.0.events().list_for_actor(actor_id).await?)
-    }
-
-    async fn batch_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::events::AcceptedBatchReceipt>> {
-        self.0
-            .events()
-            .batch_receipts_for_event(event_id)
-            .await?
-            .into_iter()
-            .map(|receipt| {
-                serde_json::to_value(receipt)
-                    .map(|value| crate::events::AcceptedBatchReceipt { value })
-                    .map_err(|error| {
-                        soland_storage::PersistenceError::Internal(format!(
-                            "event batch receipt serialization failed: {error}"
-                        ))
-                        .into()
-                    })
-            })
-            .collect()
     }
 }
 

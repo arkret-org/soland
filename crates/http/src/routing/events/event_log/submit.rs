@@ -2223,7 +2223,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
     }
     // Only a new admission needs a currently valid creation proof. An exact
     // replay of a durably accepted unit above remains replayable after the
-    // short-lived proof expires and returns the original signed receipt.
+    // short-lived proof expires and returns the original RealmCommits.
     validate_identity_creation_control_proof(state, request).await?;
     let now = Utc::now();
     let session = SessionRecord {
@@ -2282,7 +2282,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                "accepted PCR genesis receipt is unavailable",
+                "accepted PCR genesis commits are unavailable",
             )
         })?;
     Ok(outcome)
@@ -2296,41 +2296,45 @@ async fn existing_pcr_genesis_outcome(
     Option<arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome>,
     SubmitOneError,
 > {
-    let authorize_event_id = request.genesis_unit.founding_authorize().event_id.as_str();
-    let receipt = state
-        .event_queries()
-        .canonical_batch_receipts_for_event(authorize_event_id)
+    let create = state
+        .persistence()
+        .committed_event(&request.genesis_unit.create().event_id)
         .await
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("PCR genesis receipt lookup failed: {error}"),
+                format!("PCR genesis create commit lookup failed: {error}"),
             )
-        })?
-        .into_iter()
-        .find(|receipt| {
-            receipt.issuer_id.as_str() == state.service_id()
-                && receipt.pcr_genesis_scope().is_ok_and(|scope| {
-                    scope.principal_id == request.principal_id
-                        && scope.realm_id == request.pcr_realm_id
-                        && scope.audience_id == request.account_authority_id
-                        && scope.did_version_id == request.did_version_id
-                        && scope.control_key_digest == request.control_key_digest
-                        && request
-                            .registration_did_evidence
-                            .canonical_digest()
-                            .is_ok_and(|digest| digest == scope.registration_evidence_digest)
-                })
-        });
-    let Some(receipt) = receipt else {
+        })?;
+    let authorize = state
+        .persistence()
+        .committed_event(&request.genesis_unit.founding_authorize().event_id)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("PCR genesis authorize commit lookup failed: {error}"),
+            )
+        })?;
+    let (Some(create), Some(authorize)) = (create, authorize) else {
         return Ok(None);
     };
+    if create.event != *request.genesis_unit.create()
+        || authorize.event != *request.genesis_unit.founding_authorize()
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "event_conflict",
+            "PCR genesis event id is committed with different canonical content",
+        ));
+    }
     let outcome = arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome {
         principal_id: request.principal_id.clone(),
         pcr_realm_id: request.pcr_realm_id.clone(),
         accepted_device_id,
-        receipt,
+        commits: [create.commit, authorize.commit],
     };
     outcome.validate_against(request).map_err(|error| {
         SubmitOneError::new(

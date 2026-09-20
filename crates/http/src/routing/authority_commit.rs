@@ -3,10 +3,7 @@
 use arkret_models_collaboration::authority_commit::{
     PeerAuthoritySubmitRequest, SelfAuthoritySubmitRequest,
 };
-use arkret_wire::{
-    AuthorityBundleRequest, AuthorityHandoffRequest, CommittedEventResolveRequest,
-    StreamScanRequest,
-};
+use arkret_wire::{AuthorityBundleRequest, AuthorityHandoffRequest, StreamScanRequest};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -26,7 +23,6 @@ pub fn router(state: AppState) -> Router {
             .push(
                 Router::with_path("peer")
                     .push(Router::with_path("events").post(submit_peer))
-                    .push(Router::with_path("streams/resolve").post(resolve_committed))
                     .push(
                         Router::with_path("realm-authority/handoff")
                             .post(install_authority_handoff),
@@ -176,31 +172,6 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
 }
 
 #[handler]
-async fn resolve_committed(req: &mut Request, depot: &Depot, res: &mut Response) {
-    let request = match parse_current_json::<CommittedEventResolveRequest>(req).await {
-        Ok(request) => request,
-        Err(error) => return render_bad_request(res, error),
-    };
-    if let Err(error) = request.validate() {
-        return render_bad_request(res, validation_error(error));
-    }
-    let authority = match state(depot) {
-        Ok(state) => state.authority(),
-        Err(error) => return render_bad_request(res, error),
-    };
-    let result = authority
-        .resolve_committed(request.clone())
-        .await
-        .and_then(|outcome| {
-            outcome
-                .validate_for_request(&request)
-                .map_err(invalid_application_output)?;
-            Ok(outcome)
-        });
-    render_result(res, result);
-}
-
-#[handler]
 async fn authority_bundle(req: &mut Request, depot: &Depot, res: &mut Response) {
     let request = match parse_current_json::<AuthorityBundleRequest>(req).await {
         Ok(request) => request,
@@ -260,12 +231,9 @@ async fn install_authority_handoff(req: &mut Request, depot: &Depot, res: &mut R
 mod tests {
     use std::sync::Arc;
 
-    use arkret_models_collaboration::authority_commit::{
-        PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest,
-    };
     use arkret_wire::{
-        AuthoritySubmitOutcome, CommittedEventResolveOutcome, EventCommitSubmission,
-        MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityHandoff, StreamScanOutcome,
+        AuthoritySubmitOutcome, EventCommitSubmission, MlsCommitSubmission, RealmAuthorityBundle,
+        RealmAuthorityHandoff, StreamScanOutcome,
     };
     use async_trait::async_trait;
     use salvo::test::TestClient;
@@ -292,31 +260,10 @@ mod tests {
             panic!("invalid input must not reach the application port")
         }
 
-        async fn submit_peer_authority_forward_event(
-            &self,
-            _request: PeerAuthorityForwardEventRequest,
-        ) -> ServiceResult<AuthoritySubmitOutcome> {
-            panic!("invalid input must not reach the application port")
-        }
-
-        async fn submit_peer_authority_forward_mls(
-            &self,
-            _request: PeerAuthorityForwardMlsRequest,
-        ) -> ServiceResult<AuthoritySubmitOutcome> {
-            panic!("invalid input must not reach the application port")
-        }
-
         async fn scan_stream(
             &self,
             _request: StreamScanRequest,
         ) -> ServiceResult<StreamScanOutcome> {
-            panic!("invalid input must not reach the application port")
-        }
-
-        async fn resolve_committed(
-            &self,
-            _request: CommittedEventResolveRequest,
-        ) -> ServiceResult<CommittedEventResolveOutcome> {
             panic!("invalid input must not reach the application port")
         }
 
@@ -341,7 +288,6 @@ mod tests {
             "/_arkret/self/events",
             "/_arkret/peer/events",
             "/_arkret/self/streams/scan",
-            "/_arkret/peer/streams/resolve",
             "/_arkret/open/realm-authority/bundle",
             "/_arkret/peer/realm-authority/handoff",
         ];
@@ -362,7 +308,6 @@ mod tests {
             "/_arkret/self/events",
             "/_arkret/peer/events",
             "/_arkret/self/streams/scan",
-            "/_arkret/peer/streams/resolve",
             "/_arkret/open/realm-authority/bundle",
             "/_arkret/peer/realm-authority/handoff",
         ] {
@@ -376,5 +321,11 @@ mod tests {
                 "{path}"
             );
         }
+
+        let removed = TestClient::post("http://server/_arkret/peer/streams/resolve")
+            .json(&serde_json::json!({}))
+            .send(&service)
+            .await;
+        assert_eq!(removed.status_code, Some(StatusCode::NOT_FOUND));
     }
 }

@@ -1,5 +1,5 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_wire::{EventKind, ProfileId};
+use arkret_wire::EventKind;
 use serde_json::Value;
 
 use crate::artifacts;
@@ -63,7 +63,7 @@ pub fn payload_declares_minimal_metadata_realm(payload: &Value) -> bool {
         .and_then(Value::as_array)
         .is_some_and(|references| {
             references.iter().any(|reference| {
-                reference.as_str() == Some(ProfileId::MLS_MINIMAL_METADATA_REALM_V1)
+                reference.as_str() == Some("ak.profile.mls.minimal_metadata_realm.v1")
             })
         })
 }
@@ -99,12 +99,12 @@ mod tests {
     fn minimal_metadata_profile_is_read_only_from_realm_object() {
         assert!(payload_declares_minimal_metadata_realm(
             &serde_json::json!({
-                "object": { "schema_refs": [ProfileId::MLS_MINIMAL_METADATA_REALM_V1] }
+                "object": { "schema_refs": ["ak.profile.mls.minimal_metadata_realm.v1"] }
             })
         ));
         assert!(!payload_declares_minimal_metadata_realm(
             &serde_json::json!({
-                "schema_refs": [ProfileId::MLS_MINIMAL_METADATA_REALM_V1]
+                "schema_refs": ["ak.profile.mls.minimal_metadata_realm.v1"]
             })
         ));
     }

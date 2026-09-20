@@ -6,7 +6,7 @@ use super::{CursorRevocation, PersistenceResult, Utc, Value, async_trait};
 pub struct RealmJoinDownload {
     pub snapshot: arkret_wire::RealmStateSnapshot,
     pub stream_heads: Vec<arkret_wire::CommitStreamHead>,
-    pub items: Vec<arkret_wire::StreamRow>,
+    pub items: Vec<arkret_wire::CommittedEventFullView>,
     pub next_cursor: Option<String>,
     pub expires_at: chrono::DateTime<Utc>,
 }

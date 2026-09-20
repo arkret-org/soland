@@ -30,6 +30,15 @@ pub struct QueuedEventRecord {
     pub rejection_reason: Option<String>,
 }
 
+/// Exact durable pair used to materialize a caller-scoped committed-event
+/// read view. This is an internal persistence carrier, not a third protocol
+/// object and has no identity or signature of its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommittedEventRecord {
+    pub commit: RealmCommit,
+    pub event: Event,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CurrentRealmAuthority {
     pub realm_id: arkret_wire::RealmId,
@@ -142,6 +151,15 @@ pub trait AuthorityCommitStore: Send + Sync {
         stream_ref: &CommitStreamRef,
     ) -> PersistenceResult<Option<CommitStreamHead>>;
 
+    /// Resolve the unique successful RealmCommit for one Event id.
+    ///
+    /// A missing row returns `None`; storage uniqueness guarantees that this
+    /// method never chooses between two successful commits for the same Event.
+    async fn committed_event(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<CommittedEventRecord>>;
+
     /// Current heads for every independent Realm, Circle, and Sidecar stream
     /// belonging to one Realm, sorted by `stream_ref`.
     async fn realm_stream_heads(
@@ -161,11 +179,6 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         request: &arkret_wire::StreamScanRequest,
     ) -> PersistenceResult<arkret_wire::StreamScanOutcome>;
-
-    async fn resolve_committed(
-        &self,
-        refs: &[arkret_wire::CommittedEventRef],
-    ) -> PersistenceResult<Vec<arkret_wire::StreamRow>>;
 
     async fn install_handoff(
         &self,

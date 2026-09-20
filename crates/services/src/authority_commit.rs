@@ -6,16 +6,14 @@ use arkret_models_collaboration::authority_commit::{
     DirectConversationFoundingAcceptanceOutcome, DirectConversationFoundingFederationSubmission,
     DirectConversationFoundingUnitSubmission, MembershipCompensationAcceptanceOutcome,
     MembershipCompensationFederationSubmission, MembershipCompensationUnitSubmission,
-    PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest, PeerAuthorityForwardOutcome,
     PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome,
     PeerCommittedReplicationRequest, PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
     PeerRegisteredAtomicUnitOutcomeValue, SelfAuthoritySubmitOutcome, SelfAuthoritySubmitRequest,
 };
 use arkret_wire::{
     AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome, CommitStreamHead,
-    CommitStreamRef, CommittedEventResolveOutcome, CommittedEventResolveRequest, Event,
-    EventCommitSubmission, MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityHandoff,
-    RealmStateSnapshot, StreamScanOutcome, StreamScanRequest,
+    CommitStreamRef, Event, EventCommitSubmission, MlsCommitSubmission, RealmAuthorityBundle,
+    RealmAuthorityHandoff, RealmStateSnapshot, StreamScanOutcome, StreamScanRequest,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -210,16 +208,6 @@ pub trait AuthorityProtocolPort: Send + Sync {
         Ok(outcome)
     }
 
-    async fn submit_peer_authority_forward_event(
-        &self,
-        request: PeerAuthorityForwardEventRequest,
-    ) -> ServiceResult<AuthoritySubmitOutcome>;
-
-    async fn submit_peer_authority_forward_mls(
-        &self,
-        request: PeerAuthorityForwardMlsRequest,
-    ) -> ServiceResult<AuthoritySubmitOutcome>;
-
     async fn submit_peer_committed_replication(
         &self,
         _request: PeerCommittedReplicationRequest,
@@ -247,9 +235,9 @@ pub trait AuthorityProtocolPort: Send + Sync {
         ))
     }
 
-    /// Dispatch the closed peer carrier without collapsing authority-forward,
-    /// source-committed replication, or registered atomic units into one
-    /// ambiguous submission shape.
+    /// Dispatch the closed peer carrier. Canonical Station-to-own-Account-
+    /// Authority forwarding has been retired; the enum branches remain only
+    /// until the shared SDK carrier is cleaned up and always fail closed here.
     async fn submit_peer(
         &self,
         request: PeerAuthoritySubmitRequest,
@@ -260,19 +248,12 @@ pub trait AuthorityProtocolPort: Send + Sync {
             ))
         })?;
         let outcome = match request.clone() {
-            PeerAuthoritySubmitRequest::AuthorityForwardEvent(value) => {
-                let branch = value.branch;
-                PeerAuthoritySubmitOutcome::AuthorityForward(PeerAuthorityForwardOutcome {
-                    branch,
-                    outcome: self.submit_peer_authority_forward_event(value).await?,
-                })
-            }
-            PeerAuthoritySubmitRequest::AuthorityForwardMls(value) => {
-                let branch = value.branch;
-                PeerAuthoritySubmitOutcome::AuthorityForward(PeerAuthorityForwardOutcome {
-                    branch,
-                    outcome: self.submit_peer_authority_forward_mls(value).await?,
-                })
+            PeerAuthoritySubmitRequest::AuthorityForwardEvent(_)
+            | PeerAuthoritySubmitRequest::AuthorityForwardMls(_) => {
+                return Err(crate::ServiceError::SchemaViolation(
+                    "canonical authority-forward submission is retired; use the product-private Account Authority adapter"
+                        .to_owned(),
+                ));
             }
             PeerAuthoritySubmitRequest::CommittedReplication(value) => {
                 PeerAuthoritySubmitOutcome::CommittedReplication(
@@ -308,11 +289,6 @@ pub trait AuthorityProtocolPort: Send + Sync {
     }
 
     async fn scan_stream(&self, request: StreamScanRequest) -> ServiceResult<StreamScanOutcome>;
-
-    async fn resolve_committed(
-        &self,
-        request: CommittedEventResolveRequest,
-    ) -> ServiceResult<CommittedEventResolveOutcome>;
 
     async fn authority_bundle(
         &self,

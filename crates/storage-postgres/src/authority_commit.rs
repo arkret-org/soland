@@ -559,6 +559,36 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .transpose()
     }
 
+    async fn committed_event(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<soland_storage::CommittedEventRecord>> {
+        let token = ids::parse_event_id(event_id.as_str())
+            .ok_or_else(|| invalid("committed Event lookup has malformed Event id"))?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT c.commit_json, e.envelope FROM realm_commits c \
+             JOIN canonical_events e ON e.pk = c.event_pk \
+             WHERE e.id = $1",
+        )
+        .bind::<Binary, _>(token.to_vec())
+        .get_result::<CommitStreamRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        row.map(|row| {
+            let commit: arkret_wire::RealmCommit = decode_json(row.commit_json, "RealmCommit")?;
+            let event: arkret_wire::Event = decode_json(row.envelope, "committed Event")?;
+            if commit.event_ref != *event_id || event.event_id != *event_id {
+                return Err(PersistenceError::Internal(
+                    "durable committed Event pair disagrees with its lookup key".into(),
+                ));
+            }
+            Ok(soland_storage::CommittedEventRecord { commit, event })
+        })
+        .transpose()
+    }
+
     async fn realm_stream_heads(
         &self,
         realm_id: &arkret_wire::RealmId,
@@ -613,61 +643,24 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .await
         .map_err(PersistenceError::database)?;
         let truncated = rows.len() > usize::from(request.limit);
-        let commits = rows
+        let committed_events = rows
             .into_iter()
             .take(usize::from(request.limit))
             .map(|row| {
-                Ok(arkret_wire::StreamRow {
-                    commit: decode_json(row.commit_json, "RealmCommit")?,
-                    event: decode_json(row.envelope, "committed Event")?,
-                })
+                Ok(arkret_wire::CommittedEventView::Full(
+                    arkret_wire::CommittedEventFullView {
+                        commit: decode_json(row.commit_json, "RealmCommit")?,
+                        event: decode_json(row.envelope, "committed Event")?,
+                    },
+                ))
             })
             .collect::<PersistenceResult<Vec<_>>>()?;
-        let outcome = arkret_wire::StreamScanOutcome { commits, truncated };
+        let outcome = arkret_wire::StreamScanOutcome {
+            committed_events,
+            truncated,
+        };
         outcome.validate_for_request(request).map_err(invalid)?;
         Ok(outcome)
-    }
-
-    async fn resolve_committed(
-        &self,
-        refs: &[arkret_wire::CommittedEventRef],
-    ) -> PersistenceResult<Vec<arkret_wire::StreamRow>> {
-        let mut conn = pg_conn(&self.pool).await?;
-        let mut items = Vec::with_capacity(refs.len());
-        for reference in refs {
-            let token = ids::parse_event_id(reference.event_id.as_str())
-                .ok_or_else(|| invalid("committed Event ref has malformed Event id"))?;
-            let key = stream_key(&reference.stream_ref)?;
-            let position = to_i64(reference.stream_position, "stream position")?;
-            let row = sql_query(
-                "SELECT c.commit_json, e.envelope FROM realm_commits c \
-                 JOIN canonical_events e ON e.pk = c.event_pk \
-                 WHERE e.id = $1 AND c.commit_id = $2 AND c.stream_key = $3 \
-                   AND c.stream_position = $4",
-            )
-            .bind::<Binary, _>(token.to_vec())
-            .bind::<Text, _>(reference.commit_id.as_str())
-            .bind::<Text, _>(key)
-            .bind::<BigInt, _>(position)
-            .get_result::<CommitStreamRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .ok_or_else(|| {
-                PersistenceError::NotFound("exact committed Event ref not found".into())
-            })?;
-            let item = arkret_wire::StreamRow {
-                commit: decode_json(row.commit_json, "RealmCommit")?,
-                event: decode_json(row.envelope, "committed Event")?,
-            };
-            if !reference.matches(&item) {
-                return Err(PersistenceError::Internal(
-                    "durable committed Event row disagrees with its lookup key".into(),
-                ));
-            }
-            items.push(item);
-        }
-        Ok(items)
     }
 
     async fn install_handoff(

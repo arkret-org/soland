@@ -229,13 +229,11 @@ pub(in crate::routing::events) fn router() -> Router {
         )
         .push(Router::with_path("events/describe").query(events_describe))
         .push(Router::with_path("events/delivery-status").query(event_delivery_status))
-        .push(Router::with_path("events/subscribe").get(super::super::sync::events_subscribe))
         .push(
-            Router::with_path("events")
-                .post(submit_event)
-                .query(super::super::sync::events_read_body),
+            Router::with_path("committed-events/subscribe")
+                .get(super::super::sync::events_subscribe),
         )
-        .push(Router::with_path("events/resolve").query(resolve_events))
+        .push(Router::with_path("events").post(submit_event))
         .push(Router::with_path("events/frontier").query(events_frontier))
         .push(Router::with_path("seals/frontier").query(seals_frontier))
         .push(Router::with_path("seals/pending-control").query(pcr_pending_control))
@@ -252,7 +250,7 @@ pub(in crate::routing::events) fn router() -> Router {
         )
         .push(Router::with_path("seals/mls-welcome-refs").post(super::mls_welcome_refs::read))
         .push(Router::with_path("seals/history-authority").post(super::history_authority::read))
-        .push(Router::with_path("events/{event_id}").get(get_event))
+        .push(Router::with_path("committed-events/{event_id}").get(get_committed_event))
 }
 
 async fn require_pcr_controller(
@@ -1313,28 +1311,42 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.resource.get", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.resource.get.v1"))]
-async fn get_event(
+#[salvo::oapi::endpoint(operation_id = "ak.self.committed_event.resource.get", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.committed_event.resource.get.v1"))]
+async fn get_committed_event(
     aa: AuthArgs,
     event_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EventView> {
+) -> JsonResult<CommittedEventView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let event_id = event_id.into_inner();
+    let event_id = EventId::new(event_id.into_inner())
+        .map_err(|_| AppError::not_found("committed event not found"))?;
     let record = state
         .event_queries()
-        .canonical_event(&event_id)
+        .canonical_event(event_id.as_str())
         .await
         .ok()
         .flatten()
-        .ok_or_else(|| AppError::not_found("event not found"))?;
+        .ok_or_else(|| AppError::not_found("committed event not found"))?;
     if !event_visible_to_session(state, &record, &session).await {
-        return Err(AppError::not_found("event not found"));
+        return Err(AppError::not_found("committed event not found"));
     }
-    event_view_for_state(state, &record).await
+    let committed = state
+        .persistence()
+        .committed_event(&event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("committed Event lookup failed: {error}")))?
+        .ok_or_else(|| AppError::not_found("committed event not found"))?;
+    let view = CommittedEventView::Full(CommittedEventFullView {
+        commit: committed.commit,
+        event: committed.event,
+    });
+    view.validate_shape().map_err(|error| {
+        AppError::internal(format!("durable committed Event view is invalid: {error}"))
+    })?;
+    json_ok(view)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.events.read.delivery_status", tags("events"))]

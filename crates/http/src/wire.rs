@@ -585,7 +585,6 @@ pub fn describe(
             "ak.operation_bundle.station.applet_install.v1".to_owned(),
             "ak.operation_bundle.station.current_signer_evidence.v1".to_owned(),
             "ak.operation_bundle.station.describe.v1".to_owned(),
-            "ak.operation_bundle.station.device_pairing_handoff.v1".to_owned(),
             "ak.operation_bundle.station.http_core.v1".to_owned(),
             "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
             "ak.operation_bundle.station.push.v1".to_owned(),
@@ -619,7 +618,6 @@ pub fn describe(
         verified_profiles,
         interop_surfaces,
         invite_addressing: None,
-        private_contact_discovery: None,
         development_mode,
         // service-describe.schema.json requires `rate_limit_policy` or
         // `rate_limit_policy_id`. Derive the advertised per-class policy from the SAME runtime
@@ -632,16 +630,6 @@ pub fn describe(
         rate_limit_policy_id: None,
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
         resource_kinds: Vec::new(),
-        restricted_query_proof: None,
-        accept_policy_kind: None,
-        accept_policy_ref: None,
-        default_ttl_seconds: None,
-        max_ttl_seconds: None,
-        revalidation_grace_seconds: None,
-        accepted_resource_kinds: Vec::new(),
-        accepted_did_methods: Vec::new(),
-        takedown_contact: None,
-        rate_limits: None,
         supported_features: vec![
             "ak.feature.agent_runtime_approval_notifications.v1".to_owned(),
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
@@ -734,7 +722,7 @@ pub fn describe(
             "search": {
                 "directory": {
                     "operation_prefix": "ak.find.directory.",
-                    "resource_kinds": ["realm", "organization", "actor"],
+                    "resource_kinds": ["realm"],
                     "returns_message_hits": false,
                     "returns_snippets": false
                 },
@@ -920,7 +908,7 @@ mod tests {
         assert!(bundles.contains(&json!(
             "ak.operation_bundle.station.current_signer_evidence.v1"
         )));
-        assert!(bundles.contains(&json!(
+        assert!(!bundles.contains(&json!(
             "ak.operation_bundle.station.device_pairing_handoff.v1"
         )));
         assert!(!bundles.contains(&json!(

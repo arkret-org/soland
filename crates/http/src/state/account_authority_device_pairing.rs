@@ -6,14 +6,14 @@ use arkret_models_collaboration::device_pairing::{
 };
 use async_trait::async_trait;
 use reqwest::StatusCode;
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 
 use super::AppState;
 use crate::error::AppError;
 
-const STAGE_PATH: &str = "/_arkret/gate/account/device-pairing/stages";
-const RESOLVE_PATH: &str = "/_arkret/gate/account/device-pairing/resolutions";
-const STATUS_PATH: &str = "/_arkret/gate/account/device-pairing/status-queries";
+const STAGE_PATH: &str = "/_coauth/internal/device-pairing/stages";
+const RESOLVE_PATH: &str = "/_coauth/internal/device-pairing/resolutions";
+const STATUS_PATH: &str = "/_coauth/internal/device-pairing/status-queries";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// One initial send plus one retry when no HTTP response was received.
 const TRANSPORT_ATTEMPTS: usize = 2;
@@ -22,10 +22,10 @@ const TRANSPORT_ATTEMPTS: usize = 2;
 /// device-pairing handoff operations.
 ///
 /// The public handlers own request parsing, their public rate bucket, and the
-/// fresh stage idempotency key. The production implementation owns RFC 9421
-/// service-to-service transport and transport retry. Every retry of one
-/// [`Self::stage`] call reuses the supplied key; a later public ingress receives
-/// a different key from the handler.
+/// fresh stage idempotency key. The production implementation owns the private
+/// shared-secret transport and transport retry. Every retry of one [`Self::stage`]
+/// call reuses the supplied key; a later public ingress receives a different key
+/// from the handler.
 #[async_trait]
 pub trait AccountAuthorityDevicePairingPort: Send + Sync {
     async fn stage(
@@ -48,17 +48,16 @@ pub trait AccountAuthorityDevicePairingPort: Send + Sync {
     ) -> Result<DevicePairingStatusOutcome, AppError>;
 }
 
-/// Production Station -> Account Authority transport.
+/// Production Station -> Account Authority private TCB transport.
 ///
-/// This client intentionally has no bearer/shared-secret field and never reads
-/// `internal_authority_channel`. Both deployment halves use the owning
-/// Station's exact service identity; the destination role and trust-domain
-/// boundary are bound by the signed HTTP transcript.
+/// This client authenticates only with the deployment's registered shared
+/// secret. It emits no Arkret operation selector, Content-Digest, RFC 9421
+/// signature, or source/destination identity headers.
 #[derive(Debug, Default)]
-pub(crate) struct Rfc9421AccountAuthorityDevicePairing;
+pub(crate) struct PrivateAccountAuthorityDevicePairing;
 
 #[async_trait]
-impl AccountAuthorityDevicePairingPort for Rfc9421AccountAuthorityDevicePairing {
+impl AccountAuthorityDevicePairingPort for PrivateAccountAuthorityDevicePairing {
     async fn stage(
         &self,
         state: &AppState,
@@ -115,9 +114,7 @@ where
         .map_err(|error| unavailable(operation, format!("canonical request failed: {error}")))?;
 
     for attempt in 0..TRANSPORT_ATTEMPTS {
-        // A transport retry gets a fresh short-lived signature but the exact
-        // same canonical bytes and, for stage, the exact same replay key.
-        let headers = signed_headers(state, &target, &body, idempotency_key)?;
+        let headers = private_headers(state, idempotency_key)?;
         match client
             .post(target_url.clone())
             .headers(headers)
@@ -161,53 +158,30 @@ fn account_authority_target(state: &AppState, path: &str) -> Result<String, AppE
     Ok(target.into())
 }
 
-fn signed_headers(
-    state: &AppState,
-    target: &str,
-    body: &[u8],
-    idempotency_key: Option<&str>,
-) -> Result<HeaderMap, AppError> {
-    let destination_trust_domain = state
+fn private_headers(state: &AppState, idempotency_key: Option<&str>) -> Result<HeaderMap, AppError> {
+    let credential = state
         .config()
-        .account_authority_trust_domain
-        .as_ref()
-        .ok_or_else(|| unavailable("device pairing", "missing destination trust domain"))?;
-    let headers = transport_headers(
-        state.service_id(),
-        state.config().trust_domain.as_str(),
-        destination_trust_domain.as_str(),
-        body,
-        idempotency_key,
-    )?;
-    Ok(crate::routing::federation::outbox::rfc9421_sign(
-        state, headers, "POST", target,
-    ))
+        .internal_authority_shared_secret
+        .as_deref()
+        .ok_or_else(|| {
+            unavailable(
+                "device pairing",
+                "private authority channel is not configured",
+            )
+        })?;
+    private_headers_with_credential(credential, idempotency_key)
 }
 
-fn transport_headers(
-    service_id: &str,
-    source_trust_domain: &str,
-    destination_trust_domain: &str,
-    body: &[u8],
+fn private_headers_with_credential(
+    credential: &str,
     idempotency_key: Option<&str>,
 ) -> Result<HeaderMap, AppError> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     insert_header(
         &mut headers,
-        "content-digest",
-        &crate::routing::federation::outbox::content_digest_header_value(body),
-    )?;
-    // A split Account Authority acts for this owning Station, so its service
-    // audience is the same stable service id. The signed destination role and
-    // explicit trust domain distinguish the receiver side of the transaction.
-    insert_header(&mut headers, "source-service-id", service_id)?;
-    insert_header(&mut headers, "destination-service-id", service_id)?;
-    insert_header(&mut headers, "source-trust-domain", source_trust_domain)?;
-    insert_header(
-        &mut headers,
-        "destination-trust-domain",
-        destination_trust_domain.as_str(),
+        AUTHORIZATION.as_str(),
+        &format!("Bearer {credential}"),
     )?;
     if let Some(idempotency_key) = idempotency_key {
         insert_header(&mut headers, "idempotency-key", idempotency_key)?;
@@ -278,70 +252,39 @@ mod tests {
 
     #[test]
     fn operation_paths_are_the_registered_internal_bindings() {
-        assert_eq!(STAGE_PATH, "/_arkret/gate/account/device-pairing/stages");
-        assert_eq!(
-            RESOLVE_PATH,
-            "/_arkret/gate/account/device-pairing/resolutions"
-        );
+        assert_eq!(STAGE_PATH, "/_coauth/internal/device-pairing/stages");
+        assert_eq!(RESOLVE_PATH, "/_coauth/internal/device-pairing/resolutions");
         assert_eq!(
             STATUS_PATH,
-            "/_arkret/gate/account/device-pairing/status-queries"
+            "/_coauth/internal/device-pairing/status-queries"
         );
         for path in [STAGE_PATH, RESOLVE_PATH, STATUS_PATH] {
-            let operation = arkret_wire::ServiceOperationId::from_http_request("POST", path)
-                .expect("internal device-pairing path is registered");
-            assert!(operation.as_str().starts_with("ak.gate.account."));
+            assert!(arkret_wire::ServiceOperationId::from_http_request("POST", path).is_none());
         }
     }
 
     #[test]
-    fn transport_retry_source_keeps_stage_key_and_rebuilds_signature() {
+    fn transport_retry_source_keeps_stage_key_without_protocol_headers() {
         let source = include_str!("account_authority_device_pairing.rs");
         assert!(source.contains("for attempt in 0..TRANSPORT_ATTEMPTS"));
-        assert!(source.contains("signed_headers(state, &target, &body, idempotency_key)"));
+        assert!(source.contains("private_headers(state, idempotency_key)"));
         assert!(source.contains("Err(error) if attempt + 1 < TRANSPORT_ATTEMPTS"));
-        assert!(!source.contains("bearer_auth"));
-        assert!(!source.contains(".internal_authority_channel"));
+        assert!(!source.contains("Arkret-Operation"));
+        assert!(!source.contains("rfc9421_sign"));
     }
 
     #[test]
-    fn registered_signature_profile_components_are_all_constructed() {
-        let body = br#"{"request":"canonical"}"#;
-        let headers = transport_headers(
-            "ak:did_core:webvh:z6mStation",
-            "ak:trust_domain:station.example",
-            "ak:trust_domain:authority.example",
-            body,
+    fn private_headers_are_bearer_only_with_optional_replay_key() {
+        let headers = private_headers_with_credential(
+            "shared-secret",
             Some("device-pairing-stage:019f0000-0000-7000-8000-000000000001"),
         )
-        .expect("registered headers");
-        assert_eq!(headers["source-service-id"], "ak:did_core:webvh:z6mStation");
-        assert_eq!(
-            headers["destination-service-id"],
-            "ak:did_core:webvh:z6mStation"
-        );
-        assert_eq!(
-            headers["source-trust-domain"],
-            "ak:trust_domain:station.example"
-        );
-        assert_eq!(
-            headers["destination-trust-domain"],
-            "ak:trust_domain:authority.example"
-        );
+        .expect("private headers");
+        assert_eq!(headers[AUTHORIZATION], "Bearer shared-secret");
         assert_eq!(
             headers["idempotency-key"],
             "device-pairing-stage:019f0000-0000-7000-8000-000000000001"
         );
-        let digest = arkret_signatures::http_signature::ContentDigest::parse(
-            headers["content-digest"].to_str().unwrap(),
-        )
-        .expect("RFC 9530 digest");
-        arkret_signatures::http_signature::verify_content_digest(&digest, body)
-            .expect("digest binds exact HTTP content bytes");
-
-        let source = include_str!("account_authority_device_pairing.rs");
-        // The shared signer adds @method, @target-uri, @authority and the
-        // exact Arkret-Operation selector before creating Signature-Input.
-        assert!(source.contains("outbox::rfc9421_sign"));
+        assert_eq!(headers.len(), 3);
     }
 }

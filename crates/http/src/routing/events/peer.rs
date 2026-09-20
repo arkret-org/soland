@@ -167,21 +167,11 @@ async fn retained_federation_submission(
 
 pub(super) fn router() -> Router {
     Router::new()
-        .push(
-            Router::with_path("events")
-                .post(peer_events_submit)
-                .query(peer_events_read_body),
-        )
-        .push(Router::with_path("events/resolve").query(peer_events_resolve))
+        .push(Router::with_path("events").post(peer_events_submit))
         .push(Router::with_path("events/sibling-positions").query(peer_events_sibling_positions))
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
         .push(Router::with_path("seals/frontier").query(peer_seals_frontier))
-        .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
         .push(Router::with_path("account-status").post(peer_account_status_submit))
-        .push(
-            Router::with_path("device-revocations/check")
-                .post(super::peer_device_revocations::check_device_revocation_gate),
-        )
         .push(Router::with_path("signal").post(peer_signal_relay))
 }
 
@@ -377,45 +367,30 @@ async fn adjudicated_position_siblings(
     Ok(Some(siblings))
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.peer.principal_genesis.command.submit",
-    tags("events")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.principal_genesis.command.submit.v1"))]
-async fn peer_principal_genesis(
+pub(super) async fn admit_private_principal_genesis(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PcrGenesisSubmitOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, true).await?;
-    let source_id = source_id_from_request(req)?;
-    let source_trust_domain = required_header(req, "source-trust-domain")?;
+    authenticate_account_authority_private_request(state, req)?;
     let header_idempotency_key = required_header(req, "idempotency-key")?;
     let request = parse_json_body::<PcrGenesisSubmitRequestBody>(
         req,
-        "invalid ak.peer.principal_genesis.command.submit.v1 request body",
+        "invalid private principal genesis admission body",
     )
     .await?;
     request
         .validate()
         .map_err(|error| schema_violation(error.to_string()))?;
-    let configured_authority = trusted_account_authority_id(state).await?;
-    if source_id != request.account_authority_id.as_str()
-        || configured_authority != request.account_authority_id
-    {
-        return Err(AppError::capability_denied(
-            "PCR genesis relay source is not the configured Account Authority",
+    if header_idempotency_key != request.idempotency_key.as_str() {
+        return Err(cross_domain_replay(
+            "principal genesis private adapter idempotency binding mismatch",
         ));
     }
-    if header_idempotency_key != request.idempotency_key.as_str()
-        || source_trust_domain
-            != request
-                .identity_creation_control_proof
-                .trust_domain
-                .as_str()
-    {
-        return Err(cross_domain_replay(
-            "PCR genesis relay transport binding mismatch",
+    let configured_authority = trusted_account_authority_id(state).await?;
+    if configured_authority != request.account_authority_id {
+        return Err(AppError::capability_denied(
+            "principal genesis caller is not the configured Account Authority",
         ));
     }
     if let Some(authority_url) = state.config().account_authority_url.as_deref()
@@ -427,16 +402,11 @@ async fn peer_principal_genesis(
             != authority_url.trim_end_matches('/')
     {
         return Err(cross_domain_replay(
-            "PCR genesis creation-proof origin does not match the configured Account Authority",
+            "principal genesis creation-proof origin does not match the configured Account Authority",
         ));
     }
     super::event_log::submit_peer_pcr_genesis(state, &request)
         .await
-        // Adopt the admission rejection verbatim: it already carries the
-        // registered top-level code, its registry HTTP status and any reason
-        // code. Re-wrapping it as `internal_error` and overriding the wire
-        // string put an unregistered discriminator on `error.code` and
-        // reported every rejection as a server fault.
         .map_err(|error| {
             error.rejection().cloned().unwrap_or_else(|| {
                 crate::app_error!(Quarantine, error.message()).with_internal_reason(error.code())
@@ -469,29 +439,6 @@ pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<Did
         .await
         .map(|(service_id, _)| service_id)
 }
-
-/// Every operation this deployment may carry on the internal channel
-/// (`sync/service-http-binding.md` §2.2.3).
-///
-/// Closed and compile-time on purpose. §2.2.3 allows exactly one authorization
-/// granularity — per-registered-operation — and explicitly forbids turning
-/// `/_arkret/peer/*`, `/_arkret/gate/*`, `/_arkret/root/*` or `/_arkret/self/*`
-/// into deployment-bearer path groups. An operator-editable list would be a way
-/// to do exactly that, so there is none: the two entries below are the
-/// operations soland takes part in, and every other operation keeps the §2.2
-/// RFC 9421 service signature untouched.
-pub(crate) const INTERNAL_CHANNEL_OPERATIONS: [&str; 4] = [
-    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
-    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1,
-    arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
-    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
-];
-
-/// Registered operations for which Soland is the HTTP receiver. The other
-/// three entries above are outbound from Soland and must never make a Soland
-/// path accept this bearer.
-const INBOUND_INTERNAL_CHANNEL_OPERATIONS: [&str; 1] =
-    [arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1];
 
 /// One resolved registered deployment-internal authenticated channel.
 ///
@@ -558,50 +505,25 @@ fn constant_time_credential_eq(expected: &str, presented: &str) -> bool {
     expected.len() == presented.len() && bool::from(expected.as_bytes().ct_eq(presented.as_bytes()))
 }
 
-/// Authenticate one inbound call on the registered deployment-internal channel
-/// (`sync/service-http-binding.md` §2.2.3) and return the verified caller.
+/// Authenticate a product-private Account Authority adapter call.
 ///
-/// The credential is the whole authentication contract for a registered
-/// operation; it replaces the RFC 9421 service signature that §2.2 would
-/// otherwise require. The identity it yields comes from verifying that
-/// credential against deployment configuration — never from
-/// `Source-Service-ID`, `Destination-Service-ID`, a path segment, a body field
-/// or any self-reported `internal` marker. The fixed route supplies the
-/// destination and operation; redundant identity headers are ignored.
-///
-/// Every plaintext proxy on this deployment-internal link is part of the same
-/// trusted TCB (see [`crate::config::AppConfig::internal_authority_channel`]).
-pub(in crate::routing) async fn authenticate_internal_channel_request(
+/// Unlike the retired canonical self-call operations this edge is not keyed by
+/// an Arkret operation id and is never advertised in protocol discovery. The
+/// deployment's fixed shared-secret channel is the whole caller identity.
+pub(in crate::routing) fn authenticate_account_authority_private_request(
     state: &AppState,
     req: &Request,
-    operation: &str,
 ) -> Result<RegisteredInternalChannel, AppError> {
-    authenticate_internal_channel_request_from_config(state.config(), req.headers(), operation)
-}
-
-fn authenticate_internal_channel_request_from_config(
-    config: &crate::config::AppConfig,
-    headers: &salvo::http::HeaderMap,
-    operation: &str,
-) -> Result<RegisteredInternalChannel, AppError> {
-    let rejected = || {
-        AppError::unauthenticated(
-            "caller is not authenticated on the registered deployment-internal channel",
-        )
-    };
-    if !INTERNAL_CHANNEL_OPERATIONS.contains(&operation)
-        || !INBOUND_INTERNAL_CHANNEL_OPERATIONS.contains(&operation)
-    {
-        return Err(rejected());
-    }
-    let channel = registered_internal_authority_channel_from_config(config)?;
-    if !internal_channel_request_is_authentic(&channel, headers) {
-        return Err(rejected());
+    let channel = registered_internal_authority_channel_from_config(state.config())?;
+    if !internal_channel_request_is_authentic(&channel, req.headers()) {
+        return Err(AppError::unauthenticated(
+            "caller is not authenticated on the Account Authority private channel",
+        ));
     }
     Ok(channel)
 }
 
-/// The credential and transport-input half of the §2.2.3 check, separated from
+/// The credential and transport-input half of the private-channel check, separated from
 /// configuration resolution so both halves are directly testable.
 fn internal_channel_request_is_authentic(
     channel: &RegisteredInternalChannel,
@@ -2835,7 +2757,6 @@ mod internal_channel_tests {
     use std::collections::BTreeMap;
 
     use salvo::http::{HeaderMap, HeaderName, HeaderValue};
-    use soland_storage_postgres::Db;
 
     use super::*;
 
@@ -2898,53 +2819,6 @@ mod internal_channel_tests {
         internal_channel_request_is_authentic(&channel(), &headers(pairs))
     }
 
-    fn environment_headers() -> HeaderMap {
-        headers(&[
-            ("authorization", "Bearer shared-internal-channel-credential"),
-            (
-                "arkret-operation",
-                arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
-            ),
-        ])
-    }
-
-    #[test]
-    fn registered_operation_set_stays_closed() {
-        // §2.2.3 allows only per-operation registration. Anything else on
-        // `/_arkret/peer/*` keeps the §2.2 RFC 9421 service signature, so it
-        // must not appear here.
-        assert_eq!(INTERNAL_CHANNEL_OPERATIONS.len(), 4);
-        assert!(INTERNAL_CHANNEL_OPERATIONS.contains(
-            &arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1
-        ));
-        assert!(INTERNAL_CHANNEL_OPERATIONS.contains(
-            &arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1
-        ));
-        assert!(
-            INTERNAL_CHANNEL_OPERATIONS.contains(
-                &arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1
-            )
-        );
-        assert!(INTERNAL_CHANNEL_OPERATIONS.contains(
-            &arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1
-        ));
-        assert_eq!(INBOUND_INTERNAL_CHANNEL_OPERATIONS.len(), 1);
-        assert!(
-            INBOUND_INTERNAL_CHANNEL_OPERATIONS.contains(
-                &arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1
-            )
-        );
-        for unregistered in [
-            arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
-            arkret_wire::ServiceOperationId::PEER_KEYS_READ_LOOKUP_V1,
-        ] {
-            assert!(
-                !INTERNAL_CHANNEL_OPERATIONS.contains(&unregistered),
-                "{unregistered} must keep its service signature",
-            );
-        }
-    }
-
     #[test]
     fn channel_admits_only_the_configured_credential() {
         assert!(authentic(&authentic_pairs()));
@@ -2995,23 +2869,8 @@ mod internal_channel_tests {
         assert!(!authentic(&pairs));
     }
 
-    #[tokio::test]
-    async fn environment_registered_channel_authenticates_receiver() {
-        let state = AppState::new(configured_app(), Db { pool: None });
-        let mut request = Request::new();
-        *request.headers_mut() = environment_headers();
-
-        authenticate_internal_channel_request(
-            &state,
-            &request,
-            arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
-        )
-        .await
-        .expect("complete environment registration must authenticate");
-    }
-
-    #[tokio::test]
-    async fn channel_without_explicit_authority_trust_domain_is_not_registered() {
+    #[test]
+    fn channel_without_explicit_authority_trust_domain_is_not_registered() {
         let mut values = configured_values();
         values.remove("SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN");
         let config = crate::config::AppConfig::from_values(
@@ -3020,75 +2879,6 @@ mod internal_channel_tests {
         )
         .unwrap();
         assert!(config.internal_authority_channel.is_none());
-        let state = AppState::new(config, Db { pool: None });
-        let mut request = Request::new();
-        *request.headers_mut() = headers(&authentic_pairs());
-
-        assert!(
-            authenticate_internal_channel_request(
-                &state,
-                &request,
-                arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
-            )
-            .await
-            .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn registered_credential_has_no_unregistered_operation_permission() {
-        let state = AppState::new(configured_app(), Db { pool: None });
-        let mut request = Request::new();
-        *request.headers_mut() = environment_headers();
-
-        assert!(
-            authenticate_internal_channel_request(
-                &state,
-                &request,
-                arkret_wire::ServiceOperationId::PEER_ACCOUNT_STATUS_COMMAND_SUBMIT_V1,
-            )
-            .await
-            .is_err()
-        );
-
-        assert!(
-            authenticate_internal_channel_request(
-                &state,
-                &request,
-                arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
-            )
-            .await
-            .is_err(),
-            "an outbound-only registered operation must not be admitted at a Soland receiver",
-        );
-    }
-
-    #[tokio::test]
-    async fn environment_registered_receiver_rejects_wrong_credential_or_signature_digest() {
-        let state = AppState::new(configured_app(), Db { pool: None });
-        for (header, conflicting) in [
-            ("authorization", "Bearer wrong-credential"),
-            ("content-digest", "sha-256=:UjNhZGU=:"),
-        ] {
-            let mut request = Request::new();
-            let mut request_headers = environment_headers();
-            request_headers.insert(
-                HeaderName::from_bytes(header.as_bytes()).unwrap(),
-                HeaderValue::from_str(conflicting).unwrap(),
-            );
-            *request.headers_mut() = request_headers;
-
-            assert!(
-                authenticate_internal_channel_request(
-                    &state,
-                    &request,
-                    arkret_wire::ServiceOperationId::PEER_DEVICE_REVOCATIONS_COMMAND_CHECK_V1,
-                )
-                .await
-                .is_err(),
-                "invalid {header} must fail at the configured receiver",
-            );
-        }
     }
 }
 

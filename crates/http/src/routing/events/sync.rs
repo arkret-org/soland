@@ -9,10 +9,8 @@
 //!   Extension send rail; encrypted-only)
 //! - `GET  /_arkret/self/signal/subscribe`        — `ak.self.signal.stream.subscribe.v1` (Signal
 //!   Extension receive rail; verbatim envelope NDJSON)
-//! - `GET  /_arkret/self/events/subscribe`        — `ak.self.events.stream.subscribe.v1`.
+//! - `GET  /_arkret/self/committed-events/subscribe` — committed Event live tail.
 //!   Multi-Realm / multi-actor stream; frame `kind` field replaces `type`.
-//! - `QUERY /_arkret/self/events`                — `ak.self.events.read.scan.v1` (canonical;
-//!   `ak.events.list` + `ak.sync.backfill` via `direction=forward|backward`).
 //! - `GET  /_arkret/self/realm-state-snapshot/head`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,

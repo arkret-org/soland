@@ -228,23 +228,17 @@ fn validate_persistence_key_store(
 /// copied here: a split Account Authority signs as this Station, so both ends
 /// use this Station's service `did_core_id`. Trust domains are not collapsed:
 /// the Account Authority/source domain is explicit here and the
-/// Station/destination domain comes from `AppConfig::trust_domain`. The closed
-/// operation set remains a compile-time fact, while this struct carries the
-/// shared per-edge secret.
-///
-/// The operation set is a closed compile-time constant
-/// (`routing::events::peer::INTERNAL_CHANNEL_OPERATIONS`) rather than an
-/// operator-editable list. §2.2.3 registers exactly which operations exist on
-/// the internal channel, and an operator MUST NOT be able to add one — in
-/// particular MUST NOT be able to turn a whole path group such as
-/// `/_arkret/peer/*` into a deployment-bearer surface.
+/// Station/destination domain comes from `AppConfig::trust_domain`. The fixed
+/// product-private adapter paths remain compile-time facts, while this struct
+/// carries the shared per-edge secret. Operators cannot widen the credential
+/// into a bearer-protected canonical path group.
 #[derive(Clone)]
 pub struct InternalAuthorityChannelConfig {
     /// Shared per-edge credential, byte-identical to the Account Authority's
     /// `stations[].internal_authority_shared_secret` for this Station. The
     /// same secret authenticates both directions of this one edge; it is not a
-    /// general deployment bearer and grants nothing outside the registered
-    /// operations.
+    /// general deployment bearer and grants nothing outside the fixed private
+    /// adapters.
     credential: String,
     /// Account Authority/source trust domain from explicit deployment config.
     account_authority_trust_domain: TrustDomainId,
@@ -1679,9 +1673,9 @@ impl AppConfig {
 }
 
 const INTERNAL_SESSION_GRANT_INTROSPECTION_PATH: &str =
-    "/_arkret/gate/account/session-grants/introspect";
-const INTERNAL_AUTH_SESSION_LOGOUT_PATH: &str = "/_arkret/gate/account/auth-sessions/logout";
-const INTERNAL_CONTROLLER_GATE_PATH: &str = "/_arkret/gate/account/controller-gate-attestations";
+    "/_coauth/internal/session-grants/introspect";
+const INTERNAL_AUTH_SESSION_LOGOUT_PATH: &str = "/_coauth/internal/auth-sessions/logout";
+const INTERNAL_CONTROLLER_GATE_PATH: &str = "/_coauth/internal/controller-gate-attestations";
 
 fn parse_internal_authority_operation_url(
     value: &str,
@@ -2255,12 +2249,11 @@ mod tests {
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL".to_owned(),
-                "https://auth.example:443/_arkret/gate/account/session-grants/introspect"
-                    .to_owned(),
+                "https://auth.example:443/_coauth/internal/session-grants/introspect".to_owned(),
             ),
             (
                 "SOLAND_AUTH_SESSION_LOGOUT_URL".to_owned(),
-                "https://auth.example/_arkret/gate/account/auth-sessions/logout".to_owned(),
+                "https://auth.example/_coauth/internal/auth-sessions/logout".to_owned(),
             ),
         ])
     }
@@ -2282,7 +2275,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .controller_gate_url(),
-            "https://auth.example/_arkret/gate/account/controller-gate-attestations"
+            "https://auth.example/_coauth/internal/controller-gate-attestations"
         );
     }
 
@@ -2319,35 +2312,35 @@ mod tests {
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
-                "https://other.example/_arkret/gate/account/session-grants/introspect",
+                "https://other.example/_coauth/internal/session-grants/introspect",
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
-                "http://auth.example/_arkret/gate/account/session-grants/introspect",
+                "http://auth.example/_coauth/internal/session-grants/introspect",
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
-                "https://auth.example:444/_arkret/gate/account/session-grants/introspect",
+                "https://auth.example:444/_coauth/internal/session-grants/introspect",
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
-                "https://user@auth.example/_arkret/gate/account/session-grants/introspect",
+                "https://user@auth.example/_coauth/internal/session-grants/introspect",
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
-                "https://auth.example/_arkret/gate/account/session-grants/introspect?copy=1",
+                "https://auth.example/_coauth/internal/session-grants/introspect?copy=1",
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
-                "https://auth.example/_arkret/gate/account/session-grants/introspect#copy",
+                "https://auth.example/_coauth/internal/session-grants/introspect#copy",
             ),
             (
                 "SOLAND_SESSION_GRANT_INTROSPECTION_URL",
-                "https://auth.example/_arkret/gate/account/session-grants/introspect/",
+                "https://auth.example/_coauth/internal/session-grants/introspect/",
             ),
             (
                 "SOLAND_AUTH_SESSION_LOGOUT_URL",
-                "https://other.example/_arkret/gate/account/auth-sessions/logout",
+                "https://other.example/_coauth/internal/auth-sessions/logout",
             ),
         ] {
             let mut values = registered_internal_channel_values();
@@ -2408,14 +2401,14 @@ mod tests {
     #[test]
     fn auth_session_logout_url_is_an_explicit_exact_operation_endpoint() {
         validate_auth_session_logout_url(
-            "https://auth.example/_arkret/gate/account/auth-sessions/logout",
+            "https://auth.example/_coauth/internal/auth-sessions/logout",
         )
         .unwrap();
         for invalid in [
-            "https://auth.example/_arkret/gate/account/session-grants/introspect",
-            "https://user@auth.example/_arkret/gate/account/auth-sessions/logout",
-            "https://auth.example/_arkret/gate/account/auth-sessions/logout?version=1",
-            "ftp://auth.example/_arkret/gate/account/auth-sessions/logout",
+            "https://auth.example/_coauth/internal/session-grants/introspect",
+            "https://user@auth.example/_coauth/internal/auth-sessions/logout",
+            "https://auth.example/_coauth/internal/auth-sessions/logout?version=1",
+            "ftp://auth.example/_coauth/internal/auth-sessions/logout",
         ] {
             assert!(
                 validate_auth_session_logout_url(invalid).is_err(),

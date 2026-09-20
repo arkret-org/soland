@@ -5,8 +5,8 @@
 //!   profiles, and limits.
 //! - `POST /_arkret/self/events`           — submit one canonical Event Envelope or an `events[]`
 //!   account-client batch.
-//! - `GET  /_arkret/self/events/{event_id}` — fetch one envelope.
-//! - `QUERY /_arkret/self/events/resolve`  — resolve up to `MAX_EVENT_RESOLVE`.
+//! - `GET  /_arkret/self/committed-events/{event_id}` — fetch the committed Event/Commit pair.
+//! - `GET /_arkret/self/committed-events/{event_id}` — one committed Event view.
 //! - `GET  /_arkret/self/events`            — paginated list (filtered by actor / realm).
 //! - `QUERY /_arkret/self/events/frontier`  — per-actor Event frontier.
 //! - `QUERY /_arkret/self/seals/frontier`   — per-Realm Seal frontier.
@@ -37,12 +37,13 @@ use arkret_models_collaboration::governance_dependencies::{
 };
 use arkret_models_collaboration::http_bodies::{
     EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventDeliveryTargetState,
-    EventDeliveryTargetStatus, EventSealSubmitOutcome, EventView, EventsResolveOutcome,
+    EventDeliveryTargetStatus, EventSealSubmitOutcome, EventsResolveOutcome,
     EventsResolveRequestBody, EventsSubmitOutcome, EventsSubmitStatus,
 };
 use arkret_wire::{
-    Event, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,
-    MAX_EVENT_SUBMIT_BATCH, Seal, proof_kind,
+    CommittedEventFullView, CommittedEventView, CommittedEventWithheldView, Event, EventDisclosure,
+    EventDisclosureStatus, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS,
+    MAX_EVENT_RESOLVE, MAX_EVENT_SUBMIT_BATCH, Seal, proof_kind,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -163,8 +164,7 @@ async fn durable_account_owns_pcr(
 // reject another node's valid wire object (spec §1).
 mod admission;
 pub use admission::{
-    EventsSubmitRequestBody, events_submit_pre_admit_check, frozen_realm_check,
-    realm_policy_bundle_check, terminal_realm_check,
+    EventsSubmitRequestBody, frozen_realm_check, realm_policy_bundle_check, terminal_realm_check,
 };
 use admission::{policy_bundle_value_from_state_payload, validate_federation_service_binding};
 

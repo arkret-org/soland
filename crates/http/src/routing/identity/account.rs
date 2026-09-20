@@ -1652,29 +1652,32 @@ async fn read_principal_resolution_audit(
             .clone()
     });
 
-    let principal_genesis_receipt = state
-        .event_queries()
-        .canonical_batch_receipts_for_event(record.genesis_event.event_id.as_str())
+    let principal_genesis_commit = state
+        .persistence()
+        .committed_event(&record.genesis_event.event_id)
         .await
-        .map_err(|error| AppError::internal(format!("load PCR genesis receipt: {error}")))?
-        .into_iter()
-        .next()
+        .map_err(|error| AppError::internal(format!("load PCR genesis commit: {error}")))?
+        .map(|committed| committed.commit)
         .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
-    let current_digest = Hash::new(
-        record
-            .current_event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .map_err(|error| {
-                AppError::internal(format!("current resolution Event digest failed: {error}"))
-            })?,
-    )
-    .map_err(|error| AppError::internal(format!("current resolution digest invalid: {error}")))?;
-    let accepted_seal = state
-        .projections()
-        .seal_covering_event(&current_digest)
+    let current_resolution_commit = state
+        .persistence()
+        .committed_event(&record.current_event.event_id)
         .await
-        .map_err(|error| AppError::internal(format!("resolution Seal lookup failed: {error}")))?
+        .map_err(|error| AppError::internal(format!("load current resolution commit: {error}")))?
+        .map(|committed| committed.commit)
         .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
+    let mut predecessor_resolution_commits =
+        Vec::with_capacity(predecessor_resolution_events.len());
+    for event in &predecessor_resolution_events {
+        let commit = state
+            .persistence()
+            .committed_event(&event.event_id)
+            .await
+            .map_err(|error| AppError::internal(format!("load resolution commit: {error}")))?
+            .map(|committed| committed.commit)
+            .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
+        predecessor_resolution_commits.push(commit);
+    }
 
     res.headers_mut().insert(
         salvo::http::header::CACHE_CONTROL,
@@ -1683,12 +1686,13 @@ async fn read_principal_resolution_audit(
     let evidence = PrincipalResolutionAuditEvidence {
         account_id: record.account_id,
         principal_control_realm_id: record.pcr_realm_id,
-        principal_genesis_receipt,
+        principal_genesis_commit,
         principal_genesis_event: record.genesis_event,
         current_resolution_event: record.current_event,
         predecessor_resolution_events,
+        predecessor_resolution_commits,
         history_complete,
-        accepted_seal,
+        current_resolution_commit,
         next_audit_cursor,
         method_history_evidence: None,
     };

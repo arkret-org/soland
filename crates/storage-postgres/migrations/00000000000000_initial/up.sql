@@ -935,26 +935,6 @@ CREATE TABLE public.event_collision_variants (
 CREATE INDEX event_collision_variants_event_pk_idx
     ON public.event_collision_variants USING btree (event_pk);
 
-CREATE TABLE public.event_batch_receipts (
-    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    schema text NOT NULL,
-    id uuid NOT NULL UNIQUE,
-    issuer_id text NOT NULL CHECK (issuer_id LIKE 'ak:did_core:%'),
-    scope jsonb NOT NULL,
-    events jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    proofs jsonb NOT NULL
-);
-
-CREATE TABLE public.event_batch_receipt_events (
-    receipt_pk bigint NOT NULL REFERENCES public.event_batch_receipts(pk) ON DELETE CASCADE,
-    event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    PRIMARY KEY (receipt_pk, event_pk)
-);
-
-CREATE INDEX event_batch_receipt_events_event_pk_idx
-    ON public.event_batch_receipt_events USING btree (event_pk);
-
 -- Pending + sealed control-plane Events. v1 has no standalone Move object: a
 -- Control Move is an Event carrying `seal_basis`, so the log is keyed by the
 -- canonical control-event digest rather than by a Move id.

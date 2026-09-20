@@ -230,7 +230,12 @@ impl SyncCursorStore for PgSyncCursorStore {
                     limit: u16::try_from(remaining).unwrap_or(1000),
                 })
                 .await?;
-            for item in scan.commits {
+            for view in scan.committed_events {
+                let arkret_wire::CommittedEventView::Full(item) = view else {
+                    return Err(PersistenceError::SchemaViolation(
+                        "authority storage scan returned a withheld committed Event".to_owned(),
+                    ));
+                };
                 progress
                     .next_positions
                     .insert(head.stream_ref.clone(), item.commit.stream_position);
@@ -681,7 +686,7 @@ mod account_summary_query_tests {
                 }),
             )
             .unwrap();
-            arkret_wire::StreamRow {
+            arkret_wire::CommittedEventFullView {
                 commit: arkret_wire::RealmCommit {
                     commit_id: commit_id(u8::try_from(position).unwrap() + 2),
                     realm_id: realm_id.clone(),

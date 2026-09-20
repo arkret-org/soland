@@ -3,6 +3,7 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 
 pub(crate) const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
+mod account_authority_private;
 pub(crate) mod event_log;
 pub(crate) mod peer;
 mod peer_device_revocations;
@@ -80,6 +81,23 @@ pub(crate) fn require_agent_session_scope(
 /// surface).
 pub fn local_router() -> Router {
     projection_query::local_router()
+}
+
+/// Deployment-private Account Authority → Station admission boundary.
+///
+/// These routes deliberately live outside `/_arkret`, carry no
+/// `Arkret-Operation`, and are excluded from protocol OpenAPI/Describe.
+pub fn account_authority_private_router() -> Router {
+    Router::with_path("account-authority")
+        .push(Router::with_path("events/admit").post(account_authority_private::admit_event))
+        .push(
+            Router::with_path("current-device/check")
+                .post(peer_device_revocations::check_private_current_device),
+        )
+        .push(
+            Router::with_path("principal-genesis/admit")
+                .post(peer::admit_private_principal_genesis),
+        )
 }
 
 pub fn peer_router() -> Router {

@@ -2487,6 +2487,15 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert_eq!(outcome.projections_inserted, 1);
     assert_eq!(outcome.outbox_inserted, 1);
     assert!(stores.events.contains(&event_id).await.expect("read event"));
+    let committed_event_id = arkret_wire::EventId::new(event_id.clone()).expect("typed Event id");
+    let committed = stores
+        .authority
+        .committed_event(&committed_event_id)
+        .await
+        .expect("read committed Event pair")
+        .expect("committed Event pair exists after atomic acceptance");
+    assert_eq!(committed.event.event_id, committed_event_id);
+    assert_eq!(committed.commit.event_ref, committed_event_id);
     let event_outbox = stores
         .events
         .federation_outbox_for_event(&event_id)
