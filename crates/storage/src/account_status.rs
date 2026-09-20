@@ -39,6 +39,42 @@ pub struct AccountStatusAffectedServiceObservation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountStatusPropagationProjectionState {
+    Scheduled,
+    Complete,
+    Incomplete,
+}
+
+impl AccountStatusPropagationProjectionState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::Complete => "complete",
+            Self::Incomplete => "incomplete",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountStatusPropagationProjection {
+    pub account_authority_id: arkret_wire::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
+    pub account_status_record_id: arkret_wire::AccountStatusRecordId,
+    pub status_seq: u64,
+    pub state: AccountStatusPropagationProjectionState,
+    pub pending_destination_count: u64,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountStatusPropagationProjectionTransition {
+    pub projection: AccountStatusPropagationProjection,
+    pub became_incomplete: bool,
+    pub became_complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountStatusReplicaConflictKind {
     Fork,
     BindingRollback,
@@ -121,6 +157,34 @@ pub trait AccountStatusReplicaStore: Send + Sync {
         account_id: &arkret_wire::AccountId,
         limit: usize,
     ) -> PersistenceResult<Vec<arkret_wire::DidCoreId>>;
+
+    /// Freeze the destination ack-window for one immutable record. Exact
+    /// replay returns the same projection; a different target/deadline set for
+    /// the same record is a conflict.
+    async fn begin_propagation(
+        &self,
+        record: &AccountStatusRecord,
+        destinations: &[arkret_wire::DidCoreId],
+        deadline_at: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<AccountStatusPropagationProjection>;
+
+    /// Apply one receiver `accepted | duplicate` ack and recompute the
+    /// aggregate. A late final ack clears an already-incomplete projection.
+    async fn acknowledge_propagation_destination(
+        &self,
+        account_status_record_id: &arkret_wire::AccountStatusRecordId,
+        destination_id: &arkret_wire::DidCoreId,
+        acknowledged_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Option<AccountStatusPropagationProjectionTransition>>;
+
+    /// Read the latest record projection for this exact account while
+    /// atomically promoting an overdue scheduled row to incomplete.
+    async fn current_propagation_projection(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Option<AccountStatusPropagationProjectionTransition>>;
 }
 
 /// Classifies an already transport- and proof-verified submission against the

@@ -238,6 +238,32 @@ CREATE TABLE public.account_status_affected_services (
 CREATE INDEX account_status_affected_services_account_target_idx
     ON public.account_status_affected_services (account_id, service_id);
 
+CREATE TABLE public.account_status_propagations (
+    account_authority_id text NOT NULL CHECK (account_authority_id LIKE 'ak:did_core:%'),
+    account_id jsonb NOT NULL,
+    account_status_record_id text PRIMARY KEY,
+    status_seq bigint NOT NULL CHECK (status_seq >= 1),
+    state text NOT NULL CHECK (state IN ('scheduled', 'complete', 'incomplete')),
+    deadline_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    UNIQUE (account_authority_id, account_id, status_seq)
+);
+
+CREATE INDEX account_status_propagations_account_current_idx
+    ON public.account_status_propagations (account_id, status_seq DESC);
+
+CREATE TABLE public.account_status_propagation_targets (
+    account_status_record_id text NOT NULL REFERENCES public.account_status_propagations(account_status_record_id) ON DELETE CASCADE,
+    destination_id text NOT NULL CHECK (destination_id LIKE 'ak:did_core:%'),
+    acknowledged_at timestamptz,
+    PRIMARY KEY (account_status_record_id, destination_id)
+);
+
+CREATE INDEX account_status_propagation_targets_pending_idx
+    ON public.account_status_propagation_targets (account_status_record_id)
+    WHERE acknowledged_at IS NULL;
+
 CREATE TABLE public.handle_releases (
     localpart text PRIMARY KEY,
     released_at timestamp with time zone NOT NULL

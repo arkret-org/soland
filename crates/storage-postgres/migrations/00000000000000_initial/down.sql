@@ -65,6 +65,8 @@ DROP TABLE IF EXISTS account_localparts CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;
 DROP TABLE IF EXISTS account_lifecycle CASCADE;
 DROP TABLE IF EXISTS account_status_replica_records CASCADE;
+DROP TABLE IF EXISTS account_status_propagation_targets CASCADE;
+DROP TABLE IF EXISTS account_status_propagations CASCADE;
 DROP TABLE IF EXISTS account_status_affected_services CASCADE;
 DROP TABLE IF EXISTS handle_releases CASCADE;
 DROP TABLE IF EXISTS agent_participation CASCADE;

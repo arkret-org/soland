@@ -1,6 +1,8 @@
 use arkret_models_collaboration::account_status::{AccountStatusReceipt, AccountStatusRecord};
 use soland_storage::{
-    AccountStatusAffectedServiceObservation, classify_account_status_replica_append,
+    AccountStatusAffectedServiceObservation, AccountStatusPropagationProjection,
+    AccountStatusPropagationProjectionState, AccountStatusPropagationProjectionTransition,
+    classify_account_status_replica_append,
 };
 
 use super::{
@@ -43,6 +45,73 @@ struct AffectedCandidateRow {
     source: String,
     #[diesel(sql_type = Text)]
     candidate: String,
+}
+
+#[derive(QueryableByName)]
+struct PropagationProjectionRow {
+    #[diesel(sql_type = Text)]
+    account_authority_id: String,
+    #[diesel(sql_type = Jsonb)]
+    account_id: serde_json::Value,
+    #[diesel(sql_type = Text)]
+    account_status_record_id: String,
+    #[diesel(sql_type = BigInt)]
+    status_seq: i64,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = BigInt)]
+    pending_destination_count: i64,
+    #[diesel(sql_type = Timestamptz)]
+    deadline_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(QueryableByName)]
+struct PendingPropagationCountRow {
+    #[diesel(sql_type = BigInt)]
+    pending_destination_count: i64,
+}
+
+fn decode_propagation_projection(
+    row: PropagationProjectionRow,
+) -> PersistenceResult<AccountStatusPropagationProjection> {
+    let state = match row.state.as_str() {
+        "scheduled" => AccountStatusPropagationProjectionState::Scheduled,
+        "complete" => AccountStatusPropagationProjectionState::Complete,
+        "incomplete" => AccountStatusPropagationProjectionState::Incomplete,
+        other => {
+            return Err(PersistenceError::Internal(format!(
+                "stored account-status propagation state is invalid: {other}"
+            )));
+        }
+    };
+    Ok(AccountStatusPropagationProjection {
+        account_authority_id: arkret_wire::DidCoreId::new(row.account_authority_id)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+        account_id: serde_json::from_value(row.account_id).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "stored account-status propagation account id is invalid: {error}"
+            ))
+        })?,
+        account_status_record_id: arkret_wire::AccountStatusRecordId::new(
+            row.account_status_record_id,
+        )
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+        status_seq: u64::try_from(row.status_seq).map_err(|_| {
+            PersistenceError::Internal(
+                "stored account-status propagation sequence is negative".to_owned(),
+            )
+        })?,
+        state,
+        pending_destination_count: u64::try_from(row.pending_destination_count).map_err(|_| {
+            PersistenceError::Internal(
+                "stored account-status propagation pending count is negative".to_owned(),
+            )
+        })?,
+        deadline_at: row.deadline_at,
+        updated_at: row.updated_at,
+    })
 }
 
 fn affected_source(
@@ -453,10 +522,266 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
             })
             .collect()
     }
+
+    async fn begin_propagation(
+        &self,
+        record: &AccountStatusRecord,
+        destinations: &[arkret_wire::DidCoreId],
+        deadline_at: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<AccountStatusPropagationProjection> {
+        let destinations = destinations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<std::collections::BTreeSet<_>>();
+        if destinations.len() > 256 {
+            return Err(PersistenceError::SchemaViolation(
+                "account-status propagation target set exceeds 256".to_owned(),
+            ));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        let account = encode_account_id(&record.account_id)?;
+        let record = record.clone();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(format!("account-status-propagation:{}", record.account_status_record_id))
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            let existing = sql_query(
+                "SELECT p.account_authority_id, p.account_id, p.account_status_record_id, p.status_seq, \
+                 p.state, (SELECT COUNT(*) FROM account_status_propagation_targets t WHERE \
+                 t.account_status_record_id = p.account_status_record_id AND t.acknowledged_at IS NULL) \
+                 AS pending_destination_count, p.deadline_at, p.updated_at \
+                 FROM account_status_propagations p WHERE p.account_status_record_id = $1",
+            )
+            .bind::<Text, _>(record.account_status_record_id.as_str())
+            .get_result::<PropagationProjectionRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            if let Some(existing) = existing {
+                let existing_destinations = sql_query(
+                    "SELECT destination_id AS service_id FROM account_status_propagation_targets \
+                     WHERE account_status_record_id = $1 ORDER BY destination_id",
+                )
+                .bind::<Text, _>(record.account_status_record_id.as_str())
+                .load::<AffectedServiceRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?
+                .into_iter()
+                .map(|row| row.service_id)
+                .collect::<std::collections::BTreeSet<_>>();
+                if existing_destinations != destinations {
+                    return Err(PersistenceError::Conflict(
+                        "account-status propagation replay target set mismatch".to_owned(),
+                    )
+                    .into());
+                }
+                return Ok(decode_propagation_projection(existing)?);
+            }
+            let state = if destinations.is_empty() {
+                AccountStatusPropagationProjectionState::Complete
+            } else {
+                AccountStatusPropagationProjectionState::Scheduled
+            };
+            sql_query(
+                "INSERT INTO account_status_propagations \
+                 (account_authority_id, account_id, account_status_record_id, status_seq, state, \
+                  deadline_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
+            )
+            .bind::<Text, _>(record.account_authority_id.as_str())
+            .bind::<Jsonb, _>(&account)
+            .bind::<Text, _>(record.account_status_record_id.as_str())
+            .bind::<BigInt, _>(i64::try_from(record.status_seq).map_err(|_| {
+                PersistenceError::SchemaViolation(
+                    "account-status propagation sequence exceeds PostgreSQL bigint".to_owned(),
+                )
+            })?)
+            .bind::<Text, _>(state.as_str())
+            .bind::<Timestamptz, _>(deadline_at)
+            .bind::<Timestamptz, _>(now)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            for destination in &destinations {
+                sql_query(
+                    "INSERT INTO account_status_propagation_targets \
+                     (account_status_record_id, destination_id) VALUES ($1, $2)",
+                )
+                .bind::<Text, _>(record.account_status_record_id.as_str())
+                .bind::<Text, _>(destination)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            }
+            Ok(AccountStatusPropagationProjection {
+                account_authority_id: record.account_authority_id,
+                account_id: record.account_id,
+                account_status_record_id: record.account_status_record_id,
+                status_seq: record.status_seq,
+                state,
+                pending_destination_count: destinations.len() as u64,
+                deadline_at,
+                updated_at: now,
+            })
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn acknowledge_propagation_destination(
+        &self,
+        account_status_record_id: &arkret_wire::AccountStatusRecordId,
+        destination_id: &arkret_wire::DidCoreId,
+        acknowledged_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Option<AccountStatusPropagationProjectionTransition>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let record_id = account_status_record_id.to_string();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let previous = sql_query(
+                "SELECT p.account_authority_id, p.account_id, p.account_status_record_id, p.status_seq, \
+                 p.state, (SELECT COUNT(*) FROM account_status_propagation_targets t WHERE \
+                 t.account_status_record_id = p.account_status_record_id AND t.acknowledged_at IS NULL) \
+                 AS pending_destination_count, p.deadline_at, p.updated_at \
+                 FROM account_status_propagations p WHERE p.account_status_record_id = $1 FOR UPDATE",
+            )
+            .bind::<Text, _>(&record_id)
+            .get_result::<PropagationProjectionRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            let Some(previous) = previous else {
+                return Ok(None);
+            };
+            let previous = decode_propagation_projection(previous)?;
+            let updated = sql_query(
+                "UPDATE account_status_propagation_targets SET acknowledged_at = COALESCE(acknowledged_at, $3) \
+                 WHERE account_status_record_id = $1 AND destination_id = $2",
+            )
+            .bind::<Text, _>(&record_id)
+            .bind::<Text, _>(destination_id.as_str())
+            .bind::<Timestamptz, _>(acknowledged_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            if updated == 0 {
+                return Ok(None);
+            }
+            let pending = sql_query(
+                "SELECT COUNT(*) AS pending_destination_count FROM account_status_propagation_targets \
+                 WHERE account_status_record_id = $1 AND acknowledged_at IS NULL",
+            )
+            .bind::<Text, _>(&record_id)
+            .get_result::<PendingPropagationCountRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?
+            .pending_destination_count;
+            let state = if pending == 0 {
+                AccountStatusPropagationProjectionState::Complete
+            } else if acknowledged_at >= previous.deadline_at {
+                AccountStatusPropagationProjectionState::Incomplete
+            } else {
+                AccountStatusPropagationProjectionState::Scheduled
+            };
+            sql_query(
+                "UPDATE account_status_propagations SET state = $2, updated_at = $3 \
+                 WHERE account_status_record_id = $1",
+            )
+            .bind::<Text, _>(&record_id)
+            .bind::<Text, _>(state.as_str())
+            .bind::<Timestamptz, _>(acknowledged_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            let projection = AccountStatusPropagationProjection {
+                state,
+                pending_destination_count: u64::try_from(pending).map_err(|_| {
+                    PersistenceError::Internal("negative propagation pending count".to_owned())
+                })?,
+                updated_at: acknowledged_at,
+                ..previous.clone()
+            };
+            Ok(Some(AccountStatusPropagationProjectionTransition {
+                became_incomplete: previous.state
+                    != AccountStatusPropagationProjectionState::Incomplete
+                    && state == AccountStatusPropagationProjectionState::Incomplete,
+                became_complete: previous.state
+                    != AccountStatusPropagationProjectionState::Complete
+                    && state == AccountStatusPropagationProjectionState::Complete,
+                projection,
+            }))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn current_propagation_projection(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Option<AccountStatusPropagationProjectionTransition>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let account = encode_account_id(account_id)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let current = sql_query(
+                "SELECT p.account_authority_id, p.account_id, p.account_status_record_id, p.status_seq, \
+                 p.state, (SELECT COUNT(*) FROM account_status_propagation_targets t WHERE \
+                 t.account_status_record_id = p.account_status_record_id AND t.acknowledged_at IS NULL) \
+                 AS pending_destination_count, p.deadline_at, p.updated_at \
+                 FROM account_status_propagations p WHERE p.account_id = $1 \
+                 ORDER BY p.status_seq DESC LIMIT 1 FOR UPDATE",
+            )
+            .bind::<Jsonb, _>(&account)
+            .get_result::<PropagationProjectionRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            let Some(current) = current else {
+                return Ok(None);
+            };
+            let mut projection = decode_propagation_projection(current)?;
+            let previous_state = projection.state;
+            if projection.pending_destination_count == 0 {
+                projection.state = AccountStatusPropagationProjectionState::Complete;
+            } else if projection.state == AccountStatusPropagationProjectionState::Scheduled
+                && now >= projection.deadline_at
+            {
+                projection.state = AccountStatusPropagationProjectionState::Incomplete;
+            }
+            if projection.state != previous_state {
+                projection.updated_at = now;
+                sql_query(
+                    "UPDATE account_status_propagations SET state = $2, updated_at = $3 \
+                     WHERE account_status_record_id = $1",
+                )
+                .bind::<Text, _>(projection.account_status_record_id.as_str())
+                .bind::<Text, _>(projection.state.as_str())
+                .bind::<Timestamptz, _>(now)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            }
+            Ok(Some(AccountStatusPropagationProjectionTransition {
+                became_incomplete: previous_state
+                    != AccountStatusPropagationProjectionState::Incomplete
+                    && projection.state == AccountStatusPropagationProjectionState::Incomplete,
+                became_complete: previous_state
+                    != AccountStatusPropagationProjectionState::Complete
+                    && projection.state == AccountStatusPropagationProjectionState::Complete,
+                projection,
+            }))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use arkret_models_collaboration::account_status::UnsignedAccountStatusRecord;
+    use arkret_models_collaboration::objects::account_status::AccountStatus;
+    use arkret_wire::{DidUrl, PayloadProof, RealmId, SchemaId};
     use soland_storage::{
         AccountStatusAffectedServiceSource,
         contract_tests::assert_account_status_replica_decision_table_contract,
@@ -484,6 +809,66 @@ mod tests {
             .expect("system clock is after the unix epoch")
             .as_nanos();
         format!("postgres-account-status-{nanos}")
+    }
+
+    fn propagation_record(namespace: &str) -> AccountStatusRecord {
+        let base = "2026-09-20T00:00:00.000Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let verification_method = DidUrl::new("did:web:authority.example#account-status-key")
+            .expect("fixture verification method");
+        let attach = |unsigned: UnsignedAccountStatusRecord| {
+            let proof = PayloadProof {
+                kind: "detached_jws".to_owned(),
+                verification_method: verification_method.clone(),
+                payload_digest: unsigned.payload_digest().expect("fixture payload digest"),
+                created_at: unsigned.issued_at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: "eyJhbGciOiJFZDI1NTE5In0..propagation-fixture".to_owned(),
+            };
+            unsigned.attach_proof(proof).expect("valid fixture record")
+        };
+        let account_id = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(format!("ak:did_core:web:{namespace}.example")).unwrap(),
+            arkret_wire::DidCoreId::new(format!("ak:did_core:web:origin-{namespace}.example"))
+                .unwrap(),
+        );
+        let authority = arkret_wire::DidCoreId::new("ak:did_core:web:authority.example").unwrap();
+        let genesis = attach(UnsignedAccountStatusRecord {
+            schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
+            account_authority_id: authority.clone(),
+            account_id: account_id.clone(),
+            principal_control_realm_id: RealmId::new(
+                "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
+            )
+            .unwrap(),
+            binding_version: 1,
+            status_seq: 1,
+            previous_account_status_record_id: None,
+            status: AccountStatus::Active,
+            reason_code: None,
+            reason: None,
+            issued_at: base,
+            effective_at: base,
+            expires_at: None,
+        });
+        attach(UnsignedAccountStatusRecord {
+            schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
+            account_authority_id: authority,
+            account_id,
+            principal_control_realm_id: genesis.principal_control_realm_id.clone(),
+            binding_version: 1,
+            status_seq: 2,
+            previous_account_status_record_id: Some(genesis.account_status_record_id),
+            status: AccountStatus::Deactivated,
+            reason_code: None,
+            reason: None,
+            issued_at: base + chrono::Duration::seconds(1),
+            effective_at: base + chrono::Duration::seconds(1),
+            expires_at: None,
+        })
     }
 
     #[tokio::test]
@@ -714,5 +1099,101 @@ mod tests {
                 observation.source == source && observation.service_id == peer
             }));
         }
+    }
+
+    #[tokio::test]
+    async fn postgres_propagation_window_marks_incomplete_then_clears_after_late_acks() {
+        let pool = test_pool().await;
+        let store = PgAccountStatusReplicaStore { pool: pool.clone() };
+        let record = propagation_record(&unique_namespace());
+        let destination_a =
+            arkret_wire::DidCoreId::new("ak:did_core:web:propagation-a.example").unwrap();
+        let destination_b =
+            arkret_wire::DidCoreId::new("ak:did_core:web:propagation-b.example").unwrap();
+        let now = record.effective_at;
+        let deadline = now + chrono::Duration::minutes(10);
+
+        let scheduled = store
+            .begin_propagation(
+                &record,
+                &[destination_a.clone(), destination_b.clone()],
+                deadline,
+                now,
+            )
+            .await
+            .expect("freeze propagation targets");
+        assert_eq!(
+            scheduled.state,
+            AccountStatusPropagationProjectionState::Scheduled
+        );
+        assert_eq!(scheduled.pending_destination_count, 2);
+
+        let replay = store
+            .begin_propagation(
+                &record,
+                &[destination_b.clone(), destination_a.clone()],
+                deadline + chrono::Duration::hours(1),
+                now + chrono::Duration::seconds(1),
+            )
+            .await
+            .expect("exact record replay returns frozen window");
+        assert_eq!(replay.deadline_at, deadline);
+
+        let timed_out = store
+            .current_propagation_projection(
+                &record.account_id,
+                deadline + chrono::Duration::milliseconds(1),
+            )
+            .await
+            .expect("promote overdue projection")
+            .expect("projection exists");
+        assert!(timed_out.became_incomplete);
+        assert_eq!(
+            timed_out.projection.state,
+            AccountStatusPropagationProjectionState::Incomplete
+        );
+
+        let first_ack = store
+            .acknowledge_propagation_destination(
+                &record.account_status_record_id,
+                &destination_a,
+                deadline + chrono::Duration::seconds(1),
+            )
+            .await
+            .expect("persist first late ack")
+            .expect("target exists");
+        assert_eq!(first_ack.projection.pending_destination_count, 1);
+        assert!(!first_ack.became_complete);
+
+        let final_ack = store
+            .acknowledge_propagation_destination(
+                &record.account_status_record_id,
+                &destination_b,
+                deadline + chrono::Duration::seconds(2),
+            )
+            .await
+            .expect("persist final late ack")
+            .expect("target exists");
+        assert!(final_ack.became_complete);
+        assert_eq!(
+            final_ack.projection.state,
+            AccountStatusPropagationProjectionState::Complete
+        );
+        assert_eq!(final_ack.projection.pending_destination_count, 0);
+
+        let restarted = PgAccountStatusReplicaStore { pool };
+        let durable = restarted
+            .current_propagation_projection(
+                &record.account_id,
+                deadline + chrono::Duration::hours(1),
+            )
+            .await
+            .expect("read projection after restart")
+            .expect("projection exists");
+        assert_eq!(
+            durable.projection.state,
+            AccountStatusPropagationProjectionState::Complete
+        );
+        assert!(!durable.became_complete);
     }
 }

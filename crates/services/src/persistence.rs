@@ -159,6 +159,51 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn begin_account_status_propagation(
+        &self,
+        record: &arkret_models_collaboration::account_status::AccountStatusRecord,
+        destinations: &[arkret_wire::DidCoreId],
+        deadline_at: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::AccountStatusPropagationProjection> {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .begin_propagation(record, destinations, deadline_at, now)
+            .await?)
+    }
+
+    pub async fn acknowledge_account_status_propagation_destination(
+        &self,
+        account_status_record_id: &arkret_wire::AccountStatusRecordId,
+        destination_id: &arkret_wire::DidCoreId,
+        acknowledged_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<Option<soland_storage::AccountStatusPropagationProjectionTransition>>
+    {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .acknowledge_propagation_destination(
+                account_status_record_id,
+                destination_id,
+                acknowledged_at,
+            )
+            .await?)
+    }
+
+    pub async fn current_account_status_propagation_projection(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<Option<soland_storage::AccountStatusPropagationProjectionTransition>>
+    {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .current_propagation_projection(account_id, now)
+            .await?)
+    }
+
     pub async fn contact_completion_for_request(
         &self,
         actor: &arkret_wire::ActorId,

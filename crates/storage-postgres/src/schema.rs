@@ -31,6 +31,27 @@ diesel::table! {
 }
 
 diesel::table! {
+    account_status_propagations (account_status_record_id) {
+        account_authority_id -> Text,
+        account_id -> Jsonb,
+        account_status_record_id -> Text,
+        status_seq -> Int8,
+        state -> Text,
+        deadline_at -> Timestamptz,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    account_status_propagation_targets (account_status_record_id, destination_id) {
+        account_status_record_id -> Text,
+        destination_id -> Text,
+        acknowledged_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     account_data_change_retention (actor_id) {
         actor_id -> Text,
         latest_position -> Int8,
@@ -1965,10 +1986,13 @@ diesel::joinable!(event_federation_outbox -> canonical_events (event_pk));
 diesel::joinable!(canonical_events -> canonical_realms (realm_pk));
 diesel::joinable!(projection_events -> canonical_realms (realm_pk));
 diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
+diesel::joinable!(account_status_propagation_targets -> account_status_propagations (account_status_record_id));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
     account_status_affected_services,
+    account_status_propagations,
+    account_status_propagation_targets,
     account_data_changes,
     account_data_change_retention,
     account_datas,
