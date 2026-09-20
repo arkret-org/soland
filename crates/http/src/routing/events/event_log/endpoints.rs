@@ -1363,45 +1363,16 @@ async fn event_delivery_status(
         })?;
     let mut targets = BTreeMap::new();
     for delivery in deliveries {
-        let Some(binding) = delivery.delivery.realm_fanout.as_ref() else {
+        let Some(mut target) =
+            soland_services::federation::event_delivery_target_status(&delivery, event_id)
+                .map_err(|error| AppError::internal(error.to_string()))?
+        else {
             continue;
         };
-        if !binding
-            .source_event_ids
-            .iter()
-            .any(|source| source == event_id)
-        {
-            continue;
-        }
-        let status = match delivery.state {
-            soland_storage::FederationOutboxState::PendingRoute => {
-                EventDeliveryTargetState::PendingRoute
-            }
-            soland_storage::FederationOutboxState::Pending => {
-                EventDeliveryTargetState::PendingDelivery
-            }
-            soland_storage::FederationOutboxState::Leased => {
-                if delivery.leased_from_state
-                    == Some(soland_storage::FederationOutboxState::PendingRoute)
-                {
-                    EventDeliveryTargetState::PendingRoute
-                } else {
-                    EventDeliveryTargetState::PendingDelivery
-                }
-            }
-            soland_storage::FederationOutboxState::Delivered => EventDeliveryTargetState::Delivered,
-            soland_storage::FederationOutboxState::CancelledAuthorityLost => {
-                EventDeliveryTargetState::CancelledAuthorityLost
-            }
-            soland_storage::FederationOutboxState::PolicySuppressed
-            | soland_storage::FederationOutboxState::DeadLettered
-            | soland_storage::FederationOutboxState::Superseded => {
-                return Err(AppError::internal(
-                    "Realm fanout row entered a state forbidden by the delivery-status contract",
-                ));
-            }
-        };
-        let target_id = delivery.delivery.id.clone();
+        let binding =
+            delivery.delivery.realm_fanout.as_ref().ok_or_else(|| {
+                AppError::internal("projected Realm fanout target lost its binding")
+            })?;
         let can_read_service_id = caller_can_read_delivery_target_service(
             state,
             &session,
@@ -1409,13 +1380,10 @@ async fn event_delivery_status(
             delivery.delivery.peer_id.as_str(),
         )
         .await;
-        let service_id = can_read_service_id.then(|| delivery.delivery.peer_id.clone());
-        let target = EventDeliveryTargetStatus {
-            target_id: target_id.clone(),
-            status,
-            service_id,
-        };
-        if targets.insert(target_id, target).is_some() {
+        if can_read_service_id {
+            target.service_id = Some(delivery.delivery.peer_id.clone());
+        }
+        if targets.insert(target.target_id.clone(), target).is_some() {
             return Err(AppError::internal(
                 "duplicate durable Realm fanout target for one Event",
             ));

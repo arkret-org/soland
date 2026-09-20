@@ -47,6 +47,63 @@ pub struct PendingFederationDelivery {
     pub completed_at: Option<i64>,
 }
 
+/// Project one durable outbox row into the closed delivery-status vocabulary.
+///
+/// Generic federation rows are not members of a Realm Event's frozen target
+/// set and return `None`. A linked Realm fanout row must name the queried
+/// Event and carry an exact target id / lifecycle; durable disagreement is an
+/// internal invariant violation, never an omitted or guessed target.
+pub fn event_delivery_target_status(
+    delivery: &PendingFederationDelivery,
+    event_id: &str,
+) -> ServiceResult<Option<arkret_models_collaboration::event_query::EventDeliveryTargetStatus>> {
+    use arkret_models_collaboration::event_query::{
+        EventDeliveryTargetId, EventDeliveryTargetState, EventDeliveryTargetStatus,
+    };
+
+    let Some(binding) = delivery.delivery.realm_fanout.as_ref() else {
+        return Ok(None);
+    };
+    if !binding
+        .source_event_ids
+        .iter()
+        .any(|source_event_id| source_event_id == event_id)
+    {
+        return Err(crate::ServiceError::internal(
+            "linked Realm fanout row does not name the queried Event",
+        ));
+    }
+    let target_id = EventDeliveryTargetId::new(delivery.delivery.id.clone()).map_err(|error| {
+        crate::ServiceError::internal(format!("invalid durable Event delivery target id: {error}"))
+    })?;
+    let status = match (delivery.state, delivery.leased_from_state) {
+        (FederationOutboxState::PendingRoute, None)
+        | (FederationOutboxState::Leased, Some(FederationOutboxState::PendingRoute)) => {
+            EventDeliveryTargetState::PendingRoute
+        }
+        (FederationOutboxState::Pending, None)
+        | (FederationOutboxState::Leased, Some(FederationOutboxState::Pending)) => {
+            EventDeliveryTargetState::PendingDelivery
+        }
+        (FederationOutboxState::Delivered, None) => EventDeliveryTargetState::Delivered,
+        (FederationOutboxState::CancelledAuthorityLost, None) => {
+            EventDeliveryTargetState::CancelledAuthorityLost
+        }
+        _ => {
+            return Err(crate::ServiceError::internal(
+                "Realm fanout row entered a state forbidden by the delivery-status contract",
+            ));
+        }
+    };
+    Ok(Some(EventDeliveryTargetStatus {
+        target_id,
+        status,
+        // Conditional disclosure depends on current caller authorization and
+        // remains at the HTTP boundary.
+        service_id: None,
+    }))
+}
+
 pub use soland_storage::FederationOutboxDeadLetterRecord as FederationDeadLetter;
 
 #[derive(Clone, Debug)]
@@ -563,6 +620,143 @@ mod tests {
         async fn deliveries(&self) -> ServiceResult<Vec<PendingFederationDelivery>> {
             Ok(self.deliveries.lock().expect("delivery lock").clone())
         }
+    }
+
+    const DELIVERY_EVENT_ID: &str = "ak:event:AT3ARBdH1FM6GjXK9ulTx-YMvQOXys39dlUzZV6KyID9";
+
+    fn realm_fanout_entry(
+        state: FederationOutboxState,
+        leased_from_state: Option<FederationOutboxState>,
+    ) -> PendingFederationDelivery {
+        PendingFederationDelivery {
+            delivery: FederationDeliveryRecord {
+                id: "A_frozen_target_0001".to_owned(),
+                peer_id: DidCoreId::new("ak:did_core:web:peer.example").unwrap(),
+                peer_url: Some("https://peer.example".to_owned()),
+                endpoint: "/_arkret/peer/events".to_owned(),
+                idempotency_key: "fanout-key".to_owned(),
+                payload_json: "{}".to_owned(),
+                coalescing_key: None,
+                coalescing_position: None,
+                realm_fanout: Some(RealmFanoutBinding {
+                    realm_id: "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru".to_owned(),
+                    source_event_ids: vec![DELIVERY_EVENT_ID.to_owned()],
+                    authority_witnesses: vec![RealmFanoutAuthorityWitness {
+                        member_id: arkret_wire::ActorId::service(
+                            DidCoreId::new("ak:did_core:web:member.example").unwrap(),
+                        ),
+                        membership_event_ref: DELIVERY_EVENT_ID.to_owned(),
+                    }],
+                }),
+                created_at: 10,
+            },
+            state,
+            leased_from_state,
+            attempts: 0,
+            semantic_attempts: 0,
+            next_attempt_at: 10,
+            last_http_status: None,
+            last_error_code: None,
+            last_response_excerpt: None,
+            lease_owner: None,
+            lease_token: None,
+            lease_expires_at: None,
+            policy_version: None,
+            supersedes_outbox_id: None,
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn delivery_status_projects_only_the_four_closed_states() {
+        use arkret_models_collaboration::event_query::EventDeliveryTargetState;
+
+        for (state, leased_from_state, expected) in [
+            (
+                FederationOutboxState::PendingRoute,
+                None,
+                EventDeliveryTargetState::PendingRoute,
+            ),
+            (
+                FederationOutboxState::Leased,
+                Some(FederationOutboxState::PendingRoute),
+                EventDeliveryTargetState::PendingRoute,
+            ),
+            (
+                FederationOutboxState::Pending,
+                None,
+                EventDeliveryTargetState::PendingDelivery,
+            ),
+            (
+                FederationOutboxState::Leased,
+                Some(FederationOutboxState::Pending),
+                EventDeliveryTargetState::PendingDelivery,
+            ),
+            (
+                FederationOutboxState::Delivered,
+                None,
+                EventDeliveryTargetState::Delivered,
+            ),
+            (
+                FederationOutboxState::CancelledAuthorityLost,
+                None,
+                EventDeliveryTargetState::CancelledAuthorityLost,
+            ),
+        ] {
+            let projected = event_delivery_target_status(
+                &realm_fanout_entry(state, leased_from_state),
+                DELIVERY_EVENT_ID,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(projected.status, expected);
+            assert_eq!(projected.target_id.as_str(), "A_frozen_target_0001");
+            assert!(projected.service_id.is_none());
+        }
+    }
+
+    #[test]
+    fn delivery_status_fails_closed_on_corrupt_fanout_rows() {
+        for (state, leased_from_state) in [
+            (FederationOutboxState::Leased, None),
+            (
+                FederationOutboxState::Leased,
+                Some(FederationOutboxState::Delivered),
+            ),
+            (FederationOutboxState::PolicySuppressed, None),
+            (FederationOutboxState::DeadLettered, None),
+            (FederationOutboxState::Superseded, None),
+        ] {
+            assert!(
+                event_delivery_target_status(
+                    &realm_fanout_entry(state, leased_from_state),
+                    DELIVERY_EVENT_ID,
+                )
+                .is_err()
+            );
+        }
+
+        let mut wrong_event = realm_fanout_entry(FederationOutboxState::Pending, None);
+        wrong_event
+            .delivery
+            .realm_fanout
+            .as_mut()
+            .unwrap()
+            .source_event_ids =
+            vec!["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ".to_owned()];
+        assert!(event_delivery_target_status(&wrong_event, DELIVERY_EVENT_ID).is_err());
+
+        let mut invalid_id = realm_fanout_entry(FederationOutboxState::Pending, None);
+        invalid_id.delivery.id = "ak:did_core:web:peer.example".to_owned();
+        assert!(event_delivery_target_status(&invalid_id, DELIVERY_EVENT_ID).is_err());
+
+        let mut generic = realm_fanout_entry(FederationOutboxState::Pending, None);
+        generic.delivery.realm_fanout = None;
+        assert!(
+            event_delivery_target_status(&generic, DELIVERY_EVENT_ID)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

@@ -36,9 +36,8 @@ use arkret_models_collaboration::governance_dependencies::{
     SealPrepareFenceResultRequestBody, SealPrepareOutcome, SealPrepareRequestBody,
 };
 use arkret_models_collaboration::http_bodies::{
-    EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventDeliveryTargetState,
-    EventDeliveryTargetStatus, EventSealSubmitOutcome, EventsResolveOutcome,
-    EventsResolveRequestBody, EventsSubmitOutcome, EventsSubmitStatus,
+    EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventSealSubmitOutcome,
+    EventsResolveOutcome, EventsResolveRequestBody, EventsSubmitOutcome, EventsSubmitStatus,
 };
 use arkret_wire::{
     CommittedEventFullView, CommittedEventView, CommittedEventWithheldView, Event, EventDisclosure,
