@@ -253,17 +253,24 @@ pub(super) async fn submit_agent_runtime_key_request(
             .with_reason_detail("missing approval_requested_at")
     })?;
     let delta =
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+        arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta::try_new(
             arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
                 arkret_wire::NotificationId::new(notification_id.clone()).map_err(|error| {
                     AppError::internal(format!("approval notification id is invalid: {error}"))
                 })?,
             ),
-            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
+            arkret_models_collaboration::sync_frames::account_subscribe::NotificationDeltaAction::Upsert,
             Some(
-                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
-                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
-                        approval_request_id: approval_request_id.clone(),
+                arkret_models_collaboration::sync_frames::account_subscribe::NotificationData::AgentRuntimeApproval(
+                    arkret_models_collaboration::account_subscribe_projections::AgentRuntimeApprovalNotificationData {
+                        approval_request_id: arkret_models_collaboration::account_subscribe_projections::AgentRuntimeApprovalRequestId::new(
+                            approval_request_id.as_str().to_owned(),
+                        )
+                        .map_err(|error| {
+                            AppError::internal(format!(
+                                "stored approval request id is invalid: {error}"
+                            ))
+                        })?,
                         agent_id: body.agent_id.clone(),
                         requested_at,
                         expires_at,
@@ -618,7 +625,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         if agent_record.paired_pairing_request_id == agent_record.pairing_request_id {
             if let Some(context) = account_notification_context(&agent_record) {
                 finalize_terminal_account_notification(state, &agent_record.id, context,
-                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved).await?;
+                    arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Approved).await?;
             }
         }
         return Ok(agent_record);
@@ -871,9 +878,9 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             &agent_id,
             context,
             if outcome == AgentKeyPairActivationState::Active {
-                arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved
+                arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Approved
             } else {
-                arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Superseded
+                arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Superseded
             },
         )
         .await?;
@@ -1095,7 +1102,7 @@ pub(super) async fn agent_key_pair(
                 state,
                 agent_id,
                 context,
-                arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved,
+                arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Approved,
             )
             .await?;
         }
@@ -1588,7 +1595,7 @@ pub(super) fn account_notification_context(
 pub(super) async fn persist_terminal_account_notification(
     state: &AppState,
     context: AccountNotificationContext,
-    reason: arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason,
+    reason: arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason,
 ) -> Result<(), AppError> {
     let account_id = context
         .recipient_actor_id
@@ -1598,14 +1605,14 @@ pub(super) async fn persist_terminal_account_notification(
             AppError::internal("terminal approval notification requires an Account Actor")
         })?;
     let delta =
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+        arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta::try_new(
             arkret_models_collaboration::objects::read_receipts::NotificationIdentity::AgentApproval(
                 context.notification_id,
             ),
-            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove,
+            arkret_models_collaboration::sync_frames::account_subscribe::NotificationDeltaAction::Remove,
             Some(
-                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApprovalRemoval(
-                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationRemovalData {
+                arkret_models_collaboration::sync_frames::account_subscribe::NotificationData::AgentRuntimeApprovalRemoval(
+                    arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalNotificationRemovalData {
                         reason,
                     },
                 ),
@@ -1649,7 +1656,7 @@ async fn finalize_terminal_account_notification(
     state: &AppState,
     agent_id: &str,
     context: AccountNotificationContext,
-    reason: arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason,
+    reason: arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason,
 ) -> Result<(), AppError> {
     let approval_request_id = context.approval_request_id.clone();
     persist_terminal_account_notification(state, context, reason).await?;

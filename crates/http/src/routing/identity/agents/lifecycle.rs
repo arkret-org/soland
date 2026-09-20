@@ -869,7 +869,7 @@ pub(super) async fn renew_agent_pairing(
         persist_terminal_account_notification(
             state,
             context,
-            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Renewed,
+            arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Renewed,
         )
         .await?;
     }
@@ -942,7 +942,7 @@ pub(super) async fn list_agents(
     }
     // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
     json_ok(AgentList {
-        agent_projections: agents,
+        agents,
         next_cursor: None,
         has_more: false,
     })
@@ -1031,7 +1031,13 @@ pub(super) async fn get_agent(
                 expires_at: expires_at.copied().flatten(),
             })
         })
-        .collect();
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            AppError::internal(format!(
+                "agent grant snapshot serialization failed: {error}"
+            ))
+        })?;
     json_ok(view)
 }
 
@@ -1082,7 +1088,7 @@ pub(super) async fn lazily_expire_pairing(
         && let Err(error) = persist_terminal_account_notification(
             state,
             context,
-            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Expired,
+            arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Expired,
         )
         .await
     {
@@ -1177,7 +1183,7 @@ pub(super) async fn lifecycle_transition(
         persist_terminal_account_notification(
             state,
             context,
-            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Deactivated,
+            arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Deactivated,
         )
         .await?;
     }

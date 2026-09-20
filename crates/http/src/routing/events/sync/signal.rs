@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_models_collaboration::http_bodies::SignalSubmitOutcome;
+use arkret_models_collaboration::signal_operations::SignalSubmitOutcome;
 use arkret_wire::{SignalClass, SignalEnvelope, SignalRelayRequest, SignalStreamFrame};
 use futures_util::stream::StreamExt;
 use salvo::prelude::*;
