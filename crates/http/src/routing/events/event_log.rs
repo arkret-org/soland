@@ -8,8 +8,6 @@
 //! - `GET  /_arkret/self/committed-events/{event_id}` — fetch the committed Event/Commit pair.
 //! - `GET /_arkret/self/committed-events/{event_id}` — one committed Event view.
 //! - `GET  /_arkret/self/events`            — paginated list (filtered by actor / realm).
-//! - `QUERY /_arkret/self/events/frontier`  — per-actor Event frontier.
-//! - `QUERY /_arkret/self/seals/frontier`   — per-Realm Seal frontier.
 //!
 //! The validator block (`validate_event_envelope` + helpers) lives in the
 //! `validation` submodule.
@@ -26,10 +24,7 @@ use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationFoundingUnitSubmission,
 };
 use arkret_models_collaboration::event_sync::{
-    ActorAggregateFrontierKind, ActorAggregateFrontierView, AgentPcrSealHeadReceipt,
-    AgentPcrSealHeadReceiptKind, EventsFrontierState, EventsFrontierView,
     EventsSubmitFederationBatchRequestBody, FederationServiceBindingRef, RealmActorFrontierView,
-    RealmSealFrontierView, SealFrontierState,
 };
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector, SealPrepareFenceResultOutcome,

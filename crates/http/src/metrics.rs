@@ -600,9 +600,6 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
     let method = req.method().as_str();
     let path = req.uri().path();
     match (method, path) {
-        ("QUERY", "/_arkret/self/seals/frontier") => {
-            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_FRONTIER_V1)
-        }
         ("POST", "/_arkret/self/streams/scan") => {
             Some(arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1)
         }

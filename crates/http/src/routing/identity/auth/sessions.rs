@@ -776,7 +776,7 @@ mod tests {
                 "GET",
                 "/_arkret/root/identity/recovery-sessions/ak:recovery_session:1",
             ),
-            ("QUERY", "/_arkret/self/events/frontier"),
+            ("POST", "/_arkret/self/streams/scan"),
             ("QUERY", "/_arkret/self/events"),
             ("POST", "/_arkret/self/keys/backups/ak:key_backup:1/unlock"),
             ("GET", "/_arkret/self/keys/backups"),
@@ -805,6 +805,7 @@ mod tests {
 
         for (method, path) in [
             ("POST", "/_arkret/self/events"),
+            ("QUERY", "/_arkret/self/events/frontier"),
             ("GET", "/_arkret/self/events"),
             ("GET", "/_arkret/self/keys/query"),
             ("POST", "/_arkret/root/identity/recovery-policy"),

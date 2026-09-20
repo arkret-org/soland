@@ -1,36 +1,31 @@
 use super::common::*;
 
 #[test]
-fn self_seal_frontier_is_separate_from_event_frontier() {
+fn retired_self_frontier_routes_are_not_mounted() {
     run_on_deep_stack(
-        "self_seal_frontier_is_separate_from_event_frontier",
-        self_seal_frontier_is_separate_from_event_frontier_body,
+        "retired_self_frontier_routes_are_not_mounted",
+        retired_self_frontier_routes_are_not_mounted_body,
     );
 }
 
-async fn self_seal_frontier_is_separate_from_event_frontier_body() {
+async fn retired_self_frontier_routes_are_not_mounted_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    seed_demo_realm_basis(&state).await;
-
-    let seal_state: arkret_models_collaboration::event_sync::SealFrontierState =
-        TestClient::query("http://server/_arkret/self/seals/frontier")
-            .json(&serde_json::json!({"realm_id": demo_realm_id()}))
+    for (path, body) in [
+        (
+            "http://server/_arkret/self/seals/frontier",
+            serde_json::json!({"realm_id": demo_realm_id()}),
+        ),
+        (
+            "http://server/_arkret/self/events/frontier",
+            serde_json::json!({"actor_id": fixture_account_actor(&state, "did:web:alice.example")}),
+        ),
+    ] {
+        let response = TestClient::query(path)
+            .json(&body)
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .expect("typed Seal frontier response");
-    assert_eq!(seal_state.frontier.realm_id.as_str(), demo_realm_id());
-    assert!(seal_state.frontier.sole_leaf().is_ok());
-
-    let mut realm_only_events = TestClient::query("http://server/_arkret/self/events/frontier")
-        .json(&serde_json::json!({"realm_id": demo_realm_id()}))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state))
-        .await;
-    assert_eq!(realm_only_events.status_code, Some(StatusCode::BAD_REQUEST));
-    let body: Value = realm_only_events.take_json().await.unwrap();
-    assert_eq!(problem_code(&body), "json_invalid");
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
+    }
 }
