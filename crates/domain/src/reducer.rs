@@ -87,10 +87,11 @@ pub use projections::{
     MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
     PendingReplayEntry, PinProjection, PollState, ProjectedMessageView, PushRouteCellValue,
     PushRouteSubject, ReactionState, RealmInheritancePolicyState, RealmLinkState,
-    RealmOrganizationStatementState, RedactionCellValue, RsvpProjection, SidecarContextProjection,
-    SidecarProjection, SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState,
-    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
-    StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
+    RealmOrganizationStatementState, RedactionCellValue, RelationCurrentResultProjection,
+    RsvpProjection, SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,
+    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
+    SpaceContainerProjection, StrandProjection, StrandWatchProjection,
+    object_stage_from_wire_value, object_stage_wire_value,
 };
 
 #[cfg(test)]

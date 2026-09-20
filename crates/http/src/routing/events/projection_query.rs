@@ -1144,6 +1144,13 @@ struct RelationEdgeView {
     created_at: DateTime<Utc>,
     #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     updated_at: DateTime<Utc>,
+    /// Present only for the current value of a directly writable primary
+    /// domain. Historical/derived edges have no Relation CAS revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    primary_conflict_domain:
+        Option<arkret_models_collaboration::objects::relation::RelationPrimaryConflictDomain>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_revision: Option<arkret_wire::CurrentRevision>,
 }
 
 /// Strongly-typed response body for `org.arkret.soland.relations.list`
@@ -1153,6 +1160,29 @@ struct RelationEdgeView {
 struct RelationEdgeList {
     items: Vec<RelationEdgeView>,
     total: u64,
+}
+
+fn relation_edge_view(
+    relation: SolandRelationState,
+    current: Option<soland_domain::reducer::RelationCurrentResultProjection>,
+) -> RelationEdgeView {
+    RelationEdgeView {
+        relation_id: relation.relation_id,
+        realm_id: relation.realm_id,
+        relation_kind: relation.relation_kind,
+        from_ref: relation.from_ref,
+        to_ref: relation.to_ref,
+        rank: relation.rank,
+        fields: relation.fields,
+        state: relation.state,
+        scope_circle_id: relation.scope_circle_id,
+        created_at: relation.created_at,
+        updated_at: relation.updated_at,
+        primary_conflict_domain: current
+            .as_ref()
+            .map(|current| current.primary_conflict_domain.clone()),
+        current_revision: current.map(|current| current.revision),
+    }
 }
 
 /// `GET /_soland/self/strands/{strand_id}` — return a single Strand's
@@ -1277,6 +1307,51 @@ mod relation_actor_endpoint_tests {
     use arkret_identifiers::DidCoreId;
 
     use super::*;
+
+    #[test]
+    fn current_relation_view_exposes_the_exact_authority_revision() {
+        let now = "2026-09-21T00:00:00Z".parse().unwrap();
+        let relation_id = "ak:relation:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz".to_owned();
+        let primary_conflict_domain = serde_json::from_value(serde_json::json!({
+            "domain_kind":"tuple",
+            "relation_kind":"references",
+            "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+            "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-"
+        }))
+        .unwrap();
+        let revision = arkret_wire::CurrentRevision {
+            commit_id: arkret_wire::RealmCommitId::from_digest([0x44; 32]),
+            stream_position: 7,
+        };
+        let view = relation_edge_view(
+            SolandRelationState {
+                relation_id: relation_id.clone(),
+                realm_id: "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru".to_owned(),
+                relation_kind: "references".to_owned(),
+                scope_circle_id: None,
+                from_ref: Some("ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4".into()),
+                to_ref: Some("ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-".into()),
+                rank: None,
+                fields: BTreeMap::new(),
+                state: "active".to_owned(),
+                source_event_id: None,
+                source_event_digest: None,
+                created_at: now,
+                updated_at: now,
+            },
+            Some(soland_domain::reducer::RelationCurrentResultProjection {
+                relation_id,
+                primary_conflict_domain,
+                revision: revision.clone(),
+            }),
+        );
+        let wire = serde_json::to_value(view).unwrap();
+        assert_eq!(wire["current_revision"], serde_json::json!(revision));
+        assert_eq!(
+            wire["primary_conflict_domain"]["relation_kind"],
+            "references"
+        );
+    }
 
     #[test]
     fn document_authorship_serializes_complete_station_accounts() {
@@ -1525,7 +1600,9 @@ mod relation_actor_endpoint_tests {
 }
 
 /// `GET /_soland/self/relations?from_ref=&to_ref=&relation_kind=&state=` —
-/// list relation edges projected from `ak.relation.*` events. Backs the
+/// list relation edges projected from accepted Events. Directly writable
+/// current values are restart-hydrated from their authority CAS rows, while
+/// derived edges remain reducer projections. Backs the
 /// relation-cardinality invariant checks (e.g. asserting at most one active
 /// `has_default_view` edge per `from_ref`). Filters are AND-combined; `state`
 /// defaults to `active`. Only edges whose `realm_id` is accessible to the
@@ -1552,7 +1629,10 @@ async fn list_relation_projections(
         soland_http::util::query_param(req, "state").unwrap_or_else(|| "active".to_owned());
 
     let proj = state.projections().snapshot();
-    let candidates: Vec<SolandRelationState> = {
+    let candidates: Vec<(
+        SolandRelationState,
+        Option<soland_domain::reducer::RelationCurrentResultProjection>,
+    )> = {
         let candidates = proj
             .relations
             .values()
@@ -1584,29 +1664,24 @@ async fn list_relation_projections(
                     )
                 })
             })
-            .cloned()
+            .map(|relation| {
+                let current = proj
+                    .relation_current_metadata
+                    .values()
+                    .find(|current| current.relation_id == relation.relation_id)
+                    .cloned();
+                (relation.clone(), current)
+            })
             .collect();
         candidates
     };
 
     let mut items = Vec::new();
-    for relation in candidates {
+    for (relation, current) in candidates {
         if !realm_id_accessible(state, &relation.realm_id, Some(&session)).await {
             continue;
         }
-        items.push(RelationEdgeView {
-            relation_id: relation.relation_id,
-            realm_id: relation.realm_id,
-            relation_kind: relation.relation_kind,
-            from_ref: relation.from_ref,
-            to_ref: relation.to_ref,
-            rank: relation.rank,
-            fields: relation.fields,
-            state: relation.state,
-            scope_circle_id: relation.scope_circle_id,
-            created_at: relation.created_at,
-            updated_at: relation.updated_at,
-        });
+        items.push(relation_edge_view(relation, current));
     }
     items.sort_by(|left, right| left.relation_id.cmp(&right.relation_id));
     let total = total_count(items.len())?;

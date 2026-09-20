@@ -90,6 +90,27 @@ pub trait MorphProjectionStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>>;
     async fn delete(&self, morph_id: &str) -> PersistenceResult<()>;
 }
+
+/// Authoritative current Relation value for one typed primary conflict domain.
+///
+/// Unlike the rebuildable in-memory relation index, this row carries the exact
+/// accepting RealmCommit revision used by admission CAS. Restart hydration
+/// reads this port so queries and subsequent validation observe the same
+/// current value the transaction boundary serialized.
+#[derive(Clone, Debug)]
+pub struct RelationCurrentResultRecord {
+    pub realm_id: arkret_wire::RealmId,
+    pub domain_key: String,
+    pub primary_conflict_domain:
+        arkret_models_collaboration::objects::relation::RelationPrimaryConflictDomain,
+    pub relation: arkret_models_collaboration::objects::relation::Relation,
+    pub revision: arkret_wire::CurrentRevision,
+}
+
+#[async_trait]
+pub trait RelationCurrentResultStore: Send + Sync {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RelationCurrentResultRecord>>;
+}
 /// Wire / persistence record for a Space-container projection. Mirrors fields on
 /// `reducer::SpaceContainerProjection` (state stored as the canonical `&str` form
 /// of `SpaceContainerLifecycleState`) so callers can convert without pulling the

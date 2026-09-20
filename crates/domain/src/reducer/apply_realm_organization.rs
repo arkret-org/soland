@@ -93,7 +93,7 @@ impl ProjectionState {
             // other failure (bad proof, unresolved delegation, status mismatch)
             // fails closed and is not stored.
             let reason = organization_rejection_reason(&error.to_string());
-            let window_only = (reason == arkret_wire::ReasonCode::TTL_EXPIRED
+            let window_only = (reason == arkret_wire::ReasonCode::REALM_ORGANIZATION_EXPIRED
                 && payload.is_expired(now))
                 || (reason == arkret_wire::ErrorCode::FAILED_PRECONDITION
                     && payload.is_not_yet_valid(now));

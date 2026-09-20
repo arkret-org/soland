@@ -243,6 +243,97 @@ async fn hydration_replay_records(
     persistence.events().snapshot_all().await
 }
 
+fn install_relation_current_results(
+    proj: &mut ProjectionState,
+    records: Vec<soland_storage::RelationCurrentResultRecord>,
+) -> soland_storage::PersistenceResult<()> {
+    use arkret_wire::RelationState;
+    use soland_domain::reducer::{RelationCurrentResultProjection, SolandRelationState};
+
+    let mut staged_relations = std::collections::BTreeMap::new();
+    let mut staged_current = std::collections::BTreeMap::new();
+    let mut staged_metadata = std::collections::BTreeMap::new();
+    for record in records {
+        let relation = record.relation;
+        let relation_id = relation.id.clone().ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "durable Relation current value has no derived id".to_owned(),
+            )
+        })?;
+        let source_event_id = arkret_wire::EventId::from_token_bytes(relation_id.token_bytes())
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "durable Relation id cannot be retyped as its create Event: {error}"
+                ))
+            })?;
+        let state = match relation.state {
+            Some(RelationState::Active) => "active",
+            Some(RelationState::Tombstoned) => "tombstoned",
+            None => {
+                return Err(soland_storage::PersistenceError::Internal(
+                    "durable Relation current value has no lifecycle state".to_owned(),
+                ));
+            }
+        };
+        let relation_id = relation_id.to_string();
+        let current_key = (record.realm_id.to_string(), record.domain_key);
+        if staged_current.contains_key(&current_key) || staged_relations.contains_key(&relation_id)
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "durable Relation current results contain duplicate identity".to_owned(),
+            ));
+        }
+        staged_current.insert(current_key.clone(), relation_id.clone());
+        staged_metadata.insert(
+            current_key,
+            RelationCurrentResultProjection {
+                relation_id: relation_id.clone(),
+                primary_conflict_domain: record.primary_conflict_domain,
+                revision: record.revision,
+            },
+        );
+        staged_relations.insert(
+            relation_id.clone(),
+            SolandRelationState {
+                relation_id,
+                realm_id: record.realm_id.to_string(),
+                relation_kind: relation.relation_kind.as_str().to_owned(),
+                scope_circle_id: relation.scope_circle_id.map(|id| id.to_string()),
+                from_ref: Some(relation.from_ref),
+                to_ref: Some(relation.to_ref),
+                rank: relation.rank,
+                fields: relation.fields,
+                state: state.to_owned(),
+                source_event_id: Some(source_event_id.to_string()),
+                source_event_digest: Some(source_event_id.event_digest().to_string()),
+                created_at: relation.created_at,
+                updated_at: relation.updated_at.unwrap_or(relation.created_at),
+            },
+        );
+    }
+    let previous_current_ids = proj
+        .relation_current
+        .values()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if staged_relations
+        .keys()
+        .any(|id| proj.relations.contains_key(id) && !previous_current_ids.contains(id))
+    {
+        return Err(soland_storage::PersistenceError::Internal(
+            "durable Relation current result collides with a non-current projection".to_owned(),
+        ));
+    }
+    // Preserve derived Relation edges and canonical history already rebuilt by
+    // other reducers. Only replace the prior direct-current cache.
+    proj.relations
+        .retain(|relation_id, _| !previous_current_ids.contains(relation_id));
+    proj.relations.extend(staged_relations);
+    proj.relation_current = staged_current;
+    proj.relation_current_metadata = staged_metadata;
+    Ok(())
+}
+
 /// Rebuild ordinary Realm genesis from its exact confirmed command unit.
 /// Raw admission, actor sequence and timestamps confer no execution outcome.
 async fn hydrate_canonical_realm_bootstraps(
@@ -1112,6 +1203,16 @@ pub async fn hydrate_projections_from_persistence(
             "accepted-event-reducer",
         )?;
     }
+    // Relation admission serializes one authoritative current row per typed
+    // primary domain in the RealmCommit transaction. Hydrate that same row,
+    // rather than trusting a process-local reducer cache or replaying Events
+    // in receipt-time order, before Sidecar bindings resolve Relation refs.
+    let relation_current = persistence
+        .relation_current_results()
+        .snapshot_all()
+        .await?;
+    install_relation_current_results(proj, relation_current)?;
+
     // Run after object mirrors because a native Sidecar attachment validates
     // that its referenced source Relation or Strand already exists.
     hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc, projection_adapter)
@@ -1553,5 +1654,151 @@ mod agent_membership_reconcile_tests {
         reconcile_hydrated_agent_memberships(&mut realms, &projection);
 
         assert!(!realms.get(&realm_id).unwrap().members.contains(&agent));
+    }
+}
+
+#[cfg(test)]
+mod relation_current_result_hydration_tests {
+    use arkret_models_collaboration::objects::relation::{Relation, RelationPrimaryConflictDomain};
+    use soland_domain::reducer::SolandRelationState;
+    use soland_storage::RelationCurrentResultRecord;
+
+    use super::*;
+
+    fn current_relation_record() -> RelationCurrentResultRecord {
+        let realm_id =
+            RealmId::new("ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru").unwrap();
+        let primary_conflict_domain =
+            serde_json::from_value::<RelationPrimaryConflictDomain>(serde_json::json!({
+                "domain_kind":"tuple",
+                "relation_kind":"references",
+                "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+                "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-"
+            }))
+            .unwrap();
+        let domain_key = arkret_canonical::canonical_json_string(&primary_conflict_domain).unwrap();
+        let relation = serde_json::from_value::<Relation>(serde_json::json!({
+            "schema":"ak.schema.relation.v1",
+            "id":"ak:relation:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz",
+            "realm_id":realm_id,
+            "effective_scope":{"kind":"realm","realm_id":realm_id},
+            "relation_kind":"references",
+            "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+            "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-",
+            "rank":"A1",
+            "fields":{"note":"durable current"},
+            "state":"active",
+            "created_by":{
+                "kind":"account",
+                "account_id":{
+                    "principal_id":"ak:did_core:web:relation-author.example",
+                    "station_id":"ak:did_core:web:relation-station.example"
+                }
+            },
+            "created_at":"2026-09-21T00:00:00.000Z",
+            "updated_at":"2026-09-21T00:00:01.000Z"
+        }))
+        .unwrap();
+        RelationCurrentResultRecord {
+            realm_id,
+            domain_key,
+            primary_conflict_domain,
+            relation,
+            revision: arkret_wire::CurrentRevision {
+                commit_id: arkret_wire::RealmCommitId::from_digest([0x44; 32]),
+                stream_position: 7,
+            },
+        }
+    }
+
+    #[test]
+    fn restart_installs_the_authoritative_relation_current_value() {
+        let record = current_relation_record();
+        let relation_id = record.relation.id.as_ref().unwrap().to_string();
+        let current_key = (record.realm_id.to_string(), record.domain_key.clone());
+
+        let mut first_boot = ProjectionState::default();
+        install_relation_current_results(&mut first_boot, vec![record.clone()]).unwrap();
+
+        let materialized = first_boot.relations.get(&relation_id).unwrap();
+        assert_eq!(materialized.state, "active");
+        assert_eq!(materialized.rank.as_deref(), Some("A1"));
+        assert_eq!(
+            materialized.fields.get("note").and_then(Value::as_str),
+            Some("durable current")
+        );
+        assert_eq!(
+            first_boot.relation_current.get(&current_key),
+            Some(&relation_id)
+        );
+        let metadata = first_boot
+            .relation_current_metadata
+            .get(&current_key)
+            .unwrap();
+        assert_eq!(metadata.relation_id, relation_id);
+        assert_eq!(metadata.revision.stream_position, 7);
+        assert_eq!(
+            metadata.revision.commit_id,
+            arkret_wire::RealmCommitId::from_digest([0x44; 32])
+        );
+
+        // A process restart starts from an empty cache. Installing the same
+        // authoritative storage snapshot reproduces the exact query/admission
+        // identity without relying on the previous process state.
+        let mut restarted = ProjectionState::default();
+        install_relation_current_results(&mut restarted, vec![record]).unwrap();
+        assert_eq!(restarted.relation_current, first_boot.relation_current);
+        assert_eq!(
+            restarted.relation_current_metadata,
+            first_boot.relation_current_metadata
+        );
+        assert_eq!(
+            restarted.relations.get(&relation_id).unwrap().fields,
+            materialized.fields
+        );
+    }
+
+    #[test]
+    fn hydration_rejects_duplicate_authoritative_domains() {
+        let record = current_relation_record();
+        let mut projection = ProjectionState::default();
+        let error = install_relation_current_results(&mut projection, vec![record.clone(), record])
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            soland_storage::PersistenceError::Internal(_)
+        ));
+        assert!(projection.relations.is_empty());
+        assert!(projection.relation_current.is_empty());
+        assert!(projection.relation_current_metadata.is_empty());
+    }
+
+    #[test]
+    fn hydration_preserves_derived_relation_edges() {
+        let mut projection = ProjectionState::default();
+        let derived_id = "ak:relation:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-".to_owned();
+        projection.relations.insert(
+            derived_id.clone(),
+            SolandRelationState {
+                relation_id: derived_id.clone(),
+                realm_id: "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru".to_owned(),
+                relation_kind: "contains".to_owned(),
+                scope_circle_id: None,
+                from_ref: Some("ak:space:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4".into()),
+                to_ref: Some("ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4".into()),
+                rank: None,
+                fields: std::collections::BTreeMap::new(),
+                state: "active".to_owned(),
+                source_event_id: None,
+                source_event_digest: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+        );
+
+        install_relation_current_results(&mut projection, vec![current_relation_record()]).unwrap();
+
+        assert!(projection.relations.contains_key(&derived_id));
+        assert_eq!(projection.relation_current.len(), 1);
     }
 }

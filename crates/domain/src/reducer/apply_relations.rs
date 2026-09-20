@@ -93,9 +93,14 @@ impl ProjectionState {
         };
         self.relations.insert(relation_id.clone(), state);
         self.relation_current.insert(
-            (operation.realm_id.to_string(), domain_key),
+            (operation.realm_id.to_string(), domain_key.clone()),
             relation_id.clone(),
         );
+        // The reducer input does not carry its accepting RealmCommit. Do not
+        // retain a prior exact revision after a live mutation; startup (or an
+        // authority-row refresh) installs authoritative metadata.
+        self.relation_current_metadata
+            .remove(&(operation.realm_id.to_string(), domain_key));
         ProjectionEffect::RelationCreated(
             self.relations
                 .get(&relation_id)
@@ -390,6 +395,10 @@ impl ProjectionState {
             apply_relation_patch(relation, patch);
         }
         relation.updated_at = now;
+        self.relation_current_metadata.remove(&(
+            operation.realm_id.to_string(),
+            relation_primary_domain_key(&payload.primary_conflict_domain),
+        ));
         ProjectionEffect::RelationUpdated(
             self.relations
                 .get(&relation_id)
@@ -423,6 +432,10 @@ impl ProjectionState {
             relation.state = "tombstoned".to_owned();
             relation.updated_at = operation.created_at;
         }
+        self.relation_current_metadata.remove(&(
+            operation.realm_id.to_string(),
+            relation_primary_domain_key(&payload.primary_conflict_domain),
+        ));
         ProjectionEffect::RelationDeleted { relation_id }
     }
 

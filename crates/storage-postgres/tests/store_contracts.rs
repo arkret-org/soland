@@ -17,6 +17,7 @@ use soland_storage::{
     AgentPrincipalRecord, AgentStore, AppletAuthoringPreviewRecord, AppletStore,
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, MlsKeyPackageStore,
     NotificationStore, PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
+    RelationCurrentResultStore,
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
@@ -24,7 +25,7 @@ use soland_storage_postgres::{
     PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
     PgInviteNewSourceLedgerStore, PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore,
     PgMlsKeyPackageStore, PgNotificationStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore,
+    PgProjectionEventStore, PgRelationCurrentResultStore,
 };
 
 #[tokio::test]
@@ -1332,6 +1333,29 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     assert_eq!(row.relation_id, replacement_id.as_str());
     assert_eq!(row.state, "active");
 
+    // The restart reader must expose the same authoritative row written by
+    // the RealmCommit transaction, including its exact CAS revision.
+    let stored = PgRelationCurrentResultStore { pool: pool.clone() }
+        .snapshot_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.realm_id == realm_id)
+        .expect("current Relation row is restart-readable");
+    assert_eq!(
+        stored.relation.id.as_ref().map(ToString::to_string),
+        Some(replacement_id.to_string())
+    );
+    assert_eq!(
+        stored.relation.state,
+        Some(arkret_wire::RelationState::Active)
+    );
+    assert_eq!(stored.revision.commit_id.as_str(), row.current_commit_id);
+    assert_eq!(
+        stored.revision.stream_position,
+        u64::try_from(row.current_stream_position).unwrap()
+    );
+
     // The selected row and its materialized Relation must describe the same
     // signed domain. Corrupting only the value reaches schema_violation, not
     // the absent-domain CAS branch exercised above.
@@ -1417,6 +1441,19 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     ));
     assert_event_and_commit_absent(&pool, rejected_event_id, rejected_commit_id).await;
     assert!(load().await.value.get("state").is_none());
+    assert!(matches!(
+        PgRelationCurrentResultStore { pool: pool.clone() }
+            .snapshot_all()
+            .await,
+        Err(PersistenceError::Database(_))
+    ));
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE relation_current_results SET value=$2 WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Jsonb, _>(&healthy_value)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

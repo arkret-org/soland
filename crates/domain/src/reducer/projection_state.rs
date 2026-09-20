@@ -50,6 +50,10 @@ pub struct ProjectionState {
     /// transaction is the CAS authority; this rebuildable index keeps reducer
     /// replay on the same single-current-value model.
     pub relation_current: BTreeMap<(String, String), String>,
+    /// Exact authoritative domain and RealmCommit revision for current
+    /// Relation values loaded from durable storage. This is query metadata;
+    /// the PostgreSQL authority row remains the only CAS source of truth.
+    pub relation_current_metadata: BTreeMap<(String, String), RelationCurrentResultProjection>,
     /// Per-(Strand, Actor) notification watch preferences.
     pub strand_watches: BTreeMap<(String, String), StrandWatchProjection>,
     /// Poll projections keyed by poll_id. Poll create is a message content

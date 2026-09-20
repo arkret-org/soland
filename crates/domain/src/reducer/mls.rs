@@ -227,7 +227,7 @@ pub fn apply_keypackage_claim_projection(
     if row.device_authorize_event_id != projection.trust_binding.device_authorize_event_id
         || row.agent_key_authorize_event_id != projection.trust_binding.agent_key_authorize_event_id
     {
-        return reject(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
+        return reject(arkret_wire::ReasonCode::DEVICE_GENERATION_FENCED);
     }
     let intended_realm_id = projection
         .intended_realm_id
@@ -708,16 +708,16 @@ impl KeyPackageTrustBinding {
             (None, None, Some(actor_id), Some(method)) => {
                 let actor = actor_id
                     .parse::<arkret_identifiers::DidCoreId>()
-                    .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+                    .map_err(|_| arkret_wire::ReasonCode::DEVICE_GENERATION_FENCED)?;
                 let method_id = arkret_wire::DidUrl::new(method.clone())
-                    .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+                    .map_err(|_| arkret_wire::ReasonCode::DEVICE_GENERATION_FENCED)?;
                 arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
                     actor, method_id,
                 )
-                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+                .map_err(|_| arkret_wire::ReasonCode::DEVICE_GENERATION_FENCED)?;
                 Ok(Self::minimal_metadata_pairwise(actor_id, method))
             }
-            _ => Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH),
+            _ => Err(arkret_wire::ReasonCode::DEVICE_GENERATION_FENCED),
         }
     }
 }

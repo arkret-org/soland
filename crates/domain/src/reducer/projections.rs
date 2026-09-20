@@ -889,6 +889,17 @@ pub struct SolandRelationState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Restart-safe metadata for the one authoritative current Relation value in
+/// a typed primary conflict domain. It is a read cache of the durable
+/// authority row, never a second CAS authority.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelationCurrentResultProjection {
+    pub relation_id: String,
+    pub primary_conflict_domain:
+        arkret_models_collaboration::objects::relation::RelationPrimaryConflictDomain,
+    pub revision: arkret_wire::CurrentRevision,
+}
+
 impl SolandRelationState {
     /// Object-only traversal; an Actor endpoint is not an object id.
     pub fn from_object_ref(&self) -> Option<&str> {

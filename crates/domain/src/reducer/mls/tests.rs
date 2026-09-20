@@ -464,7 +464,7 @@ fn keypackage_claim_rejects_mismatched_device_authorization() {
     };
     match apply_keypackage_claim_projection(&mut state, &claim) {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
+            assert_eq!(reason, arkret_wire::ReasonCode::DEVICE_GENERATION_FENCED);
         }
         other => panic!("expected Rejected, got {other:?}"),
     }
