@@ -121,6 +121,31 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn merge_account_status_affected_services(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        observations: &[soland_storage::AccountStatusAffectedServiceObservation],
+        max_services: usize,
+    ) -> crate::ServiceResult<Vec<arkret_wire::DidCoreId>> {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .merge_affected_services(account_id, observations, max_services)
+            .await?)
+    }
+
+    pub async fn account_status_affected_services(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<arkret_wire::DidCoreId>> {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .affected_services(account_id, limit)
+            .await?)
+    }
+
     pub async fn contact_completion_for_request(
         &self,
         actor: &arkret_wire::ActorId,

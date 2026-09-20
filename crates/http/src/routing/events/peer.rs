@@ -784,11 +784,9 @@ async fn peer_account_status_resolve(
     // All relationship checks precede ledger access so unknown accounts and
     // unrelated callers collapse into the same non-enumerating response.
     let local_authority = trusted_account_authority_id(state).await?;
-    let affected_services =
-        crate::routing::identity::account::lifecycle::deactivation_peer_service_targets_for_account(
-            state,
-            &request.account_id,
-        );
+    let affected_services = crate::routing::identity::account::lifecycle::
+        durable_deactivation_peer_service_targets_for_account(state, &request.account_id)
+        .await?;
     if request.account_authority_id != local_authority
         || !account_status_resolve_source_authorized(
             &source_id,
@@ -878,11 +876,9 @@ async fn enqueue_account_status_fanout(
     if record.account_id.station_id.as_str() != state.service_id() {
         return Ok((AccountStatusPropagationState::NotRequired, None));
     }
-    let targets =
-        crate::routing::identity::account::lifecycle::deactivation_peer_service_targets_for_account(
-            state,
-            &record.account_id,
-        );
+    let targets = crate::routing::identity::account::lifecycle::
+        durable_deactivation_peer_service_targets_for_account(state, &record.account_id)
+        .await?;
     if targets.len() > 256 {
         return Err(AppError::internal(
             "account-status affected Station set exceeds 256",

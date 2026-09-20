@@ -21,6 +21,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    account_status_affected_services (account_id, service_id, source) {
+        account_id -> Jsonb,
+        service_id -> Text,
+        source -> Text,
+        first_observed_at -> Timestamptz,
+        last_observed_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     account_data_change_retention (actor_id) {
         actor_id -> Text,
         latest_position -> Int8,
@@ -1958,6 +1968,7 @@ diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
+    account_status_affected_services,
     account_data_changes,
     account_data_change_retention,
     account_datas,

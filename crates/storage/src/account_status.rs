@@ -3,6 +3,41 @@ use arkret_models_collaboration::objects::account_status::AccountStatus;
 
 use crate::{PersistenceResult, async_trait};
 
+/// Durable evidence classes that can prove another Station already holds, or
+/// is about to hold, state for one exact AccountId. The set is closed by
+/// account-lifecycle.md §3.1; callers must not invent a generic peer source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountStatusAffectedServiceSource {
+    Session,
+    Device,
+    KeyPackage,
+    ToDevice,
+    PushRoute,
+    PrincipalLocator,
+    RealmMembership,
+}
+
+impl AccountStatusAffectedServiceSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Device => "device",
+            Self::KeyPackage => "key_package",
+            Self::ToDevice => "to_device",
+            Self::PushRoute => "push_route",
+            Self::PrincipalLocator => "principal_locator",
+            Self::RealmMembership => "realm_membership",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountStatusAffectedServiceObservation {
+    pub service_id: arkret_wire::DidCoreId,
+    pub source: AccountStatusAffectedServiceSource,
+    pub observed_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountStatusReplicaConflictKind {
     Fork,
@@ -58,6 +93,23 @@ pub trait AccountStatusReplicaStore: Send + Sync {
         account_id: &arkret_wire::AccountId,
         status_seq: u64,
     ) -> PersistenceResult<Option<AccountStatusReceipt>>;
+
+    /// Merge newly observed holders into the durable affected-service index
+    /// and return the complete distinct target set. The ceiling is enforced
+    /// under the same per-account lock as the inserts, so an over-limit batch
+    /// has zero index writes even under concurrent discovery.
+    async fn merge_affected_services(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        observations: &[AccountStatusAffectedServiceObservation],
+        max_services: usize,
+    ) -> PersistenceResult<Vec<arkret_wire::DidCoreId>>;
+
+    async fn affected_services(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        limit: usize,
+    ) -> PersistenceResult<Vec<arkret_wire::DidCoreId>>;
 }
 
 /// Classifies an already transport- and proof-verified submission against the

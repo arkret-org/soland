@@ -219,6 +219,25 @@ CREATE TABLE public.account_status_replica_records (
 CREATE INDEX account_status_replica_records_range_idx
     ON public.account_status_replica_records (account_authority_id, account_id, status_seq);
 
+-- Durable, exact-AccountId affected-service evidence. One service can be
+-- evidenced by several independent state families; rows are never inferred
+-- from the principal alone and therefore cannot broaden fanout accidentally.
+CREATE TABLE public.account_status_affected_services (
+    account_id jsonb NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
+    source text NOT NULL CHECK (source IN (
+        'session', 'device', 'key_package', 'to_device', 'push_route',
+        'principal_locator', 'realm_membership'
+    )),
+    first_observed_at timestamptz NOT NULL,
+    last_observed_at timestamptz NOT NULL,
+    PRIMARY KEY (account_id, service_id, source),
+    CHECK (last_observed_at >= first_observed_at)
+);
+
+CREATE INDEX account_status_affected_services_account_target_idx
+    ON public.account_status_affected_services (account_id, service_id);
+
 CREATE TABLE public.handle_releases (
     localpart text PRIMARY KEY,
     released_at timestamp with time zone NOT NULL

@@ -498,6 +498,60 @@ pub(crate) fn deactivation_peer_service_targets_for_account(
         .collect()
 }
 
+/// Merge the rebuildable Realm-membership view into the durable affected
+/// service index and return the complete known target set. Later source-family
+/// observers use the same store; an index row never expires merely because a
+/// current Realm projection no longer exposes the historical relationship.
+pub(crate) async fn durable_deactivation_peer_service_targets_for_account(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+) -> Result<Vec<Value>, AppError> {
+    let projected = deactivation_peer_service_targets_for_account(state, account_id);
+    let observed_at = now();
+    let observations = projected
+        .iter()
+        .filter_map(|target| target.get("service_id").and_then(Value::as_str))
+        .map(|service_id| {
+            Ok(soland_storage::AccountStatusAffectedServiceObservation {
+                service_id: arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(
+                    |error| AppError::internal(format!("affected service id is invalid: {error}")),
+                )?,
+                source: soland_storage::AccountStatusAffectedServiceSource::RealmMembership,
+                observed_at,
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    let durable = state
+        .persistence()
+        .merge_account_status_affected_services(account_id, &observations, 256)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("affected-service index unavailable: {error}"))
+        })?;
+    let mut targets = projected
+        .into_iter()
+        .filter_map(|target| {
+            target
+                .get("service_id")
+                .and_then(Value::as_str)
+                .map(|service_id| (service_id.to_owned(), target))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for service_id in durable {
+        if service_id.as_str() == state.service_id() {
+            continue;
+        }
+        targets.entry(service_id.to_string()).or_insert_with(|| {
+            json!({
+                "service_id": service_id,
+                "realm_ids": [],
+                "membership_frontier": [],
+            })
+        });
+    }
+    Ok(targets.into_values().collect())
+}
+
 fn deterministic_erasure_receipt_id(
     triggering_status_record_id: &arkret_wire::AccountStatusRecordId,
     storage_boundary: ErasureStorageBoundary,
