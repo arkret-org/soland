@@ -634,7 +634,7 @@ fn grant_call_action(
     );
 }
 
-fn seed_read_receipt_inheritance(
+fn seed_read_receipt_link_context(
     state: &AppState,
     parent_realm_id: &str,
     child_realm_id: &str,
@@ -668,14 +668,14 @@ fn seed_read_receipt_inheritance(
 }
 
 #[tokio::test]
-async fn read_receipt_child_policy_rejects_visibility_loosening() {
+async fn read_receipt_realm_link_does_not_impose_visibility_floor() {
     let state = test_state();
     let parent_realm = "ak:realm:AayvHPIGaKmFumB-RpzVb9nydQtJilnjIY_0iphEtH50";
     let child_realm = arkret_identifiers::RealmId::new(
         "ak:realm:Ab-7DmdacX9m9iDoiewbvr1Th3bssb88zDPYsGOFvT77".to_owned(),
     )
     .unwrap();
-    seed_read_receipt_inheritance(
+    seed_read_receipt_link_context(
         &state,
         parent_realm,
         child_realm.as_str(),
@@ -701,14 +701,14 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
 }
 
 #[tokio::test]
-async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
+async fn read_receipt_realm_link_does_not_impose_required_floor() {
     let state = test_state();
     let parent_realm = "ak:realm:AatPxC-EqrbW4gPLx8kUdsCQdH5-3Uf5Vhx_nTaFmHiO";
     let child_realm = arkret_identifiers::RealmId::new(
         "ak:realm:AUz7tgcJ6ro47-4OhYOy75LdmXCYRnTUkLWvviuxYFld".to_owned(),
     )
     .unwrap();
-    seed_read_receipt_inheritance(
+    seed_read_receipt_link_context(
         &state,
         parent_realm,
         child_realm.as_str(),
@@ -734,48 +734,14 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
 }
 
 #[tokio::test]
-async fn read_receipt_child_policy_allows_required_floor_escape() {
-    let state = test_state();
-    let parent_realm = "ak:realm:AW-shobY6yowKV0Qvkhu1m9aYiJhgJnjVwpo17W-zUUA";
-    let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:AaxSFmZIEvN6XVXnYnkDhe61AlMNo3BOvykm7pFOnj_k".to_owned(),
-    )
-    .unwrap();
-    seed_read_receipt_inheritance(
-        &state,
-        parent_realm,
-        child_realm.as_str(),
-        json!({
-            "disclosure": "required",
-            "visibility": "members",
-            "scope_overrides_allowed": true,
-            "child_privacy_tightening_against_required": true
-        }),
-    );
-
-    let child_policy = op(
-        child_realm,
-        "000000009933",
-        arkret_wire::EventKind::RealmReadReceiptPolicy,
-        json!({
-            "disclosure": "disabled",
-            "visibility": "private"
-        }),
-    );
-    validate_operation_policy(&state, &[child_policy])
-        .await
-        .expect("parent escape allows compliance-floor privacy tightening");
-}
-
-#[tokio::test]
-async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() {
+async fn read_receipt_realm_link_does_not_impose_override_floor() {
     let state = test_state();
     let parent_realm = "ak:realm:AWmEIzkE4XrcUfjV5Sih-8UONowvK9ezo3bWR157AaF4";
     let child_realm = arkret_identifiers::RealmId::new(
         "ak:realm:ARJq-x3T6BN8drHWBoEM6LmDMvq7MTwEO6LAXUqSwsA7".to_owned(),
     )
     .unwrap();
-    seed_read_receipt_inheritance(
+    seed_read_receipt_link_context(
         &state,
         parent_realm,
         child_realm.as_str(),

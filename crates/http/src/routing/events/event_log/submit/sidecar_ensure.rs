@@ -153,6 +153,7 @@ async fn validate_and_prepare(
         Some(parsed.actor_id.as_str()),
     );
     let command = soland_services::events::CommitAcceptedEventCommand {
+        parent_membership_admission: None,
         publication_event: None,
         mls_public_producer: None,
         mls_public_genesis: None,

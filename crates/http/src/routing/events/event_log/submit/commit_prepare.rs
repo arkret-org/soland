@@ -24,6 +24,7 @@ pub(super) struct AcceptedEventCommandPreparation<'a, 'options> {
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
     pub(super) consent_admission: Option<&'a crate::routing::identity::consent::ConsentAdmission>,
     pub(super) actor_private_account_data: Option<soland_services::events::CommitAccountDataCas>,
+    pub(super) parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
     pub(super) ackless_self_principal_ingress: Option<&'a AcklessSelfPrincipalIngress>,
     pub(super) commit_options: Option<&'a SubmitCommitOptions<'options>>,
     pub(super) received_at: chrono::DateTime<chrono::Utc>,
@@ -193,6 +194,7 @@ pub(super) async fn prepare_accepted_event_command(
         internal_admission,
         consent_admission,
         actor_private_account_data,
+        parent_membership_admission,
         ackless_self_principal_ingress,
         commit_options,
         received_at,
@@ -447,6 +449,7 @@ pub(super) async fn prepare_accepted_event_command(
             envelope,
             received_at,
         },
+        parent_membership_admission,
         control_proposal_ingress: match (
             ackless_self_principal_ingress.cloned(),
             control_proposal_ack.cloned(),

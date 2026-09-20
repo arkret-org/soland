@@ -22,6 +22,20 @@ fn capability_authority_root_is_durable_and_distinct_from_station_tenure() {
 }
 
 #[test]
+fn parent_membership_inputs_are_authoritative_typed_current_results() {
+    for table in [
+        "realm_policy_bundle_current_results",
+        "realm_link_current_results",
+        "member_state_current_results",
+    ] {
+        assert!(INITIAL_UP.contains(&format!("CREATE TABLE {table}")));
+        assert!(INITIAL_DOWN.contains(&format!("DROP TABLE IF EXISTS {table}")));
+    }
+    assert!(INITIAL_UP.contains("PRIMARY KEY(realm_id,target_realm_id,link_kind)"));
+    assert!(INITIAL_UP.contains("PRIMARY KEY(realm_id,member_id)"));
+}
+
+#[test]
 fn agent_draft_pending_intent_is_a_separate_private_state_machine() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.agent_draft_pending_intents"));
     assert!(

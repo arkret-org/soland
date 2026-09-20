@@ -915,6 +915,52 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
 }
 
 #[test]
+fn parent_membership_is_deferred_to_the_durable_admission_cut() {
+    let mut state = ProjectionState::new();
+    let realm_id = "ak:realm:AehJkZSB3P7C-ch-biRjD2flKZh73AhHpbhFnxWBhjo1";
+    let member = "ak:did_core:web:alice.example";
+    state
+        .realm_join_rules
+        .insert(realm_id.to_owned(), "restricted".to_owned());
+    state.set_realm_facet(
+        realm_id,
+        facet::REALM_POLICY_BUNDLE,
+        serde_json::json!({
+            "join_policy": {
+                "combinator": "all",
+                "gates": [{
+                    "gate_id": "parent",
+                    "kind": "parent_membership",
+                    "auto_resolve": true,
+                    "membership_source_realm_ids": [
+                        "ak:realm:AYCKiTPA1bjQa3rIKg4O1PGpeq_EXPw1fnNCfHYhPsdG"
+                    ],
+                    "require_min_membership": "join"
+                }]
+            }
+        }),
+    );
+    let operation = make_operation(
+        arkret_wire::EventKind::MemberState,
+        realm_id,
+        serde_json::json!({
+            "member_id": account_actor(member),
+            "sender": member,
+            "membership": "join"
+        }),
+    );
+    assert_eq!(
+        state.check_membership_join_admission(&operation),
+        Err("gate_check_failed")
+    );
+    let deferred = state
+        .prepare_parent_membership_admission(&operation)
+        .unwrap()
+        .expect("parent membership must be finalized by PostgreSQL");
+    assert!(deferred.require_joined_source);
+}
+
+#[test]
 fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
     let mut state = ProjectionState::new();
     let realm_id = "ak:realm:AehJkZSB3P7C-ch-biRjD2flKZh73AhHpbhFnxWBhjo1";

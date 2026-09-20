@@ -14,5 +14,6 @@ mod applet_agent;
 mod circle;
 mod morph;
 mod queries;
+pub use queries::DeferredParentMembershipAdmission;
 mod sidecar;
 mod strand;

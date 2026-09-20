@@ -778,6 +778,7 @@ pub struct CommitAcceptedEventCommand {
     /// so the signed commit travels with the Event it admits.
     pub authority_commit: soland_storage::AuthorityCommitTransaction,
     pub event: AcceptedEvent,
+    pub parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
     /// Station-private pending intent created by `ak.agent.draft.propose`.
@@ -2306,6 +2307,7 @@ mod tests {
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
                 authority_commit,
+                parent_membership_admission: None,
                 device_pairing_authorization: None,
                 contact_projection: None,
                 agent_draft_pending_intent: None,

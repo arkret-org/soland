@@ -2313,6 +2313,7 @@ pub(super) async fn submit_event_value_with_context(
     let ProjectionPreflightOutcome {
         consent_admission,
         actor_private_account_data,
+        parent_membership_admission,
     } = apply_projection_preflight(
         state,
         ProjectionPreflightContext {
@@ -2509,6 +2510,7 @@ pub(super) async fn submit_event_value_with_context(
             internal_admission: context.internal_admission,
             consent_admission: consent_admission.as_ref(),
             actor_private_account_data,
+            parent_membership_admission,
             ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
             commit_options: commit_options.as_ref(),
             received_at,

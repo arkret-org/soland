@@ -17,6 +17,7 @@ pub(super) struct ProjectionPreflightContext<'a> {
 pub(super) struct ProjectionPreflightOutcome {
     pub(super) consent_admission: Option<crate::routing::identity::consent::ConsentAdmission>,
     pub(super) actor_private_account_data: Option<soland_services::events::CommitAccountDataCas>,
+    pub(super) parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
 }
 
 /// Run all reducer- and policy-facing projection checks before constructing
@@ -41,6 +42,7 @@ pub(super) async fn apply_projection_preflight(
     } = context;
     let mut consent_admission = None;
     let mut actor_private_account_data = None;
+    let mut parent_membership_admission = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::semantic_schema_violation(message));
@@ -323,12 +325,22 @@ pub(super) async fn apply_projection_preflight(
                     message,
                 ));
             }
-            if let Err(reason) = proj.check_membership_join_admission(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
+            match proj.prepare_parent_membership_admission(operation) {
+                Ok(Some(deferred)) => {
+                    parent_membership_admission =
+                        Some(soland_storage::ParentMembershipAdmissionCheck {
+                            expected_join_policy_digest: deferred.policy_digest,
+                            require_joined_source: deferred.require_joined_source,
+                        });
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    return Err(SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        reason,
+                        reason,
+                    ));
+                }
             }
             if let Err(reason) = proj.check_pin_scope_safety(operation) {
                 let status = if reason == "not_found" {
@@ -557,5 +569,6 @@ pub(super) async fn apply_projection_preflight(
     Ok(ProjectionPreflightOutcome {
         consent_admission,
         actor_private_account_data,
+        parent_membership_admission,
     })
 }

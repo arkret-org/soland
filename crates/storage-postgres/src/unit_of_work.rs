@@ -94,6 +94,32 @@ struct RelationCurrentResultRow {
     value: serde_json::Value,
 }
 
+#[derive(diesel::QueryableByName)]
+struct ParentMembershipAuthorityRow {
+    #[diesel(sql_type = BigInt)]
+    generation: i64,
+    #[diesel(sql_type = Text)]
+    service_id: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct ParentMembershipPolicyRow {
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct ParentMembershipLinkRow {
+    #[diesel(sql_type = Text)]
+    status: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct ParentMembershipMemberRow {
+    #[diesel(sql_type = Text)]
+    membership: String,
+}
+
 enum RelationCurrentResultMutation {
     Create(arkret_models_collaboration::events_payloads::RelationCreatePayload),
     Update(arkret_models_collaboration::events_payloads::RelationUpdatePayload),
@@ -102,6 +128,437 @@ enum RelationCurrentResultMutation {
 
 fn conflict(detail: impl Into<String>) -> PersistenceError {
     PersistenceError::Conflict(detail.into())
+}
+
+fn gate_check_failed() -> PersistenceError {
+    conflict("gate_check_failed")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ParentMembershipCombinator {
+    All,
+    Any,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParentMembershipDependencies {
+    combinator: ParentMembershipCombinator,
+    source_groups: Vec<Vec<arkret_wire::RealmId>>,
+    sources: Vec<arkret_wire::RealmId>,
+}
+
+fn parent_membership_dependencies(
+    join_policy: &serde_json::Value,
+) -> PersistenceResult<Option<ParentMembershipDependencies>> {
+    let Some(gates) = join_policy
+        .get("gates")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(None);
+    };
+    let mut source_groups = Vec::new();
+    for gate in gates {
+        if gate.get("kind").and_then(serde_json::Value::as_str) != Some("parent_membership") {
+            continue;
+        }
+        let raw_sources = gate
+            .get("membership_source_realm_ids")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(gate_check_failed)?;
+        let mut group = Vec::with_capacity(raw_sources.len());
+        for source in raw_sources {
+            let source = source
+                .as_str()
+                .ok_or_else(gate_check_failed)
+                .and_then(|source| {
+                    arkret_wire::RealmId::new(source.to_owned()).map_err(|_| gate_check_failed())
+                })?;
+            group.push(source);
+        }
+        if group.is_empty() {
+            return Err(gate_check_failed());
+        }
+        group.sort_by_key(arkret_wire::RealmId::token_bytes);
+        group.dedup();
+        source_groups.push(group);
+    }
+    if source_groups.is_empty() {
+        return Ok(None);
+    }
+    let combinator = match join_policy
+        .get("combinator")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("all") => ParentMembershipCombinator::All,
+        Some("any") => ParentMembershipCombinator::Any,
+        _ => return Err(gate_check_failed()),
+    };
+    let mut sources = source_groups.iter().flatten().cloned().collect::<Vec<_>>();
+    sources.sort_by_key(arkret_wire::RealmId::token_bytes);
+    sources.dedup();
+    Ok(Some(ParentMembershipDependencies {
+        combinator,
+        source_groups,
+        sources,
+    }))
+}
+
+fn parent_membership_gate_satisfied(
+    dependencies: &ParentMembershipDependencies,
+    joined_sources: &std::collections::BTreeSet<arkret_wire::RealmId>,
+) -> bool {
+    let group_satisfied = |group: &Vec<arkret_wire::RealmId>| {
+        group.iter().any(|source| joined_sources.contains(source))
+    };
+    match dependencies.combinator {
+        ParentMembershipCombinator::All => dependencies.source_groups.iter().all(group_satisfied),
+        ParentMembershipCombinator::Any => dependencies.source_groups.iter().any(group_satisfied),
+    }
+}
+
+#[cfg(test)]
+mod parent_membership_tests {
+    use std::collections::BTreeSet;
+
+    use super::{parent_membership_dependencies, parent_membership_gate_satisfied};
+
+    const SOURCE_A: &str = "ak:realm:AehJkZSB3P7C-ch-biRjD2flKZh73AhHpbhFnxWBhjo1";
+    const SOURCE_B: &str = "ak:realm:AYCKiTPA1bjQa3rIKg4O1PGpeq_EXPw1fnNCfHYhPsdG";
+
+    fn policy(combinator: &str) -> serde_json::Value {
+        serde_json::json!({
+            "combinator": combinator,
+            "gates": [
+                {
+                    "kind": "parent_membership",
+                    "membership_source_realm_ids": [SOURCE_A]
+                },
+                {
+                    "kind": "parent_membership",
+                    "membership_source_realm_ids": [SOURCE_B]
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn all_parent_gates_require_a_join_in_every_source_group() {
+        let dependencies = parent_membership_dependencies(&policy("all"))
+            .unwrap()
+            .unwrap();
+        let only_a = BTreeSet::from([arkret_wire::RealmId::new(SOURCE_A.to_owned()).unwrap()]);
+        assert!(!parent_membership_gate_satisfied(&dependencies, &only_a));
+        let both = BTreeSet::from([
+            arkret_wire::RealmId::new(SOURCE_A.to_owned()).unwrap(),
+            arkret_wire::RealmId::new(SOURCE_B.to_owned()).unwrap(),
+        ]);
+        assert!(parent_membership_gate_satisfied(&dependencies, &both));
+    }
+
+    #[test]
+    fn any_parent_gate_accepts_one_joined_source_group() {
+        let dependencies = parent_membership_dependencies(&policy("any"))
+            .unwrap()
+            .unwrap();
+        let only_a = BTreeSet::from([arkret_wire::RealmId::new(SOURCE_A.to_owned()).unwrap()]);
+        assert!(parent_membership_gate_satisfied(&dependencies, &only_a));
+    }
+}
+
+fn member_state_mutation(
+    event: &arkret_wire::Event,
+) -> PersistenceResult<Option<(String, String, serde_json::Value)>> {
+    let (member_id, membership, value) = match event.kind {
+        arkret_wire::EventKind::MemberState => {
+            let member = event.payload.get("member_id").cloned().ok_or_else(|| {
+                PersistenceError::SchemaViolation("member_state omits member_id".into())
+            })?;
+            let member: arkret_wire::ActorId = serde_json::from_value(member).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "member_state member_id is invalid: {error}"
+                ))
+            })?;
+            let membership = event
+                .payload
+                .get("membership")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    PersistenceError::SchemaViolation("member_state omits membership".into())
+                })?;
+            (
+                member.to_string(),
+                membership.to_owned(),
+                serde_json::to_value(&event.payload).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "member_state payload serialization failed: {error}"
+                    ))
+                })?,
+            )
+        }
+        arkret_wire::EventKind::InviteAccept => (
+            event.actor_id.to_string(),
+            "join".to_owned(),
+            serde_json::json!({"membership":"join"}),
+        ),
+        _ => return Ok(None),
+    };
+    Ok(Some((member_id, membership, value)))
+}
+
+async fn advisory_lock(conn: &mut AsyncPgConnection, key: String) -> PersistenceResult<()> {
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind::<Text, _>(key)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
+async fn lock_authorities_for_parent_membership(
+    conn: &mut AsyncPgConnection,
+    target: &arkret_wire::RealmId,
+    sources: &[arkret_wire::RealmId],
+    expected_target: &soland_storage::CurrentRealmAuthority,
+) -> PersistenceResult<()> {
+    let mut realms = sources.to_vec();
+    realms.push(target.clone());
+    realms.sort_by_key(arkret_wire::RealmId::token_bytes);
+    realms.dedup();
+    let mut service_id = None::<String>;
+    for realm in realms {
+        let row = sql_query(
+            "SELECT generation,service_id FROM realm_authorities WHERE realm_id=$1 FOR UPDATE",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .get_result::<ParentMembershipAuthorityRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(gate_check_failed)?;
+        if realm == *target
+            && (u64::try_from(row.generation).ok() != Some(expected_target.generation)
+                || row.service_id != expected_target.service_id.as_str())
+        {
+            return Err(gate_check_failed());
+        }
+        match service_id.as_ref() {
+            Some(expected) if expected != &row.service_id => return Err(gate_check_failed()),
+            None => service_id = Some(row.service_id),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+async fn locked_member_state(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    member_id: &str,
+) -> PersistenceResult<Option<String>> {
+    advisory_lock(
+        conn,
+        format!("parent-membership:member:{}:{member_id}", realm_id.as_str()),
+    )
+    .await?;
+    sql_query(
+        "SELECT membership FROM member_state_current_results \
+         WHERE realm_id=$1 AND member_id=$2 FOR UPDATE",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member_id)
+    .get_result::<ParentMembershipMemberRow>(&mut *conn)
+    .await
+    .optional()
+    .map(|row| row.map(|row| row.membership))
+    .map_err(PersistenceError::database)
+}
+
+async fn validate_parent_membership_dependencies(
+    conn: &mut AsyncPgConnection,
+    target: &arkret_wire::RealmId,
+    dependencies: &ParentMembershipDependencies,
+    member_id: Option<&str>,
+    require_parent_gate: bool,
+) -> PersistenceResult<()> {
+    for source in &dependencies.sources {
+        advisory_lock(
+            conn,
+            format!(
+                "parent-membership:link:{}:{}:join_gate_from",
+                target.as_str(),
+                source.as_str()
+            ),
+        )
+        .await?;
+        let row = sql_query(
+            "SELECT status FROM realm_link_current_results \
+             WHERE realm_id=$1 AND target_realm_id=$2 AND link_kind='join_gate_from' FOR UPDATE",
+        )
+        .bind::<Text, _>(target.as_str())
+        .bind::<Text, _>(source.as_str())
+        .get_result::<ParentMembershipLinkRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if row.as_ref().map(|row| row.status.as_str()) != Some("active") {
+            return Err(gate_check_failed());
+        }
+    }
+    let Some(member_id) = member_id else {
+        return Ok(());
+    };
+    let mut joined_sources = std::collections::BTreeSet::new();
+    for source in &dependencies.sources {
+        if locked_member_state(conn, source, member_id)
+            .await?
+            .as_deref()
+            == Some("join")
+        {
+            joined_sources.insert(source.clone());
+        }
+    }
+    let parent_gate_satisfied = parent_membership_gate_satisfied(dependencies, &joined_sources);
+    if require_parent_gate && !parent_gate_satisfied {
+        return Err(gate_check_failed());
+    }
+    Ok(())
+}
+
+/// Lock and revalidate the complete co-governed `parent_membership` cut before
+/// the canonical Event is queued. Any error therefore rolls back with zero
+/// Event, RealmCommit, or current-result writes.
+async fn prepare_parent_membership_transaction(
+    conn: &mut AsyncPgConnection,
+    request: &EventCommitRequest,
+) -> PersistenceResult<()> {
+    let event = &request.authority_commit.event;
+    if event.kind == arkret_wire::EventKind::RealmPolicyBundle {
+        let Some(join_policy) = event.payload.get("join_policy") else {
+            return Ok(());
+        };
+        let Some(dependencies) = parent_membership_dependencies(join_policy)? else {
+            return Ok(());
+        };
+        lock_authorities_for_parent_membership(
+            conn,
+            &event.realm_id,
+            &dependencies.sources,
+            &request.authority_commit.expected_authority,
+        )
+        .await?;
+        advisory_lock(
+            conn,
+            format!("parent-membership:policy:{}", event.realm_id.as_str()),
+        )
+        .await?;
+        validate_parent_membership_dependencies(conn, &event.realm_id, &dependencies, None, false)
+            .await?;
+        return Ok(());
+    }
+
+    if event.kind != arkret_wire::EventKind::MemberState
+        || event
+            .payload
+            .get("membership")
+            .and_then(serde_json::Value::as_str)
+            != Some("join")
+    {
+        if request.parent_membership_admission.is_some() {
+            return Err(PersistenceError::SchemaViolation(
+                "parent-membership admission plan is attached to a non-join Event".into(),
+            ));
+        }
+        return Ok(());
+    }
+    let member = event
+        .payload
+        .get("member_id")
+        .cloned()
+        .ok_or_else(gate_check_failed)
+        .and_then(|value| {
+            serde_json::from_value::<arkret_wire::ActorId>(value).map_err(|_| gate_check_failed())
+        })?
+        .to_string();
+
+    // An unlocked first read discovers the authority lock set. The later
+    // advisory + row lock and digest comparison make a concurrent policy
+    // change a fail-closed retry rather than a mixed transaction cut.
+    let candidate =
+        sql_query("SELECT value FROM realm_policy_bundle_current_results WHERE realm_id=$1")
+            .bind::<Text, _>(event.realm_id.as_str())
+            .get_result::<ParentMembershipPolicyRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+    let candidate_join_policy = candidate
+        .as_ref()
+        .and_then(|row| row.value.get("join_policy"));
+    let candidate_dependencies = candidate_join_policy
+        .map(parent_membership_dependencies)
+        .transpose()?
+        .flatten();
+    let Some(dependencies) = candidate_dependencies else {
+        if request.parent_membership_admission.is_some() {
+            return Err(gate_check_failed());
+        }
+        return Ok(());
+    };
+    lock_authorities_for_parent_membership(
+        conn,
+        &event.realm_id,
+        &dependencies.sources,
+        &request.authority_commit.expected_authority,
+    )
+    .await?;
+
+    // Existing join -> join updates are not entry admissions. Recheck under
+    // the same target authority and member-key locks used by the mutation.
+    if locked_member_state(conn, &event.realm_id, &member)
+        .await?
+        .as_deref()
+        == Some("join")
+    {
+        return Ok(());
+    }
+    let plan = request
+        .parent_membership_admission
+        .as_ref()
+        .ok_or_else(gate_check_failed)?;
+    advisory_lock(
+        conn,
+        format!("parent-membership:policy:{}", event.realm_id.as_str()),
+    )
+    .await?;
+    let current = sql_query(
+        "SELECT value FROM realm_policy_bundle_current_results WHERE realm_id=$1 FOR UPDATE",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .get_result::<ParentMembershipPolicyRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(gate_check_failed)?;
+    let join_policy = current
+        .value
+        .get("join_policy")
+        .ok_or_else(gate_check_failed)?;
+    let digest = arkret_wire::Hash::new(
+        arkret_canonical::canonical_sha256(join_policy).map_err(PersistenceError::database)?,
+    )
+    .map_err(|_| gate_check_failed())?;
+    if digest != plan.expected_join_policy_digest
+        || parent_membership_dependencies(join_policy)?.as_ref() != Some(&dependencies)
+    {
+        return Err(gate_check_failed());
+    }
+    validate_parent_membership_dependencies(
+        conn,
+        &event.realm_id,
+        &dependencies,
+        Some(&member),
+        plan.require_joined_source,
+    )
+    .await
 }
 
 fn relation_current_result_mutation(
@@ -412,6 +869,124 @@ async fn commit_relation_current_result_in_connection(
     .execute(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
+async fn commit_parent_membership_current_results(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let stream_position = i64::try_from(commit.stream_position).map_err(|_| {
+        PersistenceError::Internal(
+            "current-result stream position exceeds PostgreSQL BIGINT".into(),
+        )
+    })?;
+    let updated_at = std::cmp::max(event.created_at, commit.committed_at);
+    let payload_value = serde_json::to_value(&event.payload).map_err(|error| {
+        PersistenceError::Internal(format!("Event payload serialization failed: {error}"))
+    })?;
+    match event.kind {
+        arkret_wire::EventKind::RealmPolicyBundle => {
+            advisory_lock(
+                conn,
+                format!("parent-membership:policy:{}", event.realm_id.as_str()),
+            )
+            .await?;
+            sql_query(
+                "INSERT INTO realm_policy_bundle_current_results \
+                 (realm_id,current_commit_id,current_stream_position,value,updated_at) \
+                 VALUES($1,$2,$3,$4,$5) ON CONFLICT(realm_id) DO UPDATE SET \
+                 current_commit_id=EXCLUDED.current_commit_id, \
+                 current_stream_position=EXCLUDED.current_stream_position, \
+                 value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+            )
+            .bind::<Text, _>(event.realm_id.as_str())
+            .bind::<Text, _>(commit.commit_id.as_str())
+            .bind::<BigInt, _>(stream_position)
+            .bind::<Jsonb, _>(&payload_value)
+            .bind::<Timestamptz, _>(updated_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        }
+        arkret_wire::EventKind::RealmLink => {
+            let target_realm_id = event
+                .payload
+                .get("target_realm_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    PersistenceError::SchemaViolation("realm_link omits target_realm_id".into())
+                })?;
+            let link_kind = event
+                .payload
+                .get("link_kind")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    PersistenceError::SchemaViolation("realm_link omits link_kind".into())
+                })?;
+            let status = event
+                .payload
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    PersistenceError::SchemaViolation("realm_link omits status".into())
+                })?;
+            advisory_lock(
+                conn,
+                format!(
+                    "parent-membership:link:{}:{target_realm_id}:{link_kind}",
+                    event.realm_id.as_str()
+                ),
+            )
+            .await?;
+            sql_query(
+                "INSERT INTO realm_link_current_results \
+                 (realm_id,target_realm_id,link_kind,status,current_commit_id,current_stream_position,value,updated_at) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8) \
+                 ON CONFLICT(realm_id,target_realm_id,link_kind) DO UPDATE SET \
+                 status=EXCLUDED.status,current_commit_id=EXCLUDED.current_commit_id, \
+                 current_stream_position=EXCLUDED.current_stream_position, \
+                 value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+            )
+            .bind::<Text, _>(event.realm_id.as_str())
+            .bind::<Text, _>(target_realm_id)
+            .bind::<Text, _>(link_kind)
+            .bind::<Text, _>(status)
+            .bind::<Text, _>(commit.commit_id.as_str())
+            .bind::<BigInt, _>(stream_position)
+            .bind::<Jsonb, _>(&payload_value)
+            .bind::<Timestamptz, _>(updated_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        }
+        arkret_wire::EventKind::MemberState | arkret_wire::EventKind::InviteAccept => {
+            let Some((member_id, membership, value)) = member_state_mutation(event)? else {
+                return Ok(());
+            };
+            locked_member_state(conn, &event.realm_id, &member_id).await?;
+            sql_query(
+                "INSERT INTO member_state_current_results \
+                 (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(realm_id,member_id) DO UPDATE SET \
+                 membership=EXCLUDED.membership,current_commit_id=EXCLUDED.current_commit_id, \
+                 current_stream_position=EXCLUDED.current_stream_position, \
+                 value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+            )
+            .bind::<Text, _>(event.realm_id.as_str())
+            .bind::<Text, _>(&member_id)
+            .bind::<Text, _>(&membership)
+            .bind::<Text, _>(commit.commit_id.as_str())
+            .bind::<BigInt, _>(stream_position)
+            .bind::<Jsonb, _>(&value)
+            .bind::<Timestamptz, _>(updated_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -1536,6 +2111,8 @@ async fn commit_one_in_connection(
     }
     let event = &request.authority_commit.event;
 
+    prepare_parent_membership_transaction(conn, &request).await?;
+
     if let Some(commit) = request.device_pairing_authorization.as_ref() {
         if commit.authorized_event_ref != request.event.event_id {
             return Err(PersistenceError::SchemaViolation(
@@ -1569,6 +2146,7 @@ async fn commit_one_in_connection(
         commit_realm_authority_root_current_result_in_connection(conn, event, commit).await?;
         commit_relation_current_result_in_connection(conn, event, commit).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
+        commit_parent_membership_current_results(conn, event, commit).await?;
     }
     let committed_ref = arkret_wire::CommittedEventRef {
         event_id: event.event_id.clone(),

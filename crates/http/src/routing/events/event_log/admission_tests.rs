@@ -109,7 +109,7 @@ fn realm_policy_bundle_media_plaintext_authorization() {
 }
 
 #[test]
-fn parent_membership_policy_fails_closed_without_durable_authority_cut() {
+fn parent_membership_policy_shape_is_admitted_for_durable_transaction_validation() {
     let payload = json!({
         "join_policy": {
             "gates": [{
@@ -124,9 +124,7 @@ fn parent_membership_policy_fails_closed_without_durable_authority_cut() {
             "combinator": "all"
         }
     });
-    let err = realm_policy_bundle_check(&payload, false, false).unwrap_err();
-    assert_eq!(err.0, ErrorCode::FailedPrecondition);
-    assert!(err.1.starts_with("gate_check_failed"));
+    realm_policy_bundle_check(&payload, false, false).unwrap();
 }
 
 #[test]

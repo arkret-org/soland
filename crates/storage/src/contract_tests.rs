@@ -1599,6 +1599,7 @@ fn contract_applet_event_request(
 ) -> EventCommitRequest {
     EventCommitRequest {
         authority_commit: stream.accept(&event),
+        parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
@@ -2486,6 +2487,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let event_id = event.event_id.clone();
     let request = EventCommitRequest {
         authority_commit: stream.accept(&event),
+        parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
@@ -2650,6 +2652,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let pairing_event_id = pairing_event.event_id.clone();
     let pairing_commit = EventCommitRequest {
         authority_commit: stream.accept(&pairing_event),
+        parent_membership_admission: None,
         device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
             device_pairing_request_id: pairing_request_id.clone(),
             pairing_code: pairing_code.clone(),
@@ -2816,6 +2819,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     };
     let contact_commit = EventCommitRequest {
         authority_commit: stream.accept(&contact_event),
+        parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: Some(ContactProjectionCommit {
             completion_intent: None,
@@ -2909,6 +2913,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .unit_of_work
         .commit_event(EventCommitRequest {
             authority_commit: stream.accept(&failed_contact_event),
+            parent_membership_admission: None,
             device_pairing_authorization: None,
             contact_projection: Some(ContactProjectionCommit {
                 completion_intent: None,
@@ -2972,6 +2977,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_event_id = rollback_event.event_id.clone();
     let failed = EventCommitRequest {
         authority_commit: stream.order(&rollback_event),
+        parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
@@ -5142,6 +5148,7 @@ fn consent_commit_request(
 ) -> EventCommitRequest {
     EventCommitRequest {
         authority_commit,
+        parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,

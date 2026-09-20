@@ -86,6 +86,10 @@ pub struct EventCommitRequest {
     /// Realm, Circle, or Sidecar stream.
     pub authority_commit: crate::AuthorityCommitTransaction,
     pub event: CanonicalEventRecord,
+    /// Internal result of projection-owned join-gate validation.  It is not
+    /// authority: PostgreSQL must lock the exact policy named by the digest
+    /// and re-evaluate all `parent_membership` dependencies before writing.
+    pub parent_membership_admission: Option<ParentMembershipAdmissionCheck>,
     /// Optional staged device-pairing CAS consumed in the same durable
     /// boundary as the canonical Event and its reducer projection.
     pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
@@ -106,6 +110,16 @@ pub struct EventCommitRequest {
     pub projections: Vec<ProjectionEventRecord>,
     pub idempotency: Option<IdempotencyRecord>,
     pub outbox: Vec<FederationOutboxRecord>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParentMembershipAdmissionCheck {
+    pub expected_join_policy_digest: arkret_wire::Hash,
+    /// `true` when the join-policy combinator can pass only if at least one
+    /// source member row is currently `join`; `false` means another `any`
+    /// branch already passed, while the durable dependency cut still needs
+    /// revalidation.
+    pub require_joined_source: bool,
 }
 
 #[cfg(test)]

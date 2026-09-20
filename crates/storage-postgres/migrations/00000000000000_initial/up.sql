@@ -4242,6 +4242,52 @@ CREATE TABLE capability_grant_current_results (
 CREATE INDEX capability_grant_current_result_status
  ON capability_grant_current_results(realm_id,status,grant_id);
 
+-- Authoritative transaction inputs for co-governed parent-membership
+-- admission.  These are typed current results written in the same transaction
+-- as their accepting RealmCommit; the in-process product projection is never
+-- consulted by the admission cut.
+CREATE TABLE realm_policy_bundle_current_results (
+ realm_id TEXT PRIMARY KEY,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object')
+);
+
+CREATE TABLE realm_link_current_results (
+ realm_id TEXT NOT NULL,
+ target_realm_id TEXT NOT NULL,
+ link_kind TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('active','rejected','tombstoned')),
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,target_realm_id,link_kind),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'target_realm_id'=target_realm_id),
+ CHECK(value->>'link_kind'=link_kind),
+ CHECK(value->>'status'=status)
+);
+CREATE INDEX realm_link_current_result_gate
+ ON realm_link_current_results(realm_id,link_kind,status,target_realm_id);
+
+CREATE TABLE member_state_current_results (
+ realm_id TEXT NOT NULL,
+ member_id TEXT NOT NULL,
+ membership TEXT NOT NULL CHECK(membership IN ('join','knock','leave','ban')),
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,member_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'membership'=membership)
+);
+CREATE INDEX member_state_current_result_membership
+ ON member_state_current_results(realm_id,membership,member_id);
+
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.
 CREATE TABLE current_selector_origins (

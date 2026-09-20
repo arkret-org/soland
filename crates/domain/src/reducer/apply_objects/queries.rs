@@ -7,6 +7,19 @@ use arkret_models_collaboration::governance::membership_invite::JoinGateProof;
 
 use super::*;
 
+/// Internal hand-off from semantic preflight to the durable Event transaction.
+///
+/// This is deliberately not an authority result: it records only which
+/// branch of the already-validated join-policy combinator still needs the
+/// PostgreSQL transaction to supply the `parent_membership` verdict for.  The
+/// digest pins the exact policy the proof-bearing gates were evaluated
+/// against; storage must lock that policy and reject if it changed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeferredParentMembershipAdmission {
+    pub policy_digest: arkret_wire::Hash,
+    pub require_joined_source: bool,
+}
+
 impl ProjectionState {
     pub(crate) fn message_by_target_ref(&self, target_ref: &str) -> Option<&MessageState> {
         // Classify by canonical typed id, not by kind prefix: `ak:event:x` is
@@ -383,6 +396,77 @@ impl ProjectionState {
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
+        self.check_membership_join_admission_with_parent_verdict(operation, false)
+    }
+
+    /// Validate every projection-owned join gate while deferring only the
+    /// authoritative `parent_membership` read to the durable transaction.
+    ///
+    /// Running the deterministic policy evaluator with both possible parent
+    /// verdicts tells persistence whether a joined source is decisive (`all`,
+    /// or an `any` whose other proof gates failed) or whether only the durable
+    /// dependency cut must be revalidated because another `any` branch passed.
+    pub fn prepare_parent_membership_admission(
+        &self,
+        operation: &Operation,
+    ) -> Result<Option<DeferredParentMembershipAdmission>, &'static str> {
+        let Some(arkret_wire::EventKind::MemberState) =
+            crate::kinds::canonical_kind_for_operation(operation)
+        else {
+            self.check_membership_join_admission(operation)?;
+            return Ok(None);
+        };
+        let payload = operation
+            .typed_payload::<arkret_wire::event_spec::MemberState>()
+            .map_err(|_| "gate_check_failed")?;
+        if payload.membership
+            != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
+            || self
+                .member(operation.realm_id.as_str(), &payload.member_id.to_string())
+                .is_some_and(|membership| membership.state == "join")
+        {
+            self.check_membership_join_admission(operation)?;
+            return Ok(None);
+        }
+        let Some(join_policy) = self.realm_join_policy_value(operation.realm_id.as_str()) else {
+            self.check_membership_join_admission(operation)?;
+            return Ok(None);
+        };
+        let has_parent = join_policy
+            .get("gates")
+            .and_then(Value::as_array)
+            .is_some_and(|gates| {
+                gates.iter().any(|gate| {
+                    gate.get("kind").and_then(Value::as_str) == Some("parent_membership")
+                })
+            });
+        if !has_parent {
+            self.check_membership_join_admission(operation)?;
+            return Ok(None);
+        }
+        let policy_digest = arkret_canonical::canonical_sha256(join_policy)
+            .map_err(|_| "gate_check_failed")
+            .and_then(|digest| arkret_wire::Hash::new(digest).map_err(|_| "gate_check_failed"))?;
+        let require_joined_source =
+            match self.check_membership_join_admission_with_parent_verdict(operation, false) {
+                Ok(()) => false,
+                Err("gate_check_failed") => {
+                    self.check_membership_join_admission_with_parent_verdict(operation, true)?;
+                    true
+                }
+                Err(reason) => return Err(reason),
+            };
+        Ok(Some(DeferredParentMembershipAdmission {
+            policy_digest,
+            require_joined_source,
+        }))
+    }
+
+    fn check_membership_join_admission_with_parent_verdict(
+        &self,
+        operation: &Operation,
+        parent_membership_allows: bool,
+    ) -> Result<(), &'static str> {
         let kind = crate::kinds::canonical_kind_for_operation(operation);
         let (member, hard_gates_only) = match &kind {
             Some(arkret_wire::EventKind::MemberState) => {
@@ -423,7 +507,7 @@ impl ProjectionState {
             // entry and therefore does not re-run entry gates or the join rule.
             return Ok(());
         }
-        self.check_join_request_gates(
+        self.check_join_request_gates_with_parent_verdict(
             operation.realm_id.as_str(),
             member,
             hard_gates_only,
@@ -435,6 +519,7 @@ impl ProjectionState {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]),
             operation.created_at,
+            parent_membership_allows,
         )
     }
 
@@ -447,6 +532,28 @@ impl ProjectionState {
         is_self_authored: bool,
         raw_proofs: &[Value],
         now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), &'static str> {
+        self.check_join_request_gates_with_parent_verdict(
+            realm_id,
+            member,
+            hard_gates_only,
+            is_self_authored,
+            raw_proofs,
+            now,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_join_request_gates_with_parent_verdict(
+        &self,
+        realm_id: &str,
+        member: &str,
+        hard_gates_only: bool,
+        is_self_authored: bool,
+        raw_proofs: &[Value],
+        now: chrono::DateTime<chrono::Utc>,
+        parent_membership_allows: bool,
     ) -> Result<(), &'static str> {
         let join_rule = (!hard_gates_only).then(|| self.realm_default_join_rule(realm_id));
         if join_rule.is_some_and(|rule| matches!(rule, "invite" | "closed")) && is_self_authored {
@@ -580,6 +687,7 @@ impl ProjectionState {
                         &policy_digest,
                         realm_id,
                         now,
+                        parent_membership_allows,
                     ) {
                         return Err("gate_check_failed");
                     }
@@ -596,6 +704,7 @@ impl ProjectionState {
                         &policy_digest,
                         realm_id,
                         now,
+                        parent_membership_allows,
                     ) {
                         return Ok(());
                     }
@@ -652,14 +761,16 @@ impl ProjectionState {
         policy_digest: &arkret_wire::Hash,
         realm_id: &str,
         event_created_at: chrono::DateTime<chrono::Utc>,
+        parent_membership_allows: bool,
     ) -> bool {
         let kind = gate.get("kind").and_then(Value::as_str);
         if kind == Some("parent_membership") {
-            // This gate is authoritative only when the storage admission
-            // transaction locks target policy/link/authority rows and source
-            // authority/member rows. ProjectionState is a cache and cannot
-            // satisfy that contract, so it must never authorize a join.
-            return false;
+            // The ordinary public method always passes false.  The HTTP
+            // admission lane may pass true only to determine whether the
+            // already-validated non-parent gates leave this gate decisive;
+            // PostgreSQL still has to lock and re-evaluate the authoritative
+            // policy/link/tenure/member rows before any write is possible.
+            return parent_membership_allows;
         }
         let Some(proof) = gate
             .get("gate_id")

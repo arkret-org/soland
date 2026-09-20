@@ -1032,6 +1032,7 @@ fn franking_event_request(
     let authority_commit = stream.order(settlement, &event, received_at);
     soland_storage::EventCommitRequest {
         authority_commit,
+        parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
