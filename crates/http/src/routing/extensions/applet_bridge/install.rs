@@ -145,7 +145,7 @@ pub(super) fn validate_admin_install_events(
         || registration.actor_id.route_service_id() != &basis.target_station_id
         || &registration.realm_id != realm_id
         || registration.scope_ref != basis.effective_scope
-        || registration.proofs.is_empty()
+        || registration.producer_proof.is_none()
     {
         return Err(AppError::param_invalid(
             "registration_event must be a caller-signed Applet registration in the exact effective scope",
@@ -205,7 +205,7 @@ pub(super) fn validate_admin_install_events(
             || event.actor_id.route_service_id() != &basis.target_station_id
             || &event.realm_id != realm_id
             || event.scope_ref != basis.effective_scope
-            || event.proofs.is_empty()
+            || event.producer_proof.is_none()
             || !event_ids.insert(event.event_id.clone())
         {
             return Err(AppError::param_invalid(
@@ -311,7 +311,7 @@ fn validate_bot_managed_actor_unit(
         || provision_event.actor_id != service_actor_id
         || provision_event.applet_id.as_ref() != Some(&expected_applet_id)
         || provision_event.realm_id != *basis.effective_scope.realm_id()
-        || provision_event.proofs.is_empty()
+        || provision_event.producer_proof.is_none()
     {
         return Err(AppError::param_invalid(
             "bot_actor_provision_event does not match the installed Applet service and scope",
@@ -432,9 +432,9 @@ fn validate_bot_managed_actor_unit(
         || profile_accountability_role_count != 1
         || profile_accountability_ref_count != 1
         || accountability
-            .proofs
+            .producer_proof
             .iter()
-            .chain(profile.proofs.iter())
+            .chain(profile.producer_proof.iter())
             .any(|proof| proof.verification_method != registration_verification_method)
     {
         return Err(AppError::param_invalid(

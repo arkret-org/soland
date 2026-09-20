@@ -2274,7 +2274,7 @@ mod tests {
                 created_at: now,
                 refs: Vec::new(),
                 payload: BTreeMap::new(),
-                proofs: Vec::new(),
+                producer_proof: None,
             },
             commit: arkret_wire::RealmCommit {
                 commit_id: arkret_wire::RealmCommitId::from_digest([0x32; 32]),

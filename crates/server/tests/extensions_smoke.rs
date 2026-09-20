@@ -1578,7 +1578,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit_scenario() 
             .any(|did| did == &json!(package.service_id.to_string()))
     );
     assert_eq!(
-        profile_event.envelope["proofs"][0]["kind"],
+        profile_event.envelope["producer_proof"]["kind"],
         json!("detached_jws")
     );
 

@@ -263,7 +263,10 @@ fn sign_contact_draft(
     )
     .expect("sign prepared Contact Event");
     let event = event.into_event();
-    let proof = event.proofs.first().expect("signed Contact producer proof");
+    let proof = event
+        .producer_proof
+        .as_ref()
+        .expect("signed Contact producer proof");
     let envelope_bytes = arkret_signatures::EventProofBuilder::new()
         .envelope_bytes(&event)
         .expect("Contact Event proof envelope bytes");

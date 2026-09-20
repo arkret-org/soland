@@ -589,7 +589,7 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
         verification_method.clone(),
     );
     let created_at = event.created_at;
-    event.proofs.clear();
+    event.producer_proof = None;
     let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
         event,
         arkret_canonical::DigestSuite::Sha256,
@@ -603,7 +603,11 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
     )
     .expect("federation fixture signs with its development verification method");
     let event = event.into_event();
-    let producer = event.proofs[0].clone();
+    let producer = event
+        .producer_proof
+        .as_ref()
+        .expect("producer proof")
+        .clone();
     arkret_signatures::Ed25519DetachedJwsVerifier::new()
         .verify_detached_jws(
             &producer.jws,

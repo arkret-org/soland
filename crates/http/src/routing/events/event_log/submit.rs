@@ -751,7 +751,12 @@ impl InternalEventAdmission {
             device_id: device_id.into(),
             binding: InternalEventBinding::ProofAuthenticatedEvent {
                 event_id: event.event_id.to_string(),
-                producer_verification_method: event.proofs[0].verification_method.clone(),
+                producer_verification_method: event
+                    .producer_proof
+                    .as_ref()
+                    .expect("validated producer proof")
+                    .verification_method
+                    .clone(),
                 producer_signing_key,
             },
         }
@@ -825,9 +830,7 @@ impl InternalEventAdmission {
                         .unwrap_or_else(|| self.actor_id.clone());
                     event_signer == *signer_actor_id
                         && object
-                            .get("proofs")
-                            .and_then(Value::as_array)
-                            .and_then(|proofs| proofs.first())
+                            .get("producer_proof")
                             .and_then(Value::as_object)
                             .and_then(|proof| proof.get("verification_method"))
                             .and_then(Value::as_str)
@@ -2667,7 +2670,7 @@ pub(in crate::routing) async fn verify_federated_event_admission(
     event: &arkret_wire::Event,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), String> {
-    let [producer] = event.proofs.as_slice() else {
+    let Some(producer) = event.producer_proof.as_ref() else {
         return Err("accepted Event must carry exactly one producer proof".to_owned());
     };
     let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {

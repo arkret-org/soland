@@ -273,9 +273,9 @@ pub(super) async fn validate_signed_ghost_provision_events(
         ));
     }
     if accountability
-        .proofs
+        .producer_proof
         .iter()
-        .chain(profile.proofs.iter())
+        .chain(profile.producer_proof.iter())
         .any(|proof| proof.verification_method != registration_verification_method)
     {
         return Err(AppError::capability_denied(
@@ -394,7 +394,7 @@ async fn validate_ghost_managed_actor_unit(
         || event.actor_id != service_actor_id
         || event.applet_id.as_ref() != Some(&basis.applet_id)
         || event.realm_id != basis.realm_id
-        || event.proofs.is_empty()
+        || event.producer_proof.is_none()
     {
         return Err(AppError::param_invalid(
             "managed_actor_provision_event does not match the installed Applet service",

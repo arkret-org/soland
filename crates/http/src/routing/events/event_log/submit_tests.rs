@@ -466,7 +466,11 @@ mod federated_producer_event_proof_tests {
     #[test]
     fn federated_producer_uses_strict_event_header_profile() {
         let event = fixture_event();
-        let producer = event.proofs[0].clone();
+        let producer = event
+            .producer_proof
+            .as_ref()
+            .expect("producer proof")
+            .clone();
         let key = SigningKey::from_bytes(&[21_u8; 32]);
 
         verify_federated_producer_event_proof(
@@ -708,10 +712,10 @@ mod internal_event_admission_tests {
             "kind": arkret_wire::EventKind::SelfModerationReport.as_str(),
             "executed_by": agent,
             "authorization_ref": "did:web:alice-agent.example#authorized-event",
-            "proofs": [{
+            "producer_proof": {
                 "kind": "detached_jws",
                 "verification_method": method,
-            }],
+            },
         });
         let object = object.as_object().unwrap();
 

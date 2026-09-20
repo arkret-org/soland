@@ -86,11 +86,9 @@ pub(super) async fn reject_revoked_actor_device_signature(
     actor_id: &str,
 ) -> Result<(), EventValidationError> {
     let proof_devices = object
-        .get("proofs")
-        .and_then(Value::as_array)
+        .get("producer_proof")
+        .and_then(Value::as_object)
         .into_iter()
-        .flatten()
-        .filter_map(Value::as_object)
         .filter_map(|proof| event_string_field(proof, &["verification_method"]))
         .filter_map(|vm| actor_device_id_from_verification_method(&vm, actor_id))
         .collect::<std::collections::BTreeSet<_>>();

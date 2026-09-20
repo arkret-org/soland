@@ -814,9 +814,9 @@ fn sign_lease(
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<AuthorizationLease, AppError> {
     let actor_id = event
-        .proofs
-        .iter()
-        .find_map(|proof| {
+        .producer_proof
+        .as_ref()
+        .and_then(|proof| {
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
             (arkret_wire::project_did_to_core_id(&did).ok().as_ref()

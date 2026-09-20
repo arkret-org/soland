@@ -517,7 +517,7 @@ fn bind_pairing_request_to_controller_device(
     body.authorize_event.event.executed_by = Some(arkret_wire::ActorId::service(
         crate::test_actor_id_str(&web_did(controller_principal_id)),
     ));
-    body.authorize_event.event.proofs = vec![proof.into()];
+    body.authorize_event.event.producer_proof = Some(proof.into());
 }
 
 #[test]
@@ -547,7 +547,12 @@ fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
     bind_pairing_request_to_controller_device(&mut body, controller_principal_id);
-    let proof = &mut body.authorize_event.event.proofs[0];
+    let proof = body
+        .authorize_event
+        .event
+        .producer_proof
+        .as_mut()
+        .expect("producer proof");
     proof.verification_method = arkret_wire::DidUrl::new(format!(
         "{}#ak:device:01904100-0000-7000-8000-000000000099",
         web_did(controller_principal_id)
@@ -563,7 +568,12 @@ fn service_pairing_rejects_a_non_device_controller_proof() {
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
     bind_pairing_request_to_controller_device(&mut body, controller_principal_id);
-    let proof = &mut body.authorize_event.event.proofs[0];
+    let proof = body
+        .authorize_event
+        .event
+        .producer_proof
+        .as_mut()
+        .expect("producer proof");
     proof.verification_method =
         arkret_wire::DidUrl::new(format!("{}#key-1", web_did(controller_principal_id))).unwrap();
 

@@ -1462,7 +1462,7 @@ mod tests {
             "prev_refs": [],
             "seal_basis": { "leaves": [BASIS_SEAL] },
             "payload": payload,
-            "proofs": [],
+            "producer_proof": null,
         })
     }
 

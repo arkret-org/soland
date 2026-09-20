@@ -1165,7 +1165,7 @@ pub(super) async fn agent_key_pair(
     let event = &body.authorize_event.event;
     let expected_digest = event.event_id.event_digest();
     let mut producer_count = 0;
-    for proof in event.proofs.iter() {
+    if let Some(proof) = event.producer_proof.as_ref() {
         if proof.event_digest != expected_digest {
             return Err(AppError::param_invalid(
                 "authorize Event proof digest mismatch",
@@ -1307,8 +1307,8 @@ pub(super) fn service_pairing_controller_device_id(
 
     let verification_method = submission
         .event
-        .proofs
-        .first()
+        .producer_proof
+        .as_ref()
         .map(|proof| proof.verification_method.as_str())
         .ok_or_else(|| {
             AppError::capability_denied(

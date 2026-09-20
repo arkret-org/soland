@@ -209,7 +209,7 @@ pub(in crate::routing) async fn validate_message_authoring_candidate(
         }
         result
     };
-    if event.kind != arkret_wire::EventKind::MessageCreate || !event.proofs.is_empty() {
+    if event.kind != arkret_wire::EventKind::MessageCreate || event.producer_proof.is_some() {
         return Err(crate::app_error!(
             SchemaViolation,
             "expected unsigned Message candidate",
@@ -520,12 +520,8 @@ async fn validate_event_envelope_with_ingress(
                 "executed_by must be a Core DidCoreId",
             )
         })?;
-        let proofs = object
-            .get("proofs")
-            .and_then(Value::as_array)
-            .and_then(|arr| arr.first())
-            .and_then(Value::as_object);
-        let vm = proofs.and_then(|proof| event_string_field(proof, &["verification_method"]));
+        let proof = object.get("producer_proof").and_then(Value::as_object);
+        let vm = proof.and_then(|proof| event_string_field(proof, &["verification_method"]));
         let vm_actor = vm
             .as_deref()
             .and_then(|raw| raw.rsplit_once('#').map(|(did, _)| did))
@@ -551,9 +547,7 @@ async fn validate_event_envelope_with_ingress(
     // Event the provisioning binding forbids it on. The registration gate
     // (installed, unrevoked, bound to this Realm) still runs either way.
     let producer_signs_as_actor = object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .and_then(|proofs| proofs.first())
+        .get("producer_proof")
         .and_then(Value::as_object)
         .and_then(|proof| event_string_field(proof, &["verification_method"]))
         .and_then(|vm| vm.rsplit_once('#').map(|(did, _)| did.to_owned()))
@@ -1284,9 +1278,8 @@ async fn enforce_device_generation_fence(
         return Ok(());
     }
     if let Some(verification_method) = object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .and_then(|proofs| proofs.first())
+        .get("producer_proof")
+        .and_then(Value::as_object)
         .and_then(|proof| proof.get("verification_method"))
         .and_then(Value::as_str)
         && internal_admission.is_some_and(|admission| {
@@ -1323,9 +1316,8 @@ async fn enforce_device_generation_fence(
         return Ok(());
     }
     let verification_method = object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .and_then(|proofs| proofs.first())
+        .get("producer_proof")
+        .and_then(Value::as_object)
         .and_then(|proof| proof.get("verification_method"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
@@ -1386,9 +1378,8 @@ async fn event_uses_active_applet_registration_epoch(
         return Ok(false);
     };
     let Some(verification_method) = object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .and_then(|proofs| proofs.first())
+        .get("producer_proof")
+        .and_then(Value::as_object)
         .and_then(|proof| proof.get("verification_method"))
         .and_then(Value::as_str)
     else {

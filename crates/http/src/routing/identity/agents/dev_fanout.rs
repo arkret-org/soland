@@ -236,7 +236,7 @@ pub(super) fn validate_durable_agent_lifecycle(
             "lifecycle_event does not match the Agent controller binding",
         ));
     }
-    if event.proofs.is_empty() {
+    if event.producer_proof.is_none() {
         return Err(
             AppError::param_invalid("lifecycle_event must carry a controller proof")
                 .with_wire_code("controller_signed_event_required"),

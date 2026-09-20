@@ -1012,11 +1012,11 @@ fn validate_signed_sidecar_draft(
     .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event digest: {error}")))?;
     if actual_unsigned != expected_unsigned
         || digest != draft.event_digest
-        || signed_event.proofs.is_empty()
+        || signed_event.producer_proof.is_none()
         || signed_event
-            .proofs
-            .iter()
-            .any(|proof| proof.event_digest != draft.event_digest)
+            .producer_proof
+            .as_ref()
+            .is_some_and(|proof| proof.event_digest != draft.event_digest)
     {
         return Err(AppError::param_invalid(
             "signed Sidecar Event does not exactly match its reservation draft",

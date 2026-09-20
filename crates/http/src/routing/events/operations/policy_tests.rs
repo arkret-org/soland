@@ -1555,9 +1555,8 @@ async fn direct_conversation_admission_precedence_is_registry_order() {
         arkret_wire::EventKind::RealmTombstone,
         json!({ "sender": "ak:did_core:web:alice.example" }),
     );
-    root_terminal.context.authorization_ref = Some(
-        arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap(),
-    );
+    root_terminal.context.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap());
     assert_eq!(
         validate_operation_policy(&state, &[root_terminal])
             .await
@@ -1571,9 +1570,8 @@ async fn direct_conversation_admission_precedence_is_registry_order() {
         arkret_wire::EventKind::RealmArchive,
         json!({ "sender": "ak:did_core:web:alice.example" }),
     );
-    root_operational.context.authorization_ref = Some(
-        arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap(),
-    );
+    root_operational.context.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap());
     assert_eq!(
         validate_operation_policy(&state, &[root_operational])
             .await

@@ -27,7 +27,7 @@ fn cascade_error(
 }
 
 fn event_producer_device_id(event: &arkret_wire::Event) -> Result<String, SubmitOneError> {
-    let producer = event.proofs.first().ok_or_else(|| {
+    let producer = event.producer_proof.as_ref().ok_or_else(|| {
         cascade_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_proof",
@@ -1692,7 +1692,7 @@ mod tests {
         )
         .unwrap();
         let device_id = "ak:device:01904100-0000-7000-8000-000000000001";
-        event.proofs = vec![arkret_wire::ProducerEventProof {
+        event.producer_proof = Some(arkret_wire::ProducerEventProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             proof_purpose: None,
             verification_method: arkret_wire::DidUrl::new(format!(
@@ -1711,10 +1711,10 @@ mod tests {
             domain: None,
             audience: None,
             jws: "fixture.signature".to_owned(),
-        }];
+        });
         assert_eq!(event_producer_device_id(&event).unwrap(), device_id);
 
-        let producer = &mut event.proofs[0];
+        let producer = event.producer_proof.as_mut().expect("producer proof");
         producer.verification_method =
             arkret_wire::DidUrl::new(format!("did:web:other.example#{device_id}")).unwrap();
         assert!(event_producer_device_id(&event).is_err());

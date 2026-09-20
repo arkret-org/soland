@@ -464,8 +464,8 @@ pub(super) async fn admit_mimi_room_binding_event(
     }
     let sender_account = local_mimi_sender_account(&sender_actor_id, &state.service_core_id())?;
     let device_id = event
-        .proofs
-        .first()
+        .producer_proof
+        .as_ref()
         .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
         .map(|(_, fragment)| fragment.to_owned())
         .ok_or_else(|| {

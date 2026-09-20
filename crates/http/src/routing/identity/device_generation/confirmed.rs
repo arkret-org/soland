@@ -122,7 +122,7 @@ pub(crate) async fn load_confirmed_device_history(
             "DID inception root does not authenticate the selected Account",
         ));
     }
-    let [proof] = genesis.proofs.as_slice() else {
+    let Some(proof) = genesis.producer_proof.as_ref() else {
         return Err(invalid(
             "PCR genesis requires its unique inception-root proof",
         ));
@@ -283,7 +283,7 @@ pub(crate) async fn candidate_device_control_projection(
             "DID inception root does not authenticate the selected Account",
         ));
     }
-    let [proof] = genesis.proofs.as_slice() else {
+    let Some(proof) = genesis.producer_proof.as_ref() else {
         return Err(invalid(
             "PCR genesis requires its unique inception-root proof",
         ));

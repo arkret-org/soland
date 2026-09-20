@@ -147,7 +147,7 @@ impl Default for DeviceHistoryFixtureOptions {
     }
 }
 fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
-    event.proofs.clear();
+    event.producer_proof = None;
     event
         .refresh_content_bound_identity_with_digest_suite(DigestSuite::Sha256)
         .unwrap();
@@ -166,7 +166,7 @@ fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
         &SigningKey::from_bytes(&seed),
     )
     .unwrap();
-    event.proofs.push(proof);
+    event.producer_proof = Some(proof);
     event
 }
 

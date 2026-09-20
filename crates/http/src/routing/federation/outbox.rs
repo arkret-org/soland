@@ -2353,7 +2353,7 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-            event.proofs = vec![arkret_wire::ProducerEventProof {
+            event.producer_proof = Some(arkret_wire::ProducerEventProof {
                 kind: "detached_jws".to_owned(),
                 verification_method: arkret_wire::DidUrl::new(
                     "did:webvh:z6mkalice:alice.example#device-1",
@@ -2372,7 +2372,7 @@ mod tests {
                 audience: None,
                 proof_purpose: None,
                 jws: "a..b".to_owned(),
-            }];
+            });
             let event_digest = arkret_identifiers::Hash::new(
                 event
                     .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)

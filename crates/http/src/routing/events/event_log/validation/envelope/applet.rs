@@ -593,7 +593,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
         })?;
 
     if executed_by == &arkret_wire::ActorId::service(package.service_id.clone())
-        && let Some(verification_method) = first_event_proof_verification_method(object)
+        && let Some(verification_method) = event_proof_verification_method(object)
         && !evidence.contains_signing_key(&verification_method)
     {
         return Err(event_validation_error(
@@ -700,13 +700,11 @@ pub(super) fn delegated_applet_resource_candidates(
     resources
 }
 
-pub(super) fn first_event_proof_verification_method(
+pub(super) fn event_proof_verification_method(
     object: &serde_json::Map<String, Value>,
 ) -> Option<String> {
     object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .and_then(|proofs| proofs.first())
+        .get("producer_proof")
         .and_then(Value::as_object)
         .and_then(|proof| event_string_field(proof, &["verification_method"]))
 }

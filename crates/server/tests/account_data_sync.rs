@@ -667,7 +667,7 @@ fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
             DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
         ));
         foreign_submission.event.actor_id = foreign_actor.clone();
-        foreign_submission.event.proofs.clear();
+        foreign_submission.event.producer_proof = None;
         let verification_method = arkret_wire::DidUrl::new(format!(
             "{actor}#ak:device:01904100-0000-7000-8000-a11ce0000011"
         ))
@@ -763,11 +763,7 @@ fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
         );
         assert_eq!(event["payload"]["expected_server_revision"], 1);
         assert_eq!(event["payload"]["body"], second_value);
-        assert!(
-            event["proofs"]
-                .as_array()
-                .is_some_and(|proofs| !proofs.is_empty())
-        );
+        assert!(event["producer_proof"].is_object());
         assert!(
             !event.to_string().contains(
                 first_value["ciphertext"]

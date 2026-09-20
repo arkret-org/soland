@@ -79,7 +79,7 @@ pub(crate) async fn verify_historical_producer(
     event: &Event,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<arkret::historical_producer::VerifiedHistoricalEventProducer, String> {
-    let [proof] = event.proofs.as_slice() else {
+    let Some(proof) = event.producer_proof.as_ref() else {
         return Err("ordinary Event needs exactly one producer proof".to_owned());
     };
     let reference = proof

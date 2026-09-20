@@ -248,9 +248,9 @@ fn validate_registration_epoch_proof_method(
     label: &str,
 ) -> Result<(), String> {
     if event
-        .proofs
-        .iter()
-        .any(|proof| proof.verification_method != verification_method)
+        .producer_proof
+        .as_ref()
+        .is_some_and(|proof| proof.verification_method != verification_method)
     {
         return Err(format!(
             "stored {label} Event proof is outside the Applet registration epoch"
@@ -796,7 +796,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        event.proofs = vec![
+        event.producer_proof = Some(
             ProducerEventProof {
                 kind: "detached_jws".to_owned(),
                 verification_method: DidUrl::new(
@@ -812,7 +812,7 @@ mod tests {
                 jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
             }
             .into(),
-        ];
+        );
         event
     }
 

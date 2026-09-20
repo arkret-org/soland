@@ -151,7 +151,7 @@ impl ContactCompletionIntent {
         self.producer_signer
             .validate_for_event(&self.plan.event, &self.plan.holder)
             .map_err(|error| invalid(&error.to_string()))?;
-        let [proof] = self.plan.event.proofs.as_slice() else {
+        let Some(proof) = self.plan.event.producer_proof.as_ref() else {
             return Err(invalid("Contact requires one authenticated producer proof"));
         };
         if &proof.verification_method != self.producer_signer.verification_method()

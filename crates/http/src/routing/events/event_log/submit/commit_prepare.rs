@@ -341,7 +341,7 @@ pub(super) async fn prepare_accepted_event_command(
                 "Contact plan does not bind the authenticated Event bytes".into(),
             ));
         }
-        let [proof] = draft.event.proofs.as_slice() else {
+        let Some(proof) = draft.event.producer_proof.as_ref() else {
             return Err(invalid("Contact requires one producer".into()));
         };
         let did_key = parsed

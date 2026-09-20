@@ -75,7 +75,7 @@ pub(crate) async fn validate_device_authorization_binding(
             DeviceOrPrincipalRef::DeviceId(authorizer),
         ) => {
             let proof_methods = event
-                .proofs
+                .producer_proof
                 .iter()
                 .map(|proof| proof.verification_method.as_str())
                 .collect::<Vec<_>>();

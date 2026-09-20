@@ -918,11 +918,11 @@ fn validate_signed_event(event: &Event, draft: &PreparedEventDraft) -> Result<()
     .map_err(|error| AppError::param_invalid(format!("signed Contact digest: {error}")))?;
     if actual != expected
         || digest != draft.event_digest
-        || event.proofs.is_empty()
+        || event.producer_proof.is_none()
         || event
-            .proofs
-            .iter()
-            .any(|proof| proof.event_digest != draft.event_digest)
+            .producer_proof
+            .as_ref()
+            .is_some_and(|proof| proof.event_digest != draft.event_digest)
     {
         return Err(AppError::conflict(
             "signed Contact Event differs from its durable reservation draft",

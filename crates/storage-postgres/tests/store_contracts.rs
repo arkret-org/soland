@@ -997,7 +997,7 @@ fn franking_event_request(
     // carries the structural-only detached JWS bound to these exact bytes.
     let event_digest =
         arkret_wire::Hash::new(canonical_digest.clone()).expect("fixture event digest hash");
-    event.proofs = vec![arkret_wire::ProducerEventProof {
+    event.producer_proof = Some(arkret_wire::ProducerEventProof {
         kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
         verification_method: arkret_wire::DidUrl::new(format!(
             "{}#franking-device",
@@ -1010,7 +1010,7 @@ fn franking_event_request(
         audience: None,
         proof_purpose: None,
         jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
-    }];
+    });
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     let authority_commit = stream.order(settlement, &event, received_at);
@@ -1460,7 +1460,13 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
         rebound.event.event_id, event_id,
         "a different proof set must not change the content-bound Event id"
     );
-    rebound.authority_commit.event.proofs[0].verification_method =
+    rebound
+        .authority_commit
+        .event
+        .producer_proof
+        .as_mut()
+        .expect("producer proof")
+        .verification_method =
         arkret_wire::DidUrl::new(format!("{}#rebound-device", fixture_did(&actor_id))).unwrap();
     rebound.event.envelope = serde_json::to_value(&rebound.authority_commit.event).unwrap();
     assert_ne!(rebound.event.envelope, admitted_envelope);

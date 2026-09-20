@@ -1404,24 +1404,20 @@ async fn continue_commit_recovery_unit(
             "submitted first-generation Seal is not the frozen prepared body",
         ));
     }
-    let mut producer_methods = plan
+    let expected_verification_method = plan
         .reanchor_unit
         .request
         .events
         .get(1)
         .ok_or_else(|| AppError::internal("prepared recovery unit has no authorize Event"))?
         .event
-        .proofs
-        .iter()
-        .map(|proof| &proof.verification_method);
-    let expected_verification_method = producer_methods
-        .next()
+        .producer_proof
+        .as_ref()
+        .map(|proof| proof.verification_method.clone())
         .ok_or_else(|| {
             AppError::internal("prepared replacement authorization Event has no producer proof")
-        })?
-        .clone();
-    if producer_methods.next().is_some()
-        || attestation.auth_data.verification_method != expected_verification_method.as_str()
+        })?;
+    if attestation.auth_data.verification_method != expected_verification_method.as_str()
         || receipt.auth_data.verification_method != expected_verification_method.as_str()
         || first_generation_seal.notary_signature.verification_method
             != expected_verification_method.as_str()

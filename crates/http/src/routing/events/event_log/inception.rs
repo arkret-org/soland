@@ -334,9 +334,9 @@ mod tests {
                     }
                 }
             },
-            "proofs": [{
+            "producer_proof": {
                 "verification_method": "did:key:z6MkruntimeExample#z6MkruntimeExample"
-            }]
+            }
         })
         .as_object()
         .expect("event object")

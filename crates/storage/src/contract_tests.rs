@@ -1453,7 +1453,7 @@ fn canonical_wire_event_record(
     // case is the storage boundary and not signature verification, so it
     // carries the structural-only detached JWS bound to these exact bytes.
     let event_digest = Hash::new(canonical_digest.clone()).expect("contract event digest hash");
-    event.proofs = vec![arkret_wire::ProducerEventProof {
+    event.producer_proof = Some(arkret_wire::ProducerEventProof {
         kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
         verification_method: DidUrl::new(format!(
             "did:{}#contract-device",
@@ -1469,7 +1469,7 @@ fn canonical_wire_event_record(
         audience: None,
         proof_purpose: None,
         jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
-    }];
+    });
     let envelope = serde_json::to_value(&event).expect("contract wire event encodes");
     let decoded: arkret_wire::Event =
         serde_json::from_value(envelope.clone()).expect("contract Event decodes");

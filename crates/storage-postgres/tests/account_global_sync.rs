@@ -547,7 +547,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
                 .unwrap(),
         )
         .unwrap();
-        event.proofs = vec![arkret_wire::ProducerEventProof {
+        event.producer_proof = Some(arkret_wire::ProducerEventProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "did:{}#cas-device",
@@ -560,7 +560,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
             audience: None,
             proof_purpose: None,
             jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
-        }];
+        });
         let record = soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),
             actor_id: event.actor_id.to_string(),
@@ -751,7 +751,7 @@ async fn account_blocklist_commit_replays_exactly_and_cas_conflict_rolls_back_ev
                 .unwrap(),
         )
         .unwrap();
-        event.proofs = vec![arkret_wire::ProducerEventProof {
+        event.producer_proof = Some(arkret_wire::ProducerEventProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "did:{}#blocklist-device",
@@ -764,7 +764,7 @@ async fn account_blocklist_commit_replays_exactly_and_cas_conflict_rolls_back_ev
             audience: None,
             proof_purpose: None,
             jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
-        }];
+        });
         let commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
             event.event_id.as_str().as_bytes(),
         ));

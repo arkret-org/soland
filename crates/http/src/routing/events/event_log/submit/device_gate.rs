@@ -4,7 +4,7 @@ async fn historical_device_producer(
     state: &AppState,
     event: &Event,
 ) -> Result<Option<arkret::historical_producer::VerifiedHistoricalEventProducer>, SubmitOneError> {
-    let [producer] = event.proofs.as_slice() else {
+    let Some(producer) = event.producer_proof.as_ref() else {
         return Ok(None);
     };
     let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {

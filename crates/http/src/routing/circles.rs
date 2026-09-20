@@ -420,8 +420,8 @@ fn caller_signed_circle_create_id(actor: &ActorId, event: &Event) -> Result<Circ
     }
     let derived = arkret_schema::derived_object_id_for_kind(event.kind.as_str(), &event.event_id)
         .ok_or_else(|| {
-            AppError::param_invalid("create_event derives no Circle id from its event_id")
-        })?;
+        AppError::param_invalid("create_event derives no Circle id from its event_id")
+    })?;
     CircleId::new(derived).map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))
 }
 
@@ -728,7 +728,7 @@ mod tests {
             "actor_id": account_actor(ACTOR),
             "created_at": "2026-07-06T00:00:00.000Z",
             "payload": { "object": object },
-            "proofs": [],
+            "producer_proof": null,
         }))
         .expect("circle create envelope")
     }
@@ -821,7 +821,7 @@ mod tests {
             "actor_id": account_actor(actor),
             "created_at": "2026-07-06T00:00:00.000Z",
             "payload": payload,
-            "proofs": [],
+            "producer_proof": null,
         }))
         .expect("member state envelope")
     }

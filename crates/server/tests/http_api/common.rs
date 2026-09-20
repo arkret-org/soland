@@ -1297,7 +1297,7 @@ pub(crate) fn caller_signed_event<'a>(
 
 pub(crate) fn resign_canonical_event(event: &mut Value) {
     let verification_method = arkret_wire::DidUrl::new(
-        event["proofs"][0]["verification_method"]
+        event["producer_proof"]["verification_method"]
             .as_str()
             .expect("fixture verification method")
             .to_owned(),
@@ -2063,7 +2063,7 @@ pub(crate) async fn set_test_device_authorization_window(
         .unwrap()
         .unwrap();
     let mut event: arkret_wire::Event = serde_json::from_value(previous.envelope).unwrap();
-    event.proofs.clear();
+    event.producer_proof = None;
     event.payload.insert(
         "not_before".to_owned(),
         serde_json::json!(arkret_canonical::format_timestamp_canonical(not_before)),

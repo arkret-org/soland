@@ -958,7 +958,7 @@ pub async fn erase_receipt(
         .to_owned();
     let legal_hold_blocked = outcome == "blocked_by_legal_hold";
 
-    // Build the default redacted projection: drop the erased content + proofs
+    // Build the default redacted projection: drop the erased content + producer proof
     // entirely (key removed, not nulled) so no erased plaintext survives in the
     // default view. §3.4: legal hold blocks hard erasure but the default
     // display still applies redaction, so the strip happens regardless of
@@ -967,7 +967,7 @@ pub async fn erase_receipt(
     if let Some(object) = projected.as_object_mut() {
         strip_path(object, "payload.content");
         strip_path(object, "content");
-        object.remove("proofs");
+        object.remove("producer_proof");
         object.remove("sender_actor_id");
         // Surface a tombstone marker keyed by the signed receipt so an auditor
         // can pivot to the retained verification stub.
@@ -1800,7 +1800,7 @@ mod tests {
             "event_id": "ak:event:derived",
             "actor_id": "ak:did_core:web:alice.example",
             "payload": {"body": "hello"},
-            "proofs": [{"kind": "detached_jws"}],
+            "producer_proof": {"kind": "detached_jws"},
             "unsigned": {"local": true}
         });
 

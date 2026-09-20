@@ -526,7 +526,7 @@ async fn seed_agent_grant_session_with_suite(
     )
     .unwrap();
     let mut authorize_event = authorize_event.into_event();
-    let [producer] = authorize_event.proofs.as_mut_slice() else {
+    let Some(producer) = authorize_event.producer_proof.as_mut() else {
         panic!("fixture Event must contain exactly one producer proof");
     };
     let evidence_digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
@@ -592,8 +592,8 @@ async fn seed_agent_grant_session_with_suite(
         outcome: arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active,
         authorized_key_event: key_authorization_event,
         signer_resolution_evidence_ref: authorize_event
-            .proofs
-            .first()
+            .producer_proof
+            .as_ref()
             .and_then(|proof| proof.signer_resolution_evidence_ref.clone()),
         current_signer_evidence: None,
         authorized_at: now,
@@ -618,8 +618,8 @@ async fn seed_agent_grant_session_with_suite(
         .await
         .unwrap();
     let producer = authorize_event
-        .proofs
-        .first()
+        .producer_proof
+        .as_ref()
         .expect("accepted control Event carries a producer proof");
     let dependency_selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
         content_digest: producer
@@ -1368,8 +1368,8 @@ async fn events_describe_and_single_event_submit_work_body() {
     .unwrap();
     assert_eq!(fetched["event"]["event_id"], first_event_id);
     assert_eq!(
-        fetched["event"]["proofs"][0]["event_digest"],
-        first["proofs"][0]["event_digest"]
+        fetched["event"]["producer_proof"]["event_digest"],
+        first["producer_proof"]["event_digest"]
     );
     assert_eq!(fetched["visibility"]["realm_id"], demo_realm_id());
 

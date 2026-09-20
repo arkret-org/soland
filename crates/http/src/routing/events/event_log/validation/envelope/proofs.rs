@@ -177,7 +177,7 @@ pub(crate) async fn validate_event_proofs(
     actor_id: &str,
     expected_payload_digest: &str,
     digest_suite: arkret_canonical::DigestSuite,
-    // The Event's canonical bytes with `proofs` / `unsigned` stripped — exactly
+    // The Event's canonical bytes with `producer_proof` / `unsigned` stripped — exactly
     // what `expected_payload_digest` was computed over. The SDK Event-proof
     // verifier re-derives `event_digest` from these and constant-time compares
     // it to `proof.event_digest`, so the transcript the signature covers is
@@ -202,30 +202,14 @@ pub(crate) async fn validate_event_proofs(
             format!("event actor_id is invalid: {error}"),
         )
     })?;
-    let proofs = object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "param_missing",
-                "proofs are required",
-            )
-        })?;
-    if proofs.is_empty() {
-        return Err(event_validation_error(
+    let proof = object.get("producer_proof").ok_or_else(|| {
+        event_validation_error(
             StatusCode::BAD_REQUEST,
             "param_missing",
-            "proofs must contain at least one proof",
-        ));
-    }
-    if proofs.len() != 1 {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "Event must carry exactly one producer proof",
-        ));
-    }
+            "producer_proof is required",
+        )
+    })?;
+    let proofs = std::slice::from_ref(proof);
     // Durable Events always carry the SDK Event proof shape. Development mode
     // changes deployment trust roots, never the protocol transcript.
     // Device-identity B-model (device-lifecycle.md §5.4): a delegated-execution
@@ -334,7 +318,7 @@ pub(crate) async fn validate_event_proofs(
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_proof",
-                "event proofs must be JSON objects",
+                "event producer_proof must be a JSON object",
             ));
         };
         let required_fields: &[&str] = &[
@@ -842,13 +826,13 @@ mod tests {
             "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new(actor).unwrap(), crate::test_event::station_id(),
             )),
-            "proofs": [{
+            "producer_proof": {
                 "kind": "detached_jws",
                 "verification_method": verification_method,
                 "event_digest": format!("sha256:{}", "1".repeat(64)),
                 "created_at": "2026-07-21T08:00:00.000Z",
                 "jws": "eyJhbGciOiJFZDI1NTE5In0..signature"
-            }]
+            }
         })
     }
 
@@ -953,7 +937,13 @@ mod tests {
         let envelope_bytes =
             arkret_canonical::canonical_json_bytes(&event.event().digest_payload().unwrap())
                 .unwrap();
-        let event_digest = event.event().proofs[0].event_digest.to_string();
+        let event_digest = event
+            .event()
+            .producer_proof
+            .as_ref()
+            .expect("producer proof")
+            .event_digest
+            .to_string();
         let object = serde_json::to_value(event.event()).unwrap();
         let object = object.as_object().unwrap();
         let admission = InternalEventAdmission::service_franking_proof(

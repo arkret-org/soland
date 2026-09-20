@@ -1673,11 +1673,11 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
         event
             .validate_proof_bindings_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
-        assert_eq!(event.proofs.len(), 1);
+        assert!(event.producer_proof.is_some());
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         arkret_signatures::verify_ed25519_detached_jws_proof(
-            &event.proofs[0],
+            event.producer_proof.as_ref().expect("producer proof"),
             &canonical_bytes,
             &event.actor_id,
             &public_key,
@@ -2216,7 +2216,7 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation_b
         .unwrap()
         .unwrap();
     assert_eq!(
-        provision.envelope["proofs"][0]["verification_method"],
+        provision.envelope["producer_proof"]["verification_method"],
         format!("{controller}#{CONTROLLER_DEVICE_ID}")
     );
 }

@@ -1409,8 +1409,8 @@ pub(crate) async fn verify_retained_control_event_proofs(
     .map_err(|error| error.to_string())?;
     let uses_account_device_control = references_retained_account_device_control(
         event
-            .proofs
-            .first()
+            .producer_proof
+            .as_ref()
             .and_then(|proof| proof.signer_resolution_evidence_ref.as_ref()),
         &dependencies,
     );
@@ -1599,9 +1599,8 @@ fn canonical_actor(value: &str) -> Result<arkret_wire::ActorId, AppError> {
 fn event_signer_device_id(record: &AcceptedEvent) -> Option<String> {
     let verification_method = record
         .envelope
-        .get("proofs")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|proofs| proofs.first())
+        .get("producer_proof")
+        .and_then(serde_json::Value::as_object)
         .and_then(|proof| proof.get("verification_method"))
         .and_then(serde_json::Value::as_str)?;
     let actor = canonical_actor(&record.actor_id).ok()?;

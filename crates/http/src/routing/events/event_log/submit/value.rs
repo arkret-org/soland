@@ -1174,7 +1174,7 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
     {
         return Some("event has no non-empty Seal basis");
     }
-    if sole_self_principal_pcr_producer_proof(&event.proofs).is_none() {
+    if event.producer_proof.is_none() {
         return Some("event does not carry exactly one producer proof");
     }
     if self_principal_pcr_device_id(event).is_none() {
@@ -1184,7 +1184,9 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
 }
 
 fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
-    let (controller, fragment) = sole_self_principal_pcr_producer_proof(&event.proofs)?
+    let (controller, fragment) = event
+        .producer_proof
+        .as_ref()?
         .verification_method
         .as_str()
         .rsplit_once('#')?;
@@ -1220,18 +1222,6 @@ fn self_principal_pcr_device_query_for_station(
         actor_id: account.principal_id.to_string(),
         device_id,
     })
-}
-
-/// Select the one proof that can author an Ack-less self-PCR Control Move.
-///
-/// Every submitted and accepted Event contains exactly this producer proof.
-fn sole_self_principal_pcr_producer_proof(
-    proofs: &[arkret_wire::ProducerEventProof],
-) -> Option<&arkret_wire::ProducerEventProof> {
-    let [producer] = proofs else {
-        return None;
-    };
-    Some(producer)
 }
 
 /// The ingress authority judgement for a candidate Ack-less self-principal
@@ -1519,7 +1509,7 @@ pub(super) async fn accepted_event_envelope(
     ),
     SubmitOneError,
 > {
-    let [producer] = event.proofs.as_slice() else {
+    let Some(producer) = event.producer_proof.as_ref() else {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
@@ -1601,7 +1591,7 @@ pub(super) fn accepted_identity_anchor_native_event_envelope(
     ),
     SubmitOneError,
 > {
-    let [producer] = event.proofs.as_slice() else {
+    let Some(producer) = event.producer_proof.as_ref() else {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
@@ -1642,7 +1632,7 @@ pub(super) fn validate_producer_submission_shape(
     if session.token_hash.starts_with("federation:") {
         return Ok(());
     }
-    if event.proofs.len() != 1 {
+    if event.producer_proof.is_none() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
@@ -1656,7 +1646,7 @@ pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Event) -> 
     let Ok(existing) = serde_json::from_slice::<arkret_wire::Event>(existing_bytes) else {
         return false;
     };
-    if submitted.proofs.len() != 1 {
+    if submitted.producer_proof.is_none() {
         return false;
     }
     existing == *submitted
@@ -1763,7 +1753,10 @@ pub(in crate::routing::events::event_log) async fn validate_membership_compensat
         )
     })?;
     let core = &evidence.delegation.core;
-    let producer_method = event.proofs.first().map(|proof| &proof.verification_method);
+    let producer_method = event
+        .producer_proof
+        .as_ref()
+        .map(|proof| &proof.verification_method);
     if producer_method != Some(&core.executor_proof_key_kid)
         || evidence.delegation.signature.verification_method != core.verification_method
         || evidence.terminal_certificate.issuer_id != *core.executor_id.signing_principal_id()
@@ -1839,8 +1832,8 @@ pub(in crate::routing::events::event_log) async fn validate_membership_compensat
             )
         })?;
     let join_producer_method = accepted_join_event
-        .proofs
-        .first()
+        .producer_proof
+        .as_ref()
         .map(|proof| &proof.verification_method);
     if accepted_join_event.kind != arkret_wire::EventKind::MemberState
         || accepted_join_event.realm_id != core.resource_id
@@ -3410,7 +3403,7 @@ mod local_device_authorization_tests {
             )
             .unwrap(),
         };
-        event.proofs = vec![proof];
+        event.producer_proof = Some(proof);
         for actor in [foreign, arkret_wire::ActorId::service(principal)] {
             event.actor_id = actor;
             assert!(self_principal_pcr_control_shape_rejection(&event).is_none());
@@ -3481,16 +3474,8 @@ mod local_device_authorization_tests {
     #[test]
     fn accepted_self_pcr_event_keeps_one_producer_authority() {
         let producer = producer_proof();
-        let proofs = vec![producer.clone()];
-
-        assert_eq!(
-            sole_self_principal_pcr_producer_proof(&proofs),
-            Some(&producer)
-        );
-
-        let mut ambiguous = proofs;
-        ambiguous.push(producer);
-        assert!(sole_self_principal_pcr_producer_proof(&ambiguous).is_none());
+        let event_producer = Some(producer.clone());
+        assert_eq!(event_producer.as_ref(), Some(&producer));
     }
 
     /// Canonical negative on the local write surface: the device has no

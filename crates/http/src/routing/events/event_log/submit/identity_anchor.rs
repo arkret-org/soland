@@ -2155,7 +2155,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        event.proofs = vec![
+        event.producer_proof = Some(
             arkret_wire::ProducerEventProof {
                 kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
                 proof_purpose: None,
@@ -2169,7 +2169,7 @@ mod tests {
                 jws: "fixture.signature".to_owned(),
             }
             .into(),
-        ];
+        );
     }
 
     fn fixture_founding_authorize_payload(
@@ -2337,7 +2337,11 @@ mod tests {
         let mut event: arkret_wire::Event =
             serde_json::from_value(sdk_canonical_self_principal_bootstrap_unit().remove(0))
                 .unwrap();
-        event.proofs[0].signer_resolution_evidence_ref = Some(
+        event
+            .producer_proof
+            .as_mut()
+            .expect("producer proof")
+            .signer_resolution_evidence_ref = Some(
             arkret_wire::SignerEvidenceRef::new(format!(
                 "ak:signer_evidence:sha256:{}",
                 "1".repeat(64)
@@ -2361,7 +2365,7 @@ mod tests {
         create.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );
-        create.proofs.clear();
+        create.producer_proof = None;
         attach_bootstrap_fixture_proof(
             &mut create,
             "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
@@ -2401,13 +2405,11 @@ mod tests {
             .map(|value| arkret_identifiers::EventId::new(value.as_str().unwrap()).unwrap())
             .collect();
         if let Some(jws) = envelope
-            .get("proofs")
-            .and_then(Value::as_array)
-            .and_then(|proofs| proofs.first())
+            .get("producer_proof")
             .and_then(|proof| proof.get("jws"))
             .and_then(Value::as_str)
         {
-            event.proofs.push(
+            event.producer_proof = Some(
                 arkret_wire::ProducerEventProof {
                     kind: "detached_jws".to_owned(),
                     proof_purpose: None,
@@ -2631,7 +2633,7 @@ mod tests {
                 &json!({
                     "event_id": event_id("000000000001"),
                     "kind": "ak.device.reanchor",
-                    "proofs": [{"jws": "first-transport-proof"}]
+                    "producer_proof": {"jws": "first-transport-proof"}
                 }),
                 10,
             ),
@@ -2642,7 +2644,7 @@ mod tests {
                 &json!({
                     "event_id": event_id("000000000002"),
                     "kind": "ak.device.authorize",
-                    "proofs": [{"jws": "first-authority-proof"}]
+                    "producer_proof": {"jws": "first-authority-proof"}
                 }),
                 11,
             ),
@@ -2685,9 +2687,9 @@ mod tests {
             .unwrap();
 
         let mut retried_reanchor = reanchor.envelope;
-        retried_reanchor["proofs"][0]["jws"] = json!("retried-transport-proof");
+        retried_reanchor["producer_proof"]["jws"] = json!("retried-transport-proof");
         let mut retried_authorize = authorize.envelope;
-        retried_authorize["proofs"][0]["jws"] = json!("retried-authority-proof");
+        retried_authorize["producer_proof"]["jws"] = json!("retried-authority-proof");
         let mut candidates = Vec::new();
         for envelope in [retried_reanchor, retried_authorize] {
             let id = event_string_field_from_value(&envelope, "event_id").unwrap();

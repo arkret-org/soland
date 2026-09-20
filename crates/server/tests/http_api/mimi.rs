@@ -564,7 +564,12 @@ async fn exact_human_mimi_report_body(
     .await;
     let report_event: arkret_wire::Event = serde_json::from_value(report_event).unwrap();
     assert_eq!(report_event.actor_id, reporter_actor);
-    let verification_method = report_event.proofs[0].verification_method.clone();
+    let verification_method = report_event
+        .producer_proof
+        .as_ref()
+        .expect("producer proof")
+        .verification_method
+        .clone();
     let created_at = chrono::Utc::now();
     let mut body = arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
         reporter_authority: arkret_models_collaboration::http_bodies::MimiReporterAuthority {
@@ -620,7 +625,7 @@ fn sign_mimi_agent_report_event(
     let signer_did =
         arkret_identity::verification_method_did(verification_method.as_str()).unwrap();
     let mut event: arkret_wire::Event = serde_json::from_value(event).unwrap();
-    event.proofs.clear();
+    event.producer_proof = None;
     let created_at = event.created_at;
     let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
         event,

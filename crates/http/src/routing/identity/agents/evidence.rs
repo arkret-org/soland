@@ -191,7 +191,7 @@ pub(crate) async fn verified_station_agent_key(
             else {
                 return Err(invalid());
             };
-            let [producer] = event.proofs.as_slice() else {
+            let Some(producer) = event.producer_proof.as_ref() else {
                 return Err(invalid());
             };
             if &producer.verification_method != verification_method {
@@ -526,7 +526,7 @@ pub(crate) async fn historical_authenticated_agent_signer_evidence(
     if event.executed_by.as_ref().unwrap_or(&event.actor_id) != actor {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     }
-    let [producer] = event.proofs.as_slice() else {
+    let Some(producer) = event.producer_proof.as_ref() else {
         return Err(AgentEvidenceAcquisitionFailure::AgentSignerEvidenceMissing);
     };
     if &producer.verification_method != verification_method {

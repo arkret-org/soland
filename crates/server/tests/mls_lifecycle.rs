@@ -281,7 +281,7 @@ fn signed_event(
 
 fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
     let verification_method = arkret_wire::DidUrl::new(
-        event["proofs"][0]["verification_method"]
+        event["producer_proof"]["verification_method"]
             .as_str()
             .unwrap()
             .to_owned(),

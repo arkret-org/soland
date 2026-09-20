@@ -454,11 +454,16 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     // everything, so only the combination of both outcomes below proves the
     // verification is live). ────────────────────────────────────────────────
     let mut forged_body = serde_json::to_value(&key_pair_body).unwrap();
-    let proof = key_pair_body.authorize_event.event.proofs.first().unwrap();
+    let proof = key_pair_body
+        .authorize_event
+        .event
+        .producer_proof
+        .as_ref()
+        .unwrap();
     let proof_transcript = proof
         .canonical_binding_bytes(&key_pair_body.authorize_event.event.actor_id)
         .unwrap();
-    forged_body["authorize_event"]["event"]["proofs"][0]["jws"] = Value::String(
+    forged_body["authorize_event"]["event"]["producer_proof"]["jws"] = Value::String(
         arkret_signatures::jws::sign_jws_ed25519(
             &proof_transcript,
             &SigningKey::from_bytes(&[77u8; 32]),
@@ -787,7 +792,7 @@ async fn verify_owned_agent_direct_founding(
             .refs
             .retain(|reference| reference.role != founding_ref.role);
         event.refs.push(founding_ref.clone());
-        event.proofs.clear();
+        event.producer_proof = None;
         sign_fixture_event(
             event,
             controller,
@@ -1068,7 +1073,7 @@ async fn verify_owned_agent_direct_founding(
         )
         .unwrap(),
     );
-    denied_event.proofs.clear();
+    denied_event.producer_proof = None;
     let denied_event = sign_fixture_event(
         denied_event,
         controller,
