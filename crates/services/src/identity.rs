@@ -863,6 +863,86 @@ pub fn fold_device_verification_checkpoint(
     (state, source)
 }
 
+/// Current facts required before a verification checkpoint can authorize a
+/// live device action. The accepted authorization Event is the durable
+/// checkpoint; the `current_*` values are the projection presented for use.
+#[derive(Clone, Copy, Debug)]
+pub struct DeviceCheckpointLiveFacts<'a> {
+    pub lifecycle_active: bool,
+    pub verification_state: DeviceSummaryVerificationState,
+    pub verification_source: Option<DeviceSummaryVerificationSource>,
+    pub revocation_gate_active: bool,
+    pub checkpoint_authorization_event_id: Option<&'a str>,
+    pub current_authorization_event_id: Option<&'a str>,
+    pub checkpoint_generation_ref: Option<u64>,
+    pub current_generation_ref: Option<u64>,
+    pub checkpoint_signing_key: Option<&'a str>,
+    pub current_signing_key: Option<&'a str>,
+    pub checkpoint_hpke_key: Option<&'a str>,
+    pub current_hpke_key: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceCheckpointIneligibility {
+    LifecycleNotActive,
+    VerificationNotCurrent,
+    MissingVerificationSource,
+    RevocationGateNotActive,
+    AuthorizationEventMismatch,
+    GenerationMismatch,
+    SigningKeyMismatch,
+    HpkeKeyMismatch,
+}
+
+/// Evaluate the complete live-authorization fence for one durable device
+/// verification checkpoint.
+///
+/// Revocation and revocation-pending are represented by a non-active
+/// revocation gate and do not rewrite the orthogonal verification projection.
+/// Generation or exact-key mismatch prevents use of the former checkpoint;
+/// callers may separately project generation mismatch as `stale`.
+pub fn evaluate_device_checkpoint_live_eligibility(
+    facts: DeviceCheckpointLiveFacts<'_>,
+) -> Result<(), DeviceCheckpointIneligibility> {
+    if !facts.lifecycle_active {
+        return Err(DeviceCheckpointIneligibility::LifecycleNotActive);
+    }
+    if facts.verification_state != DeviceSummaryVerificationState::Verified {
+        return Err(DeviceCheckpointIneligibility::VerificationNotCurrent);
+    }
+    if facts.verification_source.is_none() {
+        return Err(DeviceCheckpointIneligibility::MissingVerificationSource);
+    }
+    if !facts.revocation_gate_active {
+        return Err(DeviceCheckpointIneligibility::RevocationGateNotActive);
+    }
+    if !exact_present_match(
+        facts.checkpoint_authorization_event_id,
+        facts.current_authorization_event_id,
+    ) {
+        return Err(DeviceCheckpointIneligibility::AuthorizationEventMismatch);
+    }
+    if facts.checkpoint_generation_ref.is_none()
+        || facts.checkpoint_generation_ref != facts.current_generation_ref
+    {
+        return Err(DeviceCheckpointIneligibility::GenerationMismatch);
+    }
+    if !exact_present_match(facts.checkpoint_signing_key, facts.current_signing_key) {
+        return Err(DeviceCheckpointIneligibility::SigningKeyMismatch);
+    }
+    if !exact_present_match(facts.checkpoint_hpke_key, facts.current_hpke_key) {
+        return Err(DeviceCheckpointIneligibility::HpkeKeyMismatch);
+    }
+    Ok(())
+}
+
+fn exact_present_match(checkpoint: Option<&str>, current: Option<&str>) -> bool {
+    matches!(
+        (checkpoint.map(str::trim), current.map(str::trim)),
+        (Some(checkpoint), Some(current)) if !checkpoint.is_empty() && checkpoint == current
+    )
+}
+
 #[async_trait]
 pub trait DeviceKeyPort: Send + Sync {
     async fn save_bundle(
@@ -3186,6 +3266,70 @@ mod tests {
             ),
             (DeviceSummaryVerificationState::Unresolved, None),
             "an unconfirmed bootstrap row never had a portable checkpoint to stale",
+        );
+    }
+
+    fn live_checkpoint_facts() -> DeviceCheckpointLiveFacts<'static> {
+        DeviceCheckpointLiveFacts {
+            lifecycle_active: true,
+            verification_state: DeviceSummaryVerificationState::Verified,
+            verification_source: Some(DeviceSummaryVerificationSource::PairingCode),
+            revocation_gate_active: true,
+            checkpoint_authorization_event_id: Some("ak:event:checkpoint"),
+            current_authorization_event_id: Some("ak:event:checkpoint"),
+            checkpoint_generation_ref: Some(7),
+            current_generation_ref: Some(7),
+            checkpoint_signing_key: Some("did:key:z6MkCheckpoint"),
+            current_signing_key: Some("did:key:z6MkCheckpoint"),
+            checkpoint_hpke_key: Some("z6LSCheckpoint"),
+            current_hpke_key: Some("z6LSCheckpoint"),
+        }
+    }
+
+    #[test]
+    fn device_checkpoint_live_eligibility_requires_active_lifecycle_and_revocation_gate() {
+        assert_eq!(
+            evaluate_device_checkpoint_live_eligibility(live_checkpoint_facts()),
+            Ok(()),
+        );
+
+        let mut revoked = live_checkpoint_facts();
+        revoked.lifecycle_active = false;
+        revoked.revocation_gate_active = false;
+        assert_eq!(
+            evaluate_device_checkpoint_live_eligibility(revoked),
+            Err(DeviceCheckpointIneligibility::LifecycleNotActive),
+        );
+
+        let mut revocation_pending = live_checkpoint_facts();
+        revocation_pending.revocation_gate_active = false;
+        assert_eq!(
+            evaluate_device_checkpoint_live_eligibility(revocation_pending),
+            Err(DeviceCheckpointIneligibility::RevocationGateNotActive),
+        );
+    }
+
+    #[test]
+    fn device_checkpoint_live_eligibility_fences_generation_and_exact_key_rotation() {
+        let mut generation_fenced = live_checkpoint_facts();
+        generation_fenced.current_generation_ref = Some(8);
+        assert_eq!(
+            evaluate_device_checkpoint_live_eligibility(generation_fenced),
+            Err(DeviceCheckpointIneligibility::GenerationMismatch),
+        );
+
+        let mut signing_key_rotated = live_checkpoint_facts();
+        signing_key_rotated.current_signing_key = Some("did:key:z6MkRotated");
+        assert_eq!(
+            evaluate_device_checkpoint_live_eligibility(signing_key_rotated),
+            Err(DeviceCheckpointIneligibility::SigningKeyMismatch),
+        );
+
+        let mut hpke_key_rotated = live_checkpoint_facts();
+        hpke_key_rotated.current_hpke_key = Some("z6LSRotated");
+        assert_eq!(
+            evaluate_device_checkpoint_live_eligibility(hpke_key_rotated),
+            Err(DeviceCheckpointIneligibility::HpkeKeyMismatch),
         );
     }
 

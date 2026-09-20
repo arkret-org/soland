@@ -293,13 +293,44 @@ pub(crate) async fn current_device_authorization(
     else {
         return Ok(None);
     };
-    if event_id.as_str() != selector.target_device_authorize_event_id
-        || generation != selector.target_device_generation_ref
-        || state
-            .persistence()
-            .device_revocation_gate_status(&selector)
-            .await?
-            != soland_storage::DeviceRevocationGateStatus::Active
+    let revocation_gate_active = state
+        .persistence()
+        .device_revocation_gate_status(&selector)
+        .await?
+        == soland_storage::DeviceRevocationGateStatus::Active;
+    let authorization_binding_kind = match authorization.authorization_binding_kind {
+        arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor => "registration_anchor",
+        arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::AcceptedDevice => "accepted_device",
+        arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery => "pcr_recovery",
+        arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::AppletManagedDelegation => "applet_managed_delegation",
+    };
+    let (verification_state, verification_source) =
+        soland_services::identity::fold_device_verification_checkpoint(
+            "verified",
+            true,
+            Some(authorization_binding_kind),
+            false,
+        );
+    if soland_services::identity::evaluate_device_checkpoint_live_eligibility(
+        soland_services::identity::DeviceCheckpointLiveFacts {
+            lifecycle_active: facet.status == DeviceStatus::Active,
+            verification_state,
+            verification_source,
+            revocation_gate_active,
+            checkpoint_authorization_event_id: Some(event_id.as_str()),
+            current_authorization_event_id: Some(selector.authorization_ref.event_id.as_str()),
+            checkpoint_generation_ref: Some(generation),
+            // `active_device_revocation_gate_selector` has already compared
+            // this durable authorization generation with the current PCR
+            // generation and returns no selector on a fence.
+            current_generation_ref: Some(generation),
+            checkpoint_signing_key: Some(authorization.device_public_key_did.as_str()),
+            current_signing_key: facet.signing_key_did.as_deref(),
+            checkpoint_hpke_key: Some(authorization.hpke_key.as_str()),
+            current_hpke_key: facet.hpke_key.as_deref(),
+        },
+    )
+    .is_err()
         || !device_authorization_is_effective_at(&authorization, chrono::Utc::now())
     {
         return Ok(None);
