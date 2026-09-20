@@ -295,6 +295,32 @@ fn rsvp_projects_the_complete_entry_as_the_settled_value() {
 }
 
 #[test]
+fn rsvp_schedule_basis_requires_one_exact_event_id() {
+    for invalid_basis in [
+        serde_json::json!([]),
+        serde_json::json!([schedule_basis_ref(), schedule_basis_ref()]),
+        serde_json::json!([SCHEDULE_BASIS_DIGEST]),
+        serde_json::json!(["ak:event:not-an-event-id"]),
+    ] {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        seed_pin_target(&mut state, &hlc);
+        let mut payload = rsvp_payload(Value::Null);
+        payload["entry"]["schedule_basis_refs"] = invalid_basis.clone();
+
+        let effect = state.apply(&rsvp_operation(payload), &hlc);
+        assert!(
+            matches!(
+                effect,
+                ProjectionEffect::Rejected { ref reason } if reason == "rsvp_entry_invalid"
+            ),
+            "invalid schedule basis must fail closed: {invalid_basis}: {effect:?}"
+        );
+        assert!(state.rsvps.is_empty());
+    }
+}
+
+#[test]
 fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
