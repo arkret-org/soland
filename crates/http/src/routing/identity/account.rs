@@ -51,8 +51,8 @@ use arkret_models_identity::actor_profile_operations::{
     ActorProfileResolveRequest, ResolvedActorProfile,
 };
 use arkret_models_identity::{
-    DeviceSummaryStatus, DeviceSummaryVerificationSource, DeviceSummaryVerificationState,
-    PrincipalResolutionAuditEvidence, PrincipalResolutionAuditRequest,
+    DeviceSummaryStatus, DeviceSummaryVerificationState, PrincipalResolutionAuditEvidence,
+    PrincipalResolutionAuditRequest,
 };
 use arkret_state::state_model::ResolvedCellState;
 use arkret_wire::SignerEvidenceRef;
@@ -2306,28 +2306,17 @@ async fn account_device_summary(
     // so the binding kind that authorized this device is the checkpoint source.
     // A row we cannot place in that closed set has no checkpoint, so it is
     // `unresolved` rather than a verified row with an invented provenance.
-    let verification_source = match device
+    let authorization_binding_kind = device
         .payload
         .get("authorization_binding_kind")
-        .and_then(Value::as_str)
-    {
-        Some("registration_anchor") => Some(DeviceSummaryVerificationSource::Genesis),
-        Some("accepted_device") => Some(DeviceSummaryVerificationSource::PairingCode),
-        Some("pcr_recovery") => Some(DeviceSummaryVerificationSource::Recovery),
-        _ => None,
-    };
-    let verification_state = match device.verification_state.as_str() {
-        // The identity-anchor transaction installs a possession-verified
-        // bootstrap gate before the first successful Seal exists. That gate is
-        // sufficient for the bootstrap SessionGrant, but it is not yet the
-        // confirmed portable authoring state exposed by account/viewer.
-        "verified" if has_successful_confirmation && verification_source.is_some() => {
-            DeviceSummaryVerificationState::Verified
-        }
-        "verified" => DeviceSummaryVerificationState::Unresolved,
-        "stale" => DeviceSummaryVerificationState::Stale,
-        _ => DeviceSummaryVerificationState::Unresolved,
-    };
+        .and_then(Value::as_str);
+    let (verification_state, verification_source) =
+        soland_services::identity::fold_device_verification_checkpoint(
+            device.verification_state.as_str(),
+            has_successful_confirmation,
+            authorization_binding_kind,
+            status == DeviceSummaryStatus::GenerationFenced,
+        );
     if verification_state == DeviceSummaryVerificationState::Verified {
         let authorization_event_ref = authorized_event_ref.as_ref().ok_or_else(|| {
             AppError::internal("verified device has no durable authorization Event reference")
@@ -2416,13 +2405,7 @@ async fn account_device_summary(
         device_id,
         status,
         verification_state,
-        // §10.1 keeps the provenance on a `stale` row and drops it on an
-        // `unresolved` one: the first used to hold a checkpoint, the second
-        // never did.
-        verification_source: match verification_state {
-            DeviceSummaryVerificationState::Unresolved => None,
-            _ => verification_source,
-        },
+        verification_source,
         display_name,
         authorized_at: authorized_event_ref.as_ref().map(|_| device.created_at),
         authorized_event_ref,

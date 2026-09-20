@@ -7,6 +7,7 @@ use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
+use arkret_models_identity::{DeviceSummaryVerificationSource, DeviceSummaryVerificationState};
 use arkret_wire::{AccountId, DidUrl, OpaqueLocalId, TrustDomainId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -818,6 +819,48 @@ pub struct DeviceIdentity {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// Fold the durable checkpoint facts and the current PCR generation into the
+/// account-facing verification projection.
+///
+/// Device verification is intentionally a read-side fold, not a second stored
+/// lifecycle axis. The authorization binding kind is the closed provenance
+/// source, while the current generation result can make a formerly verified
+/// exact-key checkpoint stale without erasing that provenance.
+#[must_use]
+pub fn fold_device_verification_checkpoint(
+    stored_state: &str,
+    has_successful_confirmation: bool,
+    authorization_binding_kind: Option<&str>,
+    generation_fenced: bool,
+) -> (
+    DeviceSummaryVerificationState,
+    Option<DeviceSummaryVerificationSource>,
+) {
+    let source = match authorization_binding_kind {
+        Some("registration_anchor") => Some(DeviceSummaryVerificationSource::Genesis),
+        Some("accepted_device") => Some(DeviceSummaryVerificationSource::PairingCode),
+        Some("pcr_recovery") => Some(DeviceSummaryVerificationSource::Recovery),
+        _ => None,
+    };
+    let had_verified_checkpoint =
+        stored_state == "verified" && has_successful_confirmation && source.is_some();
+
+    let state = if had_verified_checkpoint && generation_fenced {
+        DeviceSummaryVerificationState::Stale
+    } else {
+        match stored_state {
+            "verified" if had_verified_checkpoint => DeviceSummaryVerificationState::Verified,
+            "stale" if source.is_some() => DeviceSummaryVerificationState::Stale,
+            _ => DeviceSummaryVerificationState::Unresolved,
+        }
+    };
+
+    let source = (state != DeviceSummaryVerificationState::Unresolved)
+        .then_some(source)
+        .flatten();
+    (state, source)
 }
 
 #[async_trait]
@@ -3085,6 +3128,66 @@ impl DidService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_checkpoint_sources_are_the_closed_formal_three() {
+        for (binding_kind, expected_source) in [
+            (
+                "registration_anchor",
+                DeviceSummaryVerificationSource::Genesis,
+            ),
+            (
+                "accepted_device",
+                DeviceSummaryVerificationSource::PairingCode,
+            ),
+            ("pcr_recovery", DeviceSummaryVerificationSource::Recovery),
+        ] {
+            assert_eq!(
+                fold_device_verification_checkpoint("verified", true, Some(binding_kind), false,),
+                (
+                    DeviceSummaryVerificationState::Verified,
+                    Some(expected_source),
+                ),
+                "{binding_kind} must project its formal checkpoint provenance",
+            );
+        }
+
+        assert_eq!(
+            fold_device_verification_checkpoint("verified", true, Some("server_asserted"), false,),
+            (DeviceSummaryVerificationState::Unresolved, None),
+            "an unregistered source must not mint a checkpoint",
+        );
+    }
+
+    #[test]
+    fn verification_checkpoint_generation_fence_makes_it_stale_and_keeps_provenance() {
+        for binding_kind in ["registration_anchor", "accepted_device", "pcr_recovery"] {
+            let (_, expected_source) =
+                fold_device_verification_checkpoint("verified", true, Some(binding_kind), false);
+            assert_eq!(
+                fold_device_verification_checkpoint("verified", true, Some(binding_kind), true,),
+                (DeviceSummaryVerificationState::Stale, expected_source),
+            );
+        }
+    }
+
+    #[test]
+    fn verification_checkpoint_unresolved_state_drops_any_claimed_provenance() {
+        assert_eq!(
+            fold_device_verification_checkpoint("unresolved", true, Some("accepted_device"), false,),
+            (DeviceSummaryVerificationState::Unresolved, None),
+        );
+        assert_eq!(
+            fold_device_verification_checkpoint(
+                "verified",
+                false,
+                Some("registration_anchor"),
+                true,
+            ),
+            (DeviceSummaryVerificationState::Unresolved, None),
+            "an unconfirmed bootstrap row never had a portable checkpoint to stale",
+        );
+    }
 
     fn recovery_policy_basis() -> arkret_wire::RealmCommitId {
         arkret_wire::RealmCommitId::from_digest([11; 32])
