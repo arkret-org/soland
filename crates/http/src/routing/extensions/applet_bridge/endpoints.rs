@@ -1,7 +1,6 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
 use arkret_models_collaboration::account_lifecycle::AppletRevokeRequestBody;
-use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_integration::{
     AppletActorView, AppletCapabilityRevokeIntent, AppletGhostAuthoringRequestBasis,
@@ -11,9 +10,9 @@ use arkret_models_integration::{
     AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeEffectKind,
     AppletRevokeOutcome, AppletRevokePlan, AppletRevokePreviewOutcome,
     AppletRevokePreviewRequestBody, AppletRevokeSagaStatus, AppletRevokeStep,
-    AppletRevokeStepStatus, AppletTransactionOutcome, ExternalRef, FieldDefinition,
-    GhostActorProvisionOutcome, GhostActorProvisionRequestBody, GhostPreviewOutcome,
-    GhostPreviewRequestBody, ProtocolInstance, namespace_pattern_matches,
+    AppletRevokeStepStatus, AppletTransactionOutcome, AppletTransactionRequestBody, ExternalRef,
+    FieldDefinition, GhostActorProvisionOutcome, GhostActorProvisionRequestBody,
+    GhostPreviewOutcome, GhostPreviewRequestBody, ProtocolInstance, namespace_pattern_matches,
 };
 use arkret_wire::{AppletRevokeMode, EventKind, Hash, ProtocolOperationId};
 use salvo::http::StatusCode;
