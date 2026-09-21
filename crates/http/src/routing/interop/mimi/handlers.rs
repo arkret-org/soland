@@ -93,9 +93,9 @@ pub(super) async fn mimi_key_material(
         }),
     );
     json_ok(MimiKeyMaterialOutcome {
-        keypackages: vec![keypackage],
+        keypackages: Some(vec![keypackage]),
         group_info: None,
-        failures: Vec::new(),
+        failures: None,
         signature: None,
     })
 }
@@ -197,7 +197,7 @@ pub(super) async fn mimi_room_update(
     json_ok(MimiRoomUpdateOutcome {
         accepted: true,
         room_state_ref,
-        rejections: Vec::new(),
+        rejections: None,
     })
 }
 
@@ -444,7 +444,6 @@ pub(super) async fn mimi_consent_request(
     );
     json_ok(MimiRequestConsentOutcome {
         consent_id,
-        status: MimiRequestConsentStatus::Requested,
         challenge: None,
     })
 }
@@ -490,7 +489,6 @@ pub(super) async fn mimi_consent_update(
         )
     })?;
     json_ok(MimiUpdateConsentOutcome {
-        status: arkret_models_collaboration::http_bodies::MimiUpdateConsentStatus::Accepted,
         consent_id: body.consent_id,
         decision: body.decision,
         updated_at,
@@ -1002,7 +1000,7 @@ async fn verify_mimi_consent_correlation(
     let correlation_peer = mimi_correlation_peer(&correlation.requester_actor_id);
 
     match body.decision {
-        arkret_models_collaboration::http_bodies::MimiConsentDecision::Accept => {
+        arkret_models_collaboration::mimi_operations::MimiConsentDecision::Accept => {
             let payload = &body.consent_event.event.payload;
             let peer_matches = payload
                 .get("peer")
@@ -1016,8 +1014,8 @@ async fn verify_mimi_consent_correlation(
                 return Err(mimi_consent_correlation_unavailable());
             }
         }
-        arkret_models_collaboration::http_bodies::MimiConsentDecision::Deny
-        | arkret_models_collaboration::http_bodies::MimiConsentDecision::Revoke => {
+        arkret_models_collaboration::mimi_operations::MimiConsentDecision::Deny
+        | arkret_models_collaboration::mimi_operations::MimiConsentDecision::Revoke => {
             let observed_dot_ids = body
                 .consent_event
                 .event
@@ -1625,10 +1623,20 @@ pub(super) async fn mimi_proxy_download(
     } else {
         asset_ref.to_owned()
     };
+    let download_ref = arkret_wire::NonEmptyString::new(download_ref)
+        .map_err(|_| AppError::internal("MIMI proxy download reference is empty"))?;
     let mut headers = BTreeMap::new();
     if let Some(blob) = blob.as_ref() {
-        headers.insert("content-type".to_owned(), blob.media_type.clone());
-        headers.insert("content-length".to_owned(), blob.size_bytes.to_string());
+        headers.insert(
+            "content-type".to_owned(),
+            arkret_wire::NonEmptyString::new(blob.media_type.clone())
+                .map_err(|_| AppError::internal("MIMI proxy media type is empty"))?,
+        );
+        headers.insert(
+            "content-length".to_owned(),
+            arkret_wire::NonEmptyString::new(blob.size_bytes.to_string())
+                .map_err(|_| AppError::internal("MIMI proxy content length is empty"))?,
+        );
     }
     let _receipt = mimi_receipt(
         state,
@@ -1703,7 +1711,7 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
 
 #[cfg(test)]
 mod reporter_event_binding_tests {
-    use arkret_models_collaboration::http_bodies::MimiReporterAuthority;
+    use arkret_models_collaboration::mimi_operations::MimiReporterAuthority;
     use arkret_wire::{
         AccountId, ActorId, Audience, DidCoreId, DidUrl, EventInitialSubmission, Hash,
         PayloadProof, ProducerEventProof, ScopeRef, proof_kind,
@@ -1877,7 +1885,7 @@ mod reporter_event_binding_tests {
 #[cfg(test)]
 mod consent_proof_tests {
     use arkret_identifiers::{ConsentId, DeviceId, Did, DidCoreId, Hash, Hlc, RealmId, StrandId};
-    use arkret_models_collaboration::http_bodies::MimiConsentDecision;
+    use arkret_models_collaboration::mimi_operations::MimiConsentDecision;
     use arkret_models_collaboration::objects::mimi::{MimiIdentifier, MimiIdentifierKind};
     use arkret_wire::{
         Audience, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,

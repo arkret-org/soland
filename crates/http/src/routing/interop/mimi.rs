@@ -21,14 +21,13 @@ use std::collections::BTreeMap;
 
 use arkret_identifiers::{EventId, Hash, ReportId};
 use arkret_models_collaboration::account_lifecycle::ConsentPeer;
-use arkret_models_collaboration::http_bodies::{
+use arkret_models_collaboration::mimi_operations::{
     MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome,
     MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
     MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
     MimiReportAbuseStatus, MimiRequestConsentOutcome, MimiRequestConsentRequestBody,
-    MimiRequestConsentStatus, MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody,
-    MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome,
-    MimiUpdateConsentRequestBody,
+    MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome,
+    MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
 };
 use arkret_models_collaboration::objects::mimi::{
     MimiCiphertext, MimiConsentPurpose, MimiDelivery, MimiDeliveryStatus, MimiIdentifierMatch,
