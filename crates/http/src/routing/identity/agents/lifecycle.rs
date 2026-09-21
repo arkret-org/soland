@@ -200,12 +200,8 @@ pub(super) async fn provision_agent(
     let controller_principal_id = session.actor.clone();
     let body = body.into_inner();
     let requested_scope = match &body {
-        AgentProvisionRequestBody::Prepare {
-            requested_scope, ..
-        }
-        | AgentProvisionRequestBody::Commit {
-            requested_scope, ..
-        } => requested_scope,
+        AgentProvisionRequestBody::Prepare(request) => &request.requested_scope,
+        AgentProvisionRequestBody::Commit(request) => &request.requested_scope,
     };
     validate_agent_runtime_provision_scope(requested_scope)?;
     let request_hash = agent_provision_request_hash(&body)?;
@@ -215,15 +211,18 @@ pub(super) async fn provision_agent(
     .ok_or_else(|| AppError::internal("current agent provision timestamp is out of range"))?;
 
     match body {
-        AgentProvisionRequestBody::Prepare {
-            operation_id,
-            idempotency_key,
-            did,
-            controller_station_id,
-            slug,
-            requested_scope,
-            pairing_ttl_ms,
-        } => {
+        AgentProvisionRequestBody::Prepare(
+            arkret_models_collaboration::agent_operations::AgentProvisionPrepareRequestBody {
+                phase: _,
+                operation_id,
+                idempotency_key,
+                did,
+                controller_station_id,
+                slug,
+                requested_scope,
+                pairing_ttl_ms,
+            },
+        ) => {
             let key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
             if let Some(record) =
                 lookup_provision_allocation(state, &controller_principal_id, &key).await?
@@ -314,14 +313,6 @@ pub(super) async fn provision_agent(
                     &controller_principal_id,
                 )
                 .await?;
-            let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
-                &agent_id,
-                &controller_principal_id,
-                &requested_scope,
-            )
-            .map_err(|error| {
-                AppError::internal(format!("requested_scope digest failed: {error}"))
-            })?;
             let controller_authorization_ref =
                 crate::routing::identity::agent_pcr::controller_authorization_ref(&did)?;
             let allocation_handle = issue_allocation_handle(
@@ -330,17 +321,19 @@ pub(super) async fn provision_agent(
                 &operation_id,
                 &idempotency_key,
             )?;
-            let outcome = AgentProvisionOutcome::AwaitingControllerEvent {
-                agent_id,
-                did,
-                initial_resolution,
-                controller_realm_id: RealmId::new(controller_realm).map_err(|error| {
-                    AppError::internal(format!("controller PCR id invalid: {error}"))
-                })?,
-                allocation_handle,
-                controller_authorization_ref,
-                requested_scope_digest,
-            };
+            let outcome = AgentProvisionOutcome::AwaitingControllerEvent(
+                AgentProvisionAwaitingControllerEvent {
+                    status: AgentProvisionAwaitingControllerEventStatus::AwaitingControllerEvent,
+                    agent_id,
+                    did,
+                    initial_resolution,
+                    controller_realm_id: RealmId::new(controller_realm).map_err(|error| {
+                        AppError::internal(format!("controller PCR id invalid: {error}"))
+                    })?,
+                    allocation_handle,
+                    controller_authorization_ref,
+                },
+            );
             let prepared = PreparedAgentProvision {
                 outcome: outcome.clone(),
                 controller_authority,
@@ -395,18 +388,21 @@ pub(super) async fn provision_agent(
                 })?;
             json_ok(landed.outcome)
         }
-        AgentProvisionRequestBody::Commit {
-            operation_id,
-            idempotency_key,
-            agent_id,
-            did,
-            principal_control_realm_id,
-            allocation_handle,
-            slug,
-            requested_scope,
-            provision_event,
-            pairing_ttl_ms,
-        } => {
+        AgentProvisionRequestBody::Commit(
+            arkret_models_collaboration::agent_operations::AgentProvisionCommitRequestBody {
+                phase: _,
+                operation_id,
+                idempotency_key,
+                agent_id,
+                did,
+                principal_control_realm_id,
+                allocation_handle,
+                slug,
+                requested_scope,
+                provision_event,
+                pairing_ttl_ms,
+            },
+        ) => {
             let prepare_key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
             let allocation =
                 lookup_provision_allocation(state, &controller_principal_id, &prepare_key)
@@ -419,22 +415,25 @@ pub(super) async fn provision_agent(
                         "stored Agent provision allocation invalid: {error}"
                     ))
                 })?;
-            let AgentProvisionOutcome::AwaitingControllerEvent {
-                agent_id: allocated_agent_id,
-                did: allocated_did,
-                initial_resolution,
-                controller_realm_id,
-                allocation_handle: allocated_handle,
-                controller_authorization_ref,
-                requested_scope_digest,
-            } = prepared.outcome
+            let AgentProvisionOutcome::AwaitingControllerEvent(
+                AgentProvisionAwaitingControllerEvent {
+                    status: _,
+                    agent_id: allocated_agent_id,
+                    did: allocated_did,
+                    initial_resolution,
+                    controller_realm_id,
+                    allocation_handle: allocated_handle,
+                    controller_authorization_ref,
+                },
+            ) = prepared.outcome
             else {
                 return Err(AppError::internal(
                     "stored Agent provision prepare outcome has a terminal status",
                 ));
             };
-            if allocation.request_hash
-                != agent_provision_request_hash(&AgentProvisionRequestBody::Prepare {
+            let expected_prepare = AgentProvisionRequestBody::Prepare(
+                arkret_models_collaboration::agent_operations::AgentProvisionPrepareRequestBody {
+                    phase: AgentProvisionPreparePhase::Prepare,
                     operation_id: operation_id.clone(),
                     idempotency_key: idempotency_key.clone(),
                     did: did.clone(),
@@ -442,7 +441,9 @@ pub(super) async fn provision_agent(
                     slug: slug.clone(),
                     requested_scope: requested_scope.clone(),
                     pairing_ttl_ms,
-                })?
+                },
+            );
+            if allocation.request_hash != agent_provision_request_hash(&expected_prepare)?
                 || allocated_agent_id != agent_id
                 || allocated_did != did
                 || allocated_handle != allocation_handle
@@ -458,6 +459,15 @@ pub(super) async fn provision_agent(
                 &idempotency_key,
                 &allocation_handle,
             )?;
+
+            let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
+                &agent_id,
+                &prepared.controller_authority.principal_id,
+                &requested_scope,
+            )
+            .map_err(|error| {
+                AppError::internal(format!("requested_scope digest failed: {error}"))
+            })?;
 
             let controller_realm_now = require_controller_principal_control_realm(
                 state,
@@ -569,7 +579,7 @@ pub(super) async fn provision_agent(
                     &controller_authorization_ref,
                     &slug,
                     &requested_scope_digest,
-                    *provision_event,
+                    provision_event,
                 )
                 .await?;
                 debug_assert_eq!(accepted_provision_event_id, provision_event_id);
@@ -616,15 +626,17 @@ pub(super) async fn provision_agent(
                 )
                 .await?
             else {
-                return json_ok(AgentProvisionOutcome::AwaitingPcrGenesis {
-                    agent_id,
-                    did,
-                    initial_resolution,
-                    principal_control_realm_id,
-                    allocation_handle,
-                    controller_authorization_ref,
-                    requested_scope_digest,
-                });
+                return json_ok(AgentProvisionOutcome::AwaitingPcrGenesis(
+                    AgentProvisionAwaitingPcrGenesis {
+                        status: AgentProvisionAwaitingPcrGenesisStatus::AwaitingPcrGenesis,
+                        agent_id,
+                        did,
+                        initial_resolution,
+                        principal_control_realm_id,
+                        allocation_handle,
+                        controller_authorization_ref,
+                    },
+                ));
             };
 
             if !crate::routing::identity::agent_pcr::agent_binding_is_accepted(
@@ -658,15 +670,17 @@ pub(super) async fn provision_agent(
                             "Agent DID binding checkpoint persist failed: {error}"
                         ))
                     })?;
-                return json_ok(AgentProvisionOutcome::AwaitingDidBinding {
-                    agent_id,
-                    did,
-                    initial_resolution,
-                    principal_control_realm_id,
-                    allocation_handle,
-                    controller_authorization_ref,
-                    requested_scope_digest,
-                });
+                return json_ok(AgentProvisionOutcome::AwaitingDidBinding(
+                    AgentProvisionAwaitingDidBinding {
+                        status: AgentProvisionAwaitingDidBindingStatus::AwaitingDidBinding,
+                        agent_id,
+                        did,
+                        initial_resolution,
+                        principal_control_realm_id,
+                        allocation_handle,
+                        controller_authorization_ref,
+                    },
+                ));
             }
             let controller_account = state
                 .identities()
@@ -712,19 +726,17 @@ pub(super) async fn provision_agent(
                 .await
                 .map_err(|error| AppError::internal(format!("agent persist failed: {error}")))?;
 
-            let outcome = AgentProvisionOutcome::Complete {
-                outcome: arkret_models_collaboration::agent_operations::AgentProvisionComplete {
-                    agent_id: agent_id.clone(),
-                    did: did.clone(),
-                    initial_resolution: initial_resolution.clone(),
-                    principal_control_realm_id: principal_control_realm_id.clone(),
-                    controller_authorization_ref: controller_authorization_ref.clone(),
-                    requested_scope_digest: requested_scope_digest.clone(),
-                    pairing_request_id: pairing_request_id.clone(),
-                    pairing_code: Some(pairing_code.clone()),
-                    expires_at,
-                },
-            };
+            let outcome = AgentProvisionOutcome::Complete(AgentProvisionComplete {
+                status: AgentProvisionCompleteStatus::Complete,
+                agent_id: agent_id.clone(),
+                did: did.clone(),
+                initial_resolution: initial_resolution.clone(),
+                principal_control_realm_id: principal_control_realm_id.clone(),
+                controller_authorization_ref: controller_authorization_ref.clone(),
+                pairing_request_id: pairing_request_id.clone(),
+                pairing_code: Some(pairing_code.clone()),
+                expires_at,
+            });
             state
                 .jobs()
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
