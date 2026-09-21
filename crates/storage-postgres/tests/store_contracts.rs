@@ -2186,6 +2186,154 @@ async fn postgres_adapter_atomically_admits_authority_events() {
 }
 
 #[tokio::test]
+async fn postgres_local_current_member_read_requires_matching_authority_and_commit() {
+    use diesel::sql_types::{BigInt, Binary, Jsonb, SmallInt, Text, Timestamptz};
+    use diesel_async::RunQueryDsl;
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let namespace = format!("local-current-member:{}", uuid::Uuid::now_v7());
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
+        .expect("fixture Realm id");
+    let other_realm = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("{namespace}:other").as_bytes(),
+    ))
+    .expect("other fixture Realm id");
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:member-station.example").unwrap();
+    let wrong_station =
+        arkret_wire::DidCoreId::new("ak:did_core:web:other-member-station.example").unwrap();
+    let member = arkret_wire::ActorId::service(
+        arkret_wire::DidCoreId::new("ak:did_core:web:member-reader.example").unwrap(),
+    );
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    FixtureCommitStream::new(&realm_id, &station)
+        .install(&pool)
+        .await;
+    FixtureCommitStream::new(&other_realm, &station)
+        .install(&pool)
+        .await;
+
+    let event_digest = arkret_canonical::sha256_bytes(namespace.as_bytes());
+    let mut event_id = vec![1_u8];
+    event_id.extend_from_slice(&event_digest);
+    let commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        format!("{namespace}:commit").as_bytes(),
+    ));
+    let now = chrono::Utc::now();
+    let stream_ref = serde_json::json!({"kind":"realm","realm_id":realm_id});
+    let mut conn = pool.get().await.unwrap();
+    let event_pk: i64 = {
+        #[derive(diesel::QueryableByName)]
+        struct EventPk {
+            #[diesel(sql_type = BigInt)]
+            pk: i64,
+        }
+        diesel::sql_query(
+            "INSERT INTO canonical_events \
+             (id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,committed_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'committed',$10) RETURNING pk",
+        )
+        .bind::<Binary, _>(&event_id)
+        .bind::<SmallInt, _>(1_i16)
+        .bind::<Binary, _>(event_digest.to_vec())
+        .bind::<Text, _>(member.to_string())
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Jsonb, _>(&stream_ref)
+        .bind::<Text, _>("ak.member.state")
+        .bind::<Binary, _>(b"fixture-current-member".to_vec())
+        .bind::<Jsonb, _>(serde_json::json!({}))
+        .bind::<Timestamptz, _>(now)
+        .get_result::<EventPk>(&mut *conn)
+        .await
+        .unwrap()
+        .pk
+    };
+    diesel::sql_query(
+        "INSERT INTO realm_commits \
+         (commit_id,realm_id,stream_key,stream_ref,stream_position,event_pk,governance_generation,commit_json,committed_at) \
+         VALUES ($1,$2,$3,$4,0,$5,0,$6,$7)",
+    )
+    .bind::<Text, _>(commit_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(format!("realm:{}", realm_id.as_str()))
+    .bind::<Jsonb, _>(&stream_ref)
+    .bind::<BigInt, _>(event_pk)
+    .bind::<Jsonb, _>(serde_json::json!({}))
+    .bind::<Timestamptz, _>(now)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES ($1,$2,'join',$3,0,$4,$5)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member.to_string())
+    .bind::<Text, _>(commit_id.as_str())
+    .bind::<Jsonb, _>(serde_json::json!({"membership":"join"}))
+    .bind::<Timestamptz, _>(now)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(
+        store
+            .local_current_member_joined(&realm_id, &member, &station)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .local_current_member_joined(&realm_id, &member, &wrong_station)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .local_current_member_joined(&other_realm, &member, &station)
+            .await
+            .unwrap()
+    );
+
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE member_state_current_results SET current_stream_position=1 \
+         WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member.to_string())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(
+        !store
+            .local_current_member_joined(&realm_id, &member, &station)
+            .await
+            .unwrap()
+    );
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE member_state_current_results SET current_stream_position=0, \
+         membership='leave',value=$3 WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member.to_string())
+    .bind::<Jsonb, _>(serde_json::json!({"membership":"leave"}))
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(
+        !store
+            .local_current_member_joined(&realm_id, &member, &station)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn postgres_adapter_satisfies_shared_event_commit_contract() {
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
