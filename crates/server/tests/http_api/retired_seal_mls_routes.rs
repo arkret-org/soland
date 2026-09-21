@@ -17,4 +17,16 @@ async fn current_body() {
             .await;
         assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
     }
+    for path in [
+        "/_arkret/self/seals/mls-governance-proof",
+        "/_arkret/peer/seals/mls-governance-proof",
+    ] {
+        let response = TestClient::post(format!("http://server{path}"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(b"{}".to_vec())
+            .send(&app_from_state(state.clone()))
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
+    }
 }

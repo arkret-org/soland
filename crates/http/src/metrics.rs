@@ -603,12 +603,6 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
         ("POST", "/_arkret/self/streams/scan") => {
             Some(arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1)
         }
-        ("POST", "/_arkret/self/seals/mls-governance-proof") => {
-            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF_V1)
-        }
-        ("POST", "/_arkret/peer/seals/mls-governance-proof") => {
-            Some(arkret_wire::ServiceOperationId::PEER_SEALS_READ_MLS_GOVERNANCE_PROOF_V1)
-        }
         ("POST", "/_arkret/peer/mls/group-state-material") => {
             Some(arkret_wire::ServiceOperationId::PEER_MLS_READ_GROUP_STATE_MATERIAL_V1)
         }
@@ -721,6 +715,14 @@ mod tests {
             request_op_label(&peer_mls),
             "ak.peer.mls.read.group_state_material.v1"
         );
+
+        for path in [
+            "/_arkret/self/seals/mls-governance-proof",
+            "/_arkret/peer/seals/mls-governance-proof",
+        ] {
+            let retired = TestClient::post(format!("http://localhost{path}")).build();
+            assert_eq!(canonical_event_read_operation(&retired), None);
+        }
     }
 
     #[test]
