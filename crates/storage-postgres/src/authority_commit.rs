@@ -1,4 +1,4 @@
-use diesel::sql_types::SmallInt;
+use diesel::sql_types::{Bool, SmallInt};
 use serde::de::DeserializeOwned;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, AuthorityCommitWriteOutcome,
@@ -97,6 +97,12 @@ struct CommitStreamRow {
 struct EpochRow {
     #[diesel(sql_type = BigInt)]
     epoch: i64,
+}
+
+#[derive(QueryableByName)]
+struct PresenceRow {
+    #[diesel(sql_type = Bool)]
+    present: bool,
 }
 
 fn invalid(detail: impl std::fmt::Display) -> PersistenceError {
@@ -492,6 +498,35 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .optional()
         .map_err(PersistenceError::database)?;
         row.map(authority_from_row).transpose()
+    }
+
+    async fn local_current_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        member: &arkret_wire::ActorId,
+        service_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT EXISTS (\
+                SELECT 1 FROM realm_authorities a \
+                JOIN member_state_current_results m ON m.realm_id = a.realm_id \
+                JOIN realm_commits c ON c.commit_id = m.current_commit_id \
+                WHERE a.realm_id = $1 AND a.service_id = $2 \
+                  AND m.member_id = $3 AND m.membership = 'join' \
+                  AND c.realm_id = m.realm_id \
+                  AND c.stream_position = m.current_stream_position \
+                  AND c.stream_ref->>'kind' = 'realm' \
+                  AND c.stream_ref->>'realm_id' = m.realm_id\
+             ) AS present",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(service_id.as_str())
+        .bind::<Text, _>(member.to_string())
+        .get_result::<PresenceRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(row.present)
     }
 
     async fn queue_event(

@@ -164,6 +164,21 @@ impl AuthorityCommitApplication {
         Ok(())
     }
 
+    /// Optional authoring preparation may read current membership only while
+    /// this service is the verified governing Station. This read grants no
+    /// Event authority; admission still checks the current commit cut.
+    pub async fn local_current_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        member: &arkret_wire::ActorId,
+        service_id: &DidCoreId,
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .store()
+            .local_current_member_joined(realm_id, member, service_id)
+            .await?)
+    }
+
     pub async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> ServiceResult<()> {
         event.validate_for_submit_structural().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))

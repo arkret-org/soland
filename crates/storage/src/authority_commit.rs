@@ -132,6 +132,16 @@ pub trait AuthorityCommitStore: Send + Sync {
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Option<CurrentRealmAuthority>>;
 
+    /// Read one accepted current membership only when this service is the
+    /// Realm's current governing Station. Missing, remote, or inconsistent
+    /// authority/member rows fail closed for optional authoring preparation.
+    async fn local_current_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        member: &arkret_wire::ActorId,
+        service_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<bool>;
+
     async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> PersistenceResult<()>;
 
     async fn queued_event(
