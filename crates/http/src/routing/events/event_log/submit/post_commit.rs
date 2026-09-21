@@ -864,7 +864,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     parsed_events: &[ValidatedEventEnvelope],
     envelopes: &[Value],
     receipt: &DirectConversationFoundingAcceptanceReceipt,
-    founding_authority_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence,
+    founding_authority_evidence: &arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence,
     pending_control_proposal_acks: &[arkret_wire::ControlProposalAck],
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     if parsed_events.len() != 4 || envelopes.len() != 4 {

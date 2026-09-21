@@ -75,7 +75,7 @@ pub(super) async fn validate_direct_conversation_admission(
         Some(binding.participants_unordered.clone())
     } else if kind == Some(arkret_wire::EventKind::DirectConversationBound) {
         serde_json::from_value::<
-            arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+            arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload,
         >(operation.payload.clone())
         .ok()
         .map(|payload| {

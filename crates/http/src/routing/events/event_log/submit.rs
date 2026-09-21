@@ -1580,7 +1580,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         ));
     }
     let (pair_key, founder_id, authorization_core) = match &founding_authority_evidence {
-        evidence @ arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human { .. } => {
+        evidence @ arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence::Human { .. } => {
             evidence
                 .human_pair_key_and_authorization_core(trust_domain_id.clone())
                 .map_err(|error| {
@@ -1591,7 +1591,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                     )
                 })?
         }
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
             agent_provision_ref,
             controller_binding_digest,
         } => {
@@ -1629,7 +1629,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
     }
     let accepted_at = now();
     match &founding_authority_evidence {
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human {
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence::Human {
             contact_round_evidence,
             ..
         } => {
@@ -1689,7 +1689,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 ));
             }
         }
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
             agent_provision_ref,
             controller_binding_digest,
         } => {
@@ -1722,10 +1722,10 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             let provision_payload: arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload =
                 serde_json::from_value(accepted_provision.envelope.get("payload").cloned().unwrap_or(Value::Null))
                     .map_err(|error| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", error.to_string()))?;
-            let expected_evidence = arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::from_agent_provision(
+            let expected_evidence = arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence::from_agent_provision(
                 agent_provision_ref.clone(), &provision_payload,
             ).map_err(|error| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", error.to_string()))?;
-            let arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
+            let arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
                 controller_binding_digest: expected_binding_digest, ..
             } = expected_evidence else { unreachable!("Agent provision produces controller evidence") };
             if agent.controller_principal_id != founder_id.signing_principal_id().as_str()

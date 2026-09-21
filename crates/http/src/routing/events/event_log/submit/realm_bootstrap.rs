@@ -7,7 +7,7 @@ pub(super) struct DirectConversationFoundingCommitContext {
     pub slot: soland_storage::DirectConversationFoundingSlotRecord,
     pub receipt: DirectConversationFoundingAcceptanceReceipt,
     pub founding_authority_evidence:
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence,
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence,
 }
 
 pub(super) fn batch_begins_realm_create(envelopes: &[Value]) -> bool {

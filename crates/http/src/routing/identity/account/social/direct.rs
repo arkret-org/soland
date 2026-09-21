@@ -318,7 +318,7 @@ pub(crate) async fn validate_direct_message_bootstrap(
         .collect::<Vec<_>>()
         .try_into()
         .map_err(|_| "founding unit incomplete")?;
-    let plan = arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingPlan::from_events(exact)
+    let plan = arkret_models_collaboration::direct_conversation::DirectConversationFoundingPlan::from_events(exact)
         .map_err(|_| "invalid founding unit")?;
     if plan.realm_id != realm {
         return Err("founding Realm mismatch");
@@ -460,7 +460,7 @@ pub(crate) async fn validate_direct_message_participant(
     }
     let payload_value =
         serde_json::to_value(&event.payload).map_err(|_| "binding payload encoding")?;
-    let payload: arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload =
+    let payload: arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload =
         serde_json::from_value(payload_value.clone()).map_err(|_| "binding payload is invalid")?;
     if !payload.unordered_participant_ids.contains(&actor) || payload.realm_id.as_str() != realm_id
     {
@@ -988,9 +988,9 @@ mod participant_authority_tests {
 fn direct_binding_payload_from_operation(
     operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<
-    arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+    arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload,
     &'static str,
-> {
+>{
     // The adapter keeps envelope context separate from the closed wire payload.
     let payload = operation.payload.clone();
     serde_json::from_value(payload).map_err(|_| "direct_conversation_binding_invalid")
@@ -1161,7 +1161,7 @@ async fn accepted_direct_event(
 /// main Strand is accepted in the same Realm.
 async fn validate_direct_binding_event_refs(
     state: &AppState,
-    payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+    payload: &arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload,
 ) -> Result<(), &'static str> {
     let realm_create = accepted_direct_realm_create(state, &payload.realm_id).await?;
     let genesis = realm_create
@@ -1228,7 +1228,7 @@ async fn validate_direct_binding_event_refs(
         .collect::<Vec<_>>()
         .try_into()
         .map_err(|_| "founding_unit_incomplete")?;
-    let plan = arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingPlan::from_events(exact)
+    let plan = arkret_models_collaboration::direct_conversation::DirectConversationFoundingPlan::from_events(exact)
         .map_err(|_| "founding_unit_invalid")?;
     if plan.realm_id != payload.realm_id
         || plan.main_strand_id != payload.main_strand_id
@@ -1424,7 +1424,7 @@ async fn accepted_direct_realm_create(
 /// other participant is not a competing candidate: it is invalid and MUST NOT be projected.
 async fn validate_direct_founder(
     state: &AppState,
-    payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+    payload: &arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload,
     creator: &arkret_wire::ActorId,
     peer: &arkret_wire::ActorId,
 ) -> Result<(), &'static str> {
@@ -1540,7 +1540,7 @@ pub(crate) async fn project_canonical_direct_binding(
 /// collapse to the same semantic digest. The digest remains receiver-derived
 /// and MUST NOT appear in the payload.
 fn direct_binding_endorsement_digest(
-    payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+    payload: &arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload,
 ) -> Result<String, &'static str> {
     payload
         .binding_digest()
@@ -1566,7 +1566,7 @@ pub(crate) fn direct_founding_authority_from_contact(
         if record.contact_round_id.as_ref() != Some(&bundle.contact_round_id) {
             return Err("direct_conversation_founding_authority_unavailable");
         }
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human {
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence::Human {
             contact_round_evidence: bundle.clone(),
             contact_round_continuity_chains: record.contact_round_evidence_history.clone(),
         }
