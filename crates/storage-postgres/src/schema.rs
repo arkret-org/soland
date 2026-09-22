@@ -1209,10 +1209,14 @@ diesel::table! {
 diesel::table! {
     push_registration_handoff_intents (source_station_id, registration_id) {
         source_station_id -> Text,
+        local_account_id -> Jsonb,
+        local_device_id -> Text,
+        local_push_route_id -> Text,
         registration_id -> Text,
         destination_gateway_id -> Text,
         desired_state -> Text,
         request_digest -> Text,
+        client_input_digest -> Text,
         canonical_request -> Bytea,
         status -> Text,
         receipt -> Nullable<Jsonb>,

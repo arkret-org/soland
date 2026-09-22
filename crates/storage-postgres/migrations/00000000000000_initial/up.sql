@@ -3068,10 +3068,14 @@ CREATE INDEX push_devices_source_target_idx ON public.push_devices ((payload->'a
 
 CREATE TABLE public.push_registration_handoff_intents (
     source_station_id text NOT NULL,
+    local_account_id jsonb NOT NULL,
+    local_device_id text NOT NULL,
+    local_push_route_id text NOT NULL CHECK (btrim(local_push_route_id) <> ''),
     registration_id text NOT NULL,
     destination_gateway_id text NOT NULL,
     desired_state text NOT NULL CHECK (desired_state IN ('active', 'revoked')),
     request_digest text NOT NULL,
+    client_input_digest text NOT NULL,
     canonical_request bytea NOT NULL,
     status text NOT NULL CHECK (status IN ('awaiting_receipt', 'receipt_verified')),
     receipt jsonb,
@@ -3087,6 +3091,11 @@ CREATE TABLE public.push_registration_handoff_intents (
 
 CREATE INDEX push_registration_handoff_retry_idx
     ON public.push_registration_handoff_intents (source_station_id, updated_at, registration_id)
+    WHERE status = 'awaiting_receipt';
+
+CREATE UNIQUE INDEX push_registration_handoff_awaiting_local_route_idx
+    ON public.push_registration_handoff_intents
+       (source_station_id, local_account_id, local_device_id, local_push_route_id, destination_gateway_id)
     WHERE status = 'awaiting_receipt';
 
 CREATE TABLE public.realm_invites (

@@ -2,8 +2,9 @@ use arkret_models_integration::{
     PushRegistrationHandoffRequestBody, PushRegistrationHandoffState, PushRegistrationId,
     PushRegistrationInstallationReceipt,
 };
-use arkret_wire::{DidCoreId, Hash};
+use arkret_wire::{AccountId, DeviceId, DidCoreId, Hash};
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 use super::{PersistenceError, PersistenceResult, async_trait};
 
@@ -24,6 +25,47 @@ impl PushRegistrationHandoffIntentStatus {
     }
 }
 
+/// Station-private coordinates for one client-visible push route.
+///
+/// These coordinates are storage metadata only. They MUST NOT be serialized
+/// into the Gateway request body or receipt: the public Gateway learns the
+/// pairwise target and device identity, never the owning account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PushRegistrationHandoffRouteLocator {
+    pub account_id: AccountId,
+    pub device_id: DeviceId,
+    pub push_route_id: String,
+    pub destination_gateway_id: DidCoreId,
+}
+
+impl PushRegistrationHandoffRouteLocator {
+    pub fn validate_for(
+        &self,
+        source_station_id: &DidCoreId,
+        request: &PushRegistrationHandoffRequestBody,
+    ) -> PersistenceResult<()> {
+        self.account_id
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if &self.account_id.station_id != source_station_id {
+            return Err(PersistenceError::SchemaViolation(
+                "push handoff local account does not belong to the source Station".to_owned(),
+            ));
+        }
+        if self.push_route_id.trim().is_empty() {
+            return Err(PersistenceError::SchemaViolation(
+                "push handoff local route id must not be empty".to_owned(),
+            ));
+        }
+        if &self.device_id != request.device_id() {
+            return Err(PersistenceError::SchemaViolation(
+                "push handoff local device differs from the Gateway request".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Exact desired state retained until a Gateway receipt has been verified and
 /// committed. `canonical_request` is the body that must be replayed after a
 /// timeout or process restart; callers must never regenerate a replacement
@@ -31,6 +73,10 @@ impl PushRegistrationHandoffIntentStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PushRegistrationHandoffIntentRecord {
     pub source_station_id: DidCoreId,
+    pub local_route: PushRegistrationHandoffRouteLocator,
+    /// Digest of the authenticated client desired input before the Station
+    /// allocates a random registration id or adds predecessor metadata.
+    pub client_input_digest: Hash,
     pub destination_gateway_id: DidCoreId,
     pub registration_id: PushRegistrationId,
     pub desired_state: PushRegistrationHandoffState,
@@ -45,7 +91,8 @@ pub struct PushRegistrationHandoffIntentRecord {
 impl PushRegistrationHandoffIntentRecord {
     pub fn prepare(
         source_station_id: DidCoreId,
-        destination_gateway_id: DidCoreId,
+        local_route: PushRegistrationHandoffRouteLocator,
+        client_input_digest: Hash,
         request: &PushRegistrationHandoffRequestBody,
         now: DateTime<Utc>,
     ) -> PersistenceResult<Self> {
@@ -57,9 +104,12 @@ impl PushRegistrationHandoffIntentRecord {
         let request_digest = request
             .request_digest()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        local_route.validate_for(&source_station_id, request)?;
         Ok(Self {
             source_station_id,
-            destination_gateway_id,
+            destination_gateway_id: local_route.destination_gateway_id.clone(),
+            local_route,
+            client_input_digest,
             registration_id: request.registration_id().clone(),
             desired_state: request.state(),
             request_digest,
@@ -107,6 +157,13 @@ impl PushRegistrationHandoffIntentRecord {
             ));
         }
         let request = self.request()?;
+        self.local_route
+            .validate_for(&self.source_station_id, &request)?;
+        if self.local_route.destination_gateway_id != self.destination_gateway_id {
+            return Err(PersistenceError::Internal(
+                "stored push handoff local route destination mismatch".to_owned(),
+            ));
+        }
         match (self.status, &self.receipt) {
             (PushRegistrationHandoffIntentStatus::AwaitingReceipt, None) => Ok(()),
             (PushRegistrationHandoffIntentStatus::ReceiptVerified, Some(receipt)) => receipt
@@ -129,6 +186,8 @@ impl PushRegistrationHandoffIntentRecord {
     #[must_use]
     pub fn same_desired_intent(&self, candidate: &Self) -> bool {
         self.source_station_id == candidate.source_station_id
+            && self.local_route == candidate.local_route
+            && self.client_input_digest == candidate.client_input_digest
             && self.destination_gateway_id == candidate.destination_gateway_id
             && self.registration_id == candidate.registration_id
             && self.desired_state == candidate.desired_state
@@ -171,6 +230,7 @@ pub fn apply_push_registration_desired_intent(
     if stored.desired_state == PushRegistrationHandoffState::Active
         && candidate.desired_state == PushRegistrationHandoffState::Revoked
         && stored.source_station_id == candidate.source_station_id
+        && stored.local_route == candidate.local_route
         && stored.destination_gateway_id == candidate.destination_gateway_id
         && stored.registration_id == candidate.registration_id
         && stored_request.push_target_id() == candidate_request.push_target_id()
@@ -240,7 +300,8 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
     async fn ensure_desired_intent(
         &self,
         source_station_id: &DidCoreId,
-        destination_gateway_id: &DidCoreId,
+        local_route: &PushRegistrationHandoffRouteLocator,
+        client_input_digest: &Hash,
         request: &PushRegistrationHandoffRequestBody,
         now: DateTime<Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffIntentWrite>;
@@ -249,6 +310,15 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         &self,
         source_station_id: &DidCoreId,
         registration_id: &PushRegistrationId,
+    ) -> PersistenceResult<Option<PushRegistrationHandoffIntentRecord>>;
+
+    /// Return the outstanding intent for this exact Station-local route, or
+    /// the most recently verified predecessor when no receipt is outstanding.
+    /// This lookup never exposes the local locator on the Gateway wire.
+    async fn lookup_local_route_intent(
+        &self,
+        source_station_id: &DidCoreId,
+        local_route: &PushRegistrationHandoffRouteLocator,
     ) -> PersistenceResult<Option<PushRegistrationHandoffIntentRecord>>;
 
     async fn commit_verified_receipt(
@@ -289,6 +359,26 @@ mod tests {
         )
     }
 
+    fn local_route(
+        source: &DidCoreId,
+        destination: &DidCoreId,
+        device_id: &DeviceId,
+    ) -> PushRegistrationHandoffRouteLocator {
+        PushRegistrationHandoffRouteLocator {
+            account_id: AccountId::new(
+                DidCoreId::new("ak:did_core:web:account.example").unwrap(),
+                source.clone(),
+            ),
+            device_id: device_id.clone(),
+            push_route_id: "com.example.app".to_owned(),
+            destination_gateway_id: destination.clone(),
+        }
+    }
+
+    fn client_input_digest(byte: char) -> Hash {
+        Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
+    }
+
     fn receipt_for(
         request: &PushRegistrationHandoffRequestBody,
         source: &DidCoreId,
@@ -325,9 +415,11 @@ mod tests {
         let (source, destination) = identities();
         let now = Utc::now();
         let active = active_request();
+        let route = local_route(&source, &destination, active.device_id());
         let active_record = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
-            destination.clone(),
+            route.clone(),
+            client_input_digest('1'),
             &active,
             now,
         )
@@ -337,6 +429,11 @@ mod tests {
             PushRegistrationHandoffState::Active
         );
         assert_eq!(active_record.request().unwrap(), active);
+        assert!(
+            !std::str::from_utf8(&active_record.canonical_request)
+                .unwrap()
+                .contains("account.example")
+        );
         assert_eq!(
             active_record.request_digest,
             active.request_digest().unwrap()
@@ -349,9 +446,14 @@ mod tests {
             "state": "revoked"
         }))
         .unwrap();
-        let revoked_record =
-            PushRegistrationHandoffIntentRecord::prepare(source, destination, &revoked, now)
-                .unwrap();
+        let revoked_record = PushRegistrationHandoffIntentRecord::prepare(
+            source,
+            route,
+            client_input_digest('2'),
+            &revoked,
+            now,
+        )
+        .unwrap();
         assert_eq!(
             revoked_record.desired_state,
             PushRegistrationHandoffState::Revoked
@@ -370,7 +472,8 @@ mod tests {
         let prepared_at = Utc::now();
         let record = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
-            destination.clone(),
+            local_route(&source, &destination, request.device_id()),
+            client_input_digest('1'),
             &request,
             prepared_at,
         )
@@ -425,9 +528,11 @@ mod tests {
         let (source, destination) = identities();
         let active = active_request();
         let prepared_at = Utc::now();
+        let route = local_route(&source, &destination, active.device_id());
         let active_record = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
-            destination.clone(),
+            route.clone(),
+            client_input_digest('1'),
             &active,
             prepared_at,
         )
@@ -441,7 +546,8 @@ mod tests {
         .unwrap();
         let revoked_candidate = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
-            destination.clone(),
+            route.clone(),
+            client_input_digest('2'),
             &revoked,
             prepared_at + chrono::Duration::seconds(1),
         )
@@ -466,7 +572,8 @@ mod tests {
             .unwrap();
         let wrong_device_revoke = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
-            destination.clone(),
+            local_route(&source, &destination, wrong_device_revoke.device_id()),
+            client_input_digest('2'),
             &wrong_device_revoke,
             prepared_at + chrono::Duration::seconds(1),
         )
@@ -522,7 +629,8 @@ mod tests {
         *visible_notification_opt_in = true;
         let other_active = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
-            destination.clone(),
+            route,
+            client_input_digest('3'),
             &other_active,
             prepared_at + chrono::Duration::seconds(2),
         )
