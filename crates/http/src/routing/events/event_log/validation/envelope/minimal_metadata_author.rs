@@ -289,7 +289,8 @@ pub(in crate::routing::events::event_log) async fn validate_pairwise_session_hol
             .unwrap_or(current.genesis_event_ref),
     };
     let view = AuthorGroupStateView {
-        group_id: group_id.to_owned(),
+        group_id: arkret_wire::MlsGroupId::new(group_id.to_owned())
+            .map_err(|error| format!("pairwise holder MLS group id is invalid: {error}"))?,
         epoch: current.epoch,
         group_state_ref: coordinates.group_state_ref.clone(),
         active_leaves: active_author_leaves(state, &coordinates)
@@ -300,7 +301,7 @@ pub(in crate::routing::events::event_log) async fn validate_pairwise_session_hol
         group_id,
         epoch: current.epoch,
         group_state_ref: &coordinates.group_state_ref,
-        actor_id: &account_id.principal_id,
+        actor_id,
         proof_verification_method: verification_method,
         proof_public_key: &proof_public_key,
     };
@@ -349,14 +350,25 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     .ed25519_bytes()
     .map_err(|error| author_credential_invalid(format!("proof key decode: {error}")))?;
 
-    let actor = arkret_wire::DidCoreId::new(actor_id.to_owned())
-        .map_err(|error| author_credential_invalid(format!("actor_id: {error}")))?;
+    let actor = serde_json::from_value::<arkret_wire::ActorId>(
+        object
+            .get("actor_id")
+            .cloned()
+            .ok_or_else(|| author_credential_invalid("actor_id is required"))?,
+    )
+    .map_err(|error| author_credential_invalid(format!("actor_id: {error}")))?;
+    if actor.signing_principal_id().as_str() != actor_id {
+        return Err(author_credential_invalid(
+            "actor_id differs from the validated Event signing principal",
+        ));
+    }
     let proof_verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| {
             author_credential_invalid(format!("verification_method is not a DID URL: {error}"))
         })?;
     let view = AuthorGroupStateView {
-        group_id: context.coordinates.group_id.clone(),
+        group_id: arkret_wire::MlsGroupId::new(context.coordinates.group_id.clone())
+            .map_err(|error| author_credential_invalid(format!("group_id: {error}")))?,
         epoch: context.coordinates.epoch,
         group_state_ref: context.coordinates.group_state_ref.clone(),
         active_leaves: active_author_leaves(state, &context.coordinates).await?,
@@ -397,11 +409,11 @@ mod tests {
 
     use super::*;
 
-    fn leaf(index: u32, identity: &str, key: u8) -> AuthorLeaf {
+    fn leaf(index: u32, identity: &[u8], key: u8) -> AuthorLeaf {
         AuthorLeaf {
             leaf_index: index,
             credential: AuthorLeafCredential::Basic {
-                identity: identity.as_bytes().to_vec(),
+                identity: identity.to_vec(),
             },
             signature_key: vec![key; 32],
             leaf_node_canonical_bytes: Vec::new(),
@@ -410,7 +422,8 @@ mod tests {
 
     fn view(leaves: Vec<AuthorLeaf>) -> AuthorGroupStateView {
         AuthorGroupStateView {
-            group_id: "Zml4dHVyZS1yZWFsbQ".to_owned(),
+            group_id: arkret_wire::MlsGroupId::new("QjKOSorlqs3IquY7OikTUTy_Z0mMiL0X2mK4jAOT4R4")
+                .unwrap(),
             epoch: 7,
             group_state_ref: "ak:event:AYJ6k4yNe3sgr_7Xr3OYBCsTpcHMbdQAogrCDJGM0fh9".to_owned(),
             active_leaves: leaves,
@@ -449,11 +462,12 @@ mod tests {
     #[test]
     fn admission_maps_every_failure_to_the_canonical_reason() {
         let did = Did::new("did:key:z6MkpairwiseAlice").unwrap();
-        let actor = project_did_to_core_id(&did).unwrap();
+        let actor = arkret_wire::ActorId::service(project_did_to_core_id(&did).unwrap());
+        let actor_identity = actor.canonical_bytes().unwrap();
         let proof_method = DidUrl::new(format!("{did}#z6MkpairwiseAlice")).unwrap();
         let proof_key = vec![0xA1u8; 32];
         let base_claim = MinimalMetadataAuthorClaim {
-            group_id: "Zml4dHVyZS1yZWFsbQ",
+            group_id: "QjKOSorlqs3IquY7OikTUTy_Z0mMiL0X2mK4jAOT4R4",
             epoch: 7,
             group_state_ref: "ak:event:AYJ6k4yNe3sgr_7Xr3OYBCsTpcHMbdQAogrCDJGM0fh9",
             actor_id: &actor,
@@ -463,19 +477,19 @@ mod tests {
 
         // unique active leaf → accept.
         let unique = view(vec![
-            leaf(0, "ak:did_core:key:other", 0xB0),
-            leaf(3, actor.as_str(), 0xA1),
+            leaf(0, b"other actor", 0xB0),
+            leaf(3, &actor_identity, 0xA1),
         ]);
         admit_minimal_metadata_author_claim(&unique, &base_claim).unwrap();
 
         // duplicate identity / removed leaf / rollback / key mismatch → the
         // canonical failed_precondition reason, uniformly.
         let duplicate = view(vec![
-            leaf(1, actor.as_str(), 0xA1),
-            leaf(4, actor.as_str(), 0xC4),
+            leaf(1, &actor_identity, 0xA1),
+            leaf(4, &actor_identity, 0xC4),
         ]);
-        let removed = view(vec![leaf(0, "ak:did_core:key:other", 0xB0)]);
-        let key_mismatch = view(vec![leaf(3, actor.as_str(), 0xE7)]);
+        let removed = view(vec![leaf(0, b"other actor", 0xB0)]);
+        let key_mismatch = view(vec![leaf(3, &actor_identity, 0xE7)]);
         let mut rollback_claim = base_claim.clone();
         rollback_claim.group_state_ref = "ak:event:AXXyHtC0MgQ7on9ZHrO_NaIHvB0Lz6pk0TlTNxj6Wyp1";
 
