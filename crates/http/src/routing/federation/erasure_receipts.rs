@@ -2,7 +2,7 @@ use arkret_models_collaboration::governance::erasure::{
     ErasureReceiptAcceptance, ErasureReceiptAcceptanceStatus, ErasureReceiptPackage,
     ErasureReceiptResource, ErasureReceiptSubmitOutcome, ErasureReceiptSubmitRequestBody,
 };
-use arkret_wire::{Base64UrlString, ProtocolSignature};
+use arkret_wire::ProtocolSignature;
 use chrono::{Duration, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -309,7 +309,7 @@ async fn signed_acceptance(
         proof: ProtocolSignature {
             verification_method,
             created_at: accepted_at,
-            jws: Base64UrlString::new("AA".to_owned()).expect("static base64url"),
+            jws: String::new(),
         },
     };
     let input = acceptance
@@ -317,8 +317,7 @@ async fn signed_acceptance(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let jws = arkret_signatures::jws::sign_jws_ed25519(&input, state.notary_signing_key().as_ref())
         .map_err(AppError::internal)?;
-    acceptance.proof.jws =
-        Base64UrlString::new(jws).map_err(|error| AppError::internal(error.to_string()))?;
+    acceptance.proof.jws = jws;
     Ok(acceptance)
 }
 
