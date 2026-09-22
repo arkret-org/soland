@@ -79,7 +79,11 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
         return Ok(());
     }
 
-    let supersedes_digest = backup.supersedes_digest.as_deref().unwrap_or_default();
+    let supersedes_digest = backup
+        .supersedes_digest
+        .as_ref()
+        .map(arkret_wire::Hash::as_str)
+        .unwrap_or_default();
     if supersedes.is_none() || supersedes_digest.is_empty() {
         return Err(crate::app_error!(
             Conflict,
