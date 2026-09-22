@@ -344,6 +344,7 @@ impl PersistenceHandle {
         &self,
         source_station_id: &arkret_wire::DidCoreId,
         local_route: &soland_storage::PushRegistrationHandoffRouteLocator,
+        device_authorization: &soland_storage::DeviceRevocationGateSelector,
         client_input_digest: &arkret_wire::Hash,
         request: &arkret::PushRegistrationHandoffRequestBody,
         now: chrono::DateTime<chrono::Utc>,
@@ -354,10 +355,38 @@ impl PersistenceHandle {
             .ensure_desired_intent(
                 source_station_id,
                 local_route,
+                device_authorization,
                 client_input_digest,
                 request,
                 now,
             )
+            .await?)
+    }
+
+    pub async fn begin_public_push_unregistration(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+        push_key: Option<&str>,
+        app_id: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<Vec<soland_storage::PushRegistrationHandoffIntentRecord>> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .begin_public_push_unregistration(account_id, device_id, push_key, app_id, now)
+            .await?)
+    }
+
+    pub async fn awaiting_public_push_revocations(
+        &self,
+        source_station_id: &arkret_wire::DidCoreId,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<soland_storage::PushRegistrationHandoffIntentRecord>> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .list_awaiting_revoked_intents(source_station_id, limit)
             .await?)
     }
 

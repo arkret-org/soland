@@ -21,6 +21,10 @@ pub(crate) enum PushDeviceRouteWriteMode {
     RequireExact,
 }
 
+pub(crate) fn push_device_lock_key(account: &arkret_wire::AccountId, device_id: &str) -> String {
+    format!("push:{}:{device_id}", account.principal_id)
+}
+
 /// Lock and write one exact local push route on a caller-owned transaction.
 /// The caller must re-check the device revocation gate before invoking this
 /// helper; keeping that check outside makes the handoff UOW's lock order
@@ -53,10 +57,7 @@ pub(crate) async fn write_push_device_route_in_transaction(
     let account =
         serde_json::to_value(&registration.account_id).map_err(PersistenceError::database)?;
     // Serialize replacement and unregistration for this exact account/device.
-    let lock_key = format!(
-        "push:{}:{}",
-        registration.account_id.principal_id, registration.device_id
-    );
+    let lock_key = push_device_lock_key(&registration.account_id, registration.device_id.as_str());
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind::<Text, _>(&lock_key)
         .execute(&mut *conn)
@@ -180,7 +181,7 @@ impl PushDeviceStore for PgPushDeviceStore {
     ) -> PersistenceResult<usize> {
         use diesel_async::AsyncConnection;
         let account_value = serde_json::to_value(account).map_err(PersistenceError::database)?;
-        let lock_key = format!("push:{}:{device_id}", account.principal_id);
+        let lock_key = push_device_lock_key(account, device_id);
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;

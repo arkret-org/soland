@@ -86,6 +86,7 @@ pub(super) async fn register(
                 .ensure_push_registration_handoff_intent(
                     &source_station_id,
                     &local_route,
+                    input.authorization,
                     &client_input_digest,
                     &request,
                     input.prepared_at,
@@ -393,6 +394,33 @@ mod tests {
 
     use super::*;
 
+    fn device_authorization(
+        source: &DidCoreId,
+        device_id: &DeviceId,
+    ) -> DeviceRevocationGateSelector {
+        let event_id =
+            arkret_wire::EventId::new("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD")
+                .unwrap();
+        DeviceRevocationGateSelector {
+            principal_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            station_id: source.clone(),
+            device_id: device_id.as_str().to_owned(),
+            authorization_ref: arkret_wire::CommittedEventRef {
+                commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                    event_id.as_str().as_bytes(),
+                )),
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: arkret_wire::RealmId::new(
+                        "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
+                    )
+                    .unwrap(),
+                },
+                stream_position: 1,
+                event_id,
+            },
+        }
+    }
+
     fn request(registration_id: &str) -> PushRegistrationHandoffRequestBody {
         serde_json::from_value(json!({
             "registration_id": registration_id,
@@ -423,6 +451,7 @@ mod tests {
         let source = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:push.example").unwrap();
         let request = request("registration_0123456789abcdef");
+        let device_id = request.device_id().clone();
         let digest = Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-22T12:00:00Z")
             .unwrap()
@@ -438,6 +467,7 @@ mod tests {
                 push_route_id: "inkson".to_owned(),
                 destination_gateway_id: destination.clone(),
             },
+            device_authorization(&source, &device_id),
             digest,
             &request,
             now,

@@ -74,6 +74,11 @@ impl PushRegistrationHandoffRouteLocator {
 pub struct PushRegistrationHandoffIntentRecord {
     pub source_station_id: DidCoreId,
     pub local_route: PushRegistrationHandoffRouteLocator,
+    /// Exact device authorization generation that created the active intent.
+    /// This Station-private binding is retained across the terminal revoke so
+    /// device cleanup can match one generation without consulting mutable
+    /// inventory state.
+    pub device_authorization: crate::DeviceRevocationGateSelector,
     /// Digest of the authenticated client desired input before the Station
     /// allocates a random registration id or adds predecessor metadata.
     pub client_input_digest: Hash,
@@ -92,6 +97,7 @@ impl PushRegistrationHandoffIntentRecord {
     pub fn prepare(
         source_station_id: DidCoreId,
         local_route: PushRegistrationHandoffRouteLocator,
+        device_authorization: crate::DeviceRevocationGateSelector,
         client_input_digest: Hash,
         request: &PushRegistrationHandoffRequestBody,
         now: DateTime<Utc>,
@@ -105,10 +111,19 @@ impl PushRegistrationHandoffIntentRecord {
             .request_digest()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         local_route.validate_for(&source_station_id, request)?;
+        if device_authorization.principal_id != local_route.account_id.principal_id
+            || device_authorization.station_id != source_station_id
+            || device_authorization.device_id != local_route.device_id.as_str()
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "push handoff device authorization differs from its local route".to_owned(),
+            ));
+        }
         Ok(Self {
             source_station_id,
             destination_gateway_id: local_route.destination_gateway_id.clone(),
             local_route,
+            device_authorization,
             client_input_digest,
             registration_id: request.registration_id().clone(),
             desired_state: request.state(),
@@ -159,6 +174,14 @@ impl PushRegistrationHandoffIntentRecord {
         let request = self.request()?;
         self.local_route
             .validate_for(&self.source_station_id, &request)?;
+        if self.device_authorization.principal_id != self.local_route.account_id.principal_id
+            || self.device_authorization.station_id != self.source_station_id
+            || self.device_authorization.device_id != self.local_route.device_id.as_str()
+        {
+            return Err(PersistenceError::Internal(
+                "stored push handoff device authorization binding mismatch".to_owned(),
+            ));
+        }
         if self.local_route.destination_gateway_id != self.destination_gateway_id {
             return Err(PersistenceError::Internal(
                 "stored push handoff local route destination mismatch".to_owned(),
@@ -199,6 +222,7 @@ impl PushRegistrationHandoffIntentRecord {
             || authorization.principal_id != registration.account_id.principal_id
             || authorization.station_id != registration.account_id.station_id
             || authorization.device_id != registration.device_id.as_str()
+            || authorization != &self.device_authorization
             || !registration.retained_push_targets.is_empty()
         {
             return Err(PersistenceError::Conflict(
@@ -242,6 +266,7 @@ impl PushRegistrationHandoffIntentRecord {
     pub fn same_desired_intent(&self, candidate: &Self) -> bool {
         self.source_station_id == candidate.source_station_id
             && self.local_route == candidate.local_route
+            && self.device_authorization == candidate.device_authorization
             && self.client_input_digest == candidate.client_input_digest
             && self.destination_gateway_id == candidate.destination_gateway_id
             && self.registration_id == candidate.registration_id
@@ -286,6 +311,7 @@ pub fn apply_push_registration_desired_intent(
         && candidate.desired_state == PushRegistrationHandoffState::Revoked
         && stored.source_station_id == candidate.source_station_id
         && stored.local_route == candidate.local_route
+        && stored.device_authorization == candidate.device_authorization
         && stored.destination_gateway_id == candidate.destination_gateway_id
         && stored.registration_id == candidate.registration_id
         && stored_request.push_target_id() == candidate_request.push_target_id()
@@ -351,11 +377,13 @@ pub fn apply_verified_push_registration_receipt(
 }
 
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait PushRegistrationHandoffStore: Send + Sync {
     async fn ensure_desired_intent(
         &self,
         source_station_id: &DidCoreId,
         local_route: &PushRegistrationHandoffRouteLocator,
+        device_authorization: &crate::DeviceRevocationGateSelector,
         client_input_digest: &Hash,
         request: &PushRegistrationHandoffRequestBody,
         now: DateTime<Utc>,
@@ -384,6 +412,27 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         receipt: &PushRegistrationInstallationReceipt,
         now: DateTime<Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffReceiptWrite>;
+
+    /// Atomically convert every exact current public handoff route matching
+    /// this local client request into a durable terminal revoke intent, then
+    /// remove the local delivery route. Zero matches and exact retries are
+    /// idempotent.
+    async fn begin_public_push_unregistration(
+        &self,
+        account_id: &AccountId,
+        device_id: &DeviceId,
+        push_key: Option<&str>,
+        app_id: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> PersistenceResult<Vec<PushRegistrationHandoffIntentRecord>>;
+
+    /// Stable, bounded retry view for the dedicated public-Gateway revoke
+    /// worker. This is intentionally separate from the federation outbox.
+    async fn list_awaiting_revoked_intents(
+        &self,
+        source_station_id: &DidCoreId,
+        limit: usize,
+    ) -> PersistenceResult<Vec<PushRegistrationHandoffIntentRecord>>;
 
     /// Atomically commit a receipt whose detached JWS the caller has already
     /// verified and replace the exact Station-local push route it authorizes.
@@ -450,6 +499,33 @@ mod tests {
         Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
     }
 
+    fn device_authorization(
+        source: &DidCoreId,
+        device_id: &DeviceId,
+    ) -> crate::DeviceRevocationGateSelector {
+        let event_id =
+            arkret_wire::EventId::new("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD")
+                .unwrap();
+        crate::DeviceRevocationGateSelector {
+            principal_id: DidCoreId::new("ak:did_core:web:account.example").unwrap(),
+            station_id: source.clone(),
+            device_id: device_id.as_str().to_owned(),
+            authorization_ref: arkret_wire::CommittedEventRef {
+                commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                    event_id.as_str().as_bytes(),
+                )),
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: arkret_wire::RealmId::new(
+                        "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
+                    )
+                    .unwrap(),
+                },
+                stream_position: 1,
+                event_id,
+            },
+        }
+    }
+
     fn receipt_for(
         request: &PushRegistrationHandoffRequestBody,
         source: &DidCoreId,
@@ -490,6 +566,7 @@ mod tests {
         let active_record = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
             route.clone(),
+            device_authorization(&source, active.device_id()),
             client_input_digest('1'),
             &active,
             now,
@@ -518,8 +595,9 @@ mod tests {
         }))
         .unwrap();
         let revoked_record = PushRegistrationHandoffIntentRecord::prepare(
-            source,
+            source.clone(),
             route,
+            device_authorization(&source, revoked.device_id()),
             client_input_digest('2'),
             &revoked,
             now,
@@ -544,6 +622,7 @@ mod tests {
         let record = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
             local_route(&source, &destination, request.device_id()),
+            device_authorization(&source, request.device_id()),
             client_input_digest('1'),
             &request,
             prepared_at,
@@ -603,6 +682,7 @@ mod tests {
         let active_record = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
             route.clone(),
+            device_authorization(&source, active.device_id()),
             client_input_digest('1'),
             &active,
             prepared_at,
@@ -618,6 +698,7 @@ mod tests {
         let revoked_candidate = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
             route.clone(),
+            device_authorization(&source, revoked.device_id()),
             client_input_digest('2'),
             &revoked,
             prepared_at + chrono::Duration::seconds(1),
@@ -644,6 +725,7 @@ mod tests {
         let wrong_device_revoke = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
             local_route(&source, &destination, wrong_device_revoke.device_id()),
+            device_authorization(&source, wrong_device_revoke.device_id()),
             client_input_digest('2'),
             &wrong_device_revoke,
             prepared_at + chrono::Duration::seconds(1),
@@ -701,6 +783,7 @@ mod tests {
         let other_active = PushRegistrationHandoffIntentRecord::prepare(
             source.clone(),
             route,
+            device_authorization(&source, other_active.device_id()),
             client_input_digest('3'),
             &other_active,
             prepared_at + chrono::Duration::seconds(2),

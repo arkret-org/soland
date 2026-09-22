@@ -1212,6 +1212,7 @@ diesel::table! {
         local_account_id -> Jsonb,
         local_device_id -> Text,
         local_push_route_id -> Text,
+        device_authorization -> Jsonb,
         registration_id -> Text,
         destination_gateway_id -> Text,
         desired_state -> Text,

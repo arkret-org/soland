@@ -3071,6 +3071,7 @@ CREATE TABLE public.push_registration_handoff_intents (
     local_account_id jsonb NOT NULL,
     local_device_id text NOT NULL,
     local_push_route_id text NOT NULL CHECK (btrim(local_push_route_id) <> ''),
+    device_authorization jsonb NOT NULL,
     registration_id text NOT NULL,
     destination_gateway_id text NOT NULL,
     desired_state text NOT NULL CHECK (desired_state IN ('active', 'revoked')),
