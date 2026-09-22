@@ -390,6 +390,27 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn commit_verified_push_registration_handoff_receipt(
+        &self,
+        source_station_id: &arkret_wire::DidCoreId,
+        registration_id: &arkret::PushRegistrationId,
+        expected_request_digest: &arkret_wire::Hash,
+        receipt: &arkret::PushRegistrationInstallationReceipt,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::PushRegistrationHandoffReceiptWrite> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .commit_verified_receipt(
+                source_station_id,
+                registration_id,
+                expected_request_digest,
+                receipt,
+                now,
+            )
+            .await?)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn commit_verified_push_registration_handoff(
         &self,

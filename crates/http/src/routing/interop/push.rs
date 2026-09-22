@@ -226,6 +226,14 @@ pub(super) async fn push_unregister(
             "registration account must belong to this Station",
         ));
     }
+    let public_confirmed = super::push_handoff::unregister(
+        state,
+        &account_id,
+        &body.device_id,
+        body.push_key.as_deref(),
+        body.app_id.as_deref(),
+    )
+    .await?;
     let removed = state
         .deliveries()
         .unregister_push_device(
@@ -244,8 +252,13 @@ pub(super) async fn push_unregister(
             "device_id": body.device_id,
             "app_id": body.app_id,
             "removed_count": removed,
+            "public_handoffs_confirmed": public_confirmed,
         }),
-        if removed == 0 { "no_match" } else { "accepted" },
+        if removed == 0 && public_confirmed == 0 {
+            "no_match"
+        } else {
+            "accepted"
+        },
     )
     .await;
     res.status_code(StatusCode::NO_CONTENT);

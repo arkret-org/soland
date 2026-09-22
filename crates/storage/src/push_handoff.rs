@@ -79,8 +79,10 @@ pub struct PushRegistrationHandoffIntentRecord {
     /// device cleanup can match one generation without consulting mutable
     /// inventory state.
     pub device_authorization: crate::DeviceRevocationGateSelector,
-    /// Digest of the authenticated client desired input before the Station
-    /// allocates a random registration id or adds predecessor metadata.
+    /// Digest of the authenticated client desired input. Active intents bind
+    /// the registration request before Station-generated identity metadata;
+    /// revoked intents bind the exact unregister selector so an uncertain
+    /// synchronous retry can recover only its own durable tombstones.
     pub client_input_digest: Hash,
     pub destination_gateway_id: DidCoreId,
     pub registration_id: PushRegistrationId,
@@ -413,10 +415,11 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffReceiptWrite>;
 
-    /// Atomically convert every exact current public handoff route matching
-    /// this local client request into a durable terminal revoke intent, then
-    /// remove the local delivery route. Zero matches and exact retries are
-    /// idempotent.
+    /// Atomically convert every exact current public handoff route and pending
+    /// active intent matching this local client request into a durable terminal
+    /// revoke intent, then remove the local delivery route. An exact retry
+    /// returns its still-awaiting tombstones; zero matches and fully confirmed
+    /// retries are idempotent.
     async fn begin_public_push_unregistration(
         &self,
         account_id: &AccountId,

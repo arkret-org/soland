@@ -260,9 +260,26 @@ fn active_request_matches_filters(
         && app_id.is_none_or(|expected| Some(expected) == request_app_id.as_deref())
 }
 
+fn public_unregistration_input_digest(
+    account_id: &AccountId,
+    device_id: &DeviceId,
+    push_key: Option<&str>,
+    app_id: Option<&str>,
+) -> PersistenceResult<Hash> {
+    let input = serde_json::json!({
+        "account_id": account_id,
+        "device_id": device_id,
+        "push_key": push_key,
+        "app_id": app_id,
+    });
+    Hash::new(arkret_canonical::canonical_sha256(&input).map_err(PersistenceError::database)?)
+        .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
 async fn advance_active_intent_to_revoked(
     conn: &mut AsyncPgConnection,
     stored: &PushRegistrationHandoffIntentRecord,
+    client_input_digest: &Hash,
     now: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<PushRegistrationHandoffIntentRecord> {
     let active = stored.request()?;
@@ -285,7 +302,7 @@ async fn advance_active_intent_to_revoked(
         stored.source_station_id.clone(),
         stored.local_route.clone(),
         stored.device_authorization.clone(),
-        stored.client_input_digest.clone(),
+        client_input_digest.clone(),
         &revoke_request,
         now,
     )?;
@@ -543,6 +560,8 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
         account_id
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let revoke_input_digest =
+            public_unregistration_input_digest(account_id, device_id, push_key, app_id)?;
         let account_id = account_id.clone();
         let device_id = device_id.clone();
         let push_key = push_key.map(str::to_owned);
@@ -584,7 +603,23 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
                 .bind::<Text, _>(device_id.as_str())
                 .load::<HandoffIntentRow>(&mut *conn)
                 .await?;
-            let mut revoked = Vec::new();
+            let replay_query = format!(
+                "SELECT {HANDOFF_COLUMNS} FROM push_registration_handoff_intents \
+                 WHERE source_station_id = $1 AND local_account_id = $2 \
+                   AND local_device_id = $3 AND desired_state = 'revoked' \
+                   AND status = 'awaiting_receipt' AND client_input_digest = $4 \
+                 ORDER BY local_push_route_id, destination_gateway_id, registration_id"
+            );
+            let mut revoked = sql_query(replay_query)
+                .bind::<Text, _>(&account_id.station_id)
+                .bind::<Jsonb, _>(&account_json)
+                .bind::<Text, _>(device_id.as_str())
+                .bind::<Text, _>(revoke_input_digest.as_str())
+                .load::<HandoffIntentRow>(&mut *conn)
+                .await?
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<PersistenceResult<Vec<_>>>()?;
             for snapshot in awaiting {
                 let snapshot: PushRegistrationHandoffIntentRecord = snapshot.try_into()?;
                 let request = snapshot.request()?;
@@ -626,7 +661,15 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
                     )
                     .into());
                 }
-                revoked.push(advance_active_intent_to_revoked(conn, &stored, now).await?);
+                revoked.push(
+                    advance_active_intent_to_revoked(
+                        conn,
+                        &stored,
+                        &revoke_input_digest,
+                        now,
+                    )
+                    .await?,
+                );
             }
             for route_row in routes {
                 let registration: PushRegistrationRecord =
@@ -716,7 +759,13 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
                     )
                     .into());
                 }
-                let revoked_record = advance_active_intent_to_revoked(conn, &stored, now).await?;
+                let revoked_record = advance_active_intent_to_revoked(
+                    conn,
+                    &stored,
+                    &revoke_input_digest,
+                    now,
+                )
+                .await?;
                 let removed = sql_query(
                     "DELETE FROM push_devices WHERE payload->'account_id' = $1 \
                        AND device_id = $2 AND payload->>'push_route_id' = $3 \
@@ -1114,8 +1163,14 @@ mod tests {
             stored_at,
             proof: PayloadProof {
                 kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-                verification_method: DidUrl::new("did:web:gateway.example#push-receipt-key")
-                    .unwrap(),
+                verification_method: DidUrl::new(format!(
+                    "did:{}#push-receipt-key",
+                    destination
+                        .as_str()
+                        .strip_prefix("ak:did_core:")
+                        .expect("test destination is a projected DID")
+                ))
+                .unwrap(),
                 payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
                 created_at: stored_at,
                 domain: None,
@@ -1866,20 +1921,23 @@ mod tests {
                 other_gateway_pending.registration_id().as_str(),
             ]
         );
-        assert!(
-            store
-                .begin_public_push_unregistration(
-                    &source.account,
-                    &source.founding_device_id,
-                    Some("provider-token-a"),
-                    Some("com.example.app"),
-                    started_at + chrono::Duration::seconds(5),
-                )
-                .await
-                .unwrap()
-                .is_empty(),
-            "a crash/retry sees no local route but keeps the exact durable revoke"
-        );
+        let retry = store
+            .begin_public_push_unregistration(
+                &source.account,
+                &source.founding_device_id,
+                Some("provider-token-a"),
+                Some("com.example.app"),
+                started_at + chrono::Duration::seconds(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.len(), revoked.len());
+        assert!(retry.iter().all(|replayed| {
+            revoked.iter().any(|first| {
+                first.registration_id == replayed.registration_id
+                    && first.canonical_request == replayed.canonical_request
+            })
+        }));
         let active_receipt = receipt_for(
             &request_a,
             &station_id,
@@ -1950,6 +2008,76 @@ mod tests {
                 .is_none()
         );
 
+        let predecessor_revoke = retry
+            .iter()
+            .find(|record| record.registration_id == *request_a.registration_id())
+            .unwrap();
+        let predecessor_revoke_request = predecessor_revoke.request().unwrap();
+        let predecessor_revoke_receipt = receipt_for(
+            &predecessor_revoke_request,
+            &station_id,
+            &predecessor_revoke.destination_gateway_id,
+            started_at + chrono::Duration::seconds(8),
+        );
+        store
+            .commit_verified_receipt(
+                &station_id,
+                &predecessor_revoke.registration_id,
+                &predecessor_revoke.request_digest,
+                &predecessor_revoke_receipt,
+                started_at + chrono::Duration::seconds(8),
+            )
+            .await
+            .unwrap();
+        let remaining = store
+            .begin_public_push_unregistration(
+                &source.account,
+                &source.founding_device_id,
+                Some("provider-token-a"),
+                Some("com.example.app"),
+                started_at + chrono::Duration::seconds(9),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining.len(),
+            2,
+            "confirmed revokes leave only retryable peers"
+        );
+        for record in remaining {
+            let request = record.request().unwrap();
+            let receipt = receipt_for(
+                &request,
+                &station_id,
+                &record.destination_gateway_id,
+                started_at + chrono::Duration::seconds(10),
+            );
+            store
+                .commit_verified_receipt(
+                    &station_id,
+                    &record.registration_id,
+                    &record.request_digest,
+                    &receipt,
+                    started_at + chrono::Duration::seconds(10),
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            store
+                .begin_public_push_unregistration(
+                    &source.account,
+                    &source.founding_device_id,
+                    Some("provider-token-a"),
+                    Some("com.example.app"),
+                    started_at + chrono::Duration::seconds(11),
+                )
+                .await
+                .unwrap()
+                .is_empty(),
+            "a fully confirmed exact retry has zero remaining public work"
+        );
+
         let mut wrong_generation = authorization.clone();
         wrong_generation.authorization_ref.stream_position += 1;
         {
@@ -1968,7 +2096,7 @@ mod tests {
                     &source.founding_device_id,
                     Some("provider-token-b"),
                     Some("com.example.voip"),
-                    started_at + chrono::Duration::seconds(8),
+                    started_at + chrono::Duration::seconds(12),
                 )
                 .await,
             Err(PersistenceError::Conflict(_))
@@ -1986,7 +2114,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_public_unregistration_advances_once_and_replays_zero_matches() {
+    async fn concurrent_public_unregistration_advances_once_and_replays_exact_revoke() {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
@@ -2057,8 +2185,10 @@ mod tests {
         barrier.wait().await;
         let first = tasks.remove(0).await.unwrap().unwrap();
         let second = tasks.remove(0).await.unwrap().unwrap();
-        assert_eq!(first.len() + second.len(), 1);
-        assert!(first.is_empty() || second.is_empty());
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].registration_id, second[0].registration_id);
+        assert_eq!(first[0].canonical_request, second[0].canonical_request);
         assert!(stored_push_route(&pool, &route).await.is_none());
         let due = store
             .list_awaiting_revoked_intents(&station_id, 10)

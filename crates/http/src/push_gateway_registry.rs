@@ -31,6 +31,8 @@ pub enum TrustedPushGatewayError {
     DuplicateOrigin(String),
     #[error("trusted Push Gateway registry repeats service DID {0}")]
     DuplicateServiceDid(String),
+    #[error("trusted Push Gateway registry repeats projected service id {0}")]
+    DuplicateServiceId(String),
     #[error("trusted Push Gateway registry repeats receipt verification method {0}")]
     DuplicateReceiptMethod(String),
     #[error("trusted Push Gateway registry reuses a receipt Ed25519 key")]
@@ -87,6 +89,7 @@ impl TrustedPushGateway {
 #[derive(Clone, Debug, Default)]
 pub struct TrustedPushGatewayRegistry {
     by_origin: BTreeMap<WebOrigin, TrustedPushGateway>,
+    by_service_id: BTreeMap<DidCoreId, WebOrigin>,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +115,7 @@ impl TrustedPushGatewayRegistry {
         configured: Vec<ConfiguredGateway>,
     ) -> Result<Self, TrustedPushGatewayError> {
         let mut by_origin = BTreeMap::new();
+        let mut by_service_id = BTreeMap::new();
         let mut service_dids = BTreeSet::new();
         let mut receipt_methods = BTreeSet::new();
         let mut receipt_keys = BTreeSet::new();
@@ -150,6 +154,14 @@ impl TrustedPushGatewayRegistry {
                     configured.service_did.to_string(),
                 ));
             }
+            if by_service_id
+                .insert(service_id.clone(), configured.canonical_origin.clone())
+                .is_some()
+            {
+                return Err(TrustedPushGatewayError::DuplicateServiceId(
+                    service_id.to_string(),
+                ));
+            }
             if !receipt_methods.insert(configured.receipt_verification_method.clone()) {
                 return Err(TrustedPushGatewayError::DuplicateReceiptMethod(
                     configured.receipt_verification_method.to_string(),
@@ -171,7 +183,10 @@ impl TrustedPushGatewayRegistry {
             );
         }
 
-        Ok(Self { by_origin })
+        Ok(Self {
+            by_origin,
+            by_service_id,
+        })
     }
 
     #[must_use]
@@ -187,6 +202,13 @@ impl TrustedPushGatewayRegistry {
     #[must_use]
     pub fn get(&self, origin: &WebOrigin) -> Option<&TrustedPushGateway> {
         self.by_origin.get(origin)
+    }
+
+    #[must_use]
+    pub fn get_by_service_id(&self, service_id: &DidCoreId) -> Option<&TrustedPushGateway> {
+        self.by_service_id
+            .get(service_id)
+            .and_then(|origin| self.by_origin.get(origin))
     }
 
     /// Bind a current resolver result to the static onboarding trust root.
@@ -290,6 +312,13 @@ mod tests {
         let gateway = registry.get(&origin).unwrap();
         assert_eq!(gateway.service_did().as_str(), DID);
         assert_eq!(
+            registry
+                .get_by_service_id(gateway.service_id())
+                .unwrap()
+                .canonical_origin(),
+            &origin
+        );
+        assert_eq!(
             gateway.receipt_verification_method().as_str(),
             format!("{DID}#receipt")
         );
@@ -359,6 +388,39 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn reverse_lookup_keeps_each_gateway_on_its_unique_canonical_origin() {
+        let registry = TrustedPushGatewayRegistry::from_json(&registry_json(serde_json::json!([
+            entry(ORIGIN, DID, &format!("{DID}#receipt"), 7),
+            entry(
+                "https://push-2.example",
+                "did:web:push-2.example",
+                "did:web:push-2.example#receipt",
+                8
+            )
+        ])))
+        .unwrap();
+        for (did, expected_origin) in [
+            (DID, ORIGIN),
+            ("did:web:push-2.example", "https://push-2.example"),
+        ] {
+            let service_id = arkret_wire::project_did_to_core_id(&Did::new(did).unwrap()).unwrap();
+            assert_eq!(
+                registry
+                    .get_by_service_id(&service_id)
+                    .unwrap()
+                    .canonical_origin()
+                    .as_str(),
+                expected_origin
+            );
+        }
+        assert!(
+            registry
+                .get_by_service_id(&DidCoreId::new("ak:did_core:web:unknown.example").unwrap())
+                .is_none()
+        );
     }
 
     #[test]

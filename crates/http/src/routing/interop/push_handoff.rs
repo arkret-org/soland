@@ -1,11 +1,12 @@
 //! Durable Station-to-public-Gateway active registration handoff.
 
+use std::future::Future;
 use std::time::Duration;
 
 use arkret_http_client::{Client, HttpMessageSigner};
 use arkret_models_integration::{
     PushRegisterDeviceOutcome, PushRegisterDeviceRequestBody, PushRegistrationHandoffRequestBody,
-    PushRegistrationId, PushRegistrationRecord,
+    PushRegistrationId, PushRegistrationInstallationReceipt, PushRegistrationRecord,
 };
 use arkret_wire::{AccountId, ServiceKind, WebOrigin};
 use base64::Engine as _;
@@ -85,7 +86,6 @@ pub(super) async fn register(
     // Only pending or new work needs live ServiceDescribe route verification.
     // A durable verified replay is a local CAS operation and remains available
     // while discovery is temporarily unavailable.
-    let route = resolve_trusted_gateway(state, &origin, &gateway).await?;
     let intent = match plan {
         ActivePushRegistrationPlan::ReplayPending(record) => record,
         ActivePushRegistrationPlan::Create { predecessor } => {
@@ -130,7 +130,147 @@ pub(super) async fn register(
             "push registration planner returned a verified intent for network delivery",
         ));
     }
+    let (request, receipt) =
+        send_and_verify_handoff_intent(state, &origin, &gateway, &intent).await?;
+
+    let registration = local_registration(
+        &intent,
+        &request,
+        &input.account_id,
+        &input.push_route_id,
+        &origin,
+    )?;
+    let committed = state
+        .persistence()
+        .commit_verified_push_registration_handoff(
+            &source_station_id,
+            &local_route,
+            &intent.registration_id,
+            &intent.request_digest,
+            &receipt,
+            input.authorization,
+            &registration,
+            Utc::now(),
+        )
+        .await
+        .map_err(service_storage_error)?;
+    match committed {
+        soland_storage::PushRegistrationHandoffReceiptWrite::Stored(record)
+        | soland_storage::PushRegistrationHandoffReceiptWrite::ExactReplay(record) => {
+            outcome_from_record(&record)
+        }
+    }
+}
+
+pub(super) async fn unregister(
+    state: &AppState,
+    account_id: &AccountId,
+    device_id: &arkret_wire::DeviceId,
+    push_key: Option<&str>,
+    app_id: Option<&str>,
+) -> Result<usize, AppError> {
+    let source_station_id = state.service_core_id();
+    let intents = state
+        .persistence()
+        .begin_public_push_unregistration(account_id, device_id, push_key, app_id, Utc::now())
+        .await
+        .map_err(service_storage_error)?;
+    confirm_revoked_intents(intents, |intent| {
+        confirm_revoked_intent(state, &source_station_id, intent)
+    })
+    .await
+}
+
+async fn confirm_revoked_intents<F, Fut>(
+    intents: Vec<PushRegistrationHandoffIntentRecord>,
+    mut confirm: F,
+) -> Result<usize, AppError>
+where
+    F: FnMut(PushRegistrationHandoffIntentRecord) -> Fut,
+    Fut: Future<Output = Result<(), AppError>>,
+{
+    let mut confirmed = 0;
+    for intent in intents {
+        let request = intent.request().map_err(persistence_error)?;
+        if request.state() != arkret_models_integration::PushRegistrationHandoffState::Revoked
+            || intent.status != PushRegistrationHandoffIntentStatus::AwaitingReceipt
+        {
+            return Err(AppError::internal(
+                "public Push Gateway unregistration selected a non-awaiting revoke intent",
+            ));
+        }
+        confirm(intent).await?;
+        confirmed += 1;
+    }
+    Ok(confirmed)
+}
+
+async fn confirm_revoked_intent(
+    state: &AppState,
+    source_station_id: &arkret_wire::DidCoreId,
+    intent: PushRegistrationHandoffIntentRecord,
+) -> Result<(), AppError> {
+    let registry = state.trusted_push_gateways();
+    let gateway = registry
+        .get_by_service_id(&intent.destination_gateway_id)
+        .cloned()
+        .ok_or_else(|| {
+            handoff_unavailable(
+                "Gateway destination is not onboarded",
+                &intent.destination_gateway_id,
+            )
+        })?;
+    let origin = gateway.canonical_origin().clone();
+    let (_, receipt) = send_and_verify_handoff_intent(state, &origin, &gateway, &intent).await?;
+    let committed = state
+        .persistence()
+        .commit_verified_push_registration_handoff_receipt(
+            source_station_id,
+            &intent.registration_id,
+            &intent.request_digest,
+            &receipt,
+            Utc::now(),
+        )
+        .await
+        .map_err(service_storage_error)?;
+    match committed {
+        soland_storage::PushRegistrationHandoffReceiptWrite::Stored(record)
+        | soland_storage::PushRegistrationHandoffReceiptWrite::ExactReplay(record)
+            if record.desired_state
+                == arkret_models_integration::PushRegistrationHandoffState::Revoked
+                && record.status == PushRegistrationHandoffIntentStatus::ReceiptVerified =>
+        {
+            Ok(())
+        }
+        _ => Err(AppError::internal(
+            "public Push Gateway revoke receipt did not commit terminal state",
+        )),
+    }
+}
+
+async fn send_and_verify_handoff_intent(
+    state: &AppState,
+    origin: &WebOrigin,
+    gateway: &TrustedPushGateway,
+    intent: &PushRegistrationHandoffIntentRecord,
+) -> Result<
+    (
+        PushRegistrationHandoffRequestBody,
+        PushRegistrationInstallationReceipt,
+    ),
+    AppError,
+> {
+    if intent.destination_gateway_id != *gateway.service_id()
+        || intent.local_route.destination_gateway_id != *gateway.service_id()
+        || origin != gateway.canonical_origin()
+    {
+        return Err(handoff_unavailable(
+            "Gateway intent destination does not match onboarding",
+            "destination mismatch",
+        ));
+    }
     let request = intent.request().map_err(persistence_error)?;
+    let route = resolve_trusted_gateway(state, origin, gateway).await?;
     let (_, assertion_method) = state
         .current_service_receipt_binding()
         .await
@@ -153,51 +293,33 @@ pub(super) async fn register(
         .build()
         .map_err(|error| handoff_unavailable("Gateway client setup failed", error))?;
     let outcome = client
-        .push_apply_registration(&request, &source_station_id, gateway.service_id())
+        .push_apply_registration(&request, &intent.source_station_id, gateway.service_id())
         .await
         .map_err(|error| handoff_unavailable("Gateway request failed", error))?;
-    if outcome.receipt.proof.verification_method != *gateway.receipt_verification_method() {
+    verify_handoff_receipt(gateway, intent, &request, &outcome.receipt)?;
+    Ok((request, outcome.receipt))
+}
+
+fn verify_handoff_receipt(
+    gateway: &TrustedPushGateway,
+    intent: &PushRegistrationHandoffIntentRecord,
+    request: &PushRegistrationHandoffRequestBody,
+    receipt: &PushRegistrationInstallationReceipt,
+) -> Result<(), AppError> {
+    if receipt.proof.verification_method != *gateway.receipt_verification_method() {
         return Err(handoff_unavailable(
             "Gateway receipt used an unapproved verification method",
             "receipt method mismatch",
         ));
     }
     arkret::verify_push_registration_installation_receipt(
-        &outcome.receipt,
-        &request,
-        &source_station_id,
+        receipt,
+        request,
+        &intent.source_station_id,
         gateway.service_id(),
         gateway.receipt_verifying_key(),
     )
-    .map_err(|error| handoff_unavailable("Gateway receipt verification failed", error))?;
-
-    let registration = local_registration(
-        &intent,
-        &request,
-        &input.account_id,
-        &input.push_route_id,
-        &origin,
-    )?;
-    let committed = state
-        .persistence()
-        .commit_verified_push_registration_handoff(
-            &source_station_id,
-            &local_route,
-            &intent.registration_id,
-            &intent.request_digest,
-            &outcome.receipt,
-            input.authorization,
-            &registration,
-            Utc::now(),
-        )
-        .await
-        .map_err(service_storage_error)?;
-    match committed {
-        soland_storage::PushRegistrationHandoffReceiptWrite::Stored(record)
-        | soland_storage::PushRegistrationHandoffReceiptWrite::ExactReplay(record) => {
-            outcome_from_record(&record)
-        }
-    }
+    .map_err(|error| handoff_unavailable("Gateway receipt verification failed", error))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -452,6 +574,9 @@ fn handoff_unavailable(stage: &'static str, _error: impl std::fmt::Display) -> A
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use arkret_models_integration::PushRegistrationHandoffState;
     use arkret_wire::{Audience, DeviceId, DidCoreId, DidUrl, Hash, PayloadProof};
     use serde_json::json;
@@ -565,6 +690,48 @@ mod tests {
             record.receipt = Some(receipt);
         }
         record
+    }
+
+    fn revoked_record() -> PushRegistrationHandoffIntentRecord {
+        let active = record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let active_request = active.request().unwrap();
+        let revoked = PushRegistrationHandoffRequestBody::Revoked {
+            registration_id: active.registration_id.clone(),
+            push_target_id: active_request.push_target_id().clone(),
+            device_id: active_request.device_id().clone(),
+        };
+        PushRegistrationHandoffIntentRecord::prepare(
+            active.source_station_id,
+            active.local_route,
+            active.device_authorization,
+            active.client_input_digest,
+            &revoked,
+            active.created_at,
+        )
+        .unwrap()
+    }
+
+    fn trusted_gateway() -> TrustedPushGateway {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
+        let mut multicodec = vec![0xed, 0x01];
+        multicodec.extend_from_slice(key.as_bytes());
+        let registry = crate::push_gateway_registry::TrustedPushGatewayRegistry::from_json(
+            &serde_json::to_string(&serde_json::json!([{
+                "canonical_origin": "https://push.example",
+                "service_did": "did:web:push.example",
+                "receipt_verification_method": "did:web:push.example#receipt",
+                "receipt_public_key_multibase": format!(
+                    "z{}",
+                    bs58::encode(multicodec).into_string()
+                ),
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        registry
+            .get(&WebOrigin::new("https://push.example").unwrap())
+            .unwrap()
+            .clone()
     }
 
     #[test]
@@ -715,5 +882,55 @@ mod tests {
             Some("Gateway request failed")
         );
         assert!(!format!("{error:?}").contains("provider-secret"));
+    }
+
+    #[test]
+    fn wrong_gateway_receipt_binding_fails_before_commit() {
+        let intent = record(PushRegistrationHandoffIntentStatus::ReceiptVerified);
+        let request = intent.request().unwrap();
+        let mut receipt = intent.receipt.clone().unwrap();
+        receipt.destination_gateway_id =
+            DidCoreId::new("ak:did_core:web:other-gateway.example").unwrap();
+        let error = verify_handoff_receipt(&trusted_gateway(), &intent, &request, &receipt)
+            .expect_err("wrong destination must fail closed");
+        assert_eq!(
+            error.private_detail.as_deref(),
+            Some("Gateway receipt verification failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_batch_returns_failure_on_partial_remote_error_and_zero_is_success() {
+        let intent = revoked_record();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let result = confirm_revoked_intents(vec![intent.clone(), intent], move |_| {
+            let observed = observed.clone();
+            async move {
+                let call = observed.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == 2 {
+                    Err(handoff_unavailable(
+                        "Gateway request failed",
+                        "simulated timeout",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "a partial remote failure must not become 204"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        assert_eq!(
+            confirm_revoked_intents(Vec::new(), |_| async { Ok(()) })
+                .await
+                .unwrap(),
+            0,
+            "no local or public matches remain idempotent success"
+        );
     }
 }
