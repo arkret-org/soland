@@ -3,8 +3,8 @@
 //!
 //!   1. upload a KeyPackage,
 //!   2. claim it atomically (and assert a second claim returns 409),
-//!   3. submit canonical public MLS genesis/commit events and assert they mirror
-//!      into the durable MLS epoch store.
+//!   3. submit canonical public MLS genesis/commit events and assert they mirror into the durable
+//!      MLS epoch store.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
 //! `ak.mls.commit` events via the canonical `POST /_arkret/self/events` pipeline

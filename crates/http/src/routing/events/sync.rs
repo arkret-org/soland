@@ -9,8 +9,8 @@
 //!   Extension send rail; encrypted-only)
 //! - `GET  /_arkret/self/signal/subscribe`        — `ak.self.signal.stream.subscribe.v1` (Signal
 //!   Extension receive rail; verbatim envelope NDJSON)
-//! - `GET  /_arkret/self/committed-events/subscribe` — committed Event live tail.
-//!   Multi-Realm / multi-actor stream; frame `kind` field replaces `type`.
+//! - `GET  /_arkret/self/committed-events/subscribe` — committed Event live tail. Multi-Realm /
+//!   multi-actor stream; frame `kind` field replaces `type`.
 //! - `GET  /_arkret/self/realm-state-snapshot/head`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,

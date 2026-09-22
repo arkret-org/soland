@@ -876,7 +876,7 @@ async fn account_blocklist_commit_replays_exactly_and_cas_conflict_rolls_back_ev
     .count;
     assert_eq!(changes_after_replay, changes_after_first);
 
-    let (conflict, _, _) = make(1, 1, Some(first_commit_id.clone()));
+    let (conflict, ..) = make(1, 1, Some(first_commit_id.clone()));
     let conflict_event_id = conflict.event.event_id.clone();
     let error = uow.commit_event(conflict).await.unwrap_err();
     assert_eq!(
@@ -901,7 +901,7 @@ async fn account_blocklist_commit_replays_exactly_and_cas_conflict_rolls_back_ev
         1
     );
 
-    let (second, _, _) = make(2, 1, Some(first_commit_id));
+    let (second, ..) = make(2, 1, Some(first_commit_id));
     uow.commit_event(second).await.unwrap();
     let current = PgAccountDataStore { pool: pool.clone() }
         .get(&actor, arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST)

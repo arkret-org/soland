@@ -685,10 +685,7 @@ fn space_list_archive_restore_and_tombstone_protect_card_lifecycle_and_rank() {
         .values()
         .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
-    assert_eq!(
-        relation.rank.as_deref(),
-        Some("r007")
-    );
+    assert_eq!(relation.rank.as_deref(), Some("r007"));
 
     state.apply(
         &make_operation(
@@ -704,10 +701,7 @@ fn space_list_archive_restore_and_tombstone_protect_card_lifecycle_and_rank() {
         .values()
         .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
-    assert_eq!(
-        relation.rank.as_deref(),
-        Some("r007")
-    );
+    assert_eq!(relation.rank.as_deref(), Some("r007"));
     state.apply(
         &make_operation(
             arkret_wire::EventKind::StrandArchive,

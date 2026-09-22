@@ -790,10 +790,8 @@ mod tests {
     use arkret_models_collaboration::account_status::UnsignedAccountStatusRecord;
     use arkret_models_collaboration::objects::account_status::AccountStatus;
     use arkret_wire::{DidUrl, PayloadProof, RealmId, SchemaId};
-    use soland_storage::{
-        AccountStatusAffectedServiceSource,
-        contract_tests::assert_account_status_replica_decision_table_contract,
-    };
+    use soland_storage::AccountStatusAffectedServiceSource;
+    use soland_storage::contract_tests::assert_account_status_replica_decision_table_contract;
 
     use super::*;
 

@@ -36,7 +36,10 @@ pub(crate) fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) ->
     {
         return true;
     }
-    let Some(capability) = payload.get("actor_capability").filter(|value| value.is_object()) else {
+    let Some(capability) = payload
+        .get("actor_capability")
+        .filter(|value| value.is_object())
+    else {
         return false;
     };
     capability.get("action").and_then(Value::as_str)

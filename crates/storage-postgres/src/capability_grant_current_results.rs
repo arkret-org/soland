@@ -1,7 +1,5 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 
 use arkret_models_collaboration::governance::grant_constraint::{
     AuthorityRootRef, CapabilityGrant, CapabilityGrantStatus, CapabilitySubject,

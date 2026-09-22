@@ -1,6 +1,8 @@
-use arkret_models_collaboration::{
-    events_payloads::{RelationCreatePayload, RelationTombstonePayload, RelationUpdatePayload},
-    objects::relation::{RelationEndpoint, RelationPrimaryConflictDomain},
+use arkret_models_collaboration::events_payloads::{
+    RelationCreatePayload, RelationTombstonePayload, RelationUpdatePayload,
+};
+use arkret_models_collaboration::objects::relation::{
+    RelationEndpoint, RelationPrimaryConflictDomain,
 };
 
 use super::*;
@@ -539,7 +541,6 @@ fn container_facet_digest(value: Option<&Value>) -> Option<String> {
 }
 
 /// The `relation` object a `relation_create_payload` carries.
-///
 fn relation_scope_circle_id(relation: &Value) -> Option<String> {
     relation
         .get("scope_circle_id")

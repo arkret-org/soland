@@ -1122,10 +1122,12 @@ impl ProjectionState {
                     ..
                 } => {
                     !self.realm_is_in_terminal_state(realm_id.as_str())
-                        && self.realm_authority_root(realm_id.as_str()).is_some_and(|root| {
-                            root.get("authority_generation").and_then(Value::as_u64)
-                                == Some(*authority_generation)
-                        })
+                        && self
+                            .realm_authority_root(realm_id.as_str())
+                            .is_some_and(|root| {
+                                root.get("authority_generation").and_then(Value::as_u64)
+                                    == Some(*authority_generation)
+                            })
                 }
                 crate::capability::IssuerAuthorityRef::Grant { grant_id } => {
                     let Some(parent) = self.effective_engine_grant(grant_id) else {
