@@ -318,17 +318,6 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     if state.mls_commit_epochs.contains_key(&epoch_key) {
         return reject(arkret_wire::ReasonCode::MLS_ACTIVATION_IRREVERSIBLE);
     }
-    // circle.md 7 / realm-and-space.md 2.3: the governance Station accepts a scope's first
-    // `ak.mls.genesis` only while its current history_access is `since_join`, because an activated
-    // scope can no longer widen its history window.
-    if let Some(circle_id) = scope_circle_id(&effective_scope) {
-        let Some(circle) = state.circles.get(circle_id) else {
-            return reject("circle_not_found");
-        };
-        if circle.history_access != "since_join" {
-            return reject("history_access_requires_history_capable_scheme");
-        }
-    }
     state.mls_commit_epochs.insert(
         epoch_key,
         MlsCommitEpoch {
