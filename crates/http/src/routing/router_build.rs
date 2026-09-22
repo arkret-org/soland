@@ -366,7 +366,6 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(invites::self_router())
                 // self/realms/{realm_id}/organizations (ak.self.realm_organization.read.list.v1).
                 .push(realm_organization::router())
-                .push(governance_history::self_router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
                 // `/_arkret/self/keys/keypackages/*` (see `mls::router`).
                 .push(mls::router()),
@@ -380,7 +379,6 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(identity::peer_keys_router())
                 .push(federation::erasure_receipts::router())
                 .push(realm_join::peer_router())
-                .push(governance_history::peer_router())
                 .push(mls::peer_router()),
         )
         // `open` - unauthenticated, body-only handoff resolver surface.

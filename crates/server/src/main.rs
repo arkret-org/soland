@@ -262,13 +262,6 @@ async fn run() -> anyhow::Result<()> {
         "background worker configured"
     );
 
-    let _history_request_replica_reconciler =
-        soland_http::routing::spawn_history_request_replica_reconciler(state.clone());
-    tracing::info!(
-        worker = "history_request_replica_reconcile",
-        "background worker configured"
-    );
-
     // G3.S0 — durable outbound federation HTTP delivery worker. No-op
     // when `SOLAND_FEDERATION_OUTBOUND=0` (used by integration tests
     // that don't want background HTTP traffic). The dispatcher drains

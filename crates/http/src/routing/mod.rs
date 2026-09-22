@@ -80,7 +80,6 @@ mod realm_state_snapshot;
 pub use events::sync::{
     spawn_account_data_change_retention_sweeper, spawn_sync_cursor_ttl_sweeper,
 };
-pub use governance_history::spawn_history_request_replica_reconciler;
 pub use interop::spawn_resumable_upload_ttl_sweeper;
 pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, push_target_privacy_derivation_claim};
 // Snapshot manifest builder + small JSON/token helpers reachable from children
