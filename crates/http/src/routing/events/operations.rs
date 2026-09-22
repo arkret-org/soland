@@ -77,16 +77,6 @@ pub(crate) async fn lock_active_series_operations(
             active_series_admission_lane(&operation.payload).hash(&mut hasher);
             shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
         }
-        for cell in operation
-            .context
-            .preconditions
-            .iter()
-            .map(|precondition| precondition.cell_id.as_str())
-        {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            format!("cell-cas\0{}\0{cell}", operation.realm_id).hash(&mut hasher);
-            shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
-        }
     }
     let mut guards = Vec::with_capacity(shards.len());
     for shard in shards {
