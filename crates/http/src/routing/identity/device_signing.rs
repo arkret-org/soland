@@ -15,11 +15,11 @@ use crate::state::AppState;
 pub(crate) fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
     let policy: arkret_models_crypto::RecoveryPolicy =
         serde_json::from_value(policy.raw_payload.clone()).ok()?;
-    policy.validate().ok()?;
-    match policy.method(arkret_models_crypto::RecoveryProofKind::DeviceQuorum) {
-        Some(arkret_models_crypto::RecoveryMethod::DeviceQuorum { k, .. }) => Some(*k),
+    policy.validate_shape().ok()?;
+    policy.methods.iter().find_map(|method| match method {
+        arkret_models_crypto::RecoveryMethod::DeviceQuorum { k, .. } => Some(*k),
         _ => None,
-    }
+    })
 }
 
 pub fn validate_device_authorize_binding(
@@ -286,9 +286,6 @@ pub(crate) fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: 
 
 #[cfg(test)]
 mod tests {
-    use arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding;
-    use arkret_wire::{AccountId, ActorId, DidCoreId};
-    use ed25519_dalek::Signer as _;
     use serde_json::json;
 
     use super::*;
