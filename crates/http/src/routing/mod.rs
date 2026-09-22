@@ -80,8 +80,8 @@ mod realm_state_snapshot;
 pub use events::sync::{
     spawn_account_data_change_retention_sweeper, spawn_sync_cursor_ttl_sweeper,
 };
-pub use interop::spawn_resumable_upload_ttl_sweeper;
 pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, push_target_privacy_derivation_claim};
+pub use interop::{spawn_public_push_revoke_retry_worker, spawn_resumable_upload_ttl_sweeper};
 // Snapshot manifest builder + small JSON/token helpers reachable from children
 // and other crate modules via `crate::routing::*`.
 pub(crate) use realm_state_snapshot::{

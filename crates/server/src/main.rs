@@ -240,6 +240,17 @@ async fn run() -> anyhow::Result<()> {
         "background worker configured"
     );
 
+    // Public Gateway uninstall tombstones are durable before any network
+    // request. Reconcile them after restart or an interrupted synchronous
+    // unregister without sharing the federation outbox protocol.
+    let _public_push_revoke_retry_worker =
+        soland_http::routing::spawn_public_push_revoke_retry_worker(state.clone());
+    tracing::info!(
+        worker = "public_push_revoke_retry",
+        enabled = _public_push_revoke_retry_worker.is_some(),
+        "background worker configured"
+    );
+
     // TTL backstop for the durable sync-cursor handle table (forward-progress
     // pruning on cursor presentation handles the steady state; this clears
     // rows whose client never returned).

@@ -9,9 +9,10 @@ use super::{
     PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     PushRegistrationHandoffIntentRecord, PushRegistrationHandoffIntentStatus,
     PushRegistrationHandoffIntentWrite, PushRegistrationHandoffReceiptWrite,
-    PushRegistrationHandoffRouteLocator, PushRegistrationHandoffStore, QueryableByName,
-    RunQueryDsl, Text, Timestamptz, Value, apply_push_registration_desired_intent,
-    apply_verified_push_registration_receipt, async_trait, pg_conn, sql_query,
+    PushRegistrationHandoffRetryCursor, PushRegistrationHandoffRouteLocator,
+    PushRegistrationHandoffStore, QueryableByName, RunQueryDsl, Text, Timestamptz, Value,
+    apply_push_registration_desired_intent, apply_verified_push_registration_receipt, async_trait,
+    pg_conn, sql_query,
 };
 use crate::push::{
     PushDeviceRouteWriteMode, push_device_lock_key, write_push_device_route_in_transaction,
@@ -795,28 +796,45 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
     async fn list_awaiting_revoked_intents(
         &self,
         source_station_id: &DidCoreId,
+        after: Option<&PushRegistrationHandoffRetryCursor>,
         limit: usize,
     ) -> PersistenceResult<Vec<PushRegistrationHandoffIntentRecord>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
         let limit = i64::try_from(limit.min(1_000)).map_err(PersistenceError::database)?;
-        let query = format!(
-            "SELECT {HANDOFF_COLUMNS} FROM push_registration_handoff_intents \
-             WHERE source_station_id = $1 AND desired_state = 'revoked' \
-               AND status = 'awaiting_receipt' \
-             ORDER BY updated_at, registration_id LIMIT $2"
-        );
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(query)
-            .bind::<Text, _>(source_station_id)
-            .bind::<BigInt, _>(limit)
-            .load::<HandoffIntentRow>(&mut conn)
-            .await
-            .map_err(PersistenceError::database)?
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect()
+        let rows = if let Some(after) = after {
+            let query = format!(
+                "SELECT {HANDOFF_COLUMNS} FROM push_registration_handoff_intents \
+                 WHERE source_station_id = $1 AND desired_state = 'revoked' \
+                   AND status = 'awaiting_receipt' \
+                   AND (updated_at > $2 OR (updated_at = $2 AND registration_id > $3)) \
+                 ORDER BY updated_at, registration_id LIMIT $4"
+            );
+            sql_query(query)
+                .bind::<Text, _>(source_station_id)
+                .bind::<Timestamptz, _>(after.updated_at)
+                .bind::<Text, _>(after.registration_id.as_str())
+                .bind::<BigInt, _>(limit)
+                .load::<HandoffIntentRow>(&mut conn)
+                .await
+                .map_err(PersistenceError::database)?
+        } else {
+            let query = format!(
+                "SELECT {HANDOFF_COLUMNS} FROM push_registration_handoff_intents \
+                 WHERE source_station_id = $1 AND desired_state = 'revoked' \
+                   AND status = 'awaiting_receipt' \
+                 ORDER BY updated_at, registration_id LIMIT $2"
+            );
+            sql_query(query)
+                .bind::<Text, _>(source_station_id)
+                .bind::<BigInt, _>(limit)
+                .load::<HandoffIntentRow>(&mut conn)
+                .await
+                .map_err(PersistenceError::database)?
+        };
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn commit_verified_active_receipt_and_push_route(
@@ -1905,9 +1923,25 @@ mod tests {
         assert!(stored_push_route(&pool, &route_b).await.is_some());
 
         let due = store
-            .list_awaiting_revoked_intents(&station_id, 10)
+            .list_awaiting_revoked_intents(&station_id, None, 10)
             .await
             .unwrap();
+        let first_page = store
+            .list_awaiting_revoked_intents(&station_id, None, 1)
+            .await
+            .unwrap();
+        assert_eq!(first_page.len(), 1);
+        let cursor = PushRegistrationHandoffRetryCursor::after(&first_page[0]);
+        let next_page = store
+            .list_awaiting_revoked_intents(&station_id, Some(&cursor), 10)
+            .await
+            .unwrap();
+        assert_eq!(next_page.len(), due.len() - 1);
+        assert!(next_page.iter().all(|record| {
+            record.updated_at > cursor.updated_at
+                || (record.updated_at == cursor.updated_at
+                    && record.registration_id > cursor.registration_id)
+        }));
         let mut due_ids = due
             .iter()
             .map(|record| record.registration_id.as_str())
@@ -2191,7 +2225,7 @@ mod tests {
         assert_eq!(first[0].canonical_request, second[0].canonical_request);
         assert!(stored_push_route(&pool, &route).await.is_none());
         let due = store
-            .list_awaiting_revoked_intents(&station_id, 10)
+            .list_awaiting_revoked_intents(&station_id, None, 10)
             .await
             .unwrap();
         assert_eq!(due.len(), 1);

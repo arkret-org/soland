@@ -15,18 +15,20 @@ use chrono::{DateTime, Utc};
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::push_handoff::{
     ActivePushRegistrationPlan, active_push_registration_client_input_digest,
-    plan_active_push_registration,
+    plan_active_push_registration, retry_revoked_handoff_page,
 };
 use soland_storage::{
     DeviceRevocationGateSelector, PushRegistrationHandoffIntentRecord,
     PushRegistrationHandoffIntentStatus, PushRegistrationHandoffIntentWrite,
-    PushRegistrationHandoffRouteLocator,
+    PushRegistrationHandoffRetryCursor, PushRegistrationHandoffRouteLocator,
 };
 
 use crate::push_gateway_registry::TrustedPushGateway;
 use crate::state::AppState;
 
 const GATEWAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const REVOKE_RETRY_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const REVOKE_RETRY_BATCH_LIMIT: usize = 64;
 
 pub(super) struct PublicPushRegistration<'a> {
     pub account_id: AccountId,
@@ -203,6 +205,91 @@ where
         confirmed += 1;
     }
     Ok(confirmed)
+}
+
+async fn retry_awaiting_revocations_once(
+    state: &AppState,
+    cursor: &mut Option<PushRegistrationHandoffRetryCursor>,
+) -> Result<soland_services::push_handoff::RevokeRetryReport, AppError> {
+    let source_station_id = state.service_core_id();
+    retry_revoked_handoff_page(
+        cursor,
+        REVOKE_RETRY_BATCH_LIMIT,
+        |after, limit| {
+            let source_station_id = source_station_id.clone();
+            async move {
+                state
+                    .persistence()
+                    .awaiting_public_push_revocations(&source_station_id, after.as_ref(), limit)
+                    .await
+                    .map_err(service_storage_error)
+            }
+        },
+        |intent| confirm_revoked_intent(state, &source_station_id, intent),
+    )
+    .await
+}
+
+/// Spawn the bounded recovery loop for durable public-Gateway tombstones.
+///
+/// Each pass selects at most [`REVOKE_RETRY_BATCH_LIMIT`] awaiting revokes.
+/// Items are confirmed independently so one unavailable Gateway cannot starve
+/// another. The durable request bytes and registration id are always replayed
+/// by [`confirm_revoked_intent`]; this worker never reconstructs wire intent.
+pub fn spawn_public_push_revoke_retry_worker(
+    state: AppState,
+) -> Option<std::sync::Arc<tokio::task::JoinHandle<()>>> {
+    if state.trusted_push_gateways().is_empty() {
+        return None;
+    }
+    Some(std::sync::Arc::new(tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(REVOKE_RETRY_POLL_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut drain = state.subscribe_connection_drain();
+        let mut cursor = None;
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {}
+                changed = drain.changed() => {
+                    if changed.is_err() || drain.borrow().is_some() {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            let pass = retry_awaiting_revocations_once(&state, &mut cursor);
+            let report = tokio::select! {
+                result = pass => result,
+                changed = drain.changed() => {
+                    if changed.is_err() || drain.borrow().is_some() {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            match report {
+                Ok(report) if report.failed > 0 => tracing::warn!(
+                    worker = "public_push_revoke_retry",
+                    scanned = report.scanned,
+                    confirmed = report.confirmed,
+                    failed = report.failed,
+                    "public Push Gateway revoke retry pass completed with failures"
+                ),
+                Ok(report) if report.confirmed > 0 => tracing::info!(
+                    worker = "public_push_revoke_retry",
+                    scanned = report.scanned,
+                    confirmed = report.confirmed,
+                    "public Push Gateway revoke retry pass completed"
+                ),
+                Ok(_) => {}
+                Err(_) => tracing::warn!(
+                    worker = "public_push_revoke_retry",
+                    stage = "durable revoke scan failed",
+                    "public Push Gateway revoke retry pass failed"
+                ),
+            }
+        }
+    })))
 }
 
 async fn confirm_revoked_intent(

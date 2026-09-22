@@ -12,6 +12,7 @@ pub(crate) mod webrtc;
 pub(crate) use blob::MAX_BLOB_UPLOAD_BYTES;
 pub use blob_resumable::spawn_resumable_upload_ttl_sweeper;
 pub(crate) use push::push_target_privacy_derivation_claim;
+pub use push_handoff::spawn_public_push_revoke_retry_worker;
 
 /// HMAC-SHA256 (RFC 2104) over `data` keyed by `key`.
 ///

@@ -381,12 +381,13 @@ impl PersistenceHandle {
     pub async fn awaiting_public_push_revocations(
         &self,
         source_station_id: &arkret_wire::DidCoreId,
+        after: Option<&soland_storage::PushRegistrationHandoffRetryCursor>,
         limit: usize,
     ) -> crate::ServiceResult<Vec<soland_storage::PushRegistrationHandoffIntentRecord>> {
         Ok(self
             .persistence
             .push_registration_handoffs()
-            .list_awaiting_revoked_intents(source_station_id, limit)
+            .list_awaiting_revoked_intents(source_station_id, after, limit)
             .await?)
     }
 

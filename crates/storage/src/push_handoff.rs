@@ -15,6 +15,27 @@ pub enum PushRegistrationHandoffIntentStatus {
     ReceiptVerified,
 }
 
+/// Process-local continuation for the stable revoked-intent retry order.
+///
+/// The cursor is not a lease and carries no delivery authority. A worker may
+/// discard it on restart and begin from the head; while alive it prevents a
+/// permanently failing prefix from starving later Gateway destinations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PushRegistrationHandoffRetryCursor {
+    pub updated_at: DateTime<Utc>,
+    pub registration_id: PushRegistrationId,
+}
+
+impl PushRegistrationHandoffRetryCursor {
+    #[must_use]
+    pub fn after(record: &PushRegistrationHandoffIntentRecord) -> Self {
+        Self {
+            updated_at: record.updated_at,
+            registration_id: record.registration_id.clone(),
+        }
+    }
+}
+
 impl PushRegistrationHandoffIntentStatus {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -434,6 +455,7 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
     async fn list_awaiting_revoked_intents(
         &self,
         source_station_id: &DidCoreId,
+        after: Option<&PushRegistrationHandoffRetryCursor>,
         limit: usize,
     ) -> PersistenceResult<Vec<PushRegistrationHandoffIntentRecord>>;
 

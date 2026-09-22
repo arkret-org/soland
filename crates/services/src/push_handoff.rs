@@ -1,11 +1,88 @@
 //! Transport-independent public Push Gateway handoff retry planning.
 
+use std::future::Future;
+
 use arkret::PushRegisterDeviceRequestBody;
 use arkret_identifiers::PushTargetId;
 use arkret_wire::{AccountId, DidCoreId, Hash, WebOrigin};
-use soland_storage::{PushRegistrationHandoffIntentRecord, PushRegistrationHandoffIntentStatus};
+use soland_storage::{
+    PushRegistrationHandoffIntentRecord, PushRegistrationHandoffIntentStatus,
+    PushRegistrationHandoffRetryCursor,
+};
 
 use crate::{ServiceError, ServiceResult};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RevokeRetryReport {
+    pub scanned: usize,
+    pub confirmed: usize,
+    pub failed: usize,
+}
+
+/// Confirm a bounded caller-selected batch without letting one failed
+/// transport attempt block later durable tombstones.
+///
+/// Only canonical `revoked + awaiting_receipt` records reach `confirm`.
+/// Errors are deliberately reduced to counts here so transport or remote
+/// response details cannot leak through worker reporting.
+pub async fn retry_revoked_handoff_intents<E, F, Fut>(
+    intents: Vec<PushRegistrationHandoffIntentRecord>,
+    mut confirm: F,
+) -> RevokeRetryReport
+where
+    F: FnMut(PushRegistrationHandoffIntentRecord) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+{
+    let mut report = RevokeRetryReport {
+        scanned: intents.len(),
+        ..RevokeRetryReport::default()
+    };
+    for intent in intents {
+        let is_awaiting_revoke = intent
+            .request()
+            .is_ok_and(|request| request.state() == arkret::PushRegistrationHandoffState::Revoked)
+            && intent.status == PushRegistrationHandoffIntentStatus::AwaitingReceipt;
+        if !is_awaiting_revoke {
+            report.failed += 1;
+            continue;
+        }
+        match confirm(intent).await {
+            Ok(()) => report.confirmed += 1,
+            Err(_) => report.failed += 1,
+        }
+    }
+    report
+}
+
+/// Load and confirm one stable retry page, advancing an in-process cursor only
+/// after the complete page has been attempted. At the end of the ordered view
+/// the next pass wraps to the head, so a failed prefix remains retryable while
+/// it cannot permanently starve later destinations.
+pub async fn retry_revoked_handoff_page<E, Fetch, FetchFuture, Confirm, ConfirmFuture>(
+    cursor: &mut Option<PushRegistrationHandoffRetryCursor>,
+    limit: usize,
+    mut fetch: Fetch,
+    confirm: Confirm,
+) -> Result<RevokeRetryReport, E>
+where
+    Fetch: FnMut(Option<PushRegistrationHandoffRetryCursor>, usize) -> FetchFuture,
+    FetchFuture: Future<Output = Result<Vec<PushRegistrationHandoffIntentRecord>, E>>,
+    Confirm: FnMut(PushRegistrationHandoffIntentRecord) -> ConfirmFuture,
+    ConfirmFuture: Future<Output = Result<(), E>>,
+{
+    if limit == 0 {
+        return Ok(RevokeRetryReport::default());
+    }
+    let mut page = fetch(cursor.clone(), limit).await?;
+    if page.is_empty() && cursor.is_some() {
+        page = fetch(None, limit).await?;
+    }
+    page.truncate(limit);
+    let next_cursor = page.last().map(PushRegistrationHandoffRetryCursor::after);
+    let report = retry_revoked_handoff_intents(page, confirm).await;
+    *cursor = next_cursor;
+    Ok(report)
+}
 
 pub fn active_push_registration_client_input_digest(
     account_id: &AccountId,
@@ -86,6 +163,9 @@ pub fn plan_active_push_registration(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
     use arkret::PushRegistrationHandoffRequestBody;
     use arkret_identifiers::PushTargetId;
     use arkret_wire::{AccountId, DeviceId, DidCoreId};
@@ -259,5 +339,201 @@ mod tests {
                 predecessor: Some(predecessor)
             }
         );
+    }
+
+    #[tokio::test]
+    async fn revoke_retry_isolates_partial_failure_and_continues_batch() {
+        let intent = revoked_record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let report = retry_revoked_handoff_intents(
+            vec![intent.clone(), intent.clone(), intent],
+            move |_| {
+                let observed = observed.clone();
+                async move {
+                    let call = observed.fetch_add(1, Ordering::SeqCst) + 1;
+                    if call == 2 { Err(()) } else { Ok(()) }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            report,
+            RevokeRetryReport {
+                scanned: 3,
+                confirmed: 2,
+                failed: 1,
+            }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn revoke_retry_replays_exact_intent_across_gateways() {
+        let first = revoked_record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let mut second = first.clone();
+        let second_gateway = DidCoreId::new("ak:did_core:web:push-2.example").unwrap();
+        second.destination_gateway_id = second_gateway.clone();
+        second.local_route.destination_gateway_id = second_gateway;
+        let observed = Arc::new(Mutex::new(Vec::new()));
+
+        for intents in [
+            vec![first.clone(), second.clone()],
+            vec![first.clone(), second.clone()],
+        ] {
+            let observed = observed.clone();
+            let report = retry_revoked_handoff_intents(intents, move |intent| {
+                let observed = observed.clone();
+                async move {
+                    observed.lock().unwrap().push((
+                        intent.destination_gateway_id,
+                        intent.registration_id,
+                        intent.request_digest,
+                        intent.canonical_request,
+                    ));
+                    Ok::<(), ()>(())
+                }
+            })
+            .await;
+            assert_eq!(report.confirmed, 2);
+            assert_eq!(report.failed, 0);
+        }
+
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.len(), 4);
+        assert_eq!(observed[0], observed[2], "retry must replay exact bytes");
+        assert_eq!(observed[1], observed[3], "retry must replay exact bytes");
+        assert_ne!(observed[0].0, observed[1].0, "both Gateways are visited");
+    }
+
+    #[tokio::test]
+    async fn revoke_retry_never_sends_or_revives_late_active_intent() {
+        let active = record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let revoked = revoked_record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let report = retry_revoked_handoff_intents(vec![active, revoked], move |_| {
+            let observed = observed.clone();
+            async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), ()>(())
+            }
+        })
+        .await;
+
+        assert_eq!(
+            report,
+            RevokeRetryReport {
+                scanned: 2,
+                confirmed: 1,
+                failed: 1,
+            }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retry_cursor_reaches_item_after_permanently_failing_full_prefix() {
+        let base = revoked_record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let records = Arc::new(
+            (0..65)
+                .map(|index| {
+                    let mut record = base.clone();
+                    record.updated_at = base.updated_at + chrono::Duration::seconds(index);
+                    record
+                })
+                .collect::<Vec<_>>(),
+        );
+        let last_updated_at = records.last().unwrap().updated_at;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut cursor = None;
+
+        let first_page = retry_revoked_handoff_page(
+            &mut cursor,
+            64,
+            {
+                let records = records.clone();
+                move |after, limit| {
+                    let records = records.clone();
+                    async move {
+                        Ok::<_, ()>(
+                            records
+                                .iter()
+                                .filter(|record| {
+                                    after.as_ref().is_none_or(|after| {
+                                        record.updated_at > after.updated_at
+                                            || (record.updated_at == after.updated_at
+                                                && record.registration_id > after.registration_id)
+                                    })
+                                })
+                                .take(limit)
+                                .cloned()
+                                .collect(),
+                        )
+                    }
+                }
+            },
+            {
+                let calls = calls.clone();
+                move |_| {
+                    let calls = calls.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err::<(), ()>(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(first_page.scanned, 64);
+        assert_eq!(first_page.failed, 64);
+
+        let second_page = retry_revoked_handoff_page(
+            &mut cursor,
+            64,
+            {
+                let records = records.clone();
+                move |after, limit| {
+                    let records = records.clone();
+                    async move {
+                        Ok::<_, ()>(
+                            records
+                                .iter()
+                                .filter(|record| {
+                                    after.as_ref().is_none_or(|after| {
+                                        record.updated_at > after.updated_at
+                                            || (record.updated_at == after.updated_at
+                                                && record.registration_id > after.registration_id)
+                                    })
+                                })
+                                .take(limit)
+                                .cloned()
+                                .collect(),
+                        )
+                    }
+                }
+            },
+            {
+                let calls = calls.clone();
+                move |record| {
+                    let calls = calls.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        if record.updated_at == last_updated_at {
+                            Ok(())
+                        } else {
+                            Err(())
+                        }
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(second_page.scanned, 1);
+        assert_eq!(second_page.confirmed, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 65);
     }
 }
