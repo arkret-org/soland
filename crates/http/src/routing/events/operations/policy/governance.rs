@@ -324,7 +324,10 @@ pub(super) async fn validate_member_state_policy(
             if !has_active_accountability_grant(state, &target, actor).await {
                 return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
             }
-            if realm_requires_content_encryption(state, operation.realm_id.as_str()).await
+            let realm_scope = arkret_wire::ScopeRef::Realm {
+                realm_id: operation.realm_id.clone(),
+            };
+            if scope_has_accepted_mls_genesis(state, &realm_scope).await?
                 && !crate::routing::mls::has_claimable_realm_membership_keypackage(
                     state,
                     target.signing_principal_id().as_str(),

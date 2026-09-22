@@ -85,7 +85,6 @@ pub(crate) async fn lock_active_series_operations(
     guards
 }
 
-const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
 mod policy;
 pub(crate) use policy::*;
 mod policy_extra;

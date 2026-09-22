@@ -554,35 +554,22 @@ pub async fn validate_content_encryption_floor(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     for operation in operations {
-        match kinds::canonical_kind_for_operation(operation) {
-            Some(arkret_wire::EventKind::CircleUpdate)
-                if operation_touches_encryption_profile(operation) =>
-            {
-                return Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
-            }
-            Some(arkret_wire::EventKind::CircleCreate) => {
-                if let Some(profile) = operation_circle_encryption_profile(operation)
-                    && !encryption_profile_requires_content_encryption(Some(profile))
-                    && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
-                {
-                    return Err(arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR);
-                }
-            }
-            _ => {}
-        }
         if operation_carries_plaintext_private_content(operation) {
-            let circle_requires_e2ee = {
+            let scope = {
                 let projection = state.projections().snapshot();
-                operation_target_scope_circle_id(&projection, operation)
-                    .and_then(|circle_id| projection.circle(&circle_id))
-                    .is_some_and(|circle| {
-                        circle.content_encryption_floor.as_deref() == Some("e2ee_required")
-                    })
+                match operation_target_scope_circle_id(&projection, operation) {
+                    Some(circle_id) => arkret_wire::ScopeRef::Circle {
+                        realm_id: operation.realm_id.clone(),
+                        circle_id: arkret_wire::CircleId::new(circle_id)
+                            .map_err(|_| "mls_activation_state_unavailable")?,
+                    },
+                    None => arkret_wire::ScopeRef::Realm {
+                        realm_id: operation.realm_id.clone(),
+                    },
+                }
             };
-            if circle_requires_e2ee
-                || realm_content_floor_requires_e2ee(state, operation.realm_id.as_str())
-            {
-                return Err(CONTENT_ENCRYPTION_FLOOR_VIOLATION);
+            if scope_has_accepted_mls_genesis(state, &scope).await? {
+                return Err(arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED);
             }
         }
     }

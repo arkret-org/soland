@@ -1,59 +1,18 @@
 use super::*;
 
-pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
-    let realm_meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
-    realm_meta.is_some_and(|record| {
-        encryption_profile_requires_content_encryption(record.encryption_profile.as_deref())
-    })
-}
-
-/// Whether the Realm's effective `content_encryption_floor` requires E2EE
-/// content, read from the authoritative reducer projection (set by
-/// `ak.realm.policy_bundle`). This is independent of `encryption_profile`,
-/// which only declares the encryption mechanism: a `mls_rfc9420` Realm admits
-/// plaintext content until its content floor is raised to `e2ee_required`
-/// (realm-and-space.md §2.3 / §2.5, circle.md §7). The floor is a one-way
-/// ratchet enforced by the reducer, so this read can only flip false→true.
-pub(crate) fn realm_content_floor_requires_e2ee(state: &AppState, realm_id: &str) -> bool {
-    {
-        let projection = state.projections().snapshot();
-        projection.realm_content_encryption_floor(realm_id)
-    }
-    .as_deref()
-        == Some("e2ee_required")
-}
-
-pub(crate) fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool {
-    // Current soland RealmMetaRecord projects the encryption mechanism but not
-    // the separate content_encryption_floor field yet. Treat any non-plaintext
-    // profile as content-only E2EE for Strand content admission.
-    profile
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|profile| !matches!(profile, "none" | "plaintext" | "allow_plaintext"))
-}
-
-pub(crate) fn operation_circle_encryption_profile(operation: &Operation) -> Option<&str> {
-    operation
-        .payload
-        .get("object")
-        .and_then(|object| object.get("encryption_profile"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            operation
-                .payload
-                .get("encryption_profile")
-                .and_then(Value::as_str)
-        })
-}
-
-pub(crate) fn operation_touches_encryption_profile(operation: &Operation) -> bool {
-    operation.payload.get("encryption_profile").is_some()
-        || operation
-            .payload
-            .get("object")
-            .is_some_and(|object| value_has_direct_field(object, "encryption_profile"))
-        || patch_touches_field(&operation.payload, "encryption_profile")
+pub(crate) async fn scope_has_accepted_mls_genesis(
+    state: &AppState,
+    scope: &arkret_wire::ScopeRef,
+) -> Result<bool, &'static str> {
+    let group_id = scope
+        .canonical_mls_group_id()
+        .map_err(|_| "mls_activation_state_unavailable")?;
+    state
+        .mls_commits()
+        .commit(scope, group_id.as_str())
+        .await
+        .map(|commit| commit.is_some())
+        .map_err(|_| "mls_activation_state_unavailable")
 }
 
 fn value_has_direct_field(value: &Value, field: &str) -> bool {
