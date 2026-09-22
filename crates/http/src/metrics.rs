@@ -49,16 +49,6 @@ const FEDERATION_OUTBOX_DEPTH: &str = "soland_federation_outbox_depth";
 const FEDERATION_OUTBOX_STATE_DEPTH: &str = "soland_federation_outbox_state_depth";
 const FEDERATION_OUTBOX_OLDEST_PENDING_AGE: &str =
     "soland_federation_outbox_oldest_pending_age_seconds";
-const CONTROL_SEAL_ATTEMPT: &str = "soland_control_seal_attempt_total";
-const CONTROL_SEAL_REPAIR: &str = "soland_control_seal_repair_total";
-const CONTROL_SEAL_CLAIMED: &str = "soland_control_seal_claimed_total";
-const CONTROL_SEAL_IN_FLIGHT: &str = "soland_control_seal_in_flight";
-const CONTROL_SEAL_PENDING: &str = "soland_control_seal_pending_realms";
-const CONTROL_SEAL_ELIGIBLE: &str = "soland_control_seal_eligible_realms";
-const CONTROL_SEAL_CLAIMED_CURRENT: &str = "soland_control_seal_claimed_realms";
-const CONTROL_SEAL_EXPIRED_CLAIMS: &str = "soland_control_seal_expired_claims";
-const CONTROL_SEAL_OLDEST_PENDING_AGE: &str = "soland_control_seal_oldest_pending_age_seconds";
-const CONTROL_SEAL_OLDEST_ELIGIBLE_AGE: &str = "soland_control_seal_oldest_eligible_age_seconds";
 
 // ─────────────────────────────────────────────────────────────────────────
 // DID boundary counters (`did-usage-and-verification.md` §6, DID-P1-A03).
@@ -204,46 +194,6 @@ fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
             FEDERATION_OUTBOX_OLDEST_PENDING_AGE,
             "Age of the oldest federation outbox row still owed to a peer."
         );
-        describe_counter!(
-            CONTROL_SEAL_ATTEMPT,
-            "Durable Control Seal schedule attempts by outcome."
-        );
-        describe_counter!(
-            CONTROL_SEAL_REPAIR,
-            "Rows observed or changed by the always-on Control Seal schedule repair."
-        );
-        describe_counter!(
-            CONTROL_SEAL_CLAIMED,
-            "Realm attempts claimed by the Control Seal coordinator."
-        );
-        describe_gauge!(
-            CONTROL_SEAL_IN_FLIGHT,
-            "Control Seal Realm passes currently executing."
-        );
-        describe_gauge!(
-            CONTROL_SEAL_PENDING,
-            "Realms with durable pending Control Seal work."
-        );
-        describe_gauge!(
-            CONTROL_SEAL_ELIGIBLE,
-            "Realms currently eligible for a Control Seal schedule claim."
-        );
-        describe_gauge!(
-            CONTROL_SEAL_CLAIMED_CURRENT,
-            "Realms with an unexpired durable Control Seal schedule claim."
-        );
-        describe_gauge!(
-            CONTROL_SEAL_EXPIRED_CLAIMS,
-            "Realms whose durable Control Seal schedule claim has expired and can be reclaimed."
-        );
-        describe_gauge!(
-            CONTROL_SEAL_OLDEST_PENDING_AGE,
-            "Age of the oldest pending Control Seal Realm."
-        );
-        describe_gauge!(
-            CONTROL_SEAL_OLDEST_ELIGIBLE_AGE,
-            "Time elapsed since the oldest eligible Control Seal Realm became due."
-        );
         Ok(handle)
     }) {
         Ok(handle) => Ok(handle),
@@ -361,7 +311,6 @@ pub async fn render_metrics(state: &AppState) -> String {
     // Sample scrape-time gauges into the recorder right before rendering.
     gauge!(DB_POOL_IN_USE).set(state.jobs().database_pool_in_use() as f64);
     sample_federation_outbox_gauges(state).await;
-    sample_control_seal_schedule_gauges(state).await;
 
     match prometheus_handle() {
         Ok(handle) => handle.render(),
@@ -445,41 +394,6 @@ pub fn record_federation_retry_state(state: &str) {
     counter!(FEDERATION_RETRY, "state" => normalize_label(state)).increment(1);
 }
 
-pub fn record_control_seal_claimed(count: usize) {
-    counter!(CONTROL_SEAL_CLAIMED).increment(count as u64);
-}
-
-pub fn record_control_seal_attempt(outcome: &'static str, completion: &'static str) {
-    counter!(
-        CONTROL_SEAL_ATTEMPT,
-        "outcome" => outcome,
-        "completion" => completion,
-    )
-    .increment(1);
-}
-
-pub fn record_control_seal_repair(
-    scanned: usize,
-    inserted: usize,
-    generation_repaired: usize,
-    stale_deleted: usize,
-    cursor_wrapped: bool,
-) {
-    for (operation, count) in [
-        ("scanned", scanned),
-        ("inserted", inserted),
-        ("generation_repaired", generation_repaired),
-        ("stale_deleted", stale_deleted),
-        ("cursor_wrapped", usize::from(cursor_wrapped)),
-    ] {
-        counter!(CONTROL_SEAL_REPAIR, "operation" => operation).increment(count as u64);
-    }
-}
-
-pub fn set_control_seal_in_flight(count: usize) {
-    gauge!(CONTROL_SEAL_IN_FLIGHT).set(count as f64);
-}
-
 /// Sample the outbox depth gauges from the aggregate the store computes.
 ///
 /// Per-`(state, peer)` depth plus the oldest still-owed row's age are what an
@@ -514,38 +428,6 @@ async fn sample_federation_outbox_gauges(state: &AppState) {
     gauge!(FEDERATION_OUTBOX_DEPTH).set(owed as f64);
     gauge!(FEDERATION_OUTBOX_OLDEST_PENDING_AGE)
         .set(oldest_owed.map_or(0.0, |created_at| (now - created_at).max(0) as f64));
-}
-
-async fn sample_control_seal_schedule_gauges(state: &AppState) {
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let stats = tokio::time::timeout(
-        Duration::from_secs(5),
-        state.projections().control_seal_schedule_stats(now_ms),
-    )
-    .await;
-    let stats = match stats {
-        Ok(Ok(stats)) => stats,
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "control-seal schedule gauges unavailable");
-            return;
-        }
-        Err(_) => {
-            tracing::warn!("control-seal schedule gauge sample timed out");
-            return;
-        }
-    };
-    gauge!(CONTROL_SEAL_PENDING).set(stats.pending as f64);
-    gauge!(CONTROL_SEAL_ELIGIBLE).set(stats.eligible as f64);
-    gauge!(CONTROL_SEAL_CLAIMED_CURRENT).set(stats.claimed as f64);
-    gauge!(CONTROL_SEAL_EXPIRED_CLAIMS).set(stats.expired_claims as f64);
-    gauge!(CONTROL_SEAL_OLDEST_PENDING_AGE).set(stats.oldest_pending_at_ms.map_or(0.0, |at_ms| {
-        now_ms.saturating_sub(at_ms).max(0) as f64 / 1_000.0
-    }));
-    gauge!(CONTROL_SEAL_OLDEST_ELIGIBLE_AGE).set(
-        stats.oldest_eligible_at_ms.map_or(0.0, |at_ms| {
-            now_ms.saturating_sub(at_ms).max(0) as f64 / 1_000.0
-        }),
-    );
 }
 
 fn record_http_request(op: &str, status: u16, duration: Duration) {
@@ -844,16 +726,6 @@ mod tests {
         assert!(body.contains("soland_did_resolve_total"), "{body}");
         assert!(body.contains("soland_signature_verify_total"), "{body}");
         assert!(body.contains("source=\"sdk_cache\""), "{body}");
-        for gauge in [
-            CONTROL_SEAL_PENDING,
-            CONTROL_SEAL_ELIGIBLE,
-            CONTROL_SEAL_CLAIMED_CURRENT,
-            CONTROL_SEAL_EXPIRED_CLAIMS,
-            CONTROL_SEAL_OLDEST_PENDING_AGE,
-            CONTROL_SEAL_OLDEST_ELIGIBLE_AGE,
-        ] {
-            assert!(body.contains(gauge), "missing {gauge}: {body}");
-        }
     }
 
     #[test]
